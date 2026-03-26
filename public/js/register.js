@@ -52,6 +52,94 @@ async function initializeWageConfig() {
   }
 }
 
+// Check user role and disable form fields for payroll officers
+function applyRoleBasedAccess() {
+  const userStr = sessionStorage.getItem('vp_user');
+  const user = userStr ? JSON.parse(userStr) : null;
+  const isPayrollOfficer = user?.role === 'payroll_officer' || user?.role === 'payroll_manager';
+  
+  if (isPayrollOfficer) {
+    // Disable all form inputs for payroll officer (read-only mode)
+    const allInputs = document.querySelectorAll('#form-register input, #form-register select, #form-register textarea');
+    allInputs.forEach(input => {
+      input.disabled = true;
+      input.style.opacity = '0.6';
+      input.style.cursor = 'not-allowed';
+    });
+    
+    // Hide Save and Clear buttons
+    const saveBtn = document.querySelector('button.btn-green');
+    const clearBtn = document.querySelector('button.btn-outline');
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (clearBtn) clearBtn.style.display = 'none';
+    
+    // Show read-only message
+    const header = document.querySelector('.page-header-right');
+    if (header) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'color: var(--yellow); font-weight: 600; font-size: 13px;';
+      msg.textContent = '👁 View-Only Mode (Payroll Officer)';
+      header.appendChild(msg);
+    }
+  }
+}
+
+// Get government contributions for payroll display
+async function fetchGovernmentContributions(employeeId) {
+  try {
+    const response = await apiFetch(`/api/payroll/employees/${employeeId}/government-contributions`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.error('Error fetching government contributions:', err);
+    return null;
+  }
+}
+
+// Display government contributions in a modal for payroll officer
+function displayGovernmentContributions(contributions) {
+  if (!contributions) return;
+  
+  let html = `
+    <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0;">
+      <h4 style="font-weight: 600; margin-bottom: 12px; color: var(--text);">Government Contributions & Cost Deductions</h4>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="font-size: 11px; color: var(--muted); text-transform: uppercase;">SSS #</label>
+          <div style="font-size: 13px; font-weight: 600; color: var(--text);">${contributions.government_ids.sss_number}</div>
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--muted); text-transform: uppercase;">PhilHealth #</label>
+          <div style="font-size: 13px; font-weight: 600; color: var(--text);">${contributions.government_ids.philhealth_number}</div>
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--muted); text-transform: uppercase;">Pag-IBIG #</label>
+          <div style="font-size: 13px; font-weight: 600; color: var(--text);">${contributions.government_ids.pagibig_number}</div>
+        </div>
+        <div>
+          <label style="font-size: 11px; color: var(--muted); text-transform: uppercase;">TIN</label>
+          <div style="font-size: 13px; font-weight: 600; color: var(--text);">${contributions.government_ids.tin}</div>
+        </div>
+      </div>
+      ${contributions.deductions.length > 0 ? `
+        <div>
+          <h5 style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--text);">Active Deductions</h5>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            ${contributions.deductions.map(d => `
+              <div style="display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border);">
+                <span style="font-size: 12px; color: var(--text);">${d.deduction_type}</span>
+                <span style="font-weight: 600; color: var(--accent);">₱${parseFloat(d.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : '<div style="font-size: 12px; color: var(--muted);">No active deductions</div>'}
+    </div>
+  `;
+  
+  return html;
+}
+
 // Update wage type UI based on selection
 function updateWageTypeUI() {
   const wageType = document.getElementById('emp-wage-type')?.value;
@@ -82,14 +170,14 @@ function populateSewingTypeRates() {
   if (!container) return;
   
   container.innerHTML = WAGE_CONFIG.sawingTypes.map(sewing => `
-    <div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg);border-radius:4px;">
+    <div class="wage-rate-item">
+      <label class="wage-rate-label">${sewing.name}</label>
       <input type="number" 
+             class="wage-rate-input"
              id="sewing-${sewing.id}" 
              placeholder="₱ ${sewing.default_rate}" 
              min="0" step="0.01"
-             value="${sewing.default_rate}"
-             style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);" />
-      <label style="flex:2;margin:0;font-size:12px;">${sewing.name}</label>
+             value="${sewing.default_rate}" />
     </div>
   `).join('');
 }
@@ -100,14 +188,14 @@ function populateLogisticsRegionRates() {
   if (!container) return;
   
   container.innerHTML = WAGE_CONFIG.logisticsRegions.map(region => `
-    <div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg);border-radius:4px;">
+    <div class="wage-rate-item">
+      <label class="wage-rate-label">${region.name} ${region.code ? `(${region.code})` : ''}</label>
       <input type="number" 
+             class="wage-rate-input"
              id="logistics-${region.id}" 
              placeholder="₱ ${region.default_rate}" 
              min="0" step="0.01"
-             value="${region.default_rate}"
-             style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);" />
-      <label style="flex:2;margin:0;font-size:12px;">${region.name} ${region.code ? `(${region.code})` : ''}</label>
+             value="${region.default_rate}" />
     </div>
   `).join('');
 }
@@ -973,4 +1061,9 @@ document.addEventListener('DOMContentLoaded', () => {
   generateEmployeeID();
   initializeFileUploads();
   initializeWageConfig();
+  
+  // Apply role-based access after a short delay to ensure DOM is ready
+  setTimeout(() => {
+    applyRoleBasedAccess();
+  }, 100);
 });

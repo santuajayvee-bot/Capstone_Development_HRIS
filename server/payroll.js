@@ -310,4 +310,79 @@ router.post('/payroll/generate', requireAuth, requireRole(ROLES.admin), async (r
   }
 });
 
+// Get employee personal and employment details for payroll officer (READ-ONLY)
+router.get('/employees/:id/readonly', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const empId = req.params.id;
+
+    const [rows] = await pool.execute(`
+      SELECT 
+        e.id, e.employee_code, e.first_name, e.last_name, e.email,
+        e.contact_number, e.residential_address, e.birth_date,
+        d.name AS department, p.name AS position, s.id AS supervisor_id,
+        CONCAT(s.first_name, ' ', s.last_name) AS supervisor_name,
+        e.date_hired, e.employment_status, e.wage_type_id, w.name AS wage_type,
+        e.sss_number, e.philhealth_number, e.pagibig_number, e.tin,
+        e.bank_name, e.bank_account, e.status
+      FROM employees e
+      LEFT JOIN departments d ON d.id = e.department_id
+      LEFT JOIN positions p ON p.id = e.position_id
+      LEFT JOIN employees s ON s.id = e.supervisor_id
+      LEFT JOIN wage_types w ON w.id = e.wage_type_id
+      WHERE e.id = ?
+    `, [empId]);
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Error fetching employee readonly:', err);
+    res.status(500).json({ error: 'Failed to fetch employee details' });
+  }
+});
+
+// Get employee government contributions for payroll deductions
+router.get('/employees/:id/government-contributions', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const empId = req.params.id;
+
+    // Get employee government info
+    const [empRows] = await pool.execute(`
+      SELECT e.id, e.sss_number, e.philhealth_number, e.pagibig_number, e.tin
+      FROM employees e
+      WHERE e.id = ?
+    `, [empId]);
+
+    if (!empRows.length) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Get employee deductions
+    const [deductions] = await pool.execute(`
+      SELECT id, deduction_type, amount, description, start_date, end_date, is_active
+      FROM employee_deductions
+      WHERE employee_id = ? AND is_active = 1
+      ORDER BY deduction_type
+    `, [empId]);
+
+    res.json({
+      employee_id: empRows[0].id,
+      government_ids: {
+        sss_number: empRows[0].sss_number || 'Not provided',
+        philhealth_number: empRows[0].philhealth_number || 'Not provided',
+        pagibig_number: empRows[0].pagibig_number || 'Not provided',
+        tin: empRows[0].tin || 'Not provided'
+      },
+      deductions: deductions || []
+    });
+  } catch (err) {
+    console.error('Error fetching government contributions:', err);
+    res.status(500).json({ error: 'Failed to fetch government contributions' });
+  }
+});
+
 module.exports = router;
