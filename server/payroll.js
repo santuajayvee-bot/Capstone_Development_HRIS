@@ -230,7 +230,7 @@ router.get('/payroll/:monthYear', requireAuth, requireRole(ROLES.payroll_any), a
 });
 
 // Generate payroll for a month
-router.post('/payroll/generate', requireAuth, requireRole(ROLES.admin), async (req, res) => {
+router.post('/payroll/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
     const { month_year, start_date, end_date } = req.body;

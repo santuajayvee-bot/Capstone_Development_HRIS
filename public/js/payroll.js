@@ -9,6 +9,152 @@ const PAYROLL_DATA = [
   { id: 4, name:'Nikki Minaj',   dept:'Executive', basic: 45000, ot: 0,    deductions: 5500, status:'Disbursed' },
 ];
 
+// Open Run Payroll Modal
+function openRunPayrollModal() {
+  // Get current date for default values
+  const today = new Date();
+  const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+  const currentYear = today.getFullYear();
+  const defaultMonthYear = `${currentYear}-${currentMonth}`;
+  
+  // First day and last day of month
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const startDate = firstDay.toISOString().split('T')[0];
+  const endDate = lastDay.toISOString().split('T')[0];
+  
+  const modalHTML = `
+    <div id="run-payroll-modal" style="
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5); display: flex; align-items: center;
+      justify-content: center; z-index: 10000;
+    ">
+      <div style="
+        background: var(--bg); border-radius: 14px; max-width: 450px;
+        width: 90%; padding: 24px; border: 1px solid var(--border);
+      ">
+        <h2 style="margin: 0 0 20px 0; font-size: 18px; font-weight: 700;">Run Payroll</h2>
+        
+        <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+          <p style="margin: 0 0 12px 0; font-size: 13px; color: var(--muted);">Select the payroll period you want to generate.</p>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+            <div>
+              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">Month & Year</label>
+              <input id="payroll-month-year" type="month" value="${defaultMonthYear}" style="
+                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
+              " />
+            </div>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">Start Date</label>
+              <input id="payroll-start-date" type="date" value="${startDate}" style="
+                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
+              " />
+            </div>
+            <div>
+              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">End Date</label>
+              <input id="payroll-end-date" type="date" value="${endDate}" style="
+                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
+              " />
+            </div>
+          </div>
+        </div>
+        
+        <div id="payroll-warning" style="
+          background: rgba(245, 166, 35, 0.1); border-left: 4px solid var(--yellow);
+          padding: 12px; border-radius: 4px; font-size: 12px; color: var(--yellow);
+          margin-bottom: 20px; display: none;
+        "></div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button onclick="document.getElementById('run-payroll-modal')?.remove()" class="btn btn-outline" style="font-size: 13px; padding: 10px 20px;">Cancel</button>
+          <button onclick="runPayroll()" id="run-payroll-btn" class="btn btn-primary" style="font-size: 13px; padding: 10px 20px;">Generate Payroll</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  const modalDiv = document.createElement('div');
+  modalDiv.innerHTML = modalHTML;
+  document.body.appendChild(modalDiv.firstElementChild);
+}
+
+// Run the payroll generation
+async function runPayroll() {
+  const monthYearInput = document.getElementById('payroll-month-year');
+  const startDateInput = document.getElementById('payroll-start-date');
+  const endDateInput = document.getElementById('payroll-end-date');
+  const warningDiv = document.getElementById('payroll-warning');
+  const runBtn = document.getElementById('run-payroll-btn');
+  
+  if (!monthYearInput?.value || !startDateInput?.value || !endDateInput?.value) {
+    warningDiv.textContent = '⚠️ Please fill in all required fields';
+    warningDiv.style.display = 'block';
+    return;
+  }
+  
+  const monthYear = monthYearInput.value; // Format: YYYY-MM
+  const startDate = startDateInput.value; // Format: YYYY-MM-DD
+  const endDate = endDateInput.value;     // Format: YYYY-MM-DD
+  
+  // Validate dates
+  if (startDate >= endDate) {
+    warningDiv.textContent = '⚠️ Start date must be before end date';
+    warningDiv.style.display = 'block';
+    return;
+  }
+  
+  // Disable button and show loading
+  runBtn.disabled = true;
+  runBtn.innerHTML = '⏳ Generating...';
+  warningDiv.style.display = 'none';
+  
+  try {
+    const response = await apiFetch('/api/payroll/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month_year: monthYear, start_date: startDate, end_date: endDate })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate payroll');
+    }
+    
+    const result = await response.json();
+    
+    // Show success message
+    warningDiv.style.backgroundColor = 'rgba(34, 211, 165, 0.1)';
+    warningDiv.style.borderColor = 'var(--green)';
+    warningDiv.style.color = 'var(--green)';
+    warningDiv.textContent = `✅ Payroll generated successfully! Processed ${result.employeesProcessed} employees for ${monthYear}`;
+    warningDiv.style.display = 'block';
+    
+    // Close modal after 2 seconds
+    setTimeout(() => {
+      document.getElementById('run-payroll-modal')?.remove();
+      // Refresh payroll data
+      location.reload();
+    }, 2000);
+    
+  } catch (err) {
+    console.error('Error generating payroll:', err);
+    warningDiv.style.backgroundColor = 'rgba(224, 92, 122, 0.1)';
+    warningDiv.style.borderColor = 'var(--red)';
+    warningDiv.style.color = 'var(--red)';
+    warningDiv.textContent = `❌ ${err.message}`;
+    warningDiv.style.display = 'block';
+    runBtn.disabled = false;
+    runBtn.innerHTML = 'Generate Payroll';
+  }
+}
+
 async function viewEmployeeDetails(employeeId, employeeName) {
   try {
     // Fetch employee details (read-only)
