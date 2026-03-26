@@ -1,0 +1,42 @@
+/* ============================================================
+   EMPLOYEES.CSS
+   ============================================================ */
+
+.emp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.emp-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  transition: border-color .2s;
+}
+.emp-card:hover { border-color: var(--accent); }
+
+.emp-top {
+  display: flex; align-items: center;
+  gap: 12px; margin-bottom: 14px;
+}
+.emp-top > div:last-child {
+  flex: 1; min-width: 0;
+}
+.emp-avatar {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: linear-gradient(135deg, #4f7cff, #22d3a5);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; flex-shrink: 0;
+  color: white; aspect-ratio: 1;
+}
+.emp-name  { font-weight: 700; font-size: 14px; margin-bottom: 2px; color: #ffffff !important; }
+.emp-email { font-size: 11px; color: var(--muted); }
+.emp-phone { font-size: 12px; color: var(--muted); margin-bottom: x; }
+.emp-meta  {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  border-top: 1px solid var(--border); padding-top: 12px;
+}
+.emp-meta-item .mlabel { font-size: 10px; color: var(--muted); }
+.emp-meta-item .mval   { font-size: 12px; font-weight: 600; }

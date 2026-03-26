@@ -1,0 +1,81 @@
+<!-- ============================================================
+     pages/recruitment.html — Recruitment / On-Boarding page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Recruitment Management</div>
+    <div class="section-sub">Manage job openings and candidate pipeline</div>
+  </div>
+  <div class="page-header-right">
+    <div class="tabs" style="margin-bottom:0;">
+      <div class="tab active"  onclick="switchOnbTab('candidates', this)">Candidates</div>
+      <div class="tab"         onclick="switchOnbTab('jobs',       this)">Jobs</div>
+    </div>
+  </div>
+</div>
+
+<!-- ---- CANDIDATES ---- -->
+<div id="onb-candidates">
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;">Pipeline Overview</div>
+  <div class="pipeline">
+    <div class="pipe-card applied">   <div class="pipe-num" style="color:var(--blue)">1</div>  <div class="pipe-label">Applied</div></div>
+    <div class="pipe-card screening"> <div class="pipe-num" style="color:var(--green)">1</div> <div class="pipe-label">Screening</div></div>
+    <div class="pipe-card interview"> <div class="pipe-num" style="color:var(--yellow)">1</div><div class="pipe-label">Interview</div></div>
+    <div class="pipe-card offer">     <div class="pipe-num" style="color:#7c5cfc">1</div>      <div class="pipe-label">Offer Sent</div></div>
+    <div class="pipe-card hired">     <div class="pipe-num" style="color:var(--green)">1</div> <div class="pipe-label">Hired</div></div>
+    <div class="pipe-card rejected">  <div class="pipe-num" style="color:var(--red)">1</div>   <div class="pipe-label">Rejected</div></div>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;margin:16px 0 12px;">Active Job Openings</div>
+  <div style="font-size:13px;font-weight:600;margin:16px 0 12px;">All Candidates</div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Candidate</th><th>Role</th><th>Department</th><th>Applied</th><th>Experience</th><th>Stage</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Screening</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Screening</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-blue">Interview</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-yellow">Offer Sent</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Hired</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-red">Rejected</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ---- JOBS ---- -->
+<div id="onb-jobs" style="display:none;">
+  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;">Pipeline Overview</div>
+  <div class="pipeline" style="opacity:.4;">
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+    <div class="pipe-card"><div class="pipe-num">—</div></div>
+  </div>
+
+  <div class="page-header" style="margin-top:16px;">
+    <div style="font-size:15px;font-weight:700;">Job Openings</div>
+    <button class="btn btn-primary btn-sm">+ Post Job</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Job Title</th><th>Department</th><th>Location</th><th>Type</th><th>Posted</th><th>Deadline</th><th>Applicants</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
+        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-red">Closed</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -1,0 +1,65 @@
+/* ============================================================
+   auth.css — Role badges, access denied page
+   ============================================================ */
+
+/* ── Role badge in sidebar ───────────────────────────────────── */
+.role-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+.role-admin           { background: rgba(224,92,122,0.2); color: #e05c7a; }
+.role-payroll_officer { background: rgba(79,124,255,0.2); color: #4f7cff; }
+.role-payroll_manager { background: rgba(124,92,252,0.2); color: #7c5cfc; }
+.role-employee        { background: rgba(34,211,165,0.2); color: #22d3a5; }
+
+/* ── Sidebar user block ──────────────────────────────────────── */
+.sidebar-user-info { flex: 1; min-width: 0; }
+.sidebar-user-info .name  { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-user-info .role-text { font-size: 11px; color: var(--muted); }
+
+/* ── Logout button ───────────────────────────────────────────── */
+.btn-logout {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: .15s;
+  flex-shrink: 0;
+}
+.btn-logout:hover { color: var(--red); background: rgba(224,92,122,0.1); }
+
+/* ── Access Denied page ──────────────────────────────────────── */
+#page-denied {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  flex-direction: column;
+  text-align: center;
+  gap: 16px;
+}
+#page-denied.active { display: flex; }
+
+.denied-icon  { font-size: 64px; }
+.denied-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 28px; font-weight: 800; color: var(--red);
+}
+.denied-sub   { font-size: 14px; color: var(--muted); max-width: 360px; }
+.denied-back  {
+  margin-top: 8px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 10px;
+  padding: 11px 24px; font-size: 14px; font-weight: 700;
+  cursor: pointer; font-family: 'DM Sans', sans-serif;
+}
+.denied-back:hover { background: #3a6aee; }

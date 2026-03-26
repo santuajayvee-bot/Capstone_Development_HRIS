@@ -1,0 +1,92 @@
+<!-- ============================================================
+     pages/dashboard.html — Dashboard page content
+     ============================================================ -->
+<div class="section-title">Dashboard</div>
+<div class="section-sub">Welcome back Admin Diwata. Here's an overview of our HR metrics.</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Total Employees</div>
+    <div class="stat-val">12</div>
+    <div class="stat-sub">Total Employees</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active Employees</div>
+    <div class="stat-val">12</div>
+    <div class="stat-sub">+8% vs last month</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Present Today</div>
+    <div class="stat-val">154</div>
+    <div class="stat-sub">+5% vs last month</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Payroll</div>
+    <div class="stat-val">₱100K</div>
+    <div class="stat-sub">+12% last month</div>
+  </div>
+</div>
+
+<div class="charts-grid">
+  <div class="chart-card">
+    <div class="chart-title">Department Distribution</div>
+    <div class="pie-placeholder"></div>
+    <div class="pie-legend">
+      <div class="pie-leg-item"><div class="pie-dot" style="background:#4f7cff"></div>Engineering 25%</div>
+      <div class="pie-leg-item"><div class="pie-dot" style="background:#22d3a5"></div>HR 11%</div>
+      <div class="pie-leg-item"><div class="pie-dot" style="background:#f5a623"></div>Product 17%</div>
+      <div class="pie-leg-item"><div class="pie-dot" style="background:#e05c7a"></div>Design 17%</div>
+      <div class="pie-leg-item"><div class="pie-dot" style="background:#7c5cfc"></div>Operations 8%</div>
+    </div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Monthly Hiring Trend</div>
+    <div class="bar-chart">
+      <div class="bar" style="height:60%"></div>
+      <div class="bar" style="height:80%"></div>
+      <div class="bar" style="height:50%"></div>
+      <div class="bar" style="height:90%"></div>
+      <div class="bar" style="height:70%"></div>
+      <div class="bar" style="height:100%"></div>
+      <div class="bar" style="height:85%"></div>
+    </div>
+    <div class="bar-labels">
+      <span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span><span>Jan</span><span>Feb</span>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div style="font-size:15px;font-weight:700;margin-bottom:16px;">Leave Requests</div>
+  <table class="leave-req-table">
+    <thead><tr><th>Employee</th><th>Type</th><th>Date Range</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>LeBron James</td><td>Vacation</td><td>3/1/2026 – 3/5/2026</td><td><span class="badge badge-green">Approved</span></td></tr>
+      <tr><td>Wally Bayola</td><td>Sick</td><td>3/27/2026</td><td><span class="badge badge-yellow">Pending</span></td></tr>
+      <tr><td>Chris Brown</td><td>Personal</td><td>3/15/2026 – 3/17/2026</td><td><span class="badge badge-green">Approved</span></td></tr>
+      <tr><td>Sam Angela</td><td>Vacation</td><td>4/6/2026 – 4/12/2026</td><td><span class="badge badge-red">Denied</span></td></tr>
+      <tr><td>Maine Mendoza</td><td>Sick</td><td>2/28/26 – 2/21/2026</td><td><span class="badge badge-green">Approved</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="action-cards">
+  <div class="action-card blue">
+    <div class="ac-icon">👤</div>
+    <div class="ac-title">Add New Employee</div>
+    <div class="ac-sub">Onboard a new team member</div>
+    <button id="dash-add-emp" onclick="navigate('register', document.querySelector('[data-page=employees]'))">Add Employee</button>
+  </div>
+  <div class="action-card green">
+    <div class="ac-icon">📋</div>
+    <div class="ac-title">Review Requests</div>
+    <div class="ac-sub">3 pending leave requests</div>
+    <button id="dash-review" onclick="navigate('leave', document.querySelector('[data-page=leave]'))">Review Now</button>
+  </div>
+  <div class="action-card purple">
+    <div class="ac-icon">📊</div>
+    <div class="ac-title">View Reports</div>
+    <div class="ac-sub">Generate HR analytics reports</div>
+    <button>Generate Report</button>
+  </div>
+</div>

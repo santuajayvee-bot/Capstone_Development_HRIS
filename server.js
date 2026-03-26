@@ -1,0 +1,533 @@
+/* ============================================================
+   server.js — LGSV_HR System — Express + JWT + MySQL
+   ============================================================ */
+
+require('dotenv').config();
+const express    = require('express');
+const path       = require('path');
+const multer     = require('multer');
+const fs         = require('fs');
+
+const { login, me }                          = require('./server/auth');
+const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
+const payrollRoutes                          = require('./server/payroll');
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    // Allowed file types
+    const allowedTypes = /pdf|doc|docx|jpg|jpeg|png/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, DOC, DOCX, JPG, JPEG, and PNG are allowed.'));
+    }
+  }
+});
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ── PUBLIC ───────────────────────────────────────────────────
+app.post('/api/auth/login', login);
+
+// ── PROTECTED ────────────────────────────────────────────────
+app.get('/api/auth/me', requireAuth, me);
+
+// Payroll Routes (wages, transactions, payroll generation)
+app.use('/api/payroll', payrollRoutes);
+
+// Employees
+app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [rows] = await pool.execute(
+      `SELECT e.*, d.name AS department FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id ORDER BY e.first_name`
+    );
+    
+    console.log('\n=== GET /api/employees ===');
+    console.log('Total employees returned:', rows.length);
+    if (rows.length > 0) {
+      console.log('Sample employee data:', {
+        employee_code: rows[0].employee_code,
+        name: rows[0].first_name + ' ' + rows[0].last_name,
+        department: rows[0].department,
+        position: rows[0].position,
+        supervisor: rows[0].supervisor,
+        work_location: rows[0].work_location
+      });
+    }
+    
+    if (req.user.role === 'employee') return res.json(rows.filter(r => r.id === req.user.employeeId));
+    res.json(rows);
+  } catch (err) { 
+    console.error('Error fetching employees:', err);
+    res.status(500).json({ error: 'Failed to fetch employees.' }); 
+  }
+});
+
+// Add new employee
+app.post('/api/employees', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    
+    const pool = require('./config/db');
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status } = req.body;
+    
+    console.log('\n=== POST /api/employees ===');
+    console.log('User role:', req.user.role);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
+    if (!first_name || !last_name || !email) {
+      console.error('❌ Missing required fields');
+      return res.status(400).json({ error: 'First name, last name, and email are required.' });
+    }
+    
+    if (!employee_code) {
+      console.error('❌ Missing employee_code');
+      return res.status(400).json({ error: 'Employee code is required.' });
+    }
+
+    console.log('Executing INSERT for:', { employee_code, first_name, last_name, email });
+    
+    const [result] = await pool.execute(
+      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, employment_type || 'Full-time', date_hired || null, supervisor || null, work_location || null, status || 'Active']
+    );
+    
+    console.log('✅ Employee inserted successfully!');
+    console.log('Insert result:', { insertId: result.insertId, affectedRows: result.affectedRows });
+    console.log('Employee Code:', employee_code);
+    return res.status(201).json({ id: result.insertId, employee_code: employee_code, message: 'Employee added successfully.' });
+  } catch (err) { 
+    console.error('❌ ERROR adding employee:');
+    console.error('Message:', err.message);
+    console.error('SQL Error:', err.sqlMessage);
+    console.error('SQL State:', err.sqlState);
+    console.error('Full error:', err);
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({ error: 'Failed to add employee: ' + err.message }); 
+  }
+});
+
+// Update Employee
+app.put('/api/employees/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    
+    const pool = require('./config/db');
+    const { id } = req.params; // This is the employee_code
+    const { first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status } = req.body;
+    
+    console.log('\n=== PUT /api/employees/:id ===');
+    console.log('Employee Code (ID):', id);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
+    if (!first_name || !last_name || !email) {
+      console.error('❌ Missing required fields');
+      return res.status(400).json({ error: 'First name, last name, and email are required.' });
+    }
+
+    console.log('Executing UPDATE for:', { id, first_name, last_name, email, department_id, position, supervisor, work_location });
+
+    const [result] = await pool.execute(
+      `UPDATE employees SET 
+        first_name=?, middle_name=?, last_name=?, suffix=?, email=?, contact_number=?, 
+        nationality=?, date_of_birth=?, gender=?, residential_address=?, emergency_contact_name=?, 
+        emergency_contact_num=?, department_id=?, position=?, employment_type=?, date_hired=?, supervisor=?, work_location=?, status=?
+       WHERE employee_code=?`,
+      [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, 
+       nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, 
+       emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, 
+       employment_type || 'Full-time', date_hired || null, supervisor || null, work_location || null, status || 'Active', id]
+    );
+    
+    console.log('✅ UPDATE executed');
+    console.log('Rows affected:', result.affectedRows);
+    console.log('Change count:', result.changedRows);
+    
+    if (result.affectedRows === 0) {
+      console.error('❌ No rows updated! Employee code might not exist:', id);
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    
+    console.log('✅ Employee updated successfully');
+    return res.status(200).json({ message: 'Employee updated successfully.' });
+  } catch (err) { 
+    console.error('Error updating employee:', err.message, err.sqlMessage);
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({ error: 'Failed to update employee: ' + err.message }); 
+  }
+});
+
+// Update Employee Status
+app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    const pool = require('./config/db');
+    const { id } = req.params; // id = employee_code from URL
+    const { status } = req.body;
+
+    if (!status || !['Active', 'Inactive'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be Active or Inactive.' });
+    }
+
+    console.log('PATCH /api/employees/:id/status - Employee Code:', id, '- New Status:', status);
+
+    const [result] = await pool.execute(
+      `UPDATE employees SET status = ? WHERE employee_code = ?`,
+      [status, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    return res.status(200).json({ message: `Employee status updated to ${status}.` });
+  } catch (err) {
+    console.error('Error updating employee status:', err.message, err.sqlMessage);
+    return res.status(500).json({ error: 'Failed to update employee status.', details: err.message });
+  }
+});
+
+// Delete Employee
+app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    const pool = require('./config/db');
+    const { id } = req.params; // id = employee_code from URL
+
+    console.log('DELETE /api/employees/:id - Employee Code:', id);
+
+    const [result] = await pool.execute(
+      `DELETE FROM employees WHERE employee_code = ?`,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    return res.status(200).json({ message: 'Employee deleted successfully.' });
+  } catch (err) {
+    console.error('Error deleting employee:', err.message, err.sqlMessage);
+    return res.status(500).json({ error: 'Failed to delete employee.', details: err.message });
+  }
+});
+
+// Upload employee document
+app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.payroll_any), upload.single('file'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // id = employee_code
+    const { docType } = req.body;
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided.' });
+    }
+    
+    if (!docType) {
+      return res.status(400).json({ error: 'Document type is required.' });
+    }
+    
+    console.log('\n=== POST /api/employees/:id/documents ===');
+    console.log('Employee Code:', id);
+    console.log('Document Type:', docType);
+    console.log('File:', req.file.filename);
+    
+    // Get employee ID from employee_code
+    const [empRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [id]);
+    if (empRows.length === 0) {
+      fs.unlinkSync(req.file.path); // Delete uploaded file
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    
+    const employeeId = empRows[0].id;
+    const filePath = `/uploads/${req.file.filename}`;
+    
+    // Insert or update document record (REPLACE replaces if duplicate)
+    const [result] = await pool.execute(
+      `REPLACE INTO documents (employee_id, document_type, file_name, file_path) 
+       VALUES (?, ?, ?, ?)`,
+      [employeeId, docType, req.file.originalname, filePath]
+    );
+    
+    console.log('✅ Document uploaded successfully');
+    return res.status(200).json({
+      message: 'Document uploaded successfully.',
+      file_name: req.file.originalname,
+      file_path: filePath
+    });
+    
+  } catch (err) {
+    console.error('Error uploading document:', err.message);
+    if (req.file) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ error: 'Failed to upload document.', details: err.message });
+  }
+});
+
+// Get employee documents
+app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // id = employee_code
+    
+    // Get employee ID from employee_code
+    const [empRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [id]);
+    if (empRows.length === 0) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    
+    const employeeId = empRows[0].id;
+    
+    // Fetch all documents for this employee
+    const [docs] = await pool.execute(
+      `SELECT id, document_type, file_name, file_path, uploaded_date FROM documents 
+       WHERE employee_id = ? ORDER BY document_type`,
+      [employeeId]
+    );
+    
+    console.log(`Fetched ${docs.length} documents for employee ${id}`);
+    return res.json(docs);
+    
+  } catch (err) {
+    console.error('Error fetching documents:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch documents.', details: err.message });
+  }
+});
+
+// Delete employee document
+app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, docId } = req.params;
+    
+    // Get document info
+    const [docs] = await pool.execute('SELECT file_path FROM documents WHERE id = ?', [docId]);
+    if (docs.length === 0) {
+      return res.status(404).json({ error: 'Document not found.' });
+    }
+    
+    const filePath = path.join(__dirname, 'public', docs[0].file_path);
+    
+    // Delete file from disk
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    
+    // Delete database record
+    await pool.execute('DELETE FROM documents WHERE id = ?', [docId]);
+    
+    console.log('✅ Document deleted successfully');
+    return res.status(200).json({ message: 'Document deleted successfully.' });
+    
+  } catch (err) {
+    console.error('Error deleting document:', err.message);
+    return res.status(500).json({ error: 'Failed to delete document.', details: err.message });
+  }
+});
+
+// Leave
+app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    let q = `SELECT lr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
+             FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id`;
+    const p = [];
+    if (req.user.role === 'employee') { q += ' WHERE lr.employee_id = ?'; p.push(req.user.employeeId); }
+    q += ' ORDER BY lr.created_at DESC';
+    const [rows] = await pool.execute(q, p);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
+});
+
+app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { type, date_from, date_to, days, reason, employee_id } = req.body;
+    const empId = req.user.role === 'employee' ? req.user.employeeId : employee_id;
+    
+    console.log('POST /api/leave - req.user:', req.user);
+    console.log('POST /api/leave - req.body:', req.body);
+    console.log('POST /api/leave - final empId:', empId);
+    
+    if (!empId) {
+      console.error('Error: No employee_id found');
+      return res.status(400).json({ error: 'Employee ID is required.' });
+    }
+    
+    const [result] = await pool.execute(
+      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason) VALUES (?,?,?,?,?,?)`,
+      [empId, type, date_from, date_to, days || 1, reason]
+    );
+    console.log('Leave request inserted with ID:', result.insertId);
+    res.json({ id: result.insertId, message: 'Leave request submitted.' });
+  } catch (err) { 
+    console.error('Error saving leave request:', err);
+    res.status(500).json({ error: 'Failed to submit leave.' }); 
+  }
+});
+
+app.patch('/api/leave/:id/status', requireAuth, requireRole(['admin','payroll_officer','payroll_manager']), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await pool.execute(
+      `UPDATE leave_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
+      [req.body.status, req.user.id, req.params.id]
+    );
+    res.json({ message: 'Leave status updated.' });
+  } catch (err) { res.status(500).json({ error: 'Failed to update leave.' }); }
+});
+
+// Attendance
+app.get('/api/attendance', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    let q = `SELECT a.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
+             FROM attendance a JOIN employees e ON e.id = a.employee_id`;
+    const p = [];
+    if (req.user.role === 'employee') { q += ' WHERE a.employee_id = ?'; p.push(req.user.employeeId); }
+    q += ' ORDER BY a.date DESC LIMIT 100';
+    const [rows] = await pool.execute(q, p);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch attendance.' }); }
+});
+
+// General Requests (COE, COS, Exit)
+app.get('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    let q = `SELECT gr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
+             FROM general_requests gr JOIN employees e ON e.id = gr.employee_id`;
+    const p = [];
+    if (req.user.role === 'employee') { q += ' WHERE gr.employee_id = ?'; p.push(req.user.employeeId); }
+    q += ' ORDER BY gr.created_at DESC';
+    const [rows] = await pool.execute(q, p);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch requests.' }); }
+});
+
+app.post('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { type, reason, employee_id } = req.body;
+    const empId = req.user.role === 'employee' ? req.user.employeeId : employee_id;
+    if (!empId) return res.status(400).json({ error: 'Employee ID is required.' });
+    if (!['COE','COS','Request Exit'].includes(type)) return res.status(400).json({ error: 'Invalid request type.' });
+    const [result] = await pool.execute(
+      `INSERT INTO general_requests (employee_id, type, reason) VALUES (?,?,?)`,
+      [empId, type, reason || null]
+    );
+    res.json({ id: result.insertId, message: 'Request submitted.' });
+  } catch (err) { res.status(500).json({ error: 'Failed to submit request.' }); }
+});
+
+app.patch('/api/requests/:id/status', requireAuth, requireRole(['admin','payroll_officer','payroll_manager']), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await pool.execute(
+      `UPDATE general_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
+      [req.body.status, req.user.id, req.params.id]
+    );
+    res.json({ message: 'Request status updated.' });
+  } catch (err) { res.status(500).json({ error: 'Failed to update request.' }); }
+});
+
+// Payroll runs — payroll roles + admin only
+app.get('/api/payroll/runs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [rows] = await pool.execute(`SELECT * FROM payroll_runs ORDER BY created_at DESC`);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll runs.' }); }
+});
+
+app.post('/api/payroll/runs', requireAuth, requireRole(['admin','payroll_officer']), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { period_start, period_end } = req.body;
+    const [result] = await pool.execute(
+      `INSERT INTO payroll_runs (period_start,period_end,run_date,status,created_by) VALUES (?,?,CURDATE(),'Draft',?)`,
+      [period_start, period_end, req.user.id]
+    );
+    res.json({ id: result.insertId, message: 'Payroll run created.' });
+  } catch (err) { res.status(500).json({ error: 'Failed to create payroll run.' }); }
+});
+
+app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['admin','payroll_manager']), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await pool.execute(
+      `UPDATE payroll_runs SET status=?, approved_by=?, approved_at=NOW() WHERE id=?`,
+      [req.body.status, req.user.id, req.params.id]
+    );
+    res.json({ message: 'Payroll run updated.' });
+  } catch (err) { res.status(500).json({ error: 'Failed to update payroll run.' }); }
+});
+
+// Payslips
+app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    let q = `SELECT ps.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+             pr.period_start, pr.period_end
+             FROM payslips ps JOIN employees e ON e.id=ps.employee_id
+             JOIN payroll_runs pr ON pr.id=ps.payroll_run_id`;
+    const p = [];
+    if (req.user.role === 'employee') { q += ' WHERE ps.employee_id = ?'; p.push(req.user.employeeId); }
+    q += ' ORDER BY ps.generated_at DESC';
+    const [rows] = await pool.execute(q, p);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips.' }); }
+});
+
+// Blockchain — admin only
+app.get('/api/blockchain', requireAuth, requireRole(ROLES.admin), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [rows] = await pool.execute(
+      `SELECT al.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
+       FROM audit_log al LEFT JOIN employees e ON e.id=al.employee_id
+       ORDER BY al.created_at DESC LIMIT 50`
+    );
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch audit log.' }); }
+});
+
+// SPA fallback
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`✅  LGSV_HR running → http://localhost:${PORT}`);
+});
+
+

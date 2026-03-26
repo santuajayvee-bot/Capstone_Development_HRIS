@@ -1,0 +1,493 @@
+<!-- ============================================================
+     pages/employees.html — Employees page content
+     ============================================================ -->
+<style>
+  .emp-detail-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  
+  .emp-detail-container {
+    background: white;
+    border-radius: 16px;
+    width: 90%;
+    max-width: 650px;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  }
+  
+  .emp-detail-header {
+    position: sticky;
+    top: 0;
+    background: linear-gradient(135deg, #f8f9fa 0%, #f1f3f5 100%);
+    padding: 32px 28px 24px;
+    border-bottom: 1px solid #e9ecef;
+    border-radius: 16px 16px 0 0;
+  }
+  
+  .close-btn {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
+    background: rgba(0, 0, 0, 0.05);
+    border: none;
+    border-radius: 50%;
+    font-size: 20px;
+    cursor: pointer;
+    color: #6c757d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+  }
+  
+  .close-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: #212529;
+  }
+  
+  .emp-detail-top {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  
+  .emp-detail-avatar {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 22px;
+    color: white;
+    box-shadow: 0 4px 12px rgba(79, 124, 255, 0.2);
+    flex-shrink: 0;
+  }
+  
+  .emp-detail-name {
+    font-size: 20px;
+    font-weight: 700;
+    color: #212529;
+    letter-spacing: -0.5px;
+  }
+  
+  .emp-detail-status {
+    font-size: 13px;
+    color: #28a745;
+    margin-top: 6px;
+    font-weight: 500;
+  }
+  
+  .emp-detail-tabs {
+    display: flex;
+    gap: 0;
+    background: #f8f9fa;
+    border-bottom: 2px solid #e9ecef;
+    padding: 0 28px;
+    margin: 0 0 0 0;
+  }
+  
+  .emp-detail-tab-btn {
+    flex: 1;
+    padding: 16px 0;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    color: #6c757d;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.25s ease;
+    position: relative;
+  }
+  
+  .emp-detail-tab-btn:hover {
+    color: #495057;
+  }
+  
+  .emp-detail-tab-btn.active {
+    color: #4f7cff;
+    border-bottom-color: #4f7cff;
+  }
+  
+  .emp-detail-content {
+    padding: 32px 28px;
+    background: white;
+  }
+  
+  .detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    background: #f8f9fa;
+    border-radius: 10px;
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+  }
+  
+  .detail-row:hover {
+    background: #f1f3f5;
+    border-color: #dee2e6;
+  }
+  
+  .detail-label {
+    font-weight: 700;
+    color: #6c757d;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  
+  .detail-value {
+    text-align: right;
+    font-weight: 600;
+    color: #212529;
+    font-size: 14px;
+  }
+  
+  .documents-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .doc-item {
+    display: flex;
+    gap: 14px;
+    padding: 16px;
+    background: #f8f9fa;
+    border: 2px solid #e9ecef;
+    border-radius: 10px;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.25s ease;
+  }
+  
+  .doc-item:hover {
+    background: #f1f3f5;
+    border-color: #4f7cff;
+    transform: translateX(4px);
+  }
+  
+  .doc-icon {
+    font-size: 28px;
+    flex-shrink: 0;
+  }
+  
+  .doc-name {
+    font-weight: 700;
+    color: #212529;
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+  
+  .doc-date {
+    font-size: 12px;
+    color: #6c757d;
+  }
+</style>
+<div class="page-header">
+  <div>
+    <div class="section-title">Employees</div>
+    <div class="section-sub">Manage organization's workforce</div>
+  </div>
+  <div class="page-header-right">
+    <button class="btn btn-outline" onclick="switchView('manage')">⚙ Manage Employee</button>
+    <button class="btn btn-primary" onclick="navigate('register', null)">+ Add Employee</button>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <input id="emp-search" class="search-input" placeholder="🔍 Search Employees" />
+  <select id="emp-dept" class="filter-select">
+    <option>All Departments</option>
+    <option>HR</option>
+    <option>Accounting</option>
+    <option>Production</option>
+    <option>Logistics</option>
+    <option>Personnel</option>
+  </select>
+  <select id="emp-status" class="filter-select">
+    <option>All Status</option>
+    <option>Active</option>
+    <option>Inactive</option>
+  </select>
+</div>
+
+<div id="emp-count" style="font-size:13px;color:var(--muted);margin-bottom:16px;">Showing 6 of 6 employees</div>
+<div id="emp-grid" class="emp-grid">
+  <!-- Rendered by employees.js -->
+</div>
+
+<!-- Employee Details Modal -->
+<div id="emp-detail-modal" class="emp-detail-modal">
+  <div class="emp-detail-container">
+    <div class="emp-detail-header">
+      <button onclick="closeEmployeeDetail()" class="close-btn">✕</button>
+      <div class="emp-detail-top">
+        <div id="emp-detail-avatar" class="emp-detail-avatar">SJ</div>
+        <div>
+          <div id="emp-detail-name" class="emp-detail-name">Employee Name</div>
+          <div id="emp-detail-status" class="emp-detail-status">Active</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tabs -->
+    <div class="emp-detail-tabs">
+      <button class="emp-detail-tab-btn active" onclick="switchTab('personal')">👤 Personal Info</button>
+      <button class="emp-detail-tab-btn" onclick="switchTab('employment')">💼 Employment Details</button>
+      <button class="emp-detail-tab-btn" onclick="switchTab('documents')">📄 Documents</button>
+    </div>
+    
+    <!-- Tab Content -->
+    <div class="emp-detail-content">
+      
+      <!-- Personal Info Tab -->
+      <div id="emp-detail-tab-personal" style="display:block;">
+        <div class="detail-section">
+          <div class="detail-row">
+            <div class="detail-label">Email</div>
+            <div id="emp-detail-email" class="detail-value">email@example.com</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Phone</div>
+            <div id="emp-detail-phone" class="detail-value">+63 123 456 7890</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">City/Location</div>
+            <div id="emp-detail-city" class="detail-value">City Name</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Employee ID</div>
+            <div id="emp-detail-empid" class="detail-value">EMP00001</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Employment Details Tab -->
+      <div id="emp-detail-tab-employment" style="display:none;">
+        <div class="detail-section">
+          <div class="detail-row">
+            <div class="detail-label">Department</div>
+            <div id="emp-detail-dept" class="detail-value">Department Name</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Position</div>
+            <div class="detail-value">—</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Employment Type</div>
+            <div class="detail-value">—</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Date Hired</div>
+            <div class="detail-value">—</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Documents Tab -->
+      <div id="emp-detail-tab-documents" style="display:none;">
+        <div class="detail-section">
+          <div class="documents-list">
+            <div class="doc-item">
+              <span class="doc-icon">📋</span>
+              <div>
+                <div class="doc-name">Resume / CV</div>
+                <div class="doc-date">No file uploaded</div>
+              </div>
+            </div>
+            <div class="doc-item">
+              <span class="doc-icon">🆔</span>
+              <div>
+                <div class="doc-name">ID / Government ID</div>
+                <div class="doc-date">No file uploaded</div>
+              </div>
+            </div>
+            <div class="doc-item">
+              <span class="doc-icon">🎓</span>
+              <div>
+                <div class="doc-name">Educational Credentials</div>
+                <div class="doc-date">No file uploaded</div>
+              </div>
+            </div>
+            <div class="doc-item">
+              <span class="doc-icon">⚖️</span>
+              <div>
+                <div class="doc-name">Contract / Agreement</div>
+                <div class="doc-date">No file uploaded</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Employee Management View (Admin Only) -->
+<div id="emp-manage-view" style="display:none;">
+  <style>
+    .manage-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    
+    .manage-header h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #212529;
+    }
+    
+    .manage-header button {
+      background: #4f7cff;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.2s ease;
+    }
+    
+    .manage-header button:hover {
+      background: #3a5ec7;
+    }
+    
+    .emp-table-container {
+      background: white;
+      border-radius: 12px;
+      border: 1px solid #e9ecef;
+      overflow: hidden;
+    }
+    
+    .emp-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    
+    .emp-table thead {
+      background: #f8f9fa;
+      border-bottom: 2px solid #e9ecef;
+    }
+    
+    .emp-table th {
+      padding: 16px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #6c757d;
+      letter-spacing: 0.5px;
+    }
+    
+    .emp-table td {
+      padding: 16px;
+      border-bottom: 1px solid #e9ecef;
+      color: #495057;
+    }
+    
+    .emp-table tbody tr:hover {
+      background: #f8f9fa;
+    }
+    
+    .emp-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    
+    .emp-id {
+      font-weight: 700;
+      color: #212529;
+    }
+    
+    .emp-name {
+      font-weight: 600;
+      color: #212529;
+    }
+    
+    .emp-status-badge {
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    
+    .emp-status-badge.active {
+      background: #d4edda;
+      color: #155724;
+    }
+    
+    .emp-status-badge.inactive {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    
+    .emp-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .emp-actions button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    
+    .emp-edit-btn {
+      background: #4f7cff;
+      color: white;
+    }
+    
+    .emp-edit-btn:hover {
+      background: #3a5ec7;
+    }
+    
+    .emp-delete-btn {
+      background: #f5a5a5;
+      color: #721c24;
+    }
+    
+    .emp-delete-btn:hover {
+      background: #f28a8a;
+    }
+  </style>
+  
+  <div class="manage-header">
+    <h3>Manage Employees</h3>
+    <button onclick="switchView('list')">← Back to List</button>
+  </div>
+  
+  <div id="emp-manage-tbody" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:20px 0;">
+    <!-- Rendered by employees.js -->
+  </div>
+</div>

@@ -1,0 +1,50 @@
+/* ============================================================
+   ATTENDANCE.CSS
+   ============================================================ */
+
+.att-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.att-stat {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.att-icon  { font-size: 22px; }
+.att-num   { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 800; }
+.att-label { font-size: 12px; color: var(--muted); }
+
+.att-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.att-big { border-radius: 14px; padding: 20px; }
+.att-big.blue  { background: var(--blue); }
+.att-big.green { background: #1a7a5e; }
+.att-big .ab-icon  { font-size: 20px; margin-bottom: 8px; }
+.att-big .ab-val   { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; color: #fff; }
+.att-big .ab-label { font-size: 13px; color: rgba(255,255,255,0.8); }
+
+/* Overtime section */
+.ot-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.ot-name     { width: 120px; font-size: 12px; color: var(--muted); }
+.ot-bar-wrap { flex: 1; background: var(--border); border-radius: 4px; height: 8px; }
+.ot-bar      { height: 100%; border-radius: 4px; }
+.ot-val      { font-size: 12px; font-weight: 600; width: 36px; text-align: right; }
+
+/* Records summary cards */
+.records-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.records-summary .card { text-align: center; }

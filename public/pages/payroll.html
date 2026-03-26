@@ -1,0 +1,55 @@
+<!-- ============================================================
+     pages/payroll.html — Payroll page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Payroll</div>
+    <div class="section-sub">Manage employee compensation and disbursements</div>
+  </div>
+  <div class="page-header-right">
+    <button class="btn btn-outline">⬆ Export</button>
+    <button class="btn btn-primary">+ Run Payroll</button>
+  </div>
+</div>
+
+<div class="stat-grid" style="margin-bottom:24px;">
+  <div class="stat-card">
+    <div class="stat-label">Total Payroll</div>
+    <div class="stat-val">₱100K</div>
+    <div class="stat-sub">February 2026</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Disbursed</div>
+    <div class="stat-val">₱85K</div>
+    <div class="stat-sub">+12% last month</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Pending</div>
+    <div class="stat-val">₱15K</div>
+    <div class="stat-sub red">Awaiting approval</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Deductions</div>
+    <div class="stat-val">₱8K</div>
+    <div class="stat-sub">SSS, PhilHealth, etc.</div>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th>
+        <th>Department</th>
+        <th>Basic Pay</th>
+        <th>Overtime</th>
+        <th>Deductions</th>
+        <th>Net Pay</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="payroll-tbody">
+      <!-- Rendered by payroll.js -->
+    </tbody>
+  </table>
+</div>
