@@ -160,7 +160,10 @@ CREATE TABLE IF NOT EXISTS employee_deductions (
 
 -- Add wage_type_id column to employees table if it doesn't exist
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS wage_type_id INT AFTER employment_type;
-ALTER TABLE employees ADD CONSTRAINT fk_emp_wage_type FOREIGN KEY (wage_type_id) REFERENCES wage_types(id);
+
+-- Add foreign key constraint (drop first if exists to avoid conflicts)
+ALTER TABLE employees DROP FOREIGN KEY IF EXISTS fk_emp_wage_type;
+ALTER TABLE employees ADD CONSTRAINT fk_emp_wage_type FOREIGN KEY (wage_type_id) REFERENCES wage_types(id) ON DELETE SET NULL;
 
 -- Add beneficiary/government IDs to employees table
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS sss_number VARCHAR(20);

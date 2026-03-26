@@ -230,83 +230,128 @@ router.get('/payroll/:monthYear', requireAuth, requireRole(ROLES.payroll_any), a
 });
 
 // Generate payroll for a month
-router.post('/payroll/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
     const { month_year, start_date, end_date } = req.body;
 
-    // Check if payroll already exists
-    const [existing] = await pool.execute(
-      'SELECT id FROM payroll_runs WHERE month_year = ?',
-      [month_year]
-    );
+    console.log('📊 Starting payroll generation for:', { month_year, start_date, end_date });
 
-    if (existing.length) {
-      return res.status(400).json({ error: 'Payroll already generated for this month' });
+    // Validate inputs
+    if (!month_year || !start_date || !end_date) {
+      return res.status(400).json({ error: 'month_year, start_date, and end_date are required' });
+    }
+
+    // Check if payroll already exists
+    try {
+      const [existing] = await pool.execute(
+        'SELECT id FROM payroll_runs WHERE month_year = ?',
+        [month_year]
+      );
+
+      if (existing.length) {
+        return res.status(400).json({ error: `Payroll already generated for ${month_year}` });
+      }
+    } catch (dbErr) {
+      console.error('❌ Error checking existing payroll:', dbErr);
+      throw new Error(`Failed to check existing payroll: ${dbErr.message}`);
     }
 
     // Create payroll run
-    const [runResult] = await pool.execute(`
-      INSERT INTO payroll_runs (month_year, start_date, end_date, created_by)
-      VALUES (?, ?, ?, ?)
-    `, [month_year, start_date, end_date, req.user.userId]);
+    let payrollRunId;
+    try {
+      const [runResult] = await pool.execute(`
+        INSERT INTO payroll_runs (month_year, start_date, end_date, created_by)
+        VALUES (?, ?, ?, ?)
+      `, [month_year, start_date, end_date, req.user.id || req.user.userId]);
 
-    const payrollRunId = runResult.insertId;
+      payrollRunId = runResult.insertId;
+      console.log('✅ Payroll run created with ID:', payrollRunId);
+    } catch (dbErr) {
+      console.error('❌ Error creating payroll run:', dbErr);
+      throw new Error(`Failed to create payroll run: ${dbErr.message}`);
+    }
 
     // Get all active employees
-    const [employees] = await pool.execute(`
-      SELECT e.id, e.wage_type_id, w.name AS wage_type
-      FROM employees e
-      LEFT JOIN wage_types w ON w.id = e.wage_type_id
-      WHERE e.status = 'Active'
-    `);
+    let employees = [];
+    try {
+      const [empData] = await pool.execute(`
+        SELECT e.id, e.wage_type_id, w.name AS wage_type
+        FROM employees e
+        LEFT JOIN wage_types w ON w.id = e.wage_type_id
+        WHERE e.status = 'Active'
+      `);
+      employees = empData;
+      console.log(`✅ Found ${employees.length} active employees`);
+    } catch (dbErr) {
+      console.error('❌ Error fetching employees:', dbErr);
+      throw new Error(`Failed to fetch employees: ${dbErr.message}`);
+    }
 
     // Generate payslips for each employee
+    let processedCount = 0;
     for (const emp of employees) {
-      let totalEarning = 0;
+      try {
+        let totalEarning = 0;
 
-      if (emp.wage_type === 'Per-Piece') {
-        // Sum production transactions
-        const [prods] = await pool.execute(`
-          SELECT SUM(amount) AS total
-          FROM production_transactions
-          WHERE employee_id = ? AND month_year = ?
-        `, [emp.id, month_year]);
-        totalEarning = prods[0]?.total || 0;
-      } else if (emp.wage_type === 'Per-Trip') {
-        // Sum logistics transactions
-        const [trips] = await pool.execute(`
-          SELECT SUM(amount) AS total
-          FROM logistics_transactions
-          WHERE employee_id = ? AND month_year = ?
-        `, [emp.id, month_year]);
-        totalEarning = trips[0]?.total || 0;
+        if (emp.wage_type === 'Per-Piece') {
+          // Sum production transactions
+          const [prods] = await pool.execute(`
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM production_transactions
+            WHERE employee_id = ? AND month_year = ?
+          `, [emp.id, month_year]);
+          totalEarning = prods[0]?.total || 0;
+        } else if (emp.wage_type === 'Per-Trip') {
+          // Sum logistics transactions
+          const [trips] = await pool.execute(`
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM logistics_transactions
+            WHERE employee_id = ? AND month_year = ?
+          `, [emp.id, month_year]);
+          totalEarning = trips[0]?.total || 0;
+        } else {
+          // Base Salary or Hourly - use a default or configured amount
+          totalEarning = 0; // Can be customized
+        }
+
+        // Get deductions
+        const [deducts] = await pool.execute(`
+          SELECT COALESCE(SUM(amount), 0) AS total
+          FROM employee_deductions
+          WHERE employee_id = ? AND is_active = 1
+        `, [emp.id]);
+        const totalDeduction = deducts[0]?.total || 0;
+
+        // Create payslip
+        await pool.execute(`
+          INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [payrollRunId, emp.id, emp.wage_type_id || 1, totalEarning, totalDeduction, totalEarning - totalDeduction]);
+
+        processedCount++;
+      } catch (slipErr) {
+        console.error(`❌ Error creating payslip for employee ${emp.id}:`, slipErr);
+        // Continue with next employee instead of failing entire payroll
       }
-
-      // Get deductions
-      const [deducts] = await pool.execute(`
-        SELECT SUM(amount) AS total
-        FROM employee_deductions
-        WHERE employee_id = ? AND start_date <= CURDATE() AND (end_date IS NULL OR end_date >= CURDATE())
-      `, [emp.id]);
-      const totalDeduction = deducts[0]?.total || 0;
-
-      // Create payslip
-      await pool.execute(`
-        INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [payrollRunId, emp.id, emp.wage_type_id, totalEarning, totalDeduction, totalEarning - totalDeduction]);
     }
+
+    console.log(`✅ Payroll generation completed. Processed ${processedCount} out of ${employees.length} employees`);
 
     res.json({ 
       success: true, 
       payrollRunId: payrollRunId,
-      employeesProcessed: employees.length,
-      message: `Payroll generated for ${month_year}` 
+      employeesProcessed: processedCount,
+      totalEmployees: employees.length,
+      message: `Payroll generated for ${month_year} - ${processedCount} employees processed` 
     });
   } catch (err) {
-    console.error('Error generating payroll:', err);
-    res.status(500).json({ error: 'Failed to generate payroll' });
+    console.error('❌ Error generating payroll:', err);
+    res.status(500).json({ 
+      error: 'Failed to generate payroll',
+      details: err.message,
+      message: err.message
+    });
   }
 });
 

@@ -123,8 +123,25 @@ async function runPayroll() {
     });
     
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to generate payroll');
+      // Try to parse as JSON first
+      let errorMsg = 'Failed to generate payroll';
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.details || errorData.message || errorData.error || errorMsg;
+      } catch (parseErr) {
+        // If not JSON, try to get text
+        try {
+          const text = await response.text();
+          if (text.includes('<!DOCTYPE')) {
+            errorMsg = 'Server error: Database tables may not exist. Please run the database migration.';
+          } else {
+            errorMsg = text;
+          }
+        } catch (textErr) {
+          errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+        }
+      }
+      throw new Error(errorMsg);
     }
     
     const result = await response.json();
@@ -133,8 +150,10 @@ async function runPayroll() {
     warningDiv.style.backgroundColor = 'rgba(34, 211, 165, 0.1)';
     warningDiv.style.borderColor = 'var(--green)';
     warningDiv.style.color = 'var(--green)';
-    warningDiv.textContent = `✅ Payroll generated successfully! Processed ${result.employeesProcessed} employees for ${monthYear}`;
+    warningDiv.textContent = `✅ Payroll generated successfully! Processed ${result.employeesProcessed || result.totalEmployees || 0} employees for ${monthYear}`;
     warningDiv.style.display = 'block';
+    
+    console.log('✅ Payroll generation result:', result);
     
     // Close modal after 2 seconds
     setTimeout(() => {

@@ -521,6 +521,15 @@ app.get('/api/blockchain', requireAuth, requireRole(ROLES.admin), async (req, re
   } catch (err) { res.status(500).json({ error: 'Failed to fetch audit log.' }); }
 });
 
+// Error handling middleware (before SPA fallback)
+app.use((err, req, res, next) => {
+  console.error('❌ Unhandled Error:', err.message);
+  res.status(err.status || 500).json({ 
+    error: 'Internal Server Error',
+    message: err.message
+  });
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
