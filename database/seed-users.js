@@ -17,6 +17,7 @@ const USERS = [
   { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 1    },
   { username: 'chris.brown',     password: 'emp123',     role_id: 4, employee_id: 2    },
   { username: 'lebron.james',    password: 'emp123',     role_id: 4, employee_id: 3    },
+  { username: 'hr.admin', password: 'hr123admin', role_id: 1, employee_id: null },
 ];
 
 async function seedUsers() {

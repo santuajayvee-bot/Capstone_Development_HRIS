@@ -41,6 +41,16 @@ function navigate(pageId, navEl) {
       generateEmployeeID();
     }
   }
+
+  // When navigating to leave, load leave requests
+  if (pageId === 'leave' && typeof loadLeaveRequests === 'function') {
+    loadLeaveRequests();
+  }
+
+  // When navigating to requests, load all requests
+  if (pageId === 'requests' && typeof loadAllRequests === 'function') {
+    loadAllRequests();
+  }
 }
 
 function showAccessDenied() {

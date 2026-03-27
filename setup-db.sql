@@ -68,6 +68,23 @@ CREATE TABLE documents (
   UNIQUE KEY unique_doc_per_emp (employee_id, document_type)
 );
 
+-- Leave Requests table
+CREATE TABLE leave_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id INT NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  date_from DATE NOT NULL,
+  date_to DATE NOT NULL,
+  days INT DEFAULT 1,
+  reason TEXT,
+  status ENUM('Pending','Approved','Denied') DEFAULT 'Pending',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  reviewed_by INT NULL,
+  reviewed_at TIMESTAMP NULL,
+  FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
 -- Insert default roles
 INSERT INTO roles (name, label) VALUES
   ('admin', 'Administrator'),

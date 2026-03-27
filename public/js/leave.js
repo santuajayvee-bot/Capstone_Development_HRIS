@@ -64,7 +64,10 @@ function renderLeaveRequests(leaves) {
       <td>${new Date(leave.date_from).toLocaleDateString()}</td>
       <td>${new Date(leave.date_to).toLocaleDateString()}</td>
       <td>${leave.days || 1}</td>
-      <td>${leave.reason || '-'}</td>
+      <td>
+        <div>${leave.reason || '-'}</div>
+        ${leave.file_path ? `<small style="color:var(--blue);text-decoration:underline;cursor:pointer;" onclick="window.open('${leave.file_path}', '_blank')">📎 Attachment</small>` : ''}
+      </td>
       <td class="leave-status"><span class="badge badge-${leave.status === 'Approved' ? 'green' : leave.status === 'Denied' ? 'red' : 'yellow'}">${leave.status}</span></td>
       <td>
         ${isAdmin ? `
@@ -273,6 +276,206 @@ function clearRequestForm() {
   if (leaveFields) leaveFields.style.display = 'grid';
 }
 
+// ───────────────────────────────────────────────────────────────
+// ── MANUAL LEAVE ENCODING (HR Admin) ──────────────────────────
+// ───────────────────────────────────────────────────────────────
+
+let EMPLOYEES_LIST = [];
+
+// Load employees and populate dropdown
+async function loadEmployeesForDropdown() {
+  try {
+    console.log('Fetching employees for dropdown...');
+    const response = await apiFetch('/api/employees');
+    
+    if (!response) {
+      console.error('No response from /api/employees');
+      return;
+    }
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Error ${response.status}:`, errorText);
+      return;
+    }
+    
+    const employees = await response.json();
+    console.log('Employees loaded:', employees);
+    EMPLOYEES_LIST = employees;
+
+    // Populate the dropdown
+    const select = document.getElementById('manual-employee');
+    if (select) {
+      select.innerHTML = '<option value="">-- Select Employee --</option>';
+      if (employees.length === 0) {
+        const option = document.createElement('option');
+        option.disabled = true;
+        option.textContent = 'No employees found';
+        select.appendChild(option);
+      } else {
+        employees.forEach(emp => {
+          const option = document.createElement('option');
+          option.value = emp.id;
+          option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
+          select.appendChild(option);
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error loading employees:', error);
+    const select = document.getElementById('manual-employee');
+    if (select) {
+      select.innerHTML = '<option value="">-- Error loading employees --</option>';
+    }
+  }
+}
+
+function toggleLeaveForm() {
+  const container = document.getElementById('leave-form-container');
+  const btn = document.getElementById('toggle-form-btn');
+  if (container && btn) {
+    const wasHidden = container.style.display === 'none';
+    
+    // Toggle display
+    container.style.display = wasHidden ? 'block' : 'none';
+    btn.textContent = wasHidden ? '🔽 Collapse Form' : '+ Expand Form';
+    
+    // Load employees when form is expanded (wasHidden was true)
+    if (wasHidden && EMPLOYEES_LIST.length === 0) {
+      console.log('Form expanded, loading employees...');
+      loadEmployeesForDropdown();
+    }
+  }
+}
+
+async function submitManualLeave(event) {
+  event.preventDefault();
+
+  if (!CURRENT_USER) {
+    await fetchCurrentUser();
+    if (!CURRENT_USER) { alert('Error: Not authenticated.'); return; }
+  }
+
+  // Check if user is HR Admin or payroll staff
+  if (!['admin', 'payroll_officer', 'payroll_manager'].includes(CURRENT_USER.role)) {
+    alert('Error: You do not have permission to manually encode leaves.');
+    return;
+  }
+
+  const form = document.getElementById('manual-leave-form');
+  const formData = new FormData(form);
+
+  const employeeId = document.getElementById('manual-employee').value;
+  const leaveType = document.getElementById('manual-leave-type').value;
+  const startDate = document.getElementById('manual-start-date').value;
+  const endDate = document.getElementById('manual-end-date').value;
+  const reason = document.getElementById('manual-reason').value.trim();
+  const attachment = document.getElementById('manual-attachment').files[0];
+
+  // Validation
+  if (!employeeId || !leaveType || !startDate || !endDate) {
+    alert('Please fill in all required fields.');
+    return;
+  }
+
+  if (new Date(endDate) < new Date(startDate)) {
+    alert('End date cannot be before start date.');
+    return;
+  }
+
+  // Check for policy violations
+  const daysBetween = Math.ceil((new Date(endDate) - new Date(startDate)) / 86400000) + 1;
+  const daysUntilLeave = Math.ceil((new Date(startDate) - new Date()) / 86400000);
+
+  const warningEl = document.getElementById('policy-warning');
+  const warningTextEl = document.getElementById('warning-text');
+  let hasWarning = false;
+
+  if (leaveType === 'Vacation' && daysUntilLeave < 2) {
+    warningTextEl.textContent = `Vacation Leave filed less than 2 days in advance. Filed on ${new Date().toLocaleDateString()} for ${new Date(startDate).toLocaleDateString()}.`;
+    warningEl.style.display = 'block';
+    hasWarning = true;
+  } else if (leaveType === 'Sick' && !reason) {
+    warningTextEl.textContent = 'Sick Leave without reason noted. Consider adding reason or medical documentation.';
+    warningEl.style.display = 'block';
+    hasWarning = true;
+  } else {
+    warningEl.style.display = 'none';
+  }
+
+  // Prepare payload
+  const payload = {
+    employee_id: parseInt(employeeId),
+    type: leaveType,
+    date_from: startDate,
+    date_to: endDate,
+    days: daysBetween,
+    reason: reason || null,
+    status: 'Approved',
+    encoded_by: CURRENT_USER.id,
+    encoded_at: new Date().toISOString(),
+  };
+
+  console.log('Submitting manual leave with payload:', payload);
+  console.log('File attached:', attachment?.name);
+
+  try {
+    let res;
+    
+    // If there's an attachment, send as FormData
+    if (attachment) {
+      const uploadData = new FormData();
+      // Add all fields to FormData
+      Object.keys(payload).forEach(key => {
+        uploadData.append(key, payload[key]);
+      });
+      uploadData.append('attachment', attachment);
+
+      console.log('Sending with FormData (includes file)');
+      res = await apiFetch('/api/leave', {
+        method: 'POST',
+        body: uploadData,
+        // Don't manually set Content-Type - browser will set it with boundary
+      });
+    } else {
+      // No file, send as JSON
+      console.log('Sending as JSON (no file)');
+      res = await apiFetch('/api/leave', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (!res || !res.ok) {
+      const errorData = await res?.json();
+      throw new Error(errorData?.error || 'Failed to encode leave');
+    }
+
+    const result = await res.json();
+    alert(`✅ Leave successfully encoded for employee.\n\nLeave ID: ${result.id}\nType: ${leaveType}\nDuration: ${daysBetween} day(s)\nStatus: Approved`);
+    clearLeaveForm();
+    toggleLeaveForm(); // Collapse form
+    loadLeaveRequests(); // Refresh table
+  } catch (err) {
+    alert(`❌ Error encoding leave: ${err.message}`);
+    console.error('Leave encoding error:', err);
+  }
+}
+
+function clearLeaveForm() {
+  const form = document.getElementById('manual-leave-form');
+  if (form) form.reset();
+  document.getElementById('policy-warning').style.display = 'none';
+}
+
+function calculateDaysBetweenDates(startDate, endDate) {
+  if (!startDate || !endDate) return 1;
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  return Math.ceil((end - start) / 86400000) + 1;
+}
+
 // ── Watch for page activation (partials load async) ───────────
 function watchPageActivation() {
   const observer = new MutationObserver(() => {
@@ -291,14 +494,139 @@ function watchPageActivation() {
   observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
 }
 
+// ─────────────────────────────────────────────────────────────
+// ── LEAVE CALENDAR VIEW ──────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+
+let CALENDAR_DATE = new Date();
+let CALENDAR_LEAVES = [];
+
+async function openLeaveCalendar() {
+  // Fetch all leave requests
+  try {
+    const response = await apiFetch('/api/leave');
+    if (!response || !response.ok) return;
+    CALENDAR_LEAVES = await response.json();
+  } catch (err) {
+    console.error('Error fetching leaves for calendar:', err);
+  }
+
+  // Show modal
+  const modal = document.getElementById('leave-calendar-modal');
+  if (modal) modal.style.display = 'block';
+  
+  // Render calendar
+  renderLeaveCalendar();
+}
+
+function closeLeaveCalendar() {
+  const modal = document.getElementById('leave-calendar-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function previousMonth() {
+  CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() - 1);
+  renderLeaveCalendar();
+}
+
+function nextMonth() {
+  CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() + 1);
+  renderLeaveCalendar();
+}
+
+function renderLeaveCalendar() {
+  const year = CALENDAR_DATE.getFullYear();
+  const month = CALENDAR_DATE.getMonth();
+  
+  // Update month/year display
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const monthYearEl = document.getElementById('calendar-month-year');
+  if (monthYearEl) monthYearEl.textContent = `${monthNames[month]} ${year}`;
+
+  // Create calendar grid
+  const calendarEl = document.getElementById('leave-calendar');
+  if (!calendarEl) return;
+  
+  calendarEl.innerHTML = '';
+
+  // Day headers
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  dayNames.forEach(day => {
+    const dayHeader = document.createElement('div');
+    dayHeader.textContent = day;
+    dayHeader.style.cssText = 'font-weight:700;text-align:center;padding:10px;background:var(--bg-alt);border-radius:4px;';
+    calendarEl.appendChild(dayHeader);
+  });
+
+  // Get first day of month and total days
+  const firstDay = new Date(year, month, 1).getDay();
+  const totalDays = new Date(year, month + 1, 0).getDate();
+
+  // Empty cells before month starts
+  for (let i = 0; i < firstDay; i++) {
+    const emptyCell = document.createElement('div');
+    emptyCell.style.cssText = 'background:transparent;';
+    calendarEl.appendChild(emptyCell);
+  }
+
+  // Days of month
+  for (let day = 1; day <= totalDays; day++) {
+    const date = new Date(year, month, day);
+    const dateStr = date.toISOString().split('T')[0];
+
+    // Find leaves for this date
+    const leavesOnDate = CALENDAR_LEAVES.filter(leave => {
+      const from = new Date(leave.date_from).toISOString().split('T')[0];
+      const to = new Date(leave.date_to).toISOString().split('T')[0];
+      return dateStr >= from && dateStr <= to;
+    });
+
+    const dayCell = document.createElement('div');
+    dayCell.style.cssText = 'min-height:80px;border:1px solid var(--border);border-radius:4px;padding:8px;overflow:hidden;position:relative;';
+    
+    // Add day number
+    const dayNum = document.createElement('div');
+    dayNum.textContent = day;
+    dayNum.style.cssText = 'font-weight:700;margin-bottom:4px;';
+    dayCell.appendChild(dayNum);
+
+    // Add leave indicators
+    if (leavesOnDate.length > 0) {
+      leavesOnDate.forEach(leave => {
+        const badge = document.createElement('div');
+        const color = leave.status === 'Approved' ? 'var(--green)' : leave.status === 'Denied' ? 'var(--red)' : 'var(--yellow)';
+        const bgColor = leave.status === 'Approved' ? 'rgba(76,175,80,0.2)' : leave.status === 'Denied' ? 'rgba(244,67,54,0.2)' : 'rgba(255,193,7,0.2)';
+        
+        badge.textContent = leave.type.substring(0, 3);
+        badge.style.cssText = `font-size:10px;padding:2px 6px;background:${bgColor};border:1px solid ${color};border-radius:3px;margin:2px 0;display:inline-block;`;
+        badge.title = `${leave.employee_name} - ${leave.type}`;
+        dayCell.appendChild(badge);
+      });
+    }
+
+    calendarEl.appendChild(dayCell);
+  }
+}
+
 window.addEventListener('DOMContentLoaded', watchPageActivation);
 
 // Expose for inline onclick
-window.selectReq        = selectReq;
-window.saveRequest      = saveRequest;
-window.approveLeave     = approveLeave;
-window.denyLeave        = denyLeave;
+window.selectReq              = selectReq;
+window.saveRequest            = saveRequest;
+window.approveLeave           = approveLeave;
+window.denyLeave              = denyLeave;
+window.approveRequest         = approveRequest;
+window.denyRequest            = denyRequest;
+window.toggleLeaveForm        = toggleLeaveForm;
+window.submitManualLeave      = submitManualLeave;
+window.clearLeaveForm         = clearLeaveForm;
+window.calculateDaysBetweenDates = calculateDaysBetweenDates;
 window.approveRequest   = approveRequest;
 window.denyRequest      = denyRequest;
 window.loadLeaveRequests  = loadLeaveRequests;
 window.loadAllRequests    = loadAllRequests;
+window.openLeaveCalendar  = openLeaveCalendar;
+window.closeLeaveCalendar = closeLeaveCalendar;
+window.previousMonth      = previousMonth;
+window.nextMonth          = nextMonth;
+window.renderLeaveCalendar = renderLeaveCalendar;

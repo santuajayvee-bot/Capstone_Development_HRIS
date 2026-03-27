@@ -368,14 +368,15 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
 });
 
-app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.post('/api/leave', requireAuth, requireRole(ROLES.any), upload.single('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { type, date_from, date_to, days, reason, employee_id } = req.body;
-    const empId = req.user.role === 'employee' ? req.user.employeeId : employee_id;
+    const empId = req.user.role === 'employee' ? req.user.employeeId : parseInt(employee_id);
     
     console.log('POST /api/leave - req.user:', req.user);
     console.log('POST /api/leave - req.body:', req.body);
+    console.log('POST /api/leave - file:', req.file?.filename);
     console.log('POST /api/leave - final empId:', empId);
     
     if (!empId) {
@@ -383,9 +384,12 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => 
       return res.status(400).json({ error: 'Employee ID is required.' });
     }
     
+    // Save file path if attachment was uploaded
+    const filePath = req.file ? `/uploads/${req.file.filename}` : null;
+    
     const [result] = await pool.execute(
-      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason) VALUES (?,?,?,?,?,?)`,
-      [empId, type, date_from, date_to, days || 1, reason]
+      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason,file_path) VALUES (?,?,?,?,?,?,?)`,
+      [empId, type, date_from, date_to, days || 1, reason, filePath]
     );
     console.log('Leave request inserted with ID:', result.insertId);
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
