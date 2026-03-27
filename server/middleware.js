@@ -8,11 +8,16 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 // ── Role hierarchy ───────────────────────────────────────────
 const ROLES = {
-  admin:           ['admin'],
-  payroll_officer: ['admin', 'payroll_officer'],
-  payroll_manager: ['admin', 'payroll_manager'],
-  payroll_any:     ['admin', 'payroll_officer', 'payroll_manager'],
-  any:             ['admin', 'payroll_officer', 'payroll_manager', 'employee'],
+  system_admin:    ['system_admin'],
+  hr_admin:        ['hr_admin'],
+  payroll_officer: ['payroll_officer'],
+  payroll_manager: ['payroll_manager'],
+  payroll_any:     ['payroll_officer', 'payroll_manager'],
+  hr_ops:          ['hr_admin'],                           // HR operations (Leave, Attendance)
+  staff_management: ['hr_admin'],                          // Employee management (register, profiles, documents)
+  admin_any:       ['hr_admin', 'system_admin'],           // Any admin role
+  staff_any:       ['hr_admin', 'payroll_officer', 'payroll_manager'],  // All staff roles
+  any:             ['hr_admin', 'system_admin', 'payroll_officer', 'payroll_manager', 'employee'],
 };
 
 /**

@@ -9,6 +9,7 @@ const PAGE_TITLES = {
   leave:      'Leave Management',
   requests:   'Requests',
   attendance: 'Attendance Tracking',
+  '201file':  '201-File Management',
   payroll:    'Payroll',
   'salary-calculation': 'Salary Calculation',
   onboarding: 'HR Officer – Recruitment Management',
@@ -41,6 +42,21 @@ function navigate(pageId, navEl) {
     if (typeof generateEmployeeID === 'function') {
       generateEmployeeID();
     }
+  }
+
+  // When navigating to leave, load leave requests
+  if (pageId === 'leave' && typeof loadLeaveRequests === 'function') {
+    loadLeaveRequests();
+  }
+
+  // When navigating to 201-file, load list
+  if (pageId === '201file' && typeof load201FileList === 'function') {
+    load201FileList();
+  }
+
+  // When navigating to requests, load all requests
+  if (pageId === 'requests' && typeof loadAllRequests === 'function') {
+    loadAllRequests();
   }
 }
 

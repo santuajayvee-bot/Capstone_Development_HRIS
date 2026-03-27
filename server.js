@@ -11,6 +11,7 @@ const fs         = require('fs');
 const { login, me }                          = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
+const fileManagementRoutes                   = require('./server/201-file-management');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -62,6 +63,9 @@ app.get('/api/auth/me', requireAuth, me);
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
 
+// 201-File Management (HR Admin only)
+app.use('/api/201-files', requireAuth, requireRole(['hr_admin']), fileManagementRoutes);
+
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
@@ -93,7 +97,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
 });
 
 // Add new employee
-app.post('/api/employees', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -138,7 +142,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.payroll_any), async (r
 });
 
 // Update Employee
-app.put('/api/employees/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -218,7 +222,7 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.payroll_an
 });
 
 // Delete Employee
-app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
@@ -243,7 +247,7 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.payroll_any), as
 });
 
 // Upload employee document
-app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.payroll_any), upload.single('file'), async (req, res) => {
+app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), upload.single('file'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params; // id = employee_code
@@ -324,7 +328,7 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
 });
 
 // Delete employee document
-app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id, docId } = req.params;
@@ -355,7 +359,7 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
 });
 
 // Leave
-app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.get('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), async (req, res) => {
   try {
     const pool = require('./config/db');
     let q = `SELECT lr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
@@ -368,14 +372,15 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
 });
 
-app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.post('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), upload.single('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { type, date_from, date_to, days, reason, employee_id } = req.body;
-    const empId = req.user.role === 'employee' ? req.user.employeeId : employee_id;
+    const empId = req.user.role === 'employee' ? req.user.employeeId : parseInt(employee_id);
     
     console.log('POST /api/leave - req.user:', req.user);
     console.log('POST /api/leave - req.body:', req.body);
+    console.log('POST /api/leave - file:', req.file?.filename);
     console.log('POST /api/leave - final empId:', empId);
     
     if (!empId) {
@@ -383,9 +388,12 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => 
       return res.status(400).json({ error: 'Employee ID is required.' });
     }
     
+    // Save file path if attachment was uploaded
+    const filePath = req.file ? `/uploads/${req.file.filename}` : null;
+    
     const [result] = await pool.execute(
-      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason) VALUES (?,?,?,?,?,?)`,
-      [empId, type, date_from, date_to, days || 1, reason]
+      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason,file_path) VALUES (?,?,?,?,?,?,?)`,
+      [empId, type, date_from, date_to, days || 1, reason, filePath]
     );
     console.log('Leave request inserted with ID:', result.insertId);
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
@@ -395,7 +403,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => 
   }
 });
 
-app.patch('/api/leave/:id/status', requireAuth, requireRole(['admin','payroll_officer','payroll_manager']), async (req, res) => {
+app.patch('/api/leave/:id/status', requireAuth, requireRole(['hr_admin']), async (req, res) => {
   try {
     const pool = require('./config/db');
     await pool.execute(
@@ -449,7 +457,7 @@ app.post('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) 
   } catch (err) { res.status(500).json({ error: 'Failed to submit request.' }); }
 });
 
-app.patch('/api/requests/:id/status', requireAuth, requireRole(['admin','payroll_officer','payroll_manager']), async (req, res) => {
+app.patch('/api/requests/:id/status', requireAuth, requireRole(['hr_admin']), async (req, res) => {
   try {
     const pool = require('./config/db');
     await pool.execute(
@@ -469,7 +477,7 @@ app.get('/api/payroll/runs', requireAuth, requireRole(ROLES.payroll_any), async 
   } catch (err) { res.status(500).json({ error: 'Failed to fetch payroll runs.' }); }
 });
 
-app.post('/api/payroll/runs', requireAuth, requireRole(['admin','payroll_officer']), async (req, res) => {
+app.post('/api/payroll/runs', requireAuth, requireRole(['payroll_officer']), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { period_start, period_end } = req.body;
@@ -481,7 +489,7 @@ app.post('/api/payroll/runs', requireAuth, requireRole(['admin','payroll_officer
   } catch (err) { res.status(500).json({ error: 'Failed to create payroll run.' }); }
 });
 
-app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['admin','payroll_manager']), async (req, res) => {
+app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['payroll_manager']), async (req, res) => {
   try {
     const pool = require('./config/db');
     await pool.execute(
