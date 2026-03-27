@@ -1,0 +1,60 @@
+<div class="page-section">
+  <div class="page-header">
+    <div>
+      <div class="section-title">201-File Management</div>
+      <div class="section-sub">HR Admin can manage employee 201-files, documents, and sensitive information.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="page-header-right" style="margin-bottom:12px;">
+      <input id="201file-search" type="text" placeholder="Search employee..." class="search-input" oninput="filter201FileList()" />
+    </div>
+    <div id="201file-list" class="table-wrap" style="max-height:300px;overflow:auto;"></div>
+  </div>
+
+  <div id="201file-detail" class="card" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 id="201file-detail-title">201-File Details</h3>
+      <button class="btn btn-outline" onclick="close201FileDetail()">Close</button>
+    </div>
+
+    <div id="employee-info" style="margin-top:14px;"></div>
+
+    <div id="document-section" style="margin-top:20px;">
+      <h4>Documents</h4>
+      <form id="201file-upload-form" onsubmit="return upload201Document()" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="upload-document-type" class="form-select" required>
+          <option value="">Select document type</option>
+          <option value="Resume">Resume</option>
+          <option value="Government_ID">Government ID</option>
+          <option value="NBI_Clearance">NBI Clearance</option>
+          <option value="Contract">Contract</option>
+          <option value="Other">Other</option>
+        </select>
+        <input type="file" id="upload-document-file" class="file-input" required />
+        <button class="btn btn-primary" type="submit">Upload</button>
+      </form>
+      <div id="document-list" class="table-wrap" style="min-height:100px;"></div>
+    </div>
+
+    <div id="sensitive-data-section" style="margin-top:20px;">
+      <h4>Sensitive Data</h4>
+      <form id="sensitive-data-form" onsubmit="return updateSensitiveData()" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <label>SSN / TIN<input id="sd-ssn" type="text" /></label>
+        <label>Tax ID<input id="sd-taxid" type="text" /></label>
+        <label>Bank Account<input id="sd-bank-account" type="text" /></label>
+        <label>Bank Routing<input id="sd-bank-routing" type="text" /></label>
+        <label>Emergency Contact Phone<input id="sd-emergency" type="text" /></label>
+        <label style="grid-column:1 / -1">Other Info<textarea id="sd-other" rows="3"></textarea></label>
+        <div id="sensitive-data-result" style="height:20px;margin-bottom:6px;font-size:13px;color:var(--green)"></div>
+        <button class="btn btn-primary" type="submit" style="grid-column:1 / -1;width:180px;">Save Sensitive Data</button>
+      </form>
+    </div>
+
+    <div id="access-log-section" style="margin-top:20px;">
+      <h4>201-File Access Log (latest 100)</h4>
+      <div id="access-log-list" class="access-log" style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card2);"></div>
+    </div>
+  </div>
+</div>

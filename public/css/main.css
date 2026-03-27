@@ -189,6 +189,23 @@ tr:hover td { background: rgba(79,124,255,0.04); }
   gap: 16px;
 }
 
+/* ---- 201-FILE MANAGEMENT UI ---- */
+.search-input {
+  padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text);
+}
+.form-select {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); min-width:180px;
+}
+.file-input {
+  color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--card);
+}
+.access-log .log-entry {
+  border: 1px solid var(--border); background: var(--card); border-radius: 8px; margin-bottom: 8px; padding: 10px;
+  font-size: 12px; line-height: 1.35; color: var(--text);
+}
+.access-log .log-entry .meta { color: var(--muted); margin-bottom: 4px; }
+.access-log .log-entry .action { font-weight: 600; color: var(--accent); }
+.access-log .log-entry .details { background: rgba(255,255,255,0.06); border-radius: 5px; padding: 6px; margin-top: 5px; }
 .payroll-card {
   background: var(--card);
   border: 1px solid var(--border);

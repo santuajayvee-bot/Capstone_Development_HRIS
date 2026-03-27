@@ -8,7 +8,7 @@ const ROLE_PERMISSIONS = {
     'dashboard','blockchain','payroll',
   ],
   hr_admin: [
-    'dashboard','employees','register','leave','requests','attendance','onboarding',
+    'dashboard','employees','register','201file','leave','requests','attendance','onboarding',
   ],
   payroll_officer: [
     'dashboard','attendance','leave','payroll','requests',
@@ -31,6 +31,7 @@ const NAV_CONFIG = {
   hr_admin: [
     { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
     { page:'employees',  icon:'👥', label:'Employees'         },
+    { page:'201file',    icon:'📁', label:'201-Files'         },
     { page:'leave',      icon:'📅', label:'Leave Management'  },
     { page:'requests',   icon:'📋', label:'Requests'          },
     { page:'attendance', icon:'⏰', label:'Attendance'         },

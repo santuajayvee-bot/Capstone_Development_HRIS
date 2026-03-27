@@ -11,6 +11,7 @@ const fs         = require('fs');
 const { login, me }                          = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
+const fileManagementRoutes                   = require('./server/201-file-management');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -61,6 +62,9 @@ app.get('/api/auth/me', requireAuth, me);
 
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
+
+// 201-File Management (HR Admin only)
+app.use('/api/201-files', requireAuth, requireRole(['hr_admin']), fileManagementRoutes);
 
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
