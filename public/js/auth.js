@@ -4,9 +4,11 @@
 
 // ── Role → permitted pages ────────────────────────────────────
 const ROLE_PERMISSIONS = {
-  admin: [
-    'dashboard','employees','register','leave','requests',
-    'attendance','payroll','onboarding','blockchain',
+  system_admin: [
+    'dashboard','blockchain','payroll',
+  ],
+  hr_admin: [
+    'dashboard','employees','register','leave','requests','attendance','onboarding',
   ],
   payroll_officer: [
     'dashboard','attendance','leave','payroll','requests',
@@ -21,15 +23,18 @@ const ROLE_PERMISSIONS = {
 
 // ── Sidebar nav items per role ────────────────────────────────
 const NAV_CONFIG = {
-  admin: [
+  system_admin: [
+    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
+    { page:'blockchain', icon:'🔗', label:'Blockchain Audit'  },
+    { page:'payroll',    icon:'💰', label:'System Health'      },
+  ],
+  hr_admin: [
     { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
     { page:'employees',  icon:'👥', label:'Employees'         },
     { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'requests',   icon:'📋', label:'Request'           },
+    { page:'requests',   icon:'📋', label:'Requests'          },
     { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
-    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+    { page:'onboarding', icon:'🚀', label:'Recruitment'        },
   ],
   payroll_officer: [
     { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },

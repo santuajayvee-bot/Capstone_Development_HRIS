@@ -11,13 +11,20 @@ const pool   = require('../config/db');
 const SALT_ROUNDS = 10;
 
 const USERS = [
-  { username: 'admin',           password: 'admin123',   role_id: 1, employee_id: null },
+  // System Administrator (Level 4) - role_id 6
+  { username: 'sys.admin',       password: 'sys123admin', role_id: 6, employee_id: null },
+  
+  // HR Administrator (Level 2) - role_id 5
+  { username: 'hr.admin',        password: 'hr123admin',  role_id: 5, employee_id: null },
+  
+  // Payroll staff
   { username: 'payroll.officer', password: 'officer123', role_id: 2, employee_id: 1    },
   { username: 'payroll.manager', password: 'manager123', role_id: 3, employee_id: 3    },
-  { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 1    },
+  
+  // Regular employees - role_id 4
+  { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 5    },
   { username: 'chris.brown',     password: 'emp123',     role_id: 4, employee_id: 2    },
   { username: 'lebron.james',    password: 'emp123',     role_id: 4, employee_id: 3    },
-  { username: 'hr.admin', password: 'hr123admin', role_id: 1, employee_id: null },
 ];
 
 async function seedUsers() {
@@ -31,7 +38,7 @@ async function seedUsers() {
       await conn.execute(
         `INSERT INTO users (username, password_hash, role_id, employee_id)
          VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
+         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role_id = VALUES(role_id), employee_id = VALUES(employee_id)`,
         [u.username, hash, u.role_id, u.employee_id]
       );
 

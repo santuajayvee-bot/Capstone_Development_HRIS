@@ -38,6 +38,32 @@ async function loadLeaveRequests() {
     const response = await apiFetch('/api/leave');
     if (!response || !response.ok) { console.error('Failed to fetch leave requests'); return; }
     const leaves = await response.json();
+    
+    // Also fetch and sort employees for dropdown
+    try {
+      const empRes = await apiFetch('/api/employees');
+      if (empRes && empRes.ok) {
+        let employees = await empRes.json();
+        // Sort by ID for sequential order
+        employees = employees.sort((a, b) => a.id - b.id);
+        EMPLOYEES_LIST = employees;
+        
+        // Update dropdown
+        const select = document.getElementById('manual-employee');
+        if (select) {
+          select.innerHTML = '<option value="">-- Select Employee --</option>';
+          employees.forEach(emp => {
+            const option = document.createElement('option');
+            option.value = emp.id;
+            option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
+            select.appendChild(option);
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching employees:', err);
+    }
+    
     renderLeaveRequests(leaves);
   } catch (error) {
     console.error('Error loading leave requests:', error);
@@ -65,8 +91,8 @@ function renderLeaveRequests(leaves) {
       <td>${new Date(leave.date_to).toLocaleDateString()}</td>
       <td>${leave.days || 1}</td>
       <td>
-        <div>${leave.reason || '-'}</div>
-        ${leave.file_path ? `<small style="color:var(--blue);text-decoration:underline;cursor:pointer;" onclick="window.open('${leave.file_path}', '_blank')">📎 Attachment</small>` : ''}
+        <div style="word-break:break-word;">${leave.reason || '-'}</div>
+        ${leave.file_path ? `<a href="${leave.file_path}" target="_blank" style="display:inline-block;margin-top:6px;padding:4px 8px;background:var(--blue);color:white;border-radius:4px;font-size:12px;text-decoration:none;cursor:pointer;">📎 View Attachment</a>` : ''}
       </td>
       <td class="leave-status"><span class="badge badge-${leave.status === 'Approved' ? 'green' : leave.status === 'Denied' ? 'red' : 'yellow'}">${leave.status}</span></td>
       <td>
@@ -299,8 +325,12 @@ async function loadEmployeesForDropdown() {
       return;
     }
     
-    const employees = await response.json();
+    let employees = await response.json();
     console.log('Employees loaded:', employees);
+    
+    // Sort by ID to ensure sequential order (1, 2, 3, 4, 5)
+    employees = employees.sort((a, b) => a.id - b.id);
+    
     EMPLOYEES_LIST = employees;
 
     // Populate the dropdown
