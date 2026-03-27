@@ -1,13 +1,9 @@
 /* ============================================================
-   PAYROLL.JS — Payroll page logic
+   PAYROLL.JS — Payroll page logic with real database data
    ============================================================ */
 
-const PAYROLL_DATA = [
-  { id: 1, name:'Serjo Justine', dept:'HR',        basic: 25000, ot: 1500, deductions: 3200, status:'Disbursed' },
-  { id: 2, name:'Chris Brown',   dept:'Production',basic: 22000, ot: 2100, deductions: 2800, status:'Disbursed' },
-  { id: 3, name:'LeBron James',  dept:'HR',        basic: 30000, ot: 0,    deductions: 3800, status:'Pending'   },
-  { id: 4, name:'Nikki Minaj',   dept:'Executive', basic: 45000, ot: 0,    deductions: 5500, status:'Disbursed' },
-];
+let currentPayrollData = [];
+let currentMonthYear = null;
 
 // Open Run Payroll Modal
 function openRunPayrollModal() {
@@ -155,11 +151,10 @@ async function runPayroll() {
     
     console.log('✅ Payroll generation result:', result);
     
-    // Close modal after 2 seconds
+    // Close modal and reload data
     setTimeout(() => {
       document.getElementById('run-payroll-modal')?.remove();
-      // Refresh payroll data
-      location.reload();
+      loadPayrollRecords(monthYear);
     }, 2000);
     
   } catch (err) {
@@ -174,130 +169,147 @@ async function runPayroll() {
   }
 }
 
-async function viewEmployeeDetails(employeeId, employeeName) {
+async function viewPayslipDetails(employeeId, employeeName, monthYear) {
   try {
-    // Fetch employee details (read-only)
-    const detailsRes = await apiFetch(`/api/payroll/employees/${employeeId}/readonly`);
-    const contributionsRes = await apiFetch(`/api/payroll/employees/${employeeId}/government-contributions`);
-    
-    if (!detailsRes.ok || !contributionsRes.ok) {
-      alert('Failed to load employee details');
+    // Fetch monthly summary with detailed breakdown
+    const response = await apiFetch(`/api/payroll/employees/${employeeId}/monthly-summary/${monthYear}`);
+    if (!response.ok) {
+      alert('Failed to load payslip details');
       return;
     }
-    
-    const details = await detailsRes.json();
-    const contributions = await contributionsRes.json();
-    
-    // Create modal HTML
+
+    const data = await response.json();
+    const d = data;
+
+    // Create detailed modal
+    let earningsHTML = '';
+    if (d.earnings.production && d.earnings.production.length > 0) {
+      earningsHTML = `
+        <div style="margin-bottom: 12px;">
+          <h5 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: var(--text);">Production Breakdown</h5>
+          <div style="background: var(--card); border-radius: 6px; padding: 8px; font-size: 12px;">
+            ${d.earnings.production.map(p => `
+              <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border);">
+                <span>${p.type} (${p.quantity} pcs)</span>
+                <span style="font-weight: 600; color: var(--accent);">₱${parseFloat(p.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (d.earnings.logistics && d.earnings.logistics.length > 0) {
+      earningsHTML = `
+        <div style="margin-bottom: 12px;">
+          <h5 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: var(--text);">Logistics Breakdown</h5>
+          <div style="background: var(--card); border-radius: 6px; padding: 8px; font-size: 12px;">
+            ${d.earnings.logistics.map(l => `
+              <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border);">
+                <span>${l.region} (${l.trips} trips)</span>
+                <span style="font-weight: 600; color: var(--accent);">₱${parseFloat(l.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
     const modalHTML = `
-      <div id="employee-details-modal" style="
+      <div id="payslip-details-modal" style="
         position: fixed; top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.5); display: flex; align-items: center;
         justify-content: center; z-index: 10000;
       ">
         <div style="
-          background: var(--bg); border-radius: 14px; max-width: 600px;
-          width: 90%; max-height: 80vh; overflow-y: auto; padding: 24px;
+          background: var(--bg); border-radius: 14px; max-width: 700px;
+          width: 90%; max-height: 85vh; overflow-y: auto; padding: 24px;
           border: 1px solid var(--border);
         ">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 18px; font-weight: 700;">${employeeName}</h2>
-            <button onclick="document.getElementById('employee-details-modal')?.remove()" style="
+            <div>
+              <h2 style="margin: 0; font-size: 18px; font-weight: 700;">${employeeName}</h2>
+              <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">${d.employee.code} • ${d.employee.department || 'N/A'}</div>
+            </div>
+            <button onclick="document.getElementById('payslip-details-modal')?.remove()" style="
               background: none; border: none; font-size: 24px; cursor: pointer; color: var(--muted);
             ">×</button>
           </div>
           
-          <!-- Personal Information -->
+          <!-- Earnings Section -->
           <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
-            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Personal Information</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Email</label>
-                <div style="font-weight: 600; color: var(--text);">${details.email || '—'}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Contact Number</label>
-                <div style="font-weight: 600; color: var(--text);">${details.contact_number || '—'}</div>
-              </div>
-              <div style="grid-column: 1/-1;">
-                <label style="color: var(--muted); font-size: 11px;">Address</label>
-                <div style="font-weight: 600; color: var(--text);">${details.residential_address || '—'}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Birth Date</label>
-                <div style="font-weight: 600; color: var(--text);">${details.birth_date ? new Date(details.birth_date).toLocaleDateString() : '—'}</div>
-              </div>
+            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Earnings</h4>
+            ${earningsHTML}
+            <div style="display: flex; justify-content: space-between; padding: 12px 0; border-top: 2px solid var(--border); margin-top: 8px; font-weight: 700; font-size: 14px;">
+              <span style="color: var(--text);">Total Gross Pay</span>
+              <span style="color: var(--accent);">₱${parseFloat(d.totalEarning).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
             </div>
           </div>
-          
-          <!-- Employment Details -->
+
+          <!-- Deductions Section -->
           <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
-            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Employment Details</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Department</label>
-                <div style="font-weight: 600; color: var(--text);">${details.department || '—'}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Position</label>
-                <div style="font-weight: 600; color: var(--text);">${details.position || '—'}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Wage Type</label>
-                <div style="font-weight: 600; color: var(--text);">${details.wage_type || '—'}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Date Hired</label>
-                <div style="font-weight: 600; color: var(--text);">${details.date_hired ? new Date(details.date_hired).toLocaleDateString() : '—'}</div>
-              </div>
-              <div style="grid-column: 1/-1;">
-                <label style="color: var(--muted); font-size: 11px;">Supervisor</label>
-                <div style="font-weight: 600; color: var(--text);">${details.supervisor_name || '—'}</div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Government Contributions -->
-          <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
-            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Government Contributions</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">SSS #</label>
-                <div style="font-weight: 600; color: var(--text);">${contributions.government_ids.sss_number}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">PhilHealth #</label>
-                <div style="font-weight: 600; color: var(--text);">${contributions.government_ids.philhealth_number}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">Pag-IBIG #</label>
-                <div style="font-weight: 600; color: var(--text);">${contributions.government_ids.pagibig_number}</div>
-              </div>
-              <div>
-                <label style="color: var(--muted); font-size: 11px;">TIN</label>
-                <div style="font-weight: 600; color: var(--text);">${contributions.government_ids.tin}</div>
-              </div>
-            </div>
-            ${contributions.deductions.length > 0 ? `
-              <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
-                <h5 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: var(--text);">Active Deductions</h5>
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                  ${contributions.deductions.map(d => `
-                    <div style="display: flex; justify-content: space-between; font-size: 12px;">
-                      <span style="color: var(--muted);">${d.deduction_type}</span>
-                      <span style="font-weight: 600; color: var(--accent);">₱${parseFloat(d.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
-                    </div>
-                  `).join('')}
+            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Deductions</h4>
+            <div style="font-size: 12px;">
+              ${d.deductions.length > 0 ? d.deductions.map(ded => `
+                <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                  <span>${ded.deduction_type}</span>
+                  <span style="font-weight: 600; color: var(--red);">₱${parseFloat(ded.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
                 </div>
-              </div>
-            ` : ''}
+              `).join('') : '<div style="color: var(--muted); padding: 8px 0;">No deductions</div>'}
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 12px 0; border-top: 2px solid var(--border); margin-top: 8px; font-weight: 700; font-size: 14px;">
+              <span style="color: var(--text);">Total Deductions</span>
+              <span style="color: var(--red);">₱${parseFloat(d.totalDeduction).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+            </div>
           </div>
-          
-          <div style="display: flex; justify-content: flex-end;">
-            <button onclick="document.getElementById('employee-details-modal')?.remove()" class="btn btn-primary" style="font-size: 13px;">Close</button>
+
+          <!-- Government IDs Section -->
+          <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
+            <h4 style="margin: 0 0 12px 0; font-weight: 600; font-size: 13px; text-transform: uppercase; color: var(--muted);">Contribution IDs</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+              <div>
+                <label style="color: var(--muted); font-size: 11px; text-transform: uppercase;">SSS</label>
+                <div style="font-weight: 600; color: var(--text);">${d.employee.governmentIds.sss}</div>
+              </div>
+              <div>
+                <label style="color: var(--muted); font-size: 11px; text-transform: uppercase;">PhilHealth</label>
+                <div style="font-weight: 600; color: var(--text);">${d.employee.governmentIds.philhealth}</div>
+              </div>
+              <div>
+                <label style="color: var(--muted); font-size: 11px; text-transform: uppercase;">Pag-IBIG</label>
+                <div style="font-weight: 600; color: var(--text);">${d.employee.governmentIds.pagibig}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Net Pay Summary -->
+          <div style="background: linear-gradient(135deg, rgba(34, 211, 165, 0.1), rgba(59, 130, 246, 0.1)); border: 2px solid var(--accent); border-radius: 10px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-size: 12px; color: var(--muted); text-transform: uppercase; margin-bottom: 4px;">Net Pay</div>
+                <div style="font-size: 24px; font-weight: 700; color: var(--accent);">₱${parseFloat(d.netPay).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+              </div>
+              <div style="text-align: right; font-size: 12px; color: var(--muted);">
+                <div>Period: ${d.monthYear}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+            <button onclick="document.getElementById('payslip-details-modal')?.remove()" class="btn btn-primary" style="font-size: 13px;">Close</button>
           </div>
         </div>
       </div>
+    `;
+
+    const modalDiv = document.createElement('div');
+    modalDiv.innerHTML = modalHTML;
+    document.body.appendChild(modalDiv.firstElementChild);
+  } catch (err) {
+    console.error('Error viewing payslip details:', err);
+    alert('Failed to load payslip details');
+  }
+}
     `;
     
     // Add modal to page
@@ -315,40 +327,117 @@ function renderPayroll() {
   const grid = document.getElementById('payroll-grid');
   if (!grid) return;
 
-  grid.innerHTML = PAYROLL_DATA.map(p => {
-    const net = p.basic + p.ot - p.deductions;
-    const badgeClass = p.status === 'Disbursed' ? 'badge-green' : 'badge-yellow';
-    return `
-      <div class="payroll-card">
-        <div class="payroll-card-header">
-          <div class="payroll-card-name">${p.name}</div>
-          <span class="badge ${badgeClass}">${p.status}</span>
+  if (currentPayrollData.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
+        <div style="font-size: 14px; color: var(--muted);">
+          📊 No payroll records found. Click "Process Payroll" to generate payroll.
         </div>
-        <div class="payroll-card-dept">${p.dept}</div>
-        <div class="payroll-card-divider"></div>
-        <div class="payroll-card-rows">
-          <div class="payroll-card-row">
-            <span class="payroll-card-label">Basic Pay</span>
-            <span class="payroll-card-value">₱${p.basic.toLocaleString()}</span>
-          </div>
-          <div class="payroll-card-row">
-            <span class="payroll-card-label">Overtime</span>
-            <span class="payroll-card-value">₱${p.ot.toLocaleString()}</span>
-          </div>
-          <div class="payroll-card-row">
-            <span class="payroll-card-label">Deductions</span>
-            <span class="payroll-card-value">₱${p.deductions.toLocaleString()}</span>
-          </div>
-          <div class="payroll-card-row payroll-card-net">
-            <span class="payroll-card-label">Net Pay</span>
-            <span class="payroll-card-value-net">₱${net.toLocaleString()}</span>
-          </div>
-        </div>
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
-          <button onclick="viewEmployeeDetails(${p.id}, '${p.name}')" class="btn btn-sm btn-outline" style="width: 100%; font-size: 12px;">👁 View Details & Contributions</button>
-        </div>
-      </div>`;
-  }).join('');
+      </div>
+    `;
+    return;
+  }
+
+  const table = `
+    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+      <thead>
+        <tr style="border-bottom: 2px solid var(--border); background: var(--card);">
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Payroll ID</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Employee</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Period</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Basic Salary</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Allowances</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Deductions</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Tax</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--text);">Net Pay</th>
+          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Status</th>
+          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${currentPayrollData.map(p => {
+          const tax = (p.total_earning * 0.06).toFixed(2); // 6% tax
+          const statusBadge = p.status === 'Disbursed' 
+            ? `<span style="background: rgba(34, 211, 165, 0.2); color: var(--green); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">paid</span>`
+            : p.status === 'Pending'
+            ? `<span style="background: rgba(245, 166, 35, 0.2); color: var(--yellow); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">processed</span>`
+            : `<span style="background: rgba(224, 92, 122, 0.2); color: var(--red); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">pending</span>`;
+          
+          return `
+            <tr style="border-bottom: 1px solid var(--border); hover: {background: var(--card)};">
+              <td style="padding: 12px; color: var(--muted); font-family: 'Courier New', monospace; font-weight: 600;">${p.payroll_run_id || 'PAY001'}</td>
+              <td style="padding: 12px; color: var(--text); font-weight: 500;">${p.employee_name}</td>
+              <td style="padding: 12px; color: var(--muted);">${p.month_year || 'N/A'}</td>
+              <td style="padding: 12px; text-align: right; color: var(--text); font-weight: 600;">₱${parseFloat(p.total_earning || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--text);">₱${(parseFloat(p.total_earning || 0) * 0.1).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--red);">₱${parseFloat(p.total_deduction || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--muted);">₱${tax}</td>
+              <td style="padding: 12px; text-align: right; color: var(--accent); font-weight: 700;">₱${parseFloat(p.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: center;">${statusBadge}</td>
+              <td style="padding: 12px; text-align: center;">
+                <button onclick="viewPayslipDetails(${p.employee_id}, '${p.employee_name}', '${p.month_year}')" style="
+                  background: none; border: none; color: var(--accent); cursor: pointer; font-size: 16px; padding: 4px 8px;
+                " title="View Details">📥</button>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  grid.innerHTML = table;
 }
 
-document.addEventListener('DOMContentLoaded', renderPayroll);
+// Load payroll records for current month
+async function loadPayrollRecords(monthYear = null) {
+  if (!monthYear) {
+    const today = new Date();
+    monthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  currentMonthYear = monthYear;
+
+  try {
+    const response = await apiFetch(`/api/payroll/payroll-records/${monthYear}`);
+    if (!response.ok) {
+      if (response.status === 404) {
+        currentPayrollData = [];
+        updatePayrollStats({});
+      } else {
+        throw new Error('Failed to load payroll records');
+      }
+    } else {
+      const data = await response.json();
+      currentPayrollData = data.payslips || [];
+      updatePayrollStats(data.summary || {});
+    }
+  } catch (err) {
+    console.error('Error loading payroll records:', err);
+    currentPayrollData = [];
+    updatePayrollStats({});
+  }
+
+  renderPayroll();
+}
+
+// Update stats cards at the top
+function updatePayrollStats(summary) {
+  const statsCards = document.querySelectorAll('.stat-val');
+  if (statsCards.length >= 4) {
+    statsCards[0].textContent = summary.totalPayroll ? `₱${(summary.totalPayroll / 1000).toFixed(0)}K` : '₱0';
+    statsCards[1].textContent = summary.employeesPaid || '0';
+    statsCards[2].textContent = summary.avgSalary ? `₱${(summary.avgSalary / 1000).toFixed(0)}K` : '₱0';
+    statsCards[3].textContent = summary.totalDeductions ? `₱${(summary.totalDeductions / 1000).toFixed(0)}K` : '₱0';
+  }
+
+  const subCards = document.querySelectorAll('.stat-sub');
+  if (subCards.length >= 2) {
+    subCards[0].textContent = summary.monthYear || 'N/A';
+    subCards[1].textContent = `${summary.totalEmployees || 0} employees processed`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadPayrollRecords();
+});

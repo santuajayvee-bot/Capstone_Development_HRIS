@@ -3,38 +3,40 @@
      ============================================================ -->
 <div class="page-header">
   <div>
-    <div class="section-title">Payroll</div>
-    <div class="section-sub">Manage employee compensation and disbursements</div>
+    <div class="section-title">Payroll Records</div>
+    <div class="section-sub">Manage employee compensation and payroll processing</div>
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline">⬆ Export</button>
-    <button class="btn btn-primary" onclick="openRunPayrollModal()">+ Run Payroll</button>
+    <button class="btn btn-primary" onclick="navigate('salary-calculation', null)">Process Payroll</button>
   </div>
 </div>
 
 <div class="stat-grid" style="margin-bottom:24px;">
   <div class="stat-card">
     <div class="stat-label">Total Payroll</div>
-    <div class="stat-val">₱100K</div>
-    <div class="stat-sub">February 2026</div>
+    <div class="stat-val">₱0</div>
+    <div class="stat-sub">N/A</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Disbursed</div>
-    <div class="stat-val">₱85K</div>
-    <div class="stat-sub">+12% last month</div>
+    <div class="stat-label">Employees Paid</div>
+    <div class="stat-val">0</div>
+    <div class="stat-sub">0 employees processed</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Pending</div>
-    <div class="stat-val">₱15K</div>
-    <div class="stat-sub red">Awaiting approval</div>
+    <div class="stat-label">Average Salary</div>
+    <div class="stat-val">₱0</div>
+    <div class="stat-sub">Per Employee</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Deductions</div>
-    <div class="stat-val">₱8K</div>
+    <div class="stat-label">Total Deductions</div>
+    <div class="stat-val">₱0</div>
     <div class="stat-sub">SSS, PhilHealth, etc.</div>
   </div>
 </div>
 
-<div class="payroll-grid" id="payroll-grid">
-  <!-- Rendered by payroll.js -->
+<div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
+  <div id="payroll-grid">
+    <!-- Rendered by payroll.js -->
+  </div>
 </div>

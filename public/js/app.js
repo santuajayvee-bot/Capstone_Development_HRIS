@@ -10,6 +10,7 @@ const PAGE_TITLES = {
   requests:   'Requests',
   attendance: 'Attendance Tracking',
   payroll:    'Payroll',
+  'salary-calculation': 'Salary Calculation',
   onboarding: 'HR Officer – Recruitment Management',
   blockchain: 'Blockchain',
 };

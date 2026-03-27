@@ -259,6 +259,7 @@
       <button class="emp-detail-tab-btn active" onclick="switchTab('personal')">👤 Personal Info</button>
       <button class="emp-detail-tab-btn" onclick="switchTab('employment')">💼 Employment Details</button>
       <button class="emp-detail-tab-btn" onclick="switchTab('documents')">📄 Documents</button>
+      <button class="emp-detail-tab-btn" onclick="switchTab('payroll')">💼 Payroll & Compensation</button>
     </div>
     
     <!-- Tab Content -->
@@ -341,6 +342,56 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Payroll & Compensation Tab -->
+      <div id="emp-detail-tab-payroll" style="display:none;">
+        <div class="detail-section">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+            <div>
+              <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 600;">Current Wage Type</label>
+              <div id="emp-payroll-wage-type" style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);">—</div>
+            </div>
+            <div>
+              <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 600;">Current Rate</label>
+              <div id="emp-payroll-rate" style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-weight: 600;">₱0.00</div>
+            </div>
+          </div>
+
+          <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">
+
+          <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Wage Type</label>
+          <select id="emp-payroll-wage-select" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 16px;">
+            <option value="">— Select wage type —</option>
+            <option value="1">Base Salary</option>
+            <option value="2">Hourly</option>
+            <option value="3">Per-Piece (Sewing)</option>
+            <option value="4">Per-Trip (Logistics)</option>
+          </select>
+
+          <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Base Rate (₱)</label>
+          <input type="number" id="emp-payroll-primary-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 16px;" />
+
+          <div id="emp-payroll-hourly-section" style="display:none; margin-bottom: 16px;">
+            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Hourly Rate (₱)</label>
+            <input type="number" id="emp-payroll-hourly-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 12px;" />
+            
+            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Overtime Rate (₱)</label>
+            <input type="number" id="emp-payroll-overtime-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);" />
+          </div>
+
+          <div id="emp-payroll-sewing-section" style="display:none; margin-bottom: 16px;">
+            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 12px; font-weight: 600;">Sewing Type Rates</label>
+            <div id="emp-payroll-sewing-items"></div>
+          </div>
+
+          <div id="emp-payroll-logistics-section" style="display:none; margin-bottom: 16px;">
+            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 12px; font-weight: 600;">Logistics Region Rates</label>
+            <div id="emp-payroll-logistics-items"></div>
+          </div>
+
+          <button id="emp-payroll-save-btn" onclick="saveEmpPayrollConfig()" style="width: 100%; background: #4f7cff; color: white; border: none; padding: 12px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">✓ Save Compensation</button>
         </div>
       </div>
     </div>

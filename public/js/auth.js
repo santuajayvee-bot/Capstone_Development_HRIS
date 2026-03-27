@@ -6,13 +6,13 @@
 const ROLE_PERMISSIONS = {
   admin: [
     'dashboard','employees','register','leave','requests',
-    'attendance','payroll','onboarding','blockchain',
+    'attendance','payroll','salary-calculation','onboarding','blockchain',
   ],
   payroll_officer: [
-    'dashboard','attendance','leave','payroll','requests',
+    'dashboard','attendance','leave','payroll','salary-calculation','requests',
   ],
   payroll_manager: [
-    'dashboard','attendance','leave','payroll','requests',
+    'dashboard','attendance','leave','payroll','salary-calculation','requests',
   ],
   employee: [
     'dashboard','leave','requests','attendance',

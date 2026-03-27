@@ -4,7 +4,8 @@
 
 const FORM_SECTIONS = ['personal', 'employment', 'payroll', 'documents'];
 let EDIT_MODE = false;
-let EDIT_EMPLOYEE_ID = null;
+let EDIT_EMPLOYEE_ID = null;           // Stores the employee_code (e.g. "EMP00001")
+let EDIT_EMPLOYEE_NUMERIC_ID = null;   // Stores the numeric database ID (for API calls)
 
 // Store uploaded files temporarily (in memory before save)
 const UPLOADED_FILES = {
@@ -217,9 +218,11 @@ function loadEmployeeData() {
   EDIT_MODE = true;
   const emp = JSON.parse(empDataStr);
   EDIT_EMPLOYEE_ID = emp.employee_code;
+  EDIT_EMPLOYEE_NUMERIC_ID = emp.id;  // Store the numeric ID for API calls
   
   console.log('✅ loadEmployeeData called');
   console.log('Loading employee data for:', emp.employee_code, emp.first_name, emp.last_name);
+  console.log('   Numeric ID:', emp.id);
   console.log('Employee from DB - Department:', emp.department, '| Position:', emp.position, '| Supervisor:', emp.supervisor);
   
   // Populate Personal Info
@@ -303,6 +306,8 @@ function loadEmployeeData() {
   // Load existing documents if editing
   if (EDIT_EMPLOYEE_ID) {
     loadEmployeeDocuments(EDIT_EMPLOYEE_ID);
+    // Also load wage configuration
+    loadExistingWageConfiguration(EDIT_EMPLOYEE_ID);
   }
 }
 
@@ -537,13 +542,16 @@ function saveEmployee() {
     // Reset edit mode flags
     EDIT_MODE = false;
     EDIT_EMPLOYEE_ID = null;
+    EDIT_EMPLOYEE_NUMERIC_ID = null;
     window.IS_EDITING = false;
     window.PENDING_EDIT_MODE = false;
     
     // Save wage configuration if set
     const wageTypeId = getWageTypeId(document.getElementById('emp-wage-type')?.value);
     if (wageTypeId) {
-      return saveWageConfiguration(empId, wageTypeId);
+      // Use numeric ID for API calls, fall back to employee code for new employees
+      const apiEmployeeId = EDIT_EMPLOYEE_NUMERIC_ID || empId;
+      return saveWageConfiguration(apiEmployeeId, wageTypeId);
     }
     return null;
   })
@@ -563,38 +571,47 @@ function saveEmployee() {
     }
     
     // Wait a moment for database to settle, then fetch fresh data and redirect
-    setTimeout(() => {
+    setTimeout(async () => {
       console.log('Fetching fresh employee data...');
       if (typeof fetchEmployees === 'function') {
-        fetchEmployees()
-          .then((freshData) => {
-            console.log('✅ Fresh employee data loaded');
-            // Find the current employee in the fresh data
-            const currentEmp = freshData?.find(e => e.id === empId);
-            if (currentEmp) {
-              console.log('Current employee fresh data from API:', {
-                name: currentEmp.name,
-                dept: currentEmp.dept,
-                position: currentEmp.position,
-                supervisor: currentEmp.supervisor,
-                status: currentEmp.status
-              });
-            }
-            if (typeof navigate === 'function') {
-              console.log('Redirecting to main Employees page...');
-              navigate('employees', null);
-            } else {
-              console.error('navigate is not available');
-              alert('Error: Could not navigate to employees page');
-            }
-          })
-          .catch(err => {
-            console.error('Error fetching fresh data:', err);
-            // Still navigate even if fetch fails
-            if (typeof navigate === 'function') {
-              navigate('employees', null);
-            }
-          });
+        try {
+          const freshData = await fetchEmployees();
+          console.log('✅ Fresh employee data loaded from API:', freshData?.length, 'employees');
+          
+          // Find the current employee in the fresh data
+          const currentEmp = freshData?.find(e => e.id === empId);
+          if (currentEmp) {
+            console.log('✅ Current employee fresh data verified:', {
+              name: currentEmp.name,
+              email: currentEmp.email,
+              phone: currentEmp.phone,
+              city: currentEmp.city,
+              dept: currentEmp.dept,
+              position: currentEmp.position,
+              supervisor: currentEmp.supervisor,
+              status: currentEmp.status
+            });
+          } else {
+            console.warn('⚠️ Could not find current employee in fresh data');
+          }
+          
+          // Give DOM a moment to render the updated cards
+          await new Promise(r => setTimeout(r, 200));
+          
+          if (typeof navigate === 'function') {
+            console.log('✅ Redirecting to main Employees page with fresh data...');
+            navigate('employees', null);
+          } else {
+            console.error('navigate is not available');
+            alert('Error: Could not navigate to employees page');
+          }
+        } catch (err) {
+          console.error('❌ Error fetching fresh data:', err);
+          // Still navigate even if fetch fails
+          if (typeof navigate === 'function') {
+            navigate('employees', null);
+          }
+        }
       } else {
         console.warn('fetchEmployees not available, navigating with existing data');
         if (typeof navigate === 'function') {
@@ -631,52 +648,209 @@ function getWageTypeId(wageName) {
   return wageMap[wageName] || null;
 }
 
+// Load existing wage configuration for an employee (when editing)
+async function loadExistingWageConfiguration(employeeCode) {
+  try {
+    console.log('📋 Loading existing wage configuration for:', employeeCode);
+    
+    const res = await apiFetch(`/api/payroll/employees/${employeeCode}/wage-config`);
+    
+    if (!res.ok) {
+      console.log('ℹ️  No existing wage configuration found (new employee or wages not yet set)');
+      return;
+    }
+    
+    const config = await res.json();
+    console.log('✅ Existing wage config found:', config);
+    
+    // Set the wage type dropdown
+    const wageTypeDropdown = document.getElementById('emp-wage-type');
+    if (wageTypeDropdown && config.wage_type) {
+      wageTypeDropdown.value = config.wage_type;
+      console.log('✅ Set wage type to:', config.wage_type);
+      
+      // Trigger change to show appropriate form sections
+      wageTypeDropdown.dispatchEvent(new Event('change'));
+    }
+    
+    // Populate the rates based on wage type
+    if (config.rates && config.rates.length > 0) {
+      if (config.wage_type === 'Base Salary') {
+        const baseSalaryInput = document.getElementById('emp-salary');
+        if (baseSalaryInput && config.rates[0]) {
+          baseSalaryInput.value = config.rates[0].rate || config.rates[0].base_rate || '';
+          console.log('✅ Loaded base salary:', baseSalaryInput.value);
+        }
+      } else if (config.wage_type === 'Hourly') {
+        const hourlyInput = document.getElementById('emp-hourly-rate');
+        const overtimeInput = document.getElementById('emp-overtime-rate');
+        if (config.rates[0]) {
+          if (hourlyInput) {
+            hourlyInput.value = config.rates[0].hourly_rate || '';
+            console.log('✅ Loaded hourly rate:', hourlyInput.value);
+          }
+          if (overtimeInput) {
+            overtimeInput.value = config.rates[0].overtime_rate || '';
+            console.log('✅ Loaded overtime rate:', overtimeInput.value);
+          }
+        }
+      } else if (config.wage_type === 'Per-Piece') {
+        // Load sewing type rates
+        config.rates.forEach(rate => {
+          if (rate.sewing_type_id) {
+            const input = document.getElementById(`sewing-${rate.sewing_type_id}`);
+            if (input) {
+              input.value = rate.rate || '';
+              console.log(`✅ Loaded sewing type ${rate.sewing_type_id} rate:`, input.value);
+            }
+          }
+        });
+      } else if (config.wage_type === 'Per-Trip') {
+        // Load logistics region rates
+        config.rates.forEach(rate => {
+          if (rate.logistics_region_id) {
+            const input = document.getElementById(`logistics-${rate.logistics_region_id}`);
+            if (input) {
+              input.value = rate.rate || '';
+              console.log(`✅ Loaded logistics region ${rate.logistics_region_id} rate:`, input.value);
+            }
+          }
+        });
+      }
+    }
+    
+    console.log('✅✅✅ Existing wage configuration loaded successfully');
+  } catch (err) {
+    console.error('❌ Error loading wage configuration:', err);
+  }
+}
+
 // Save wage configuration for an employee
 async function saveWageConfiguration(employeeCode, wageTypeId) {
   const wageType = document.getElementById('emp-wage-type')?.value;
   const rates = [];
 
   try {
-    if (wageType === 'Per-Piece') {
+    console.log('🔵 saveWageConfiguration called');
+    console.log('   Wage Type:', wageType);
+    console.log('   Employee Code:', employeeCode);
+    console.log('   Wage Type ID:', wageTypeId);
+    
+    if (wageType === 'Base Salary') {
+      // Collect base salary
+      console.log('→ Collecting BASE SALARY rates');
+      const salaryInput = document.getElementById('emp-salary');
+      const salary = salaryInput ? parseFloat(salaryInput.value) : 0;
+      
+      if (salary > 0) {
+        console.log('   ✅ Salary:', salary);
+        rates.push({
+          rate: salary,
+          base_rate: salary,
+          hourly_rate: null,
+          overtime_rate: null,
+          sewing_type_id: null,
+          logistics_region_id: null
+        });
+      } else {
+        console.log('   ⚠️ Salary is 0 or empty, skipping');
+      }
+    } else if (wageType === 'Hourly') {
+      // Collect hourly rates
+      console.log('→ Collecting HOURLY rates');
+      const hourlyInput = document.getElementById('emp-hourly-rate');
+      const overtimeInput = document.getElementById('emp-overtime-rate');
+      const hourlyRate = hourlyInput ? parseFloat(hourlyInput.value) : 0;
+      const overtimeRate = overtimeInput ? parseFloat(overtimeInput.value) : 0;
+      
+      if (hourlyRate > 0) {
+        console.log('   ✅ Hourly Rate:', hourlyRate);
+        console.log('   ✅ Overtime Rate:', overtimeRate);
+        rates.push({
+          rate: hourlyRate,
+          base_rate: 0,
+          hourly_rate: hourlyRate,
+          overtime_rate: overtimeRate || 0,
+          sewing_type_id: null,
+          logistics_region_id: null
+        });
+      } else {
+        console.log('   ⚠️ Hourly rate is 0 or empty, skipping');
+      }
+    } else if (wageType === 'Per-Piece') {
       // Collect sewing type rates
+      console.log('→ Collecting PER-PIECE (Sewing) rates');
       for (const sewing of WAGE_CONFIG.sawingTypes) {
         const rateInput = document.getElementById(`sewing-${sewing.id}`);
         if (rateInput) {
-          rates.push({
-            sewing_type_id: sewing.id,
-            rate: parseFloat(rateInput.value) || sewing.default_rate
-          });
+          const rate = parseFloat(rateInput.value) || 0;
+          if (rate > 0) {
+            console.log(`   ✅ ${sewing.name}: ${rate}`);
+            rates.push({
+              rate: rate,
+              base_rate: 0,
+              hourly_rate: null,
+              overtime_rate: null,
+              sewing_type_id: sewing.id,
+              logistics_region_id: null
+            });
+          } else {
+            console.log(`   ⊘ ${sewing.name}: empty (skipped)`);
+          }
         }
       }
     } else if (wageType === 'Per-Trip') {
       // Collect logistics region rates
+      console.log('→ Collecting PER-TRIP (Logistics) rates');
       for (const region of WAGE_CONFIG.logisticsRegions) {
         const rateInput = document.getElementById(`logistics-${region.id}`);
         if (rateInput) {
-          rates.push({
-            logistics_region_id: region.id,
-            rate: parseFloat(rateInput.value) || region.default_rate
-          });
+          const rate = parseFloat(rateInput.value) || 0;
+          if (rate > 0) {
+            console.log(`   ✅ ${region.name}: ${rate}`);
+            rates.push({
+              rate: rate,
+              base_rate: 0,
+              hourly_rate: null,
+              overtime_rate: null,
+              sewing_type_id: null,
+              logistics_region_id: region.id
+            });
+          } else {
+            console.log(`   ⊘ ${region.name}: empty (skipped)`);
+          }
         }
       }
     }
 
+    console.log('📊 Total rates collected:', rates.length);
+    
     if (rates.length > 0) {
+      console.log('📤 SENDING WAGE CONFIG API REQUEST...');
+      console.log('   Payload:', { wage_type_id: wageTypeId, rates: rates });
+      
       const res = await apiFetch(`/api/payroll/employees/${employeeCode}/wage-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ wage_type_id: wageTypeId, rates: rates })
       });
       
+      console.log('📥 API Response Status:', res.status);
+      
       if (res.ok) {
-        console.log('✅ Wage configuration saved');
-        return await res.json();
+        const responseData = await res.json();
+        console.log('✅✅✅ Wage configuration saved! Response:', responseData);
+        return responseData;
       } else {
-        console.error('Failed to save wage configuration');
+        const errorData = await res.json();
+        console.error('❌ Failed to save wage configuration:', errorData);
+        throw new Error(errorData.error || 'Failed to save wage configuration');
       }
+    } else {
+      console.log('⚠️ No rates to save (rates.length === 0)');
     }
   } catch (err) {
-    console.error('Error saving wage configuration:', err);
+    console.error('❌ Error saving wage configuration:', err);
   }
   return null;
 }
@@ -685,6 +859,7 @@ async function saveWageConfiguration(employeeCode, wageTypeId) {
 window.resetEditMode = function() {
   EDIT_MODE = false;
   EDIT_EMPLOYEE_ID = null;
+  EDIT_EMPLOYEE_NUMERIC_ID = null;
   window.IS_EDITING = false;
   window.PENDING_EDIT_MODE = false;
   console.log('All edit mode flags reset');
