@@ -82,6 +82,17 @@ router.get('/:employeeId', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
+    const userEmployeeId = req.user.employeeId;
+
+    // Permission check: Allow if user is HR admin OR viewing their own documents
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    const isOwnRecord = parseInt(employeeId) === userEmployeeId;
+    
+    if (!isHrAdmin && !isOwnRecord) {
+      console.warn(`⚠️ Permission denied: User ${userId} (role: ${userRole}) tried to access employee ${employeeId}`);
+      return res.status(403).json({ error: 'You do not have permission to view this employee\'s documents.' });
+    }
 
     // Log access
     await logAccessLog(employeeId, userId, 'view', 'employee_info', employeeId, { action: 'viewed_201_file' });
@@ -179,6 +190,13 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // Permission check: Only HR admins can view sensitive data
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    if (!isHrAdmin) {
+      return res.status(403).json({ error: 'Only HR admins can view sensitive employee data.' });
+    }
 
     // Log sensitive data access
     await logAccessLog(employeeId, userId, 'sensitive_data_view', 'sensitive_data', employeeId, { action: 'viewed_sensitive_data' });
@@ -214,7 +232,14 @@ router.put('/:employeeId/sensitive-data', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
     const { ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info } = req.body;
+
+    // Permission check: Only HR admins can edit sensitive data
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    if (!isHrAdmin) {
+      return res.status(403).json({ error: 'Only HR admins can edit sensitive employee data.' });
+    }
 
     // Check if sensitive data exists
     const [[existing]] = await pool.execute(
@@ -255,7 +280,14 @@ router.post('/:employeeId/documents', upload.single('file'), async (req, res) =>
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
     const { document_type } = req.body;
+
+    // Permission check: Only HR admins can upload documents
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    if (!isHrAdmin) {
+      return res.status(403).json({ error: 'Only HR admins can upload documents.' });
+    }
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded.' });
@@ -287,6 +319,13 @@ router.delete('/:employeeId/documents/:docId', async (req, res) => {
   try {
     const { employeeId, docId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // Permission check: Only HR admins can delete documents
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    if (!isHrAdmin) {
+      return res.status(403).json({ error: 'Only HR admins can delete documents.' });
+    }
 
     const [[existingDoc]] = await pool.execute(`
       SELECT * FROM documents WHERE id = ? AND employee_id = ?
@@ -325,7 +364,14 @@ router.put('/:employeeId/verify-document/:docId', async (req, res) => {
   try {
     const { employeeId, docId } = req.params;
     const userId = req.user.id;
+    const userRole = req.user.role;
     const { verification_status, rejection_reason } = req.body;
+
+    // Permission check: Only HR admins can verify documents
+    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    if (!isHrAdmin) {
+      return res.status(403).json({ error: 'Only HR admins can verify documents.' });
+    }
 
     if (!['Verified', 'Rejected'].includes(verification_status)) {
       return res.status(400).json({ error: 'Invalid verification status.' });

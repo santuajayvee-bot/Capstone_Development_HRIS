@@ -7,17 +7,27 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // ── Role hierarchy ───────────────────────────────────────────
+// Support both old role names (for backward compatibility with existing tokens) and new names
+const ROLE_ALIASES = {
+  'admin': 'hr_admin',      // Map old 'admin' to new 'hr_admin'
+  'system_admin': 'system_admin',
+  'hr_admin': 'hr_admin',
+  'payroll_officer': 'payroll_officer',
+  'payroll_manager': 'payroll_manager',
+  'employee': 'employee'
+};
+
 const ROLES = {
-  system_admin:    ['system_admin'],
-  hr_admin:        ['hr_admin'],
+  system_admin:    ['system_admin', 'hr_admin', 'admin'],  // Accept system_admin, hr_admin, or old admin
+  hr_admin:        ['hr_admin', 'admin'],                  // Accept hr_admin or old admin
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
   payroll_any:     ['payroll_officer', 'payroll_manager'],
-  hr_ops:          ['hr_admin'],                           // HR operations (Leave, Attendance)
-  staff_management: ['hr_admin'],                          // Employee management (register, profiles, documents)
-  admin_any:       ['hr_admin', 'system_admin'],           // Any admin role
-  staff_any:       ['hr_admin', 'payroll_officer', 'payroll_manager'],  // All staff roles
-  any:             ['hr_admin', 'system_admin', 'payroll_officer', 'payroll_manager', 'employee'],
+  hr_ops:          ['hr_admin', 'admin'],                           // HR operations (Leave, Attendance)
+  staff_management: ['hr_admin', 'admin'],                          // Employee management (register, profiles, documents)
+  admin_any:       ['hr_admin', 'system_admin', 'admin'],           // Any admin role
+  staff_any:       ['hr_admin', 'admin', 'payroll_officer', 'payroll_manager'],  // All staff roles
+  any:             ['hr_admin', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
 };
 
 /**

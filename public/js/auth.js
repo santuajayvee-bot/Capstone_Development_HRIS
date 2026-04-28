@@ -5,8 +5,16 @@
 // ── Role → permitted pages ────────────────────────────────────
 const ROLE_PERMISSIONS = {
   admin: [
-    'dashboard','employees','register','leave','requests',
-    'attendance','payroll','salary-calculation','onboarding','blockchain',
+    'dashboard','employees','leave','requests',
+    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
+  ],
+  hr_admin: [
+    'dashboard','employees','leave','requests',
+    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
+  ],
+  system_admin: [
+    'dashboard','employees','leave','requests',
+    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
   ],
   payroll_officer: [
     'dashboard','attendance','leave','payroll','salary-calculation','requests',
@@ -27,7 +35,33 @@ const NAV_CONFIG = {
     { page:'leave',      icon:'📅', label:'Leave Management'  },
     { page:'requests',   icon:'📋', label:'Request'           },
     { page:'attendance', icon:'⏰', label:'Attendance'         },
+    { page:'201file',    icon:'📄', label:'201-File'          },
     { page:'payroll',    icon:'💰', label:'Payroll'            },
+    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
+    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
+    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+  ],
+  hr_admin: [
+    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
+    { page:'employees',  icon:'👥', label:'Employees'         },
+    { page:'leave',      icon:'📅', label:'Leave Management'  },
+    { page:'requests',   icon:'📋', label:'Request'           },
+    { page:'attendance', icon:'⏰', label:'Attendance'         },
+    { page:'201file',    icon:'📄', label:'201-File'          },
+    { page:'payroll',    icon:'💰', label:'Payroll'            },
+    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
+    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
+    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+  ],
+  system_admin: [
+    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
+    { page:'employees',  icon:'👥', label:'Employees'         },
+    { page:'leave',      icon:'📅', label:'Leave Management'  },
+    { page:'requests',   icon:'📋', label:'Request'           },
+    { page:'attendance', icon:'⏰', label:'Attendance'         },
+    { page:'201file',    icon:'📄', label:'201-File'          },
+    { page:'payroll',    icon:'💰', label:'Payroll'            },
+    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
     { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
     { page:'blockchain', icon:'🔗', label:'Blockchain'         },
   ],
@@ -36,6 +70,7 @@ const NAV_CONFIG = {
     { page:'attendance', icon:'⏰', label:'Attendance'         },
     { page:'leave',      icon:'📅', label:'Leave Management'  },
     { page:'payroll',    icon:'💰', label:'Payroll'            },
+    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
     { page:'requests',   icon:'📋', label:'Request'           },
   ],
   payroll_manager: [
@@ -43,6 +78,7 @@ const NAV_CONFIG = {
     { page:'attendance', icon:'⏰', label:'Attendance'         },
     { page:'leave',      icon:'📅', label:'Leave Management'  },
     { page:'payroll',    icon:'💰', label:'Payroll'            },
+    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
     { page:'requests',   icon:'📋', label:'Request'           },
   ],
   employee: [

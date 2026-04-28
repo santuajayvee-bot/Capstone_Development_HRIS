@@ -8,10 +8,28 @@ let CURRENT_VIEW = 'list'; // 'list' or 'manage'
 
 async function fetchEmployees() {
   try {
+    console.log('📡 Fetching employees from API...');
     const response = await apiFetch('/api/employees');
-    if (!response) return; // apiFetch handles 401 logout
-    if (!response.ok) throw new Error('Failed to fetch employees');
+    if (!response) {
+      console.error('❌ No response from API (401 logout triggered?)');
+      return;
+    }
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`HTTP ${response.status}: ${errorData.error || response.statusText}`);
+    }
+    
     const data = await response.json();
+    console.log('✅ API returned', data.length, 'employees');
+    
+    if (!data || data.length === 0) {
+      console.warn('⚠️  API returned empty employee list');
+      EMPLOYEES = [];
+      EMPLOYEES_RAW = [];
+      renderEmployees([]);
+      return [];
+    }
+    
     EMPLOYEES_RAW = data; // Store raw data for editing
     
     EMPLOYEES = data.map(e => {
@@ -19,7 +37,8 @@ async function fetchEmployees() {
       const cityFromAddress = e.residential_address ? e.residential_address.split(',')[0].trim() : '—';
       
       return {
-        id: e.employee_code || '—',
+        id: e.id, // Numeric database ID for API calls
+        empCode: e.employee_code || '—', // Employee code (EMP00011) for display
         name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Unknown',
         initials: `${(e.first_name || 'U')[0]}${(e.last_name || 'K')[0]}`.toUpperCase(),
         gradient: 'linear-gradient(135deg,#4f7cff,#22d3a5)', // Default gradient
@@ -42,68 +61,60 @@ async function fetchEmployees() {
     renderEmployees(EMPLOYEES);
     return EMPLOYEES; // Return the fetched data
   } catch (error) {
-    console.error('❌ Error fetching employees:', error);
-    // Fallback to static data if API fails
-    EMPLOYEES = [
-      { id:'EMP00521', name:'Serjo Justine',  initials:'SJ', gradient:'linear-gradient(135deg,#4f7cff,#22d3a5)', email:'sjerp@hrekuh.com',      phone:'+63 02 1267 981', city:'Dasmarinas City',        dept:'HR',         status:'Active' },
-      { id:'EMP00522', name:'Chris Brown',    initials:'CB', gradient:'linear-gradient(135deg,#f5a623,#e05c7a)', email:'fistmas@gmail.com',      phone:'+63 52 2345 800',  city:'Caloocan City',          dept:'Production', status:'Active' },
-      { id:'EMP00583', name:'LeBron James',   initials:'LJ', gradient:'linear-gradient(135deg,#22d3a5,#4f7cff)', email:'lebr42@james-er.com',    phone:'+63 17 2322 203', city:'Paranaque City',         dept:'HR',         status:'Active' },
-      { id:'EMP00600', name:'Nikki Minaj',    initials:'NM', gradient:'linear-gradient(135deg,#7c5cfc,#e05c7a)', email:'nikkitulsa@gmail.com',   phone:'+63 277 537 329', city:'Quezon City',            dept:'Executive',  status:'Active' },
-      { id:'EMP00601', name:'Boyd Amorado',   initials:'BA', gradient:'linear-gradient(135deg,#f5a623,#22d3a5)', email:'hmuk.smd72@gmail.com',   phone:'+32 10761 4444',  city:'Paranaque City',         dept:'Executive',  status:'Active' },
-      { id:'EMP00602', name:'Sassa Gurl',     initials:'SG', gradient:'linear-gradient(135deg,#e05c7a,#f5a623)', email:'sassag4@email.com',      phone:'+63 96 868 7697', city:'Manila City',            dept:'Executive',  status:'Active' },
-    ];
-    console.log('⚠️ Using fallback static employee data');
-    renderEmployees(EMPLOYEES);
-    return EMPLOYEES;
+    console.error('❌ Error fetching employees:', error.message);
+    // Do NOT use fallback data - show error instead
+    EMPLOYEES = [];
+    EMPLOYEES_RAW = [];
+    
+    const grid = document.getElementById('emp-grid');
+    if (grid) {
+      grid.innerHTML = `
+        <div style="grid-column: 1/-1; padding: 40px; text-align: center; color: #ff6b6b;">
+          <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Failed to Load Employees</div>
+          <div style="font-size: 14px; color: #999;">${error.message}</div>
+          <button onclick="location.reload()" style="margin-top: 16px; padding: 8px 16px; background: #4f7cff; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
+        </div>
+      `;
+    }
+    
+    return [];
   }
 }
 
 function renderEmployees(list) {
-  const grid = document.getElementById('emp-grid');
-  if (!grid) return;
+  const tbody = document.getElementById('emp-tbody');
+  if (!tbody) return;
   
-  const renderedCards = list.map(e => {
-    const fullName = `${e.name}`;
-    const empId = e.id;
-    const empEmail = e.email;
-    const empPhone = e.phone;
-    const empCity = e.city;
-    const empDept = e.dept;
-    const empPosition = e.position;
-    const empSupervisor = e.supervisor;
-    const empStatus = e.status;
+  const renderedRows = list.map(e => {
+    const statusClass = e.status === 'Active' ? 'active' : 'inactive';
+    const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     
     return `
-    <div class="emp-card" onclick="openEmployeeDetailModal('${empId}')" style="cursor:pointer;" data-emp-id="${empId}">
-      <div class="emp-top">
-        <div class="emp-avatar" style="background:${e.gradient}">${e.initials}</div>
-        <div>
-          <div class="emp-name">${fullName} <span class="badge badge-active">${empStatus}</span></div>
-          <div class="emp-email">${empEmail}</div>
-        </div>
-      </div>
-      <div class="emp-phone">${empPhone} · ${empCity}</div>
-      <div class="emp-meta">
-        <div class="emp-meta-item"><div class="mlabel">Department</div><div class="mval">${empDept}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Position</div><div class="mval">${empPosition}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Supervisor</div><div class="mval">${empSupervisor}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Employee ID</div><div class="mval">${empId}</div></div>
-      </div>
-    </div>
+    <tr onclick="openEmployeeDetailModal('${e.id}')" style="cursor:pointer;" data-emp-id="${e.id}">
+      <td class="emp-id">${e.empCode}</td>
+      <td class="emp-name">${e.name}</td>
+      <td class="emp-email">${e.email}</td>
+      <td>${e.phone}</td>
+      <td>${e.city}</td>
+      <td>${e.dept}</td>
+      <td>${e.position}</td>
+      <td>${e.supervisor}</td>
+      <td><span class="emp-status ${statusClass}">${statusDisplay}</span></td>
+      <td class="emp-action">View</td>
+    </tr>
   `;
   }).join('');
   
-  grid.innerHTML = renderedCards;
+  tbody.innerHTML = renderedRows;
   
-  console.log('✅ Rendered', list.length, 'employee cards');
+  console.log('✅ Rendered', list.length, 'employees in table');
   if (list.length > 0) {
-    console.log('📊 First employee card data:', {
+    console.log('📊 First employee:', {
       name: list[0].name,
       id: list[0].id,
+      empCode: list[0].empCode,
       email: list[0].email,
-      phone: list[0].phone,
-      dept: list[0].dept,
-      position: list[0].position
+      dept: list[0].dept
     });
   }
 
@@ -230,9 +241,20 @@ function prefillEmployeeForm(employee) {
 }
 
 function filterEmployees() {
-  const search = document.getElementById('manage-search')?.value.toLowerCase() || '';
-  const status = document.getElementById('manage-status')?.value || '';
-  const dept   = document.getElementById('manage-dept')?.value || '';
+  // Determine which view is active and use appropriate filter IDs
+  let search, status, dept;
+  
+  if (CURRENT_VIEW === 'manage') {
+    // Manage view - use manage-* IDs
+    search = document.getElementById('manage-search')?.value.toLowerCase() || '';
+    status = document.getElementById('manage-status')?.value || '';
+    dept   = document.getElementById('manage-dept')?.value || '';
+  } else {
+    // List view - use emp-* IDs
+    search = document.getElementById('emp-search')?.value.toLowerCase() || '';
+    status = document.getElementById('emp-status')?.value || '';
+    dept   = document.getElementById('emp-dept')?.value || '';
+  }
 
   const filtered = EMPLOYEES.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search) || e.email.toLowerCase().includes(search);
@@ -242,40 +264,78 @@ function filterEmployees() {
   });
 
   console.log(`Filtered: ${filtered.length} employees (search: "${search}", status: "${status}", dept: "${dept}")`);
-  loadManageEmployeeList(filtered);
+  
+  // Render appropriate view
+  if (CURRENT_VIEW === 'manage') {
+    loadManageEmployeeList(filtered);
+  } else {
+    renderEmployees(filtered);
+  }
 }
 
 /* View Switching */
 function switchView(view) {
   CURRENT_VIEW = view;
   const filterBar = document.querySelector('.filter-bar');
-  const empGrid = document.getElementById('emp-grid');
+  const empTable = document.getElementById('emp-table');
   const empCount = document.getElementById('emp-count');
   const manageView = document.getElementById('emp-manage-view');
   
   if (view === 'list') {
     // Show list view, hide manage view
     if (filterBar) filterBar.style.display = '';
-    if (empGrid) empGrid.style.display = '';
+    if (empTable) empTable.style.display = '';
     if (empCount) empCount.style.display = '';
     if (manageView) manageView.style.display = 'none';
   } else if (view === 'manage') {
-    // Check if user is admin
+    // Check if user is admin (support both 'admin' and 'hr_admin' roles)
     const userStr = sessionStorage.getItem('vp_user');
     const user = userStr ? JSON.parse(userStr) : null;
-    if (user?.role !== 'admin') {
+    const adminRoles = ['admin', 'hr_admin', 'system_admin'];
+    if (!adminRoles.includes(user?.role)) {
       alert('Only administrators can access this feature.');
       return;
     }
     // Show manage view, hide list view
     if (filterBar) filterBar.style.display = 'none';
-    if (empGrid) empGrid.style.display = 'none';
+    if (empTable) empTable.style.display = 'none';
     if (empCount) empCount.style.display = 'none';
     if (manageView) {
       manageView.style.display = 'block';
-      renderManagementTable(EMPLOYEES);
+      
+      // Ensure employees are loaded before rendering
+      if (EMPLOYEES.length === 0) {
+        fetchEmployees().then(() => {
+          loadManageEmployeeList(EMPLOYEES);
+          attachManageViewEventListeners();
+        });
+      } else {
+        loadManageEmployeeList(EMPLOYEES);
+        attachManageViewEventListeners();
+      }
     }
   }
+}
+
+function attachManageViewEventListeners() {
+  setTimeout(() => {
+    const searchInput = document.getElementById('manage-search');
+    const statusSelect = document.getElementById('manage-status');
+    const deptSelect = document.getElementById('manage-dept');
+    
+    if (searchInput) {
+      searchInput.removeEventListener('input', filterEmployees);
+      searchInput.addEventListener('input', filterEmployees);
+    }
+    if (statusSelect) {
+      statusSelect.removeEventListener('change', filterEmployees);
+      statusSelect.addEventListener('change', filterEmployees);
+    }
+    if (deptSelect) {
+      deptSelect.removeEventListener('change', filterEmployees);
+      deptSelect.addEventListener('change', filterEmployees);
+    }
+  }, 100);
 }
 
 /* Register Page View Switching - Manage vs Add Employee */
@@ -358,31 +418,30 @@ function loadManageEmployeeList(list = EMPLOYEES) {
   
   console.log('Loading manage employee list with', list.length, 'employees');
   
-  grid.innerHTML = list.map(e => `
-    <div class="emp-card" style="position:relative;">
-      <div class="emp-top">
-        <div class="emp-avatar" style="background:${e.gradient}">${e.initials}</div>
-        <div>
-          <div class="emp-name">${e.name} <span class="badge badge-active">${e.status}</span></div>
-          <div class="emp-email">${e.email}</div>
+  grid.innerHTML = list.map(e => {
+    const statusClass = e.status === 'Active' ? 'active' : 'inactive';
+    const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
+    const toggleLabel = e.status === 'Active' ? 'Deactivate' : 'Activate';
+    
+    return `
+    <tr data-emp-id="${e.id}">
+      <td class="emp-id">${e.empCode}</td>
+      <td class="emp-name">${e.name}</td>
+      <td>${e.email}</td>
+      <td>${e.dept}</td>
+      <td>${e.position}</td>
+      <td><span class="emp-status-badge ${statusClass}">${statusDisplay}</span></td>
+      <td>
+        <div class="emp-actions" style="flex-wrap:wrap;">
+          <button class="emp-edit-btn" onclick="editEmployee('${e.id}')" title="Edit Employee" style="flex:1;min-width:60px;">Edit</button>
+          <button class="emp-status-toggle-btn" onclick="toggleEmployeeStatus('${e.id}', '${e.status}')" title="Toggle Status" style="flex:1;min-width:70px;">${toggleLabel}</button>
+          <button class="emp-delete-btn" onclick="deleteEmployeeFromManage('${e.id}')" title="Delete Employee" style="flex:1;min-width:60px;">Delete</button>
         </div>
-      </div>
-      <div class="emp-phone">${e.phone} · ${e.city}</div>
-      <div class="emp-meta">
-        <div class="emp-meta-item"><div class="mlabel">Department</div><div class="mval">${e.dept}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Position</div><div class="mval">${e.position}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Supervisor</div><div class="mval">${e.supervisor}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Employee ID</div><div class="mval">${e.id}</div></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:12px;border-top:1px solid #e9ecef;padding-top:12px;">
-        <button class="btn btn-sm btn-outline" onclick="editEmployeeFromManage('${e.id}')" style="flex:1;font-size:12px;">Edit</button>
-        <button class="btn btn-sm btn-outline" onclick="toggleEmployeeStatus('${e.id}', '${e.status}')" style="flex:1;font-size:12px;" title="Toggle Status">${e.status === 'Active' ? 'Deactivate' : 'Activate'}</button>
-        <button class="btn btn-sm btn-outline" onclick="deleteEmployeeFromManage('${e.id}')" style="flex:1;font-size:12px;color:#dc3545;">Delete</button>
-      </div>
-    </div>
-  `).join('');
+      </td>
+    </tr>
+  `}).join('');
   
-  console.log('Rendered', list.length, 'employees to manage grid');
+  console.log('Rendered', list.length, 'employees to manage table');
 }
 
 async function toggleEmployeeStatus(employeeId, currentStatus) {
@@ -416,8 +475,8 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
 }
 
 function editEmployeeFromManage(employeeId) {
-  console.log('Editing employee:', employeeId);
-  const employee = EMPLOYEES_RAW.find(e => e.employee_code === employeeId);
+  console.log('Editing employee ID:', employeeId);
+  const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
   console.log('Found employee:', employee);
   if (!employee) {
     alert('Employee not found');
@@ -429,13 +488,13 @@ function editEmployeeFromManage(employeeId) {
   window.PENDING_EDIT_MODE = false;
   sessionStorage.removeItem('editEmployee');
   
-  // Store NEW employee data in sessionStorage
+  // Store employee data in sessionStorage
   sessionStorage.setItem('editEmployee', JSON.stringify(employee));
   
-  // Set edit mode flags for this NEW employee
+  // Set edit mode flags
   window.IS_EDITING = true;
   window.PENDING_EDIT_MODE = true;
-  console.log('Set edit mode for employee:', employeeId);
+  console.log('Set edit mode for employee:', employee.employee_code);
   console.log('Flags: IS_EDITING:', window.IS_EDITING, 'PENDING_EDIT_MODE:', window.PENDING_EDIT_MODE);
   
   // Switch to form view
@@ -443,7 +502,7 @@ function editEmployeeFromManage(employeeId) {
 }
 
 async function deleteEmployeeFromManage(employeeId) {
-  const emp = EMPLOYEES.find(e => e.id === employeeId);
+  const emp = EMPLOYEES.find(e => e.id === parseInt(employeeId));
   if (!emp) {
     alert('Employee not found');
     return;
@@ -530,37 +589,37 @@ function clearEmployeeForm() {
 
 /* Management Table */
 function renderManagementTable(list) {
-  const grid = document.getElementById('emp-manage-tbody');
+  const grid = document.getElementById('manage-emp-grid');
   if (!grid) {
-    console.error('Grid element "emp-manage-tbody" not found!');
+    console.error('Grid element "manage-emp-grid" not found!');
     return;
   }
   
-  grid.innerHTML = list.map(e => `
-    <div class="emp-card" style="position:relative;">
-      <div class="emp-top">
-        <div class="emp-avatar" style="background:${e.gradient}">${e.initials}</div>
-        <div>
-          <div class="emp-name">${e.name} <span class="badge badge-active">${e.status}</span></div>
-          <div class="emp-email">${e.email}</div>
+  grid.innerHTML = list.map(e => {
+    const statusClass = e.status === 'Active' ? 'active' : 'inactive';
+    const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
+    const toggleLabel = e.status === 'Active' ? 'Deactivate' : 'Activate';
+    
+    return `
+    <tr data-emp-id="${e.id}">
+      <td class="emp-id">${e.id}</td>
+      <td class="emp-name">${e.name}</td>
+      <td>${e.email}</td>
+      <td>${e.dept}</td>
+      <td>${e.position}</td>
+      <td><span class="emp-status-badge ${statusClass}">${statusDisplay}</span></td>
+      <td>
+        <div class="emp-actions" style="flex-wrap:wrap;">
+          <button class="emp-edit-btn" onclick="editEmployee('${e.id}')" title="Edit Employee" style="flex:1;min-width:60px;">Edit</button>
+          <button style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:all 0.2s ease;background:#6c757d;color:white;" onclick="openPayrollConfigModal('${e.id}')" title="Configure Payroll">Payroll</button>
+          <button class="emp-status-toggle-btn" onclick="toggleEmployeeStatus('${e.id}', '${e.status}')" title="Toggle Status" style="flex:1;min-width:70px;">${toggleLabel}</button>
+          <button class="emp-delete-btn" onclick="deleteEmployee('${e.id}', '${e.name}')" title="Delete Employee" style="flex:1;min-width:60px;">Delete</button>
         </div>
-      </div>
-      <div class="emp-phone">${e.phone} · ${e.city}</div>
-      <div class="emp-meta">
-        <div class="emp-meta-item"><div class="mlabel">Department</div><div class="mval">${e.dept}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Position</div><div class="mval">${e.position}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Supervisor</div><div class="mval">${e.supervisor}</div></div>
-        <div class="emp-meta-item"><div class="mlabel">Employee ID</div><div class="mval">${e.id}</div></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:12px;border-top:1px solid #e9ecef;padding-top:12px;">
-        <button class="btn btn-sm btn-outline" onclick="editEmployee('${e.id}')" style="flex:1;font-size:12px;">Edit</button>
-        <button class="btn btn-sm btn-outline" onclick="toggleEmployeeStatus('${e.id}', '${e.status}')" style="flex:1;font-size:12px;" title="Toggle Status">${e.status === 'Active' ? 'Deactivate' : 'Activate'}</button>
-        <button class="btn btn-sm btn-outline" onclick="deleteEmployee('${e.id}', '${e.name}')" style="flex:1;font-size:12px;color:#dc3545;">Delete</button>
-      </div>
-    </div>
-  `).join('');
+      </td>
+    </tr>
+  `}).join('');
   
-  console.log('Rendered', list.length, 'employees to management grid');
+  console.log('Rendered', list.length, 'employees to management table');
 }
 
 /* Delete Employee */
@@ -588,9 +647,181 @@ function deleteEmployee(empId, empName) {
 }
 
 /* Edit Employee - Redirect to register form */
+let currentEditingEmployeeId = null;
+
+function switchEditTab(tabName) {
+  // Hide all tabs
+  document.getElementById('edit-tab-personal').style.display = 'none';
+  document.getElementById('edit-tab-employment').style.display = 'none';
+  document.getElementById('edit-tab-payroll').style.display = 'none';
+  
+  // Remove active state from all buttons
+  document.querySelectorAll('.edit-tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+    btn.style.borderBottomColor = 'transparent';
+    btn.style.color = '#666';
+  });
+  
+  // Show selected tab and update button
+  const tabMap = {
+    'personal': 'edit-tab-personal',
+    'employment': 'edit-tab-employment',
+    'payroll': 'edit-tab-payroll'
+  };
+  
+  if (tabMap[tabName]) {
+    document.getElementById(tabMap[tabName]).style.display = 'block';
+  }
+  
+  // Find and activate the clicked button
+  document.querySelectorAll('.edit-tab-btn').forEach(btn => {
+    if (btn.textContent.includes(tabName === 'personal' ? 'Personal' : tabName === 'employment' ? 'Employment' : 'Payroll')) {
+      btn.classList.add('active');
+      btn.style.borderBottomColor = '#4f7cff';
+      btn.style.color = '#333';
+    }
+  });
+}
+
 function editEmployee(empId) {
-  console.log('Editing employee:', empId);
-  const employee = EMPLOYEES_RAW.find(e => e.employee_code === empId);
+  console.log('Editing employee ID:', empId);
+  const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
+  console.log('Found employee:', employee);
+  if (!employee) {
+    alert('Employee not found');
+    return;
+  }
+
+  currentEditingEmployeeId = employee.id;
+  
+  // Populate Personal Info Tab
+  document.getElementById('edit-emp-first-name').value = employee.first_name || '';
+  document.getElementById('edit-emp-last-name').value = employee.last_name || '';
+  document.getElementById('edit-emp-email').value = employee.email || '';
+  document.getElementById('edit-emp-phone').value = employee.contact_number || '';
+  document.getElementById('edit-emp-city').value = employee.residential_address || '';
+  
+  // Populate Employment Details Tab
+  document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
+  document.getElementById('edit-emp-position').value = employee.position || '';
+  document.getElementById('edit-emp-type').value = employee.employment_type || '';
+  document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
+  document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
+  document.getElementById('edit-emp-work-location').value = employee.work_location || '';
+  
+  // Populate Payroll & Compensation Tab
+  document.getElementById('edit-payroll-wage-type').value = employee.wage_type || '';
+  document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
+  
+  // Reset to first tab
+  switchEditTab('personal');
+  
+  // Open the modal
+  const modal = document.getElementById('edit-employee-modal');
+  if (modal) modal.style.setProperty('display', 'flex', 'important');
+}
+
+function closeEditEmployeeModal() {
+  const modal = document.getElementById('edit-employee-modal');
+  if (modal) modal.style.display = 'none';
+  currentEditingEmployeeId = null;
+}
+
+function getDeptName(deptId) {
+  const deptMap = {
+    1: 'HR',
+    2: 'Accounting',
+    3: 'Production',
+    4: 'Logistics',
+    5: 'Personnel'
+  };
+  return deptMap[deptId] || 'HR';
+}
+
+function getDeptId(deptName) {
+  const deptMap = {
+    'HR': 1,
+    'Accounting': 2,
+    'Production': 3,
+    'Logistics': 4,
+    'Personnel': 5
+  };
+  return deptMap[deptName] || 1;
+}
+
+async function saveEditedEmployee() {
+  if (!currentEditingEmployeeId) {
+    alert('Error: No employee selected');
+    return;
+  }
+
+  // Collect Personal Info Tab
+  const firstName = document.getElementById('edit-emp-first-name').value;
+  const lastName = document.getElementById('edit-emp-last-name').value;
+  const email = document.getElementById('edit-emp-email').value;
+  const phone = document.getElementById('edit-emp-phone').value;
+  const city = document.getElementById('edit-emp-city').value;
+  
+  // Collect Employment Details Tab
+  const dept = document.getElementById('edit-emp-dept').value;
+  const position = document.getElementById('edit-emp-position').value;
+  const empType = document.getElementById('edit-emp-type').value;
+  const dateHired = document.getElementById('edit-emp-date-hired').value;
+  const supervisor = document.getElementById('edit-emp-supervisor').value;
+  const workLocation = document.getElementById('edit-emp-work-location').value;
+  
+  // Collect Payroll & Compensation Tab
+  const wageType = document.getElementById('edit-payroll-wage-type').value;
+  const baseRate = document.getElementById('edit-payroll-rate').value;
+
+  if (!firstName || !lastName || !email) {
+    alert('First name, last name, and email are required');
+    return;
+  }
+
+  try {
+    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        first_name: firstName,
+        last_name: lastName,
+        email: email,
+        contact_number: phone,
+        residential_address: city,
+        department_id: getDeptId(dept),
+        position: position,
+        employment_type: empType,
+        date_hired: dateHired,
+        supervisor: supervisor,
+        work_location: workLocation,
+        wage_type: wageType,
+        base_rate: baseRate ? parseFloat(baseRate) : null,
+        status: 'Active'
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update employee');
+    }
+
+    alert('Employee updated successfully!');
+    closeEditEmployeeModal();
+    
+    // Refresh the employee list
+    await fetchEmployees();
+    loadManageEmployeeList(EMPLOYEES);
+  } catch (error) {
+    console.error('Error saving employee:', error);
+    alert('Failed to save employee: ' + error.message);
+  }
+}
+
+/* Edit Employee - Redirect to register form (kept for legacy) */
+function editEmployeeOld(empId) {
+  console.log('Editing employee ID:', empId);
+  const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
   console.log('Found employee:', employee);
   if (!employee) {
     alert('Employee not found');
@@ -634,6 +865,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('emp-status') ?.addEventListener('change', filterEmployees);
 });
 
+// Payroll config wage type change handler
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'payroll-config-wage-select') {
+    const wageTypeId = e.target.value;
+    document.getElementById('payroll-config-hourly-section').style.display = wageTypeId === '2' ? 'block' : 'none';
+    document.getElementById('payroll-config-sewing-section').style.display = wageTypeId === '3' ? 'block' : 'none';
+    document.getElementById('payroll-config-logistics-section').style.display = wageTypeId === '4' ? 'block' : 'none';
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════════════
    Employee Detail Modal Functions
    ═══════════════════════════════════════════════════════════════════ */
@@ -644,10 +885,15 @@ let logisticsRegionsForPayroll = [];
 
 // Open employee detail modal
 async function openEmployeeDetailModal(employeeId) {
-  const employee = EMPLOYEES_RAW.find(e => e.employee_code === employeeId);
+  const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
   if (!employee) return;
   
   currentEmployeeForModal = employee;
+  
+  console.log('🔍 Opening employee detail modal');
+  console.log('   Employee ID:', employeeId);
+  console.log('   Employee Code:', employee.employee_code);
+  console.log('   Full Employee:', employee);
   
   // Populate personal info
   document.getElementById('emp-detail-empid').textContent = employee.employee_code || '—';
@@ -1003,9 +1249,231 @@ window.switchRegisterView = switchRegisterView;
 window.loadManageEmployeeList = loadManageEmployeeList;
 window.openEmployeeDetail = openEmployeeDetail;
 window.prefillEmployeeForm = prefillEmployeeForm;
+window.openPayrollConfigModal = openPayrollConfigModal;
+window.closePayrollConfigModal = closePayrollConfigModal;
+window.savePayrollConfigFromManage = savePayrollConfigFromManage;
+window.editEmployee = editEmployee;
+window.switchEditTab = switchEditTab;
+window.closeEditEmployeeModal = closeEditEmployeeModal;
+window.saveEditedEmployee = saveEditedEmployee;
+
+/* Payroll Configuration Modal (Manage View) */
+let currentPayrollEmployeeId = null;
+
+function openPayrollConfigModal(employeeId) {
+  const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
+  if (!employee) {
+    alert('Employee not found');
+    return;
+  }
+  
+  currentPayrollEmployeeId = employeeId;
+  
+  // Set employee info (read-only)
+  document.getElementById('payroll-modal-emp-id').textContent = employee.employee_code || '—';
+  document.getElementById('payroll-modal-emp-name').textContent = `${employee.first_name} ${employee.last_name}`;
+  
+  // Load current payroll config
+  loadPayrollConfigForModal(employeeId);
+  
+  // Load ref data if needed
+  if (sewingTypesForPayroll.length === 0) {
+    loadPayrollRefData();
+  }
+  
+  // Show modal
+  const modal = document.getElementById('payroll-config-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closePayrollConfigModal() {
+  const modal = document.getElementById('payroll-config-modal');
+  if (modal) modal.style.display = 'none';
+  currentPayrollEmployeeId = null;
+  clearPayrollConfigForm();
+}
+
+function clearPayrollConfigForm() {
+  document.getElementById('payroll-config-wage-select').value = '';
+  document.getElementById('payroll-config-primary-rate').value = '';
+  document.getElementById('payroll-config-hourly-rate').value = '';
+  document.getElementById('payroll-config-overtime-rate').value = '';
+  document.getElementById('payroll-config-hourly-section').style.display = 'none';
+  document.getElementById('payroll-config-sewing-section').style.display = 'none';
+  document.getElementById('payroll-config-logistics-section').style.display = 'none';
+}
+
+async function loadPayrollConfigForModal(employeeId) {
+  try {
+    const res = await apiFetch(`/api/payroll/employees/${employeeId}/wage-config`);
+    if (!res.ok) {
+      console.log('No wage config found for employee');
+      clearPayrollConfigForm();
+      return;
+    }
+    
+    const config = await res.json();
+    console.log('Loaded payroll config for modal:', config);
+    
+    if (config.wage_type_id) {
+      document.getElementById('payroll-config-wage-select').value = config.wage_type_id;
+      document.getElementById('payroll-config-primary-rate').value = config.base_rate || '';
+      
+      if (config.wage_type_id === 2) {
+        // Hourly
+        document.getElementById('payroll-config-hourly-section').style.display = 'block';
+        document.getElementById('payroll-config-hourly-rate').value = config.hourly_rate || '';
+        document.getElementById('payroll-config-overtime-rate').value = config.overtime_rate || '';
+      } else {
+        document.getElementById('payroll-config-hourly-section').style.display = 'none';
+      }
+      
+      if (config.wage_type_id === 3) {
+        // Sewing
+        document.getElementById('payroll-config-sewing-section').style.display = 'block';
+        renderPayrollSewingRates(config.rates || []);
+      } else {
+        document.getElementById('payroll-config-sewing-section').style.display = 'none';
+      }
+      
+      if (config.wage_type_id === 4) {
+        // Logistics
+        document.getElementById('payroll-config-logistics-section').style.display = 'block';
+        renderPayrollLogisticsRates(config.rates || []);
+      } else {
+        document.getElementById('payroll-config-logistics-section').style.display = 'none';
+      }
+    }
+  } catch (e) {
+    console.error('Error loading payroll config:', e);
+  }
+}
+
+function renderPayrollSewingRates(rates) {
+  const container = document.getElementById('payroll-config-sewing-items');
+  container.innerHTML = sewingTypesForPayroll.map(type => {
+    const existingRate = rates.find(r => r.sewing_type_id === type.id);
+    return `
+      <div style="margin-bottom:12px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">${type.name}</label>
+        <input type="number" class="emp-payroll-rate-input" data-sewing-id="${type.id}" min="0" step="0.01" placeholder="0.00" value="${existingRate?.rate || ''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);" />
+      </div>
+    `;
+  }).join('');
+}
+
+function renderPayrollLogisticsRates(rates) {
+  const container = document.getElementById('payroll-config-logistics-items');
+  container.innerHTML = logisticsRegionsForPayroll.map(region => {
+    const existingRate = rates.find(r => r.logistics_region_id === region.id);
+    return `
+      <div style="margin-bottom:12px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">${region.name}</label>
+        <input type="number" class="emp-payroll-rate-input" data-region-id="${region.id}" min="0" step="0.01" placeholder="0.00" value="${existingRate?.rate || ''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);" />
+      </div>
+    `;
+  }).join('');
+}
+
+async function savePayrollConfigFromManage() {
+  if (!currentPayrollEmployeeId) {
+    alert('No employee selected');
+    return;
+  }
+  
+  const wageTypeId = document.getElementById('payroll-config-wage-select').value;
+  if (!wageTypeId) {
+    alert('Please select a wage type');
+    return;
+  }
+  
+  const primaryRate = parseFloat(document.getElementById('payroll-config-primary-rate').value) || 0;
+  const hourlyRate = parseFloat(document.getElementById('payroll-config-hourly-rate').value) || 0;
+  const overtimeRate = parseFloat(document.getElementById('payroll-config-overtime-rate').value) || 0;
+  
+  const rates = [];
+  
+  if (wageTypeId === '2') {
+    // Hourly
+    if (hourlyRate <= 0) {
+      alert('Please enter a valid hourly rate');
+      return;
+    }
+    rates.push({
+      rate: hourlyRate,
+      base_rate: primaryRate,
+      hourly_rate: hourlyRate,
+      overtime_rate: overtimeRate,
+      sewing_type_id: null,
+      logistics_region_id: null
+    });
+  } else if (wageTypeId === '3' || wageTypeId === '4') {
+    const inputs = document.querySelectorAll('.emp-payroll-rate-input');
+    inputs.forEach((input) => {
+      const rate = parseFloat(input.value) || 0;
+      const sewingId = input.getAttribute('data-sewing-id');
+      const regionId = input.getAttribute('data-region-id');
+      
+      if (rate > 0) {
+        rates.push({
+          rate,
+          base_rate: primaryRate,
+          hourly_rate: null,
+          overtime_rate: null,
+          sewing_type_id: sewingId ? parseInt(sewingId) : null,
+          logistics_region_id: regionId ? parseInt(regionId) : null
+        });
+      }
+    });
+    
+    if (rates.length === 0) {
+      alert('Please enter at least one rate');
+      return;
+    }
+  } else {
+    // Base Salary
+    if (primaryRate <= 0) {
+      alert('Please enter a valid base rate');
+      return;
+    }
+    rates.push({
+      rate: primaryRate,
+      base_rate: primaryRate,
+      hourly_rate: null,
+      overtime_rate: null,
+      sewing_type_id: null,
+      logistics_region_id: null
+    });
+  }
+  
+  const payload = { wage_type_id: parseInt(wageTypeId), rates };
+  
+  try {
+    const res = await apiFetch(`/api/payroll/employees/${currentPayrollEmployeeId}/wage-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const responseData = await res.json();
+    
+    if (res.ok) {
+      alert(`✅ Payroll configuration saved!\n✓ ${responseData.ratesSaved} rate(s) saved`);
+      closePayrollConfigModal();
+    } else {
+      alert('❌ Failed to save: ' + (responseData.error || 'Unknown error'));
+    }
+  } catch (e) {
+    console.error('Error saving payroll config:', e);
+    alert('Error: ' + e.message);
+  }
+}
 
 // Close modal when clicking outside
 window.addEventListener('click', (e) => {
   const modal = document.getElementById('emp-detail-modal');
   if (modal && e.target === modal) closeEmployeeDetail();
+  
+  const payrollModal = document.getElementById('payroll-config-modal');
+  if (payrollModal && e.target === payrollModal) closePayrollConfigModal();
 });

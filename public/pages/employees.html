@@ -214,7 +214,7 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline" onclick="switchView('manage')">⚙ Manage Employee</button>
-    <button class="btn btn-primary" onclick="navigate('register', null)">+ Add Employee</button>
+    <button class="btn btn-primary" onclick="switchView('manage')">+ Add Employee</button>
   </div>
 </div>
 
@@ -236,9 +236,25 @@
 </div>
 
 <div id="emp-count" style="font-size:13px;color:var(--muted);margin-bottom:16px;">Showing 6 of 6 employees</div>
-<div id="emp-grid" class="emp-grid">
-  <!-- Rendered by employees.js -->
-</div>
+<table id="emp-table" class="emp-table">
+  <thead>
+    <tr>
+      <th onclick="openEmployeeDetailModal(this.dataset.empId)" style="cursor:pointer;">ID</th>
+      <th>Name</th>
+      <th>Email</th>
+      <th>Phone</th>
+      <th>City</th>
+      <th>Department</th>
+      <th>Position</th>
+      <th>Supervisor</th>
+      <th>Status</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody id="emp-tbody">
+    <!-- Rendered by employees.js -->
+  </tbody>
+</table>
 
 <!-- Employee Details Modal -->
 <div id="emp-detail-modal" class="emp-detail-modal">
@@ -258,7 +274,6 @@
     <div class="emp-detail-tabs">
       <button class="emp-detail-tab-btn active" onclick="switchTab('personal')">👤 Personal Info</button>
       <button class="emp-detail-tab-btn" onclick="switchTab('employment')">💼 Employment Details</button>
-      <button class="emp-detail-tab-btn" onclick="switchTab('documents')">📄 Documents</button>
       <button class="emp-detail-tab-btn" onclick="switchTab('payroll')">💼 Payroll & Compensation</button>
     </div>
     
@@ -309,42 +324,6 @@
         </div>
       </div>
       
-      <!-- Documents Tab -->
-      <div id="emp-detail-tab-documents" style="display:none;">
-        <div class="detail-section">
-          <div class="documents-list">
-            <div class="doc-item">
-              <span class="doc-icon">📋</span>
-              <div>
-                <div class="doc-name">Resume / CV</div>
-                <div class="doc-date">No file uploaded</div>
-              </div>
-            </div>
-            <div class="doc-item">
-              <span class="doc-icon">🆔</span>
-              <div>
-                <div class="doc-name">ID / Government ID</div>
-                <div class="doc-date">No file uploaded</div>
-              </div>
-            </div>
-            <div class="doc-item">
-              <span class="doc-icon">🎓</span>
-              <div>
-                <div class="doc-name">Educational Credentials</div>
-                <div class="doc-date">No file uploaded</div>
-              </div>
-            </div>
-            <div class="doc-item">
-              <span class="doc-icon">⚖️</span>
-              <div>
-                <div class="doc-name">Contract / Agreement</div>
-                <div class="doc-date">No file uploaded</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Payroll & Compensation Tab -->
       <div id="emp-detail-tab-payroll" style="display:none;">
         <div class="detail-section">
@@ -359,39 +338,9 @@
             </div>
           </div>
 
-          <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">
-
-          <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Wage Type</label>
-          <select id="emp-payroll-wage-select" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 16px;">
-            <option value="">— Select wage type —</option>
-            <option value="1">Base Salary</option>
-            <option value="2">Hourly</option>
-            <option value="3">Per-Piece (Sewing)</option>
-            <option value="4">Per-Trip (Logistics)</option>
-          </select>
-
-          <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Base Rate (₱)</label>
-          <input type="number" id="emp-payroll-primary-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 16px;" />
-
-          <div id="emp-payroll-hourly-section" style="display:none; margin-bottom: 16px;">
-            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Hourly Rate (₱)</label>
-            <input type="number" id="emp-payroll-hourly-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); margin-bottom: 12px;" />
-            
-            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600;">Overtime Rate (₱)</label>
-            <input type="number" id="emp-payroll-overtime-rate" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);" />
+          <div style="padding: 12px; background: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; color: #004085; font-size: 13px;">
+            <strong>📝 Note:</strong> To configure or update payroll and compensation, please use the Manage Employee section.
           </div>
-
-          <div id="emp-payroll-sewing-section" style="display:none; margin-bottom: 16px;">
-            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 12px; font-weight: 600;">Sewing Type Rates</label>
-            <div id="emp-payroll-sewing-items"></div>
-          </div>
-
-          <div id="emp-payroll-logistics-section" style="display:none; margin-bottom: 16px;">
-            <label style="display: block; font-size: 12px; color: var(--muted); margin-bottom: 12px; font-weight: 600;">Logistics Region Rates</label>
-            <div id="emp-payroll-logistics-items"></div>
-          </div>
-
-          <button id="emp-payroll-save-btn" onclick="saveEmpPayrollConfig()" style="width: 100%; background: #4f7cff; color: white; border: none; padding: 12px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">✓ Save Compensation</button>
         </div>
       </div>
     </div>
@@ -430,26 +379,42 @@
       background: #3a5ec7;
     }
     
+    .manage-filters {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .manage-filters input,
+    .manage-filters select {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+    }
+    
     .emp-table-container {
-      background: white;
+      background: var(--card);
       border-radius: 12px;
-      border: 1px solid #e9ecef;
+      border: 1px solid var(--border);
       overflow: hidden;
     }
     
-    .emp-table {
+    .manage-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 14px;
     }
     
-    .emp-table thead {
+    .manage-table thead {
       background: #f8f9fa;
-      border-bottom: 2px solid #e9ecef;
+      border-bottom: 2px solid var(--border);
     }
     
-    .emp-table th {
-      padding: 16px;
+    .manage-table th {
+      padding: 12px 14px;
       text-align: left;
       font-weight: 700;
       font-size: 12px;
@@ -458,50 +423,24 @@
       letter-spacing: 0.5px;
     }
     
-    .emp-table td {
-      padding: 16px;
-      border-bottom: 1px solid #e9ecef;
-      color: #495057;
+    .manage-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
     }
     
-    .emp-table tbody tr:hover {
+    .manage-table tbody tr:hover {
       background: #f8f9fa;
     }
     
-    .emp-table tbody tr:last-child td {
+    .manage-table tbody tr:last-child td {
       border-bottom: none;
     }
-    
-    .emp-id {
-      font-weight: 700;
-      color: #212529;
-    }
-    
-    .emp-name {
-      font-weight: 600;
-      color: #212529;
-    }
-    
-    .emp-status-badge {
-      padding: 4px 10px;
-      border-radius: 12px;
-      font-weight: 600;
-      font-size: 12px;
-    }
-    
-    .emp-status-badge.active {
-      background: #d4edda;
-      color: #155724;
-    }
-    
-    .emp-status-badge.inactive {
-      background: #f8d7da;
-      color: #721c24;
-    }
-    
+
     .emp-actions {
       display: flex;
-      gap: 8px;
+      gap: 6px;
+      justify-content: center;
     }
     
     .emp-actions button {
@@ -522,14 +461,42 @@
     .emp-edit-btn:hover {
       background: #3a5ec7;
     }
+
+    .emp-status-toggle-btn {
+      background: #ffc107;
+      color: #212529;
+    }
+
+    .emp-status-toggle-btn:hover {
+      background: #e0a800;
+    }
     
     .emp-delete-btn {
-      background: #f5a5a5;
-      color: #721c24;
+      background: #dc3545;
+      color: white;
     }
     
     .emp-delete-btn:hover {
-      background: #f28a8a;
+      background: #c82333;
+    }
+
+    .emp-status-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 12px;
+      text-align: center;
+    }
+    
+    .emp-status-badge.active {
+      background: #d4edda;
+      color: #155724;
+    }
+    
+    .emp-status-badge.inactive {
+      background: #f8d7da;
+      color: #721c24;
     }
   </style>
   
@@ -537,8 +504,224 @@
     <h3>Manage Employees</h3>
     <button onclick="switchView('list')">← Back to List</button>
   </div>
+
+  <div class="manage-filters">
+    <input id="manage-search" type="text" class="search-input" placeholder="🔍 Search by name or email" />
+    <select id="manage-dept" class="filter-select">
+      <option>All Departments</option>
+      <option>HR</option>
+      <option>Accounting</option>
+      <option>Production</option>
+      <option>Logistics</option>
+      <option>Personnel</option>
+    </select>
+    <select id="manage-status" class="filter-select">
+      <option>All Status</option>
+      <option>Active</option>
+      <option>Inactive</option>
+    </select>
+  </div>
   
-  <div id="emp-manage-tbody" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:20px 0;">
-    <!-- Rendered by employees.js -->
+  <div class="emp-table-container">
+    <table class="manage-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Department</th>
+          <th>Position</th>
+          <th>Status</th>
+          <th style="text-align:center;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="manage-emp-grid">
+        <!-- Rendered by employees.js -->
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Payroll Configuration Modal -->
+<div id="payroll-config-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1001;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:var(--card);border-radius:12px;width:90%;max-width:600px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+    <div style="position:sticky;top:0;background:linear-gradient(135deg,#f8f9fa 0%,#f1f3f5 100%);padding:24px 28px;border-bottom:1px solid var(--border);border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;">
+      <h2 style="margin:0;font-size:18px;color:var(--text);">Configure Payroll & Compensation</h2>
+      <button onclick="closePayrollConfigModal()" style="background:rgba(0,0,0,0.05);border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;color:#6c757d;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">✕</button>
+    </div>
+
+    <div style="padding:24px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+        <div>
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">Employee ID</label>
+          <div id="payroll-modal-emp-id" style="padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-weight:600;">—</div>
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">Employee Name</label>
+          <div id="payroll-modal-emp-name" style="padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-weight:600;">—</div>
+        </div>
+      </div>
+
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Wage Type</label>
+      <select id="payroll-config-wage-select" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:16px;">
+        <option value="">— Select wage type —</option>
+        <option value="1">Base Salary</option>
+        <option value="2">Hourly</option>
+        <option value="3">Per-Piece (Sewing)</option>
+        <option value="4">Per-Trip (Logistics)</option>
+      </select>
+
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Base Rate (₱)</label>
+      <input type="number" id="payroll-config-primary-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:16px;" />
+
+      <div id="payroll-config-hourly-section" style="display:none;margin-bottom:16px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Hourly Rate (₱)</label>
+        <input type="number" id="payroll-config-hourly-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:12px;" />
+        
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Overtime Rate (₱)</label>
+        <input type="number" id="payroll-config-overtime-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);" />
+      </div>
+
+      <div id="payroll-config-sewing-section" style="display:none;margin-bottom:16px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:12px;font-weight:600;">Sewing Type Rates</label>
+        <div id="payroll-config-sewing-items"></div>
+      </div>
+
+      <div id="payroll-config-logistics-section" style="display:none;margin-bottom:16px;">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:12px;font-weight:600;">Logistics Region Rates</label>
+        <div id="payroll-config-logistics-items"></div>
+      </div>
+
+      <div style="display:flex;gap:12px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+        <button onclick="closePayrollConfigModal()" style="flex:1;padding:12px;background:var(--border);color:var(--text);border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">Cancel</button>
+        <button id="payroll-config-save-btn" onclick="savePayrollConfigFromManage()" style="flex:1;padding:12px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">✓ Save Configuration</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Edit Employee Modal with Tabs -->
+<div id="edit-employee-modal" style="display:none !important;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);" onclick="if(event.target.id==='edit-employee-modal') closeEditEmployeeModal();">
+  <div style="background:white;border-radius:12px;max-width:600px;width:85%;max-height:90vh;min-height:300px;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);color:#333 !important;display:flex !important;flex-direction:column;z-index:10000;">
+    <!-- Header -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid #ddd;flex-shrink:0;">
+      <h3 style="margin:0;font-size:18px;font-weight:600;color:#333 !important;">Edit Employee</h3>
+      <button onclick="closeEditEmployeeModal()" style="background:rgba(0,0,0,0.05);border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;color:#6c757d;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">✕</button>
+    </div>
+    
+    <!-- Tabs -->
+    <div style="display:flex;border-bottom:1px solid #ddd;background:#f8f9fa;padding:0 24px;flex-shrink:0;">
+      <button onclick="switchEditTab('personal')" class="edit-tab-btn active" style="padding:12px 16px;border:none;background:transparent;cursor:pointer;font-weight:600;color:#333;border-bottom:3px solid transparent;">
+        👤 Personal Info
+      </button>
+      <button onclick="switchEditTab('employment')" class="edit-tab-btn" style="padding:12px 16px;border:none;background:transparent;cursor:pointer;font-weight:600;color:#666;border-bottom:3px solid transparent;">
+        💼 Employment Details
+      </button>
+      <button onclick="switchEditTab('payroll')" class="edit-tab-btn" style="padding:12px 16px;border:none;background:transparent;cursor:pointer;font-weight:600;color:#666;border-bottom:3px solid transparent;">
+        💰 Payroll & Compensation
+      </button>
+    </div>
+    
+    <!-- Tab Content -->
+    <div style="padding:24px;overflow-y:auto;flex:1;">
+      <!-- Personal Info Tab -->
+      <div id="edit-tab-personal" style="display:block;">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">First Name</label>
+              <input id="edit-emp-first-name" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Last Name</label>
+              <input id="edit-emp-last-name" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Email</label>
+            <input id="edit-emp-email" type="email" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Phone</label>
+              <input id="edit-emp-phone" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">City/Location</label>
+              <input id="edit-emp-city" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Employment Details Tab -->
+      <div id="edit-tab-employment" style="display:none;">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Department</label>
+              <select id="edit-emp-dept" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+                <option>HR</option>
+                <option>Accounting</option>
+                <option>Production</option>
+                <option>Logistics</option>
+                <option>Personnel</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Position</label>
+              <input id="edit-emp-position" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Employment Type</label>
+              <input id="edit-emp-type" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;" placeholder="Full-time">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Date Hired</label>
+              <input id="edit-emp-date-hired" type="date" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Supervisor</label>
+            <input id="edit-emp-supervisor" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Work Location</label>
+            <input id="edit-emp-work-location" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+          </div>
+        </div>
+      </div>
+      
+      <!-- Payroll & Compensation Tab -->
+      <div id="edit-tab-payroll" style="display:none;">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Wage Type</label>
+              <select id="edit-payroll-wage-type" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+                <option value="">— Select wage type —</option>
+                <option value="1">Base Salary</option>
+                <option value="2">Hourly</option>
+                <option value="3">Per-Piece (Sewing)</option>
+                <option value="4">Per-Trip (Logistics)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Base Rate (₱)</label>
+              <input id="edit-payroll-rate" type="number" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;" placeholder="0.00" step="0.01">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Footer Buttons -->
+    <div style="display:flex;gap:12px;padding:16px 24px;border-top:1px solid #ddd;background:#f8f9fa;flex-shrink:0;">
+      <button onclick="closeEditEmployeeModal()" style="flex:1;padding:12px;background:#f0f0f0;color:#333 !important;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">Cancel</button>
+      <button onclick="saveEditedEmployee()" style="flex:1;padding:12px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">✓ Save Changes</button>
+    </div>
   </div>
 </div>

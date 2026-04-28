@@ -63,8 +63,8 @@ app.get('/api/auth/me', requireAuth, me);
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
 
-// 201-File Management (HR Admin only)
-app.use('/api/201-files', requireAuth, requireRole(['hr_admin']), fileManagementRoutes);
+// 201-File Management (Auth required, role-based per endpoint)
+app.use('/api/201-files', requireAuth, fileManagementRoutes);
 
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
@@ -147,11 +147,11 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
-    const { id } = req.params; // This is the employee_code
+    const { id } = req.params; // numeric employee id
     const { first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
-    console.log('Employee Code (ID):', id);
+    console.log('Employee ID:', id);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     
     if (!first_name || !last_name || !email) {
@@ -166,7 +166,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
         first_name=?, middle_name=?, last_name=?, suffix=?, email=?, contact_number=?, 
         nationality=?, date_of_birth=?, gender=?, residential_address=?, emergency_contact_name=?, 
         emergency_contact_num=?, department_id=?, position=?, employment_type=?, date_hired=?, supervisor=?, work_location=?, status=?
-       WHERE employee_code=?`,
+       WHERE id=?`,
       [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, 
        nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, 
        emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, 
@@ -178,7 +178,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     console.log('Change count:', result.changedRows);
     
     if (result.affectedRows === 0) {
-      console.error('❌ No rows updated! Employee code might not exist:', id);
+      console.error('❌ No rows updated! Employee ID might not exist:', id);
       return res.status(404).json({ error: 'Employee not found.' });
     }
     
@@ -192,21 +192,21 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
 });
 
 // Update Employee Status
-app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
-    const { id } = req.params; // id = employee_code from URL
+    const { id } = req.params; // id = numeric employee id
     const { status } = req.body;
 
     if (!status || !['Active', 'Inactive'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status. Must be Active or Inactive.' });
     }
 
-    console.log('PATCH /api/employees/:id/status - Employee Code:', id, '- New Status:', status);
+    console.log('PATCH /api/employees/:id/status - Employee ID:', id, '- New Status:', status);
 
     const [result] = await pool.execute(
-      `UPDATE employees SET status = ? WHERE employee_code = ?`,
+      `UPDATE employees SET status = ? WHERE id = ?`,
       [status, id]
     );
 
@@ -226,12 +226,12 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
-    const { id } = req.params; // id = employee_code from URL
+    const { id } = req.params; // id = numeric employee id
 
-    console.log('DELETE /api/employees/:id - Employee Code:', id);
+    console.log('DELETE /api/employees/:id - Employee ID:', id);
 
     const [result] = await pool.execute(
-      `DELETE FROM employees WHERE employee_code = ?`,
+      `DELETE FROM employees WHERE id = ?`,
       [id]
     );
 

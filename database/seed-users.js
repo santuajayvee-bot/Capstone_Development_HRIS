@@ -5,17 +5,18 @@
    ============================================================ */
 
 require('dotenv').config();
-const bcrypt = require('bcrypt');
 const pool   = require('../config/db');
+const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
 
+// Updated USERS array with plain text passwords and valid role_id
 const USERS = [
-  // System Administrator (Level 4) - role_id 6
-  { username: 'sys.admin',       password: 'sys123admin', role_id: 6, employee_id: null },
+  // System Administrator (Level 4) - role_id 1
+  { username: 'sys.admin',       password: 'sys123admin', role_id: 1, employee_id: null },
   
-  // HR Administrator (Level 2) - role_id 5
-  { username: 'hr.admin',        password: 'hr123admin',  role_id: 5, employee_id: null },
+  // HR Administrator (Level 2) - role_id 2
+  { username: 'hr.admin',        password: 'hr123admin',  role_id: 2, employee_id: null },
   
   // Payroll staff
   { username: 'payroll.officer', password: 'officer123', role_id: 2, employee_id: 1    },
@@ -25,6 +26,8 @@ const USERS = [
   { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 5    },
   { username: 'chris.brown',     password: 'emp123',     role_id: 4, employee_id: 2    },
   { username: 'lebron.james',    password: 'emp123',     role_id: 4, employee_id: 3    },
+  // Admin (Level 1) - role_id 1
+  { username: 'admin', password: 'admin', role_id: 1, employee_id: null },
 ];
 
 async function seedUsers() {
@@ -33,7 +36,7 @@ async function seedUsers() {
     console.log('🌱  Seeding users...\n');
 
     for (const u of USERS) {
-      const hash = await bcrypt.hash(u.password, SALT_ROUNDS);
+      const hash = await bcrypt.hash(u.password, SALT_ROUNDS); // Re-enable password hashing
 
       await conn.execute(
         `INSERT INTO users (username, password_hash, role_id, employee_id)
