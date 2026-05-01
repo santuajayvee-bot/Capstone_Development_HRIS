@@ -148,11 +148,13 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     
     const pool = require('./config/db');
     const { id } = req.params; // numeric employee id
-    const { first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status } = req.body;
+    const { first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status, wage_type, base_rate, sewingRates } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
     console.log('Employee ID:', id);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Wage Type:', wage_type);
+    console.log('Base Rate:', base_rate);
+    console.log('Sewing Rates:', sewingRates);
     
     if (!first_name || !last_name || !email) {
       console.error('❌ Missing required fields');
@@ -180,6 +182,71 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     if (result.affectedRows === 0) {
       console.error('❌ No rows updated! Employee ID might not exist:', id);
       return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    // Save wage configuration if provided
+    if (wage_type) {
+      try {
+        console.log('💾 Saving wage configuration...');
+        
+        // Get wage_type_id from wage type name
+        const [wageTypeRows] = await pool.execute(
+          'SELECT id FROM wage_types WHERE name = ?',
+          [wage_type]
+        );
+        
+        if (wageTypeRows.length > 0) {
+          const wage_type_id = wageTypeRows[0].id;
+          
+          // Update employee wage_type_id
+          await pool.execute(
+            'UPDATE employees SET wage_type_id = ? WHERE id = ?',
+            [wage_type_id, id]
+          );
+          
+          console.log('✅ Updated employee wage_type_id to:', wage_type_id);
+          
+          // Save base rate for all wage types (or per-piece primary rate)
+          if (base_rate !== undefined && base_rate !== null && base_rate !== '') {
+            // Mark previous rates as ended
+            await pool.execute(
+              'UPDATE employee_wage_rates SET end_date = NOW() WHERE employee_id = ? AND end_date IS NULL',
+              [id]
+            );
+            
+            // Insert new base rate
+            await pool.execute(
+              'INSERT INTO employee_wage_rates (employee_id, rate, effective_date) VALUES (?, ?, NOW())',
+              [id, parseFloat(base_rate)]
+            );
+            
+            console.log('✅ Saved base rate:', base_rate);
+          }
+          
+          // Save sewing type specific rates if provided
+          if (sewingRates && Array.isArray(sewingRates) && sewingRates.length > 0) {
+            for (const sewingRate of sewingRates) {
+              if (sewingRate.sewing_id && sewingRate.rate) {
+                try {
+                  await pool.execute(
+                    `INSERT INTO employee_wage_rates 
+                     (employee_id, sewing_type_id, rate, effective_date) 
+                     VALUES (?, ?, ?, NOW())
+                     ON DUPLICATE KEY UPDATE rate = VALUES(rate), effective_date = NOW()`,
+                    [id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
+                  );
+                  console.log(`✅ Saved sewing rate for type ${sewingRate.sewing_id}: ${sewingRate.rate}`);
+                } catch (err) {
+                  console.warn('⚠️ Error saving sewing rate:', err.message);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('⚠️ Error saving wage configuration:', err.message);
+        // Don't fail the whole request if wage save fails
+      }
     }
     
     console.log('✅ Employee updated successfully');

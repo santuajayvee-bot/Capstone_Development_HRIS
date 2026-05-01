@@ -779,6 +779,23 @@ async function saveEditedEmployee() {
     return;
   }
 
+  // Collect sewing type rates if wage type is per-piece
+  let sewingRates = [];
+  if (wageType === '3') { // Per-Piece (Sewing)
+    const sewingInputs = document.querySelectorAll('.edit-payroll-sewing-rate');
+    sewingInputs.forEach(input => {
+      const rate = input.value;
+      const sewingId = input.getAttribute('data-sewing-id');
+      if (rate && !isNaN(rate) && parseFloat(rate) > 0) {
+        sewingRates.push({
+          sewing_id: parseInt(sewingId),
+          rate: parseFloat(rate)
+        });
+      }
+    });
+    console.log('Collected sewing rates:', sewingRates);
+  }
+
   try {
     const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}`, {
       method: 'PUT',
@@ -795,8 +812,9 @@ async function saveEditedEmployee() {
         date_hired: dateHired,
         supervisor: supervisor,
         work_location: workLocation,
-        wage_type: wageType,
+        wage_type: wageType === '1' ? 'Base Salary' : wageType === '2' ? 'Hourly' : wageType === '3' ? 'Per-Piece' : 'Per-Trip',
         base_rate: baseRate ? parseFloat(baseRate) : null,
+        sewingRates: sewingRates,
         status: 'Active'
       })
     });

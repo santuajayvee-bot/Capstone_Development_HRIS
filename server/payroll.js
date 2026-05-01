@@ -86,7 +86,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       LEFT JOIN sewing_types st ON st.id = ewr.sewing_type_id
       LEFT JOIN logistics_regions lr ON lr.id = ewr.logistics_region_id
       WHERE ewr.employee_id = ? AND ewr.end_date IS NULL
-      ORDER BY ewr.effective_date
+      ORDER BY ewr.effective_date DESC
     `, [empId]);
 
     console.log('✅ Query result - Found', rates.length, 'active rate(s)');
@@ -109,11 +109,24 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       currentRate = parseFloat(rates[0].rate) || parseFloat(rates[0].base_rate) || 0;
     }
 
-    console.log('✅ Final response - wage_type:', emp.wage_type, '| current_rate:', currentRate);
+    // If no wage type is set, check if rates exist and infer the type
+    let wageTypeToReturn = emp.wage_type;
+    if (!emp.wage_type && rates.length > 0) {
+      // Infer wage type from rates
+      const firstRate = rates[0];
+      if (firstRate.sewing_type_id) {
+        wageTypeToReturn = 'Per-Piece';
+      } else if (firstRate.logistics_region_id) {
+        wageTypeToReturn = 'Per-Trip';
+      }
+      console.log('✅ Inferred wage type from rates:', wageTypeToReturn);
+    }
+
+    console.log('✅ Final response - wage_type:', wageTypeToReturn, '| current_rate:', currentRate);
 
     res.json({
       // Return fields at top level for frontend compatibility
-      wage_type: emp.wage_type,
+      wage_type: wageTypeToReturn || null,
       current_rate: currentRate,
       wage_type_id: emp.wage_type_id_val,
       // Also include nested structure for reference
