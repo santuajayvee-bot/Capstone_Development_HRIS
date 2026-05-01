@@ -818,6 +818,45 @@ async function saveEditedEmployee() {
   }
 }
 
+// Handle wage type change in edit modal
+async function updateEditPayrollWageType(wageTypeValue) {
+  const sewingSection = document.getElementById('edit-payroll-sewing-section');
+  
+  if (wageTypeValue === '3') {
+    // Per-Piece (Sewing) selected
+    sewingSection.style.display = 'block';
+    
+    // Load sewing types if not already loaded
+    if (sewingTypesForPayroll.length === 0) {
+      try {
+        const response = await apiFetch('/api/payroll/sewing-types');
+        if (response.ok) {
+          sewingTypesForPayroll = await response.json();
+          renderEditPayrollSewingTypes();
+        }
+      } catch (error) {
+        console.error('Error loading sewing types:', error);
+      }
+    } else {
+      renderEditPayrollSewingTypes();
+    }
+  } else {
+    // Other wage types - hide sewing section
+    sewingSection.style.display = 'none';
+  }
+}
+
+// Render sewing type inputs in edit modal
+function renderEditPayrollSewingTypes() {
+  const container = document.getElementById('edit-payroll-sewing-items');
+  container.innerHTML = sewingTypesForPayroll.map(type => `
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">${type.name}</label>
+      <input type="number" class="edit-payroll-sewing-rate" data-sewing-id="${type.id}" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;" />
+    </div>
+  `).join('');
+}
+
 /* Edit Employee - Redirect to register form (kept for legacy) */
 function editEmployeeOld(empId) {
   console.log('Editing employee ID:', empId);
@@ -1256,6 +1295,7 @@ window.editEmployee = editEmployee;
 window.switchEditTab = switchEditTab;
 window.closeEditEmployeeModal = closeEditEmployeeModal;
 window.saveEditedEmployee = saveEditedEmployee;
+window.updateEditPayrollWageType = updateEditPayrollWageType;
 
 /* Payroll Configuration Modal (Manage View) */
 let currentPayrollEmployeeId = null;

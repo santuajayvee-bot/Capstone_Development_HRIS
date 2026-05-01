@@ -701,7 +701,7 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div>
               <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Wage Type</label>
-              <select id="edit-payroll-wage-type" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+              <select id="edit-payroll-wage-type" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;" onchange="updateEditPayrollWageType(this.value)">
                 <option value="">— Select wage type —</option>
                 <option value="1">Base Salary</option>
                 <option value="2">Hourly</option>
@@ -713,6 +713,12 @@
               <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Base Rate (₱)</label>
               <input id="edit-payroll-rate" type="number" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;" placeholder="0.00" step="0.01">
             </div>
+          </div>
+          
+          <!-- Sewing Types Section (shows when Per-Piece selected) -->
+          <div id="edit-payroll-sewing-section" style="display:none;">
+            <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:8px;font-weight:600;">Sewing Types</label>
+            <div id="edit-payroll-sewing-items"></div>
           </div>
         </div>
       </div>
