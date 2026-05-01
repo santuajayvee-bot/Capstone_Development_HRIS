@@ -214,13 +214,13 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
               [id]
             );
             
-            // Insert new base rate
+            // Insert new base rate with wage_type_id
             await pool.execute(
-              'INSERT INTO employee_wage_rates (employee_id, rate, effective_date) VALUES (?, ?, NOW())',
-              [id, parseFloat(base_rate)]
+              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, NOW())',
+              [id, wage_type_id, parseFloat(base_rate)]
             );
             
-            console.log('✅ Saved base rate:', base_rate);
+            console.log('✅ Saved base rate:', base_rate, 'for wage_type_id:', wage_type_id);
           }
           
           // Save sewing type specific rates if provided
@@ -230,10 +230,9 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
                 try {
                   await pool.execute(
                     `INSERT INTO employee_wage_rates 
-                     (employee_id, sewing_type_id, rate, effective_date) 
-                     VALUES (?, ?, ?, NOW())
-                     ON DUPLICATE KEY UPDATE rate = VALUES(rate), effective_date = NOW()`,
-                    [id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
+                     (employee_id, wage_type_id, sewing_type_id, rate, effective_date) 
+                     VALUES (?, ?, ?, ?, NOW())`,
+                    [id, wage_type_id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
                   );
                   console.log(`✅ Saved sewing rate for type ${sewingRate.sewing_id}: ${sewingRate.rate}`);
                 } catch (err) {
