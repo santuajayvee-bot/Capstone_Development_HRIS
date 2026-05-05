@@ -5,87 +5,87 @@
 // ── Role → permitted pages ────────────────────────────────────
 const ROLE_PERMISSIONS = {
   admin: [
-    'dashboard','employees','leave','requests',
-    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
+    'dashboard', 'employees', 'leave', 'requests',
+    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
   ],
   hr_admin: [
-    'dashboard','employees','leave','requests',
-    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
+    'dashboard', 'employees', 'leave', 'requests',
+    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
   ],
   system_admin: [
-    'dashboard','employees','leave','requests',
-    'attendance','payroll','salary-calculation','onboarding','blockchain','201file',
+    'dashboard', 'employees', 'leave', 'requests',
+    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
   ],
   payroll_officer: [
-    'dashboard','attendance','leave','payroll','salary-calculation','requests',
+    'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
   ],
   payroll_manager: [
-    'dashboard','attendance','leave','payroll','salary-calculation','requests',
+    'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
   ],
   employee: [
-    'dashboard','leave','requests','attendance',
+    'dashboard', 'leave', 'requests', 'attendance',
   ],
 };
 
 // ── Sidebar nav items per role ────────────────────────────────
 const NAV_CONFIG = {
   admin: [
-    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
-    { page:'employees',  icon:'👥', label:'Employees'         },
-    { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'requests',   icon:'📋', label:'Request'           },
-    { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'201file',    icon:'📄', label:'201-File'          },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
-    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
-    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
+    { page: 'employees', icon: '👥', label: 'Employees' },
+    { page: 'leave', icon: '📅', label: 'Leave Management' },
+    { page: 'requests', icon: '📋', label: 'Request' },
+    { page: 'attendance', icon: '⏰', label: 'Attendance' },
+    { page: '201file', icon: '📄', label: '201-File' },
+    { page: 'payroll', icon: '💰', label: 'Payroll' },
+    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
+    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
   ],
   hr_admin: [
-    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
-    { page:'employees',  icon:'👥', label:'Employees'         },
-    { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'requests',   icon:'📋', label:'Request'           },
-    { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'201file',    icon:'📄', label:'201-File'          },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
-    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
-    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
+    { page: 'employees', icon: '👥', label: 'Employees' },
+    { page: 'leave', icon: '📅', label: 'Leave Management' },
+    { page: 'requests', icon: '📋', label: 'Request' },
+    { page: 'attendance', icon: '⏰', label: 'Attendance' },
+    { page: '201file', icon: '📄', label: '201-File' },
+    { page: 'payroll', icon: '💰', label: 'Payroll' },
+    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
+    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
   ],
   system_admin: [
-    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
-    { page:'employees',  icon:'👥', label:'Employees'         },
-    { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'requests',   icon:'📋', label:'Request'           },
-    { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'201file',    icon:'📄', label:'201-File'          },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
-    { page:'onboarding', icon:'🚀', label:'On-Boarding'        },
-    { page:'blockchain', icon:'🔗', label:'Blockchain'         },
+    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
+    { page: 'employees', icon: '👥', label: 'Employees' },
+    { page: 'leave', icon: '📅', label: 'Leave Management' },
+    { page: 'requests', icon: '📋', label: 'Request' },
+    { page: 'attendance', icon: '⏰', label: 'Attendance' },
+    { page: '201file', icon: '📄', label: '201-File' },
+    { page: 'payroll', icon: '💰', label: 'Payroll' },
+    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
+    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
   ],
   payroll_officer: [
-    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
-    { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
-    { page:'requests',   icon:'📋', label:'Request'           },
+    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
+    { page: 'attendance', icon: '⏰', label: 'Attendance' },
+    { page: 'leave', icon: '📅', label: 'Leave Management' },
+    { page: 'payroll', icon: '💰', label: 'Payroll' },
+    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'requests', icon: '📋', label: 'Request' },
   ],
   payroll_manager: [
-    { page:'dashboard',  icon:'⊞',  label:'Dashboard'        },
-    { page:'attendance', icon:'⏰', label:'Attendance'         },
-    { page:'leave',      icon:'📅', label:'Leave Management'  },
-    { page:'payroll',    icon:'💰', label:'Payroll'            },
-    { page:'salary-calculation', icon:'🧮', label:'Salary Calc'    },
-    { page:'requests',   icon:'📋', label:'Request'           },
+    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
+    { page: 'attendance', icon: '⏰', label: 'Attendance' },
+    { page: 'leave', icon: '📅', label: 'Leave Management' },
+    { page: 'payroll', icon: '💰', label: 'Payroll' },
+    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'requests', icon: '📋', label: 'Request' },
   ],
   employee: [
-    { page:'dashboard',  icon:'⊞',  label:'My Dashboard'      },
-    { page:'leave',      icon:'📅', label:'My Leave'           },
-    { page:'requests',   icon:'📋', label:'My Requests'        },
-    { page:'attendance', icon:'⏰', label:'My Attendance'       },
+    { page: 'dashboard', icon: '⊞', label: 'My Dashboard' },
+    { page: 'leave', icon: '📅', label: 'My Leave' },
+    { page: 'requests', icon: '📋', label: 'My Requests' },
+    { page: 'attendance', icon: '⏰', label: 'My Attendance' },
   ],
 };
 
@@ -116,20 +116,20 @@ function isLoggedIn() {
 // ── API helper — attaches Bearer token automatically ──────────
 async function apiFetch(url, options = {}) {
   const token = getToken();
-  
+
   // For FormData uploads, don't set Content-Type - let browser handle it
   const isFormData = options.body instanceof FormData;
-  
+
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-  
+
   // Only set Content-Type if not FormData and not already set
   if (!isFormData && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
-  
+
   const res = await fetch(url, { ...options, headers });
 
   if (res.status === 401) {
@@ -163,8 +163,8 @@ function buildSidebar(user) {
   // Show role badge
   const badgeEl = document.getElementById('role-badge');
   if (badgeEl) {
-    badgeEl.textContent  = user.roleLabel;
-    badgeEl.className    = `role-badge role-${user.role}`;
+    badgeEl.textContent = user.roleLabel;
+    badgeEl.className = `role-badge role-${user.role}`;
     badgeEl.style.display = 'inline-block';
   }
 }
@@ -180,7 +180,7 @@ function canAccess(pageId) {
 // ── Logout ────────────────────────────────────────────────────
 function logout() {
   clearAuth();
-  document.getElementById('app').style.display          = 'none';
+  document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
 }
 
@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (isLoggedIn()) {
     const user = getUser();
     document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display          = 'block';
+    document.getElementById('app').style.display = 'block';
     buildSidebar(user);
   }
 
@@ -199,12 +199,12 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Expose globally
-window.saveAuth   = saveAuth;
-window.getToken   = getToken;
-window.getUser    = getUser;
-window.clearAuth  = clearAuth;
+window.saveAuth = saveAuth;
+window.getToken = getToken;
+window.getUser = getUser;
+window.clearAuth = clearAuth;
 window.isLoggedIn = isLoggedIn;
-window.apiFetch   = apiFetch;
+window.apiFetch = apiFetch;
 window.buildSidebar = buildSidebar;
-window.canAccess  = canAccess;
-window.logout     = logout;
+window.canAccess = canAccess;
+window.logout = logout;

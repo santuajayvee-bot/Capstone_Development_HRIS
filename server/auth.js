@@ -66,10 +66,18 @@ async function login(req, res) {
 /**
  * GET /api/auth/me
  * Requires: Authorization: Bearer <token>
- * Returns the decoded token payload (verified).
+ * Returns the decoded token payload (verified) mixed with fresh DB data.
  */
-function me(req, res) {
-  // req.user is set by requireAuth middleware
+async function me(req, res) {
+  try {
+    const pool = require('../config/db');
+    const [rows] = await pool.execute('SELECT employee_id FROM users WHERE id = ?', [req.user.id]);
+    if (rows.length > 0) {
+      req.user.employeeId = rows[0].employee_id;
+    }
+  } catch (err) {
+    console.error('[auth/me]', err);
+  }
   return res.json({ user: req.user });
 }
 

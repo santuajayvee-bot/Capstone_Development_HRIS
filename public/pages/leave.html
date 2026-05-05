@@ -9,7 +9,7 @@
 </div>
 
 <!-- ── MANUAL ENCODING FORM (HR Admin) ────────────────────────────── -->
-<div class="card" style="margin-bottom:30px;">
+<div id="manual-encoding-card" class="card" style="margin-bottom:30px; display: none;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h3 style="margin:0;font-size:16px;font-weight:600;">📝 Manual Leave Encoding</h3>
     <button class="btn btn-sm btn-outline" onclick="toggleLeaveForm()" id="toggle-form-btn">+ Expand Form</button>
@@ -84,51 +84,76 @@
   </div>
 </div>
 
-<div class="table-wrap" style="margin-bottom:20px;">
-  <table>
-    <thead>
-      <tr>
-        <th>Employee ▼</th>
-        <th>Type ▼</th>
-        <th>From ▼</th>
-        <th>To ▼</th>
-        <th>Days</th>
-        <th>Reason</th>
-        <th>Status ▼</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>LeBron James</td><td>Casual</td><td>03/25/2026</td><td>03/30/2026</td><td>1</td><td>LeBron James</td>
-        <td class="leave-status"><span class="badge badge-green">Approved</span></td>
-        <td><button class="btn btn-sm btn-outline" onclick="approveLeave(this)">✓</button> <button class="btn btn-sm btn-outline" style="color:var(--red)" onclick="denyLeave(this)">✕</button></td>
-      </tr>
-      <tr>
-        <td>Wally Bayola</td><td>Sick</td><td>03/27/2026</td><td>03/30/2026</td><td>1</td><td>Wally Bayola</td>
-        <td class="leave-status"><span class="badge badge-yellow">Pending</span></td>
-        <td><button class="btn btn-sm btn-outline" onclick="approveLeave(this)">✓</button> <button class="btn btn-sm btn-outline" style="color:var(--red)" onclick="denyLeave(this)">✕</button></td>
-      </tr>
-      <tr>
-        <td>Chris Brown</td><td>Casual</td><td>03/25/2026</td><td>03/28/2026</td><td>1</td><td>Chris Brown</td>
-        <td class="leave-status"><span class="badge badge-green">Approved</span></td>
-        <td><button class="btn btn-sm btn-outline" onclick="approveLeave(this)">✓</button> <button class="btn btn-sm btn-outline" style="color:var(--red)" onclick="denyLeave(this)">✕</button></td>
-      </tr>
-      <tr>
-        <td>Sam Angela</td><td>Casual</td><td>03/25/2026</td><td>03/30/2026</td><td>1</td><td>Sam Angela</td>
-        <td class="leave-status"><span class="badge badge-red">Denied</span></td>
-        <td><button class="btn btn-sm btn-outline" onclick="approveLeave(this)">✓</button> <button class="btn btn-sm btn-outline" style="color:var(--red)" onclick="denyLeave(this)">✕</button></td>
-      </tr>
-      <tr>
-        <td>Maine Mendoza</td><td>Casual</td><td>03/29/2026</td><td>03/30/2026</td><td>1</td><td>Maine Mendoza</td>
-        <td class="leave-status"><span class="badge badge-green">Approved</span></td>
-        <td><button class="btn btn-sm btn-outline" onclick="approveLeave(this)">✓</button> <button class="btn btn-sm btn-outline" style="color:var(--red)" onclick="denyLeave(this)">✕</button></td>
-      </tr>
-    </tbody>
-  </table>
-</div>
+<!-- Leave Management Dashboard -->
+<div id="leave-dashboard-container" class="card" style="padding:0;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--bg);margin-bottom:20px;">
+  
+  <!-- Dashboard Header & Tabs -->
+  <div style="padding:24px 30px;border-bottom:1px solid var(--border);background:var(--bg-alt);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;">
+      <div>
+        <h2 style="margin:0;font-size:22px;font-weight:700;color:var(--text);">Leave Management</h2>
+        <div style="font-size:13px;color:var(--muted);margin-top:6px;">Review and manage employee leave requests.</div>
+      </div>
+      
+      <!-- Pill-shaped Tab Menu -->
+      <div id="leave-tabs-container" style="display:inline-flex;background:rgba(0,0,0,0.04);padding:4px;border-radius:50px;border:1px solid var(--border);">
+        <button id="leave-tab-pending" class="btn" style="border:none;border-radius:50px;padding:6px 16px;font-size:13px;font-weight:600;background:var(--bg);box-shadow:0 1px 3px rgba(0,0,0,0.1);color:var(--text);" onclick="switchLeaveTab('pending')">Pending Inbox</button>
+        <button id="leave-tab-history" class="btn" style="border:none;border-radius:50px;padding:6px 16px;font-size:13px;font-weight:600;background:transparent;box-shadow:none;color:var(--muted);" onclick="switchLeaveTab('history')">Action History</button>
+      </div>
+    </div>
+  </div>
 
-<div style="font-size:12px;color:var(--muted);margin-bottom:16px;">1 ▼ out of 1</div>
+  <!-- Action History Controls (Hidden by default) -->
+  <div id="leave-history-controls" style="display:none;padding:16px 30px;border-bottom:1px solid var(--border);background:var(--bg);align-items:center;gap:16px;flex-wrap:wrap;">
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);">Date Range</label>
+      <select id="leave-date-filter" class="form-control" style="padding:6px 12px;border-radius:6px;font-size:13px;min-width:140px;" onchange="renderLeaveTable()">
+        <option value="30">Last 30 Days</option>
+        <option value="90">Last 90 Days</option>
+        <option value="365">Last 1 Year</option>
+        <option value="all">All Time</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px;">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);">Search Employee</label>
+      <input type="text" id="leave-search" placeholder="Search by name..." class="form-control" style="padding:6px 12px;border-radius:6px;font-size:13px;width:100%;max-width:300px;" onkeyup="renderLeaveTable()" />
+    </div>
+  </div>
+
+  <!-- Table Container -->
+  <div class="table-wrap" style="margin:0;border:none;">
+    <table style="margin:0;border:none;width:100%;text-align:left;border-collapse:collapse;">
+      <thead style="background:rgba(0,0,0,0.02);border-bottom:1px solid var(--border);">
+        <tr>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Employee</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Request Type</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Dates & Duration</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Reason</th>
+          <th id="leave-dynamic-col-head" style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="leave-tbody">
+        <!-- Rows rendered by JS -->
+      </tbody>
+    </table>
+    
+    <!-- Empty State -->
+    <div id="leave-empty-state" style="display:none;padding:60px 20px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">🎉</div>
+      <h3 style="margin:0;font-size:18px;font-weight:600;color:var(--text);">You're all caught up!</h3>
+      <div style="font-size:14px;color:var(--muted);margin-top:8px;">No pending requests require your attention.</div>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div id="leave-pagination" style="display:flex;justify-content:space-between;align-items:center;padding:16px 30px;border-top:1px solid var(--border);background:var(--bg-alt);">
+    <div id="leave-page-info" style="font-size:13px;color:var(--muted);">Showing 0 results</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" style="padding:4px 12px;font-size:12px;border-radius:6px;" onclick="prevLeavePage()">Previous</button>
+      <button class="btn btn-outline" style="padding:4px 12px;font-size:12px;border-radius:6px;" onclick="nextLeavePage()">Next</button>
+    </div>
+  </div>
+</div>
 
 <div class="calendar-hint">
   <div>
@@ -139,37 +164,51 @@
 </div>
 
 <!-- Calendar Modal -->
-<div id="leave-calendar-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:var(--bg);border-radius:8px;padding:30px;max-width:1000px;width:95%;max-height:90vh;overflow:auto;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-      <h2 style="margin:0;">Leave Calendar View</h2>
-      <button class="btn btn-outline" onclick="closeLeaveCalendar()">✕ Close</button>
+<div id="leave-calendar-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(15, 23, 42, 0.85);backdrop-filter:blur(6px);z-index:9999;align-items:center;justify-content:center;opacity:0;transition:opacity 0.3s ease;">
+  <div style="background:var(--bg);border-radius:12px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);width:95%;max-width:1200px;height:90vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);">
+    
+    <!-- Modal Header -->
+    <div style="padding:24px 30px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg-alt);">
+      <div>
+        <h2 style="margin:0;font-size:24px;font-weight:700;display:flex;align-items:center;gap:10px;">
+          📅 Company Leave Calendar
+        </h2>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px;">View team availability and approved absences</div>
+      </div>
+      <button class="btn btn-outline" onclick="closeLeaveCalendar()" style="border-radius:50px;padding:8px 16px;">✕ Close View</button>
     </div>
     
-    <!-- Month Navigation -->
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:10px;">
-      <button class="btn btn-outline" id="prev-month-btn" onclick="previousMonth()">← Previous</button>
-      <h3 id="calendar-month-year" style="margin:0;min-width:200px;text-align:center;">March 2026</h3>
-      <button class="btn btn-outline" id="next-month-btn" onclick="nextMonth()">Next →</button>
-    </div>
+    <!-- Modal Body (Calendar Area) -->
+    <div style="flex:1;display:flex;flex-direction:column;padding:24px 30px;overflow:hidden;">
+      
+      <!-- Controls & Legend -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:16px;">
+        <div style="display:flex;gap:15px;font-size:13px;background:var(--bg-alt);padding:10px 16px;border-radius:8px;border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);"></div>
+            <span style="font-weight:600;">Approved</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:var(--yellow);box-shadow:0 0 8px var(--yellow);"></div>
+            <span style="font-weight:600;">Pending</span>
+          </div>
+        </div>
 
-    <!-- Calendar Grid -->
-    <div id="leave-calendar" style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:20px;"></div>
-    
-    <!-- Legend -->
-    <div style="display:flex;gap:20px;font-size:12px;margin-top:20px;flex-wrap:wrap;">
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:16px;height:16px;background:rgba(76,175,80,0.3);border:2px solid var(--green);"></div>
-        <span>Approved Leave</span>
+        <div style="display:flex;align-items:center;gap:16px;background:var(--bg-alt);padding:6px;border-radius:8px;border:1px solid var(--border);">
+          <button class="btn btn-sm btn-outline" id="prev-month-btn" onclick="previousMonth()" style="border:none;">&larr; Prev</button>
+          <h3 id="calendar-month-year" style="margin:0;min-width:160px;text-align:center;font-size:18px;font-weight:700;">March 2026</h3>
+          <button class="btn btn-sm btn-outline" id="next-month-btn" onclick="nextMonth()" style="border:none;">Next &rarr;</button>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:16px;height:16px;background:rgba(255,193,7,0.3);border:2px solid var(--yellow);"></div>
-        <span>Pending Leave</span>
+
+      <!-- Calendar Grid Container -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);border-radius:8px;background:var(--bg-alt);">
+        <!-- Day Headers -->
+        <div id="calendar-headers" style="display:grid;grid-template-columns:repeat(7,1fr);background:rgba(0,0,0,0.2);border-bottom:1px solid var(--border);"></div>
+        <!-- Days -->
+        <div id="leave-calendar" style="flex:1;display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:minmax(100px, 1fr);overflow-y:auto;background:var(--bg);"></div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <div style="width:16px;height:16px;background:rgba(244,67,54,0.3);border:2px solid var(--red);"></div>
-        <span>Denied Leave</span>
-      </div>
+
     </div>
   </div>
 </div>
