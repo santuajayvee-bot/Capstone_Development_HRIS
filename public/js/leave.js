@@ -237,7 +237,8 @@ window.renderLeaveTable = function() {
           </div>
         ` : `<span class="badge badge-yellow" style="padding:4px 8px;border-radius:20px;">Pending</span>`) : `
           <div style="display:flex;align-items:center;gap:8px;">
-            <span class="badge badge-${leave.status === 'Approved' ? 'green' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${leave.status}</span>
+            <span class="badge badge-${leave.status === 'Approved' ? 'green' : leave.status === 'Cancelled' ? 'yellow' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${leave.status}</span>
+            ${(isAdmin && leave.status === 'Approved') ? `<button class="btn" style="background:none;border:1px solid rgba(244,67,54,0.3);color:var(--red);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="cancelLeave(this)">Cancel</button>` : ''}
           </div>
         `}
       </td>
@@ -670,6 +671,165 @@ function calculateDaysBetweenDates(startDate, endDate) {
   return Math.ceil((end - start) / 86400000) + 1;
 }
 
+// ─────────────────────────────────────────────────────────────
+// ── GENERAL REQUESTS MANAGEMENT (COE, COS, Request Exit) ─────
+// ─────────────────────────────────────────────────────────────
+
+let ALL_GEN_REQUESTS = [];
+let CURRENT_GEN_TAB = 'pending';
+
+async function loadGeneralRequests() {
+  try {
+    const res = await apiFetch('/api/requests');
+    if (!res || !res.ok) { console.error('Failed to fetch general requests'); return; }
+    const requests = await res.json();
+    ALL_GEN_REQUESTS = requests.map(r => ({
+      ...r,
+      parsedDate: new Date(r.created_at)
+    })).sort((a, b) => b.parsedDate - a.parsedDate);
+
+    // Show the card for admin users
+    const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+    const card = document.getElementById('general-requests-card');
+    if (card) card.style.display = isAdmin ? 'block' : 'none';
+
+    renderGenTable();
+  } catch (err) {
+    console.error('Error loading general requests:', err);
+  }
+}
+
+window.switchGenTab = function(tab) {
+  CURRENT_GEN_TAB = tab;
+  const btnPending = document.getElementById('gen-tab-pending');
+  const btnHistory = document.getElementById('gen-tab-history');
+  if (btnPending && btnHistory) {
+    if (tab === 'pending') {
+      btnPending.style.background = 'var(--bg)';
+      btnPending.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+      btnPending.style.color = 'var(--text)';
+      btnHistory.style.background = 'transparent';
+      btnHistory.style.boxShadow = 'none';
+      btnHistory.style.color = 'var(--muted)';
+    } else {
+      btnHistory.style.background = 'var(--bg)';
+      btnHistory.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+      btnHistory.style.color = 'var(--text)';
+      btnPending.style.background = 'transparent';
+      btnPending.style.boxShadow = 'none';
+      btnPending.style.color = 'var(--muted)';
+    }
+  }
+  renderGenTable();
+};
+
+function renderGenTable() {
+  const tbody = document.getElementById('gen-tbody');
+  const emptyState = document.getElementById('gen-empty-state');
+  const colHead = document.getElementById('gen-dynamic-col');
+  if (!tbody) return;
+
+  const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+  let filtered = ALL_GEN_REQUESTS;
+
+  if (CURRENT_GEN_TAB === 'pending') {
+    filtered = filtered.filter(r => r.status === 'Pending');
+    if (colHead) { colHead.textContent = 'Actions'; colHead.style.textAlign = 'right'; }
+  } else {
+    filtered = filtered.filter(r => r.status !== 'Pending');
+    if (colHead) { colHead.textContent = 'Status'; colHead.style.textAlign = 'left'; }
+  }
+
+  // Update pending count badge
+  const pendingCount = ALL_GEN_REQUESTS.filter(r => r.status === 'Pending').length;
+  const countBadge = document.getElementById('gen-pending-count');
+  if (countBadge) {
+    countBadge.textContent = pendingCount > 0 ? pendingCount : '';
+    countBadge.style.display = pendingCount > 0 ? 'inline' : 'none';
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    emptyState.style.display = 'block';
+    if (CURRENT_GEN_TAB === 'history') {
+      emptyState.innerHTML = `<div style="font-size:32px;margin-bottom:12px;">📂</div><h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">No history records</h3><div style="font-size:13px;color:var(--muted);margin-top:4px;">No processed general requests yet.</div>`;
+    } else {
+      emptyState.innerHTML = `<div style="font-size:48px;margin-bottom:16px;">🎉</div><h3 style="margin:0;font-size:18px;font-weight:600;color:var(--text);">All caught up!</h3><div style="font-size:14px;color:var(--muted);margin-top:8px;">No pending general requests require your attention.</div>`;
+    }
+    document.getElementById('gen-page-info').textContent = 'Showing 0 results';
+    return;
+  } else {
+    emptyState.style.display = 'none';
+  }
+
+  document.getElementById('gen-page-info').textContent = `Showing ${filtered.length} result${filtered.length !== 1 ? 's' : ''}`;
+
+  // Type icon mapping
+  const typeIcons = { 'COE': '📄', 'COS': '📋', 'Request Exit': '🚪' };
+
+  tbody.innerHTML = filtered.map(req => `
+    <tr data-gen-id="${req.id}" style="border-bottom:1px solid rgba(0,0,0,0.05);">
+      <td style="padding:16px 24px;">
+        <div style="font-weight:600;color:var(--text);">${req.employee_name}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Submitted ${req.parsedDate.toLocaleDateString()}</div>
+      </td>
+      <td style="padding:16px 24px;">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-weight:500;">
+          ${typeIcons[req.type] || '📝'} ${req.type}
+        </span>
+      </td>
+      <td style="padding:16px 24px;font-size:13px;color:var(--muted);max-width:250px;">
+        <span style="text-overflow:ellipsis;overflow:hidden;white-space:nowrap;display:block;" title="${req.reason || '-'}">${req.reason || '-'}</span>
+      </td>
+      <td style="padding:16px 24px;font-size:13px;color:var(--muted);">${req.parsedDate.toLocaleDateString()}</td>
+      <td style="padding:16px 24px;text-align:${CURRENT_GEN_TAB === 'pending' ? 'right' : 'left'};">
+        ${CURRENT_GEN_TAB === 'pending' ? `
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" style="background:var(--green);color:white;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="approveGenRequest(this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Approve
+            </button>
+            <button class="btn btn-outline" style="color:var(--red);border-color:rgba(244,67,54,0.3);padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="denyGenRequest(this)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Reject
+            </button>
+          </div>
+        ` : `
+          <span class="badge badge-${req.status === 'Approved' ? 'green' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${req.status}</span>
+        `}
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function approveGenRequest(btn) {
+  const row = btn.closest('tr');
+  const id = row?.dataset.genId;
+  if (!id) { alert('Error: Could not find request'); return; }
+  if (!confirm('Approve this request?')) return;
+  try {
+    const res = await apiFetch(`/api/requests/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'Approved' })
+    });
+    if (!res || !res.ok) throw new Error('Failed to approve');
+    alert('Request approved successfully.');
+    loadGeneralRequests();
+  } catch (err) { alert('Failed to approve: ' + err.message); }
+}
+
+async function denyGenRequest(btn) {
+  const row = btn.closest('tr');
+  const id = row?.dataset.genId;
+  if (!id) { alert('Error: Could not find request'); return; }
+  if (!confirm('Deny this request?')) return;
+  try {
+    const res = await apiFetch(`/api/requests/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'Denied' })
+    });
+    if (!res || !res.ok) throw new Error('Failed to deny');
+    alert('Request denied.');
+    loadGeneralRequests();
+  } catch (err) { alert('Failed to deny: ' + err.message); }
+}
+
 // ── Watch for page activation (partials load async) ───────────
 function watchPageActivation() {
   const observer = new MutationObserver(() => {
@@ -678,7 +838,10 @@ function watchPageActivation() {
 
     if (leavePage && !leavePage.dataset.loaded) {
       leavePage.dataset.loaded = '1';
-      fetchCurrentUser(() => loadLeaveRequests());
+      fetchCurrentUser(() => {
+        loadLeaveRequests();
+        loadGeneralRequests();
+      });
     }
     if (requestsPage && !requestsPage.dataset.loaded) {
       requestsPage.dataset.loaded = '1';
@@ -696,11 +859,12 @@ let CALENDAR_DATE = new Date();
 let CALENDAR_LEAVES = [];
 
 async function openLeaveCalendar() {
-  // Fetch all leave requests
+  // Fetch all leave requests — only keep Approved & Pending (exclude Denied/Cancelled)
   try {
     const response = await apiFetch('/api/leave');
     if (!response || !response.ok) return;
-    CALENDAR_LEAVES = await response.json();
+    const allLeaves = await response.json();
+    CALENDAR_LEAVES = allLeaves.filter(l => l.status === 'Approved' || l.status === 'Pending');
   } catch (err) {
     console.error('Error fetching leaves for calendar:', err);
   }
@@ -828,55 +992,151 @@ function renderLeaveCalendar() {
       leavesOnDate.sort((a,b) => a.status === 'Approved' ? -1 : 1);
       
       const leavesContainer = document.createElement('div');
-      leavesContainer.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
-      
-      leavesOnDate.forEach(leave => {
+      leavesContainer.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+
+      const MAX_VISIBLE = 2;
+      const visible = leavesOnDate.slice(0, MAX_VISIBLE);
+      const overflow = leavesOnDate.length - MAX_VISIBLE;
+
+      // Helper to build a single leave badge
+      const buildBadge = (leave) => {
         const badge = document.createElement('div');
         const isApproved = leave.status === 'Approved';
         const isPending = leave.status === 'Pending';
-        
-        // Extract a short name like "J. Doe"
         let shortName = leave.employee_name;
         if (shortName.includes(' ')) {
-           const parts = shortName.split(' ');
-           // Handle Last First format vs First Last, fallback to just first initial + last word
-           shortName = parts[0].charAt(0) + '. ' + parts[parts.length - 1];
+          const parts = shortName.split(' ');
+          shortName = parts[0].charAt(0) + '. ' + parts[parts.length - 1];
         }
-
-        const color = isApproved ? 'var(--green)' : isPending ? 'var(--yellow)' : 'var(--red)';
-        const bgColor = isApproved ? 'rgba(76,175,80,0.1)' : isPending ? 'rgba(255,193,7,0.1)' : 'rgba(244,67,54,0.1)';
-        
+        const color = isApproved ? 'var(--green)' : 'var(--yellow)';
+        const bgColor = isApproved ? 'rgba(76,175,80,0.1)' : 'rgba(255,193,7,0.1)';
         badge.innerHTML = `
           <div style="width:4px;height:100%;background:${color};border-radius:4px;position:absolute;left:0;top:0;"></div>
           <span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${shortName}</span>
           <span style="opacity:0.7;font-size:10px;margin-left:4px;">(${leave.type.substring(0,4)})</span>
         `;
-        
-        badge.style.cssText = `
-          font-size:11px;
-          padding:4px 6px 4px 10px;
-          background:${bgColor};
-          color:var(--text);
-          border-radius:4px;
-          position:relative;
-          display:flex;
-          align-items:center;
-          overflow:hidden;
-          cursor:pointer;
-          transition:filter 0.2s;
-        `;
-        badge.title = `${leave.employee_name} \nType: ${leave.type} \nStatus: ${leave.status}\nReason: ${leave.reason || 'None'}`;
-        
+        badge.style.cssText = `font-size:11px;padding:3px 6px 3px 10px;background:${bgColor};color:var(--text);border-radius:4px;position:relative;display:flex;align-items:center;overflow:hidden;cursor:pointer;transition:filter 0.2s;`;
+        badge.title = `${leave.employee_name}\nType: ${leave.type}\nStatus: ${leave.status}\nReason: ${leave.reason || 'None'}`;
         badge.onmouseover = () => badge.style.filter = 'brightness(0.9)';
         badge.onmouseout = () => badge.style.filter = 'none';
+        return badge;
+      };
 
-        leavesContainer.appendChild(badge);
-      });
+      visible.forEach(leave => leavesContainer.appendChild(buildBadge(leave)));
+
+      // Overflow "+N more" badge
+      if (overflow > 0) {
+        const moreBtn = document.createElement('div');
+        const approvedCount = leavesOnDate.filter(l => l.status === 'Approved').length;
+        const pendingCount = leavesOnDate.filter(l => l.status === 'Pending').length;
+        moreBtn.innerHTML = `<span style="font-weight:700;">+${overflow} more</span><span style="opacity:0.6;margin-left:4px;font-size:10px;">(${approvedCount}✓ ${pendingCount}⏳)</span>`;
+        moreBtn.style.cssText = 'font-size:11px;padding:3px 8px;background:rgba(99,102,241,0.12);color:var(--text);border-radius:4px;display:flex;align-items:center;cursor:pointer;transition:background 0.2s;';
+        moreBtn.onmouseover = () => moreBtn.style.background = 'rgba(99,102,241,0.22)';
+        moreBtn.onmouseout = () => moreBtn.style.background = 'rgba(99,102,241,0.12)';
+
+        // Click opens detail popup
+        const allLeavesForPopup = [...leavesOnDate];
+        const popupDateStr = dateStr;
+        moreBtn.onclick = (e) => {
+          e.stopPropagation();
+          showCalendarDayPopup(popupDateStr, allLeavesForPopup);
+        };
+        leavesContainer.appendChild(moreBtn);
+      }
+
+      // If only showing count badges (many leaves), also make whole cell clickable
+      if (leavesOnDate.length > MAX_VISIBLE) {
+        dayCell.style.cursor = 'pointer';
+        const allLeavesForPopup = [...leavesOnDate];
+        const popupDateStr = dateStr;
+        dayCell.onclick = () => showCalendarDayPopup(popupDateStr, allLeavesForPopup);
+      }
+
       dayCell.appendChild(leavesContainer);
     }
 
     calendarEl.appendChild(dayCell);
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ── CALENDAR DAY DETAIL POPUP ────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+function showCalendarDayPopup(dateStr, leaves) {
+  // Remove any existing popup
+  const existing = document.getElementById('calendar-day-popup');
+  if (existing) existing.remove();
+
+  const dateObj = new Date(dateStr + 'T00:00:00');
+  const dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  const approvedLeaves = leaves.filter(l => l.status === 'Approved');
+  const pendingLeaves = leaves.filter(l => l.status === 'Pending');
+
+  const popup = document.createElement('div');
+  popup.id = 'calendar-day-popup';
+  popup.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10001;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s;';
+  
+  popup.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4);width:90%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);">
+      <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h3 style="margin:0;font-size:17px;font-weight:700;color:var(--text);">${dateLabel}</h3>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">${leaves.length} leave${leaves.length !== 1 ? 's' : ''} · ${approvedLeaves.length} approved · ${pendingLeaves.length} pending</div>
+          </div>
+          <button id="close-day-popup" style="background:none;border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:background 0.2s;">✕</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:16px 24px;">
+        ${leaves.map(l => {
+          const isApproved = l.status === 'Approved';
+          const color = isApproved ? 'var(--green)' : 'var(--yellow)';
+          const bgColor = isApproved ? 'rgba(76,175,80,0.08)' : 'rgba(255,193,7,0.08)';
+          return `
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:${bgColor};border-radius:8px;margin-bottom:8px;border-left:4px solid ${color};">
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:13px;color:var(--text);">${l.employee_name}</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px;">${l.type} · ${l.days || 1} day(s)</div>
+                ${l.reason ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${l.reason}">📝 ${l.reason}</div>` : ''}
+              </div>
+              <span style="font-size:11px;font-weight:600;padding:3px 8px;border-radius:12px;background:${bgColor};color:${color};border:1px solid ${color};white-space:nowrap;">${l.status}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(popup);
+  requestAnimationFrame(() => popup.style.opacity = '1');
+
+  // Close handlers
+  const closeBtn = document.getElementById('close-day-popup');
+  const closePopup = () => {
+    popup.style.opacity = '0';
+    setTimeout(() => popup.remove(), 200);
+  };
+  closeBtn.onclick = closePopup;
+  popup.onclick = (e) => { if (e.target === popup) closePopup(); };
+}
+
+// ─────────────────────────────────────────────────────────────
+// ── CANCEL APPROVED LEAVE (HR Admin) ─────────────────────────
+// ─────────────────────────────────────────────────────────────
+async function cancelLeave(btn) {
+  const row = btn.closest('tr');
+  const leaveId = row?.dataset.leaveId;
+  if (!leaveId) { alert('Error: Could not find leave request'); return; }
+  if (!confirm('Are you sure you want to cancel this approved leave?\n\nThis will revert the leave status to "Cancelled" and restore the employee\'s leave balance.')) return;
+  try {
+    const res = await apiFetch(`/api/leave/${leaveId}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'Cancelled' })
+    });
+    if (!res || !res.ok) throw new Error('Failed to cancel leave');
+    alert('Leave has been cancelled successfully.');
+    loadLeaveRequests();
+  } catch (err) { alert('Failed to cancel leave: ' + err.message); }
 }
 
 window.addEventListener('DOMContentLoaded', watchPageActivation);
@@ -886,6 +1146,7 @@ window.selectReq              = selectReq;
 window.saveRequest            = saveRequest;
 window.approveLeave           = approveLeave;
 window.denyLeave              = denyLeave;
+window.cancelLeave            = cancelLeave;
 window.approveRequest         = approveRequest;
 window.denyRequest            = denyRequest;
 window.toggleLeaveForm        = toggleLeaveForm;
@@ -901,3 +1162,8 @@ window.closeLeaveCalendar = closeLeaveCalendar;
 window.previousMonth      = previousMonth;
 window.nextMonth          = nextMonth;
 window.renderLeaveCalendar = renderLeaveCalendar;
+window.showCalendarDayPopup = showCalendarDayPopup;
+window.loadGeneralRequests  = loadGeneralRequests;
+window.approveGenRequest    = approveGenRequest;
+window.denyGenRequest       = denyGenRequest;
+window.switchGenTab         = switchGenTab;
