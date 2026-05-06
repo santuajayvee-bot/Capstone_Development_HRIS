@@ -721,6 +721,37 @@ function editEmployee(empId) {
   if (modal) modal.style.setProperty('display', 'flex', 'important');
 }
 
+function openAddEmployeeModal() {
+  // Reset for adding new employee (not editing)
+  currentEditingEmployeeId = null;
+  
+  // Clear all edit modal fields
+  document.getElementById('edit-emp-first-name').value = '';
+  document.getElementById('edit-emp-last-name').value = '';
+  document.getElementById('edit-emp-email').value = '';
+  document.getElementById('edit-emp-phone').value = '';
+  document.getElementById('edit-emp-city').value = '';
+  document.getElementById('edit-emp-dept').value = 'HR';
+  document.getElementById('edit-emp-position').value = '';
+  document.getElementById('edit-emp-type').value = 'Full-time';
+  document.getElementById('edit-emp-date-hired').value = '';
+  document.getElementById('edit-emp-supervisor').value = '';
+  document.getElementById('edit-emp-work-location').value = '';
+  document.getElementById('edit-payroll-wage-type').value = '';
+  document.getElementById('edit-payroll-rate').value = '';
+  
+  // Reset tabs to show personal info
+  document.querySelectorAll('.edit-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById('edit-tab-personal').style.display = 'block';
+  document.getElementById('edit-tab-employment').style.display = 'none';
+  document.getElementById('edit-tab-payroll').style.display = 'none';
+  document.querySelectorAll('.edit-tab-btn')[0].classList.add('active');
+  
+  // Show modal
+  const modal = document.getElementById('edit-employee-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
 function closeEditEmployeeModal() {
   const modal = document.getElementById('edit-employee-modal');
   if (modal) modal.style.display = 'none';
@@ -750,11 +781,6 @@ function getDeptId(deptName) {
 }
 
 async function saveEditedEmployee() {
-  if (!currentEditingEmployeeId) {
-    alert('Error: No employee selected');
-    return;
-  }
-
   // Collect Personal Info Tab
   const firstName = document.getElementById('edit-emp-first-name').value;
   const lastName = document.getElementById('edit-emp-last-name').value;
@@ -796,11 +822,30 @@ async function saveEditedEmployee() {
     console.log('Collected sewing rates:', sewingRates);
   }
 
+  const isAddingNew = !currentEditingEmployeeId;
+  const method = isAddingNew ? 'POST' : 'PUT';
+  const endpoint = isAddingNew ? '/api/employees' : `/api/employees/${currentEditingEmployeeId}`;
+  
+  // For adding new employees, we need an employee code
+  let employeeCode = '';
+  if (isAddingNew) {
+    // Generate next employee code
+    const maxCode = Math.max(
+      ...EMPLOYEES_RAW.map(e => {
+        const match = e.employee_code?.match(/EMP(\d+)/);
+        return match ? parseInt(match[1]) : 0;
+      }),
+      0
+    );
+    employeeCode = `EMP${String(maxCode + 1).padStart(5, '0')}`;
+  }
+
   try {
-    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}`, {
-      method: 'PUT',
+    const response = await apiFetch(endpoint, {
+      method: method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        employee_code: employeeCode,
         first_name: firstName,
         last_name: lastName,
         email: email,
@@ -821,10 +866,11 @@ async function saveEditedEmployee() {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || 'Failed to update employee');
+      throw new Error(error.error || 'Failed to save employee');
     }
 
-    alert('Employee updated successfully!');
+    const message = isAddingNew ? 'Employee added successfully!' : 'Employee updated successfully!';
+    alert(message);
     closeEditEmployeeModal();
     
     // Refresh the employee list
@@ -1298,6 +1344,15 @@ window.openEmployeeDetailModal = openEmployeeDetailModal;
 window.closeEmployeeDetail = closeEmployeeDetail;
 window.switchTab = switchTab;
 window.saveEmpPayrollConfig = saveEmpPayrollConfig;
+window.openAddEmployeeModal = openAddEmployeeModal;
+window.closeEditEmployeeModal = closeEditEmployeeModal;
+window.saveEditedEmployee = saveEditedEmployee;
+window.switchEditTab = switchEditTab;
+window.updateEditPayrollWageType = updateEditPayrollWageType;
+window.editEmployee = editEmployeeFromManage;
+window.editEmployeeFromManage = editEmployeeFromManage;
+window.toggleEmployeeStatus = toggleEmployeeStatus;
+window.deleteEmployeeFromManage = deleteEmployeeFromManage;
 
 // Expose refresh function globally for manual refresh
 window.refreshEmployees = fetchEmployees;
