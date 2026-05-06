@@ -22,7 +22,7 @@ const ROLES = {
   hr_admin:        ['hr_admin', 'admin'],                  // Accept hr_admin or old admin
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
-  payroll_any:     ['payroll_officer', 'payroll_manager'],
+  payroll_any:     ['payroll_officer', 'payroll_manager', 'admin', 'hr_admin'],  // Added hr_admin + admin
   hr_ops:          ['hr_admin', 'admin'],                           // HR operations (Leave, Attendance)
   staff_management: ['hr_admin', 'admin'],                          // Employee management (register, profiles, documents)
   admin_any:       ['hr_admin', 'system_admin', 'admin'],           // Any admin role

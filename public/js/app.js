@@ -58,6 +58,16 @@ function navigate(pageId, navEl) {
   if (pageId === 'requests' && typeof loadAllRequests === 'function') {
     loadAllRequests();
   }
+
+  // When navigating to payroll, load payroll and salary calculation records
+  if (pageId === 'payroll') {
+    if (typeof loadPayrollRecords === 'function') {
+      loadPayrollRecords();
+    }
+    if (typeof loadSalaryCalculations === 'function') {
+      loadSalaryCalculations();
+    }
+  }
 }
 
 function showAccessDenied() {
