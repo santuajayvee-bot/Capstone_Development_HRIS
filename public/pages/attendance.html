@@ -1,133 +1,200 @@
 <!-- ============================================================
-     pages/attendance.html — Attendance Tracking page content
+     pages/attendance.html — Attendance Management Module
      ============================================================ -->
 <div class="page-header">
   <div>
-    <div class="section-title">Attendance Tracking</div>
-    <div class="section-sub">Monitor employee attendance working hours</div>
+    <div class="section-title">Attendance Management</div>
+    <div class="section-sub">Secure QR-based attendance tracking & management</div>
   </div>
   <div class="page-header-right">
     <div class="tabs" style="margin-bottom:0;">
-      <div class="tab active"  onclick="switchAttTab('overview', this)">Overview</div>
-      <div class="tab"         onclick="switchAttTab('records',  this)">Records</div>
-      <div class="tab"         onclick="switchAttTab('overtime', this)">Overtime</div>
+      <div class="tab active" onclick="switchAttTab('overview', this)">Overview</div>
+      <div class="tab" onclick="switchAttTab('records', this)">Records</div>
+      <div class="tab" id="att-tab-overtime" onclick="switchAttTab('overtime', this)">Overtime</div>
+      <div class="tab" id="att-tab-audit" onclick="switchAttTab('audit', this)">Audit Log</div>
     </div>
-    <button class="btn btn-outline btn-sm">⬆ Export Report</button>
   </div>
 </div>
 
-<!-- ---- OVERVIEW ---- -->
+<!-- ═══════ OVERVIEW TAB ═══════ -->
 <div id="att-overview">
-  <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">
-    📅 27/02/2026 — Showing attendance for Friday, February 27, 2026
+  <!-- QR Clock In/Out Card (All roles) -->
+  <div class="card" id="qr-attendance-card" style="margin-bottom:24px;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+      <div>
+        <h3 style="margin:0;font-size:18px;font-weight:700;">🔐 QR Attendance</h3>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px;" id="att-clock-status">Checking status...</div>
+      </div>
+      <div style="display:flex;gap:10px;" id="att-clock-buttons">
+        <button class="btn btn-green" id="btn-clock-in" onclick="startClockIn()" disabled>
+          <span style="margin-right:4px;">📥</span> Clock In
+        </button>
+        <button class="btn btn-outline" id="btn-clock-out" onclick="startClockOut()" disabled style="display:none;">
+          <span style="margin-right:4px;">📤</span> Clock Out
+        </button>
+      </div>
+    </div>
+
+    <!-- QR Scanner Container (hidden by default) -->
+    <div id="qr-scanner-container" style="display:none;margin-top:20px;padding:20px;background:var(--bg-alt);border-radius:12px;border:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-weight:600;font-size:14px;">📷 Scan Site QR Code</div>
+        <button class="btn btn-outline btn-sm" onclick="cancelQrScan()">✕ Cancel</button>
+      </div>
+      <div id="qr-reader" style="width:100%;max-width:400px;margin:0 auto;border-radius:8px;overflow:hidden;"></div>
+      <div id="qr-scan-status" style="text-align:center;margin-top:12px;font-size:13px;color:var(--muted);"></div>
+    </div>
+
+    <!-- GPS Status -->
+    <div id="gps-status" style="display:none;margin-top:12px;padding:10px 16px;border-radius:8px;font-size:12px;background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.2);color:var(--green);">
+      📍 GPS Location acquired
+    </div>
   </div>
 
-  <div class="att-stats">
-    <div class="att-stat">
-      <div class="att-icon" style="color:var(--green)">✓</div>
-      <div><div class="att-num">8</div><div class="att-label">Present</div></div>
+  <!-- Admin: Generate QR Code -->
+  <div class="card" id="qr-generate-card" style="display:none;margin-bottom:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+      <div>
+        <h3 style="margin:0;font-size:16px;font-weight:700;">🏭 Site QR Code Generator</h3>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">Generate the QR code to display at the factory entrance</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="generateSiteQR()">Generate QR</button>
     </div>
-    <div class="att-stat">
-      <div class="att-icon" style="color:var(--yellow)">⏰</div>
-      <div><div class="att-num">8</div><div class="att-label">Late</div></div>
+    <div id="site-qr-display" style="display:none;margin-top:16px;text-align:center;padding:20px;background:white;border-radius:12px;">
+      <img id="site-qr-img" src="" alt="Site QR" style="width:250px;height:250px;" />
+      <div id="site-qr-name" style="margin-top:8px;font-weight:600;color:#333;"></div>
     </div>
-    <div class="att-stat">
-      <div class="att-icon" style="color:var(--yellow)">ℹ</div>
-      <div><div class="att-num">8</div><div class="att-label">On Leave</div></div>
-    </div>
-    <div class="att-stat">
-      <div class="att-icon" style="color:var(--red)">👤</div>
-      <div><div class="att-num">8</div><div class="att-label">Absent</div></div>
-    </div>
+  </div>
+
+  <!-- Stats Cards -->
+  <div style="font-size:12px;color:var(--muted);margin-bottom:16px;" id="att-date-label">
+    📅 Loading attendance overview...
+  </div>
+  <div class="att-stats" id="att-stats-grid">
+    <div class="att-stat"><div class="att-icon" style="color:var(--green)">✓</div><div><div class="att-num" id="stat-present">-</div><div class="att-label">Present</div></div></div>
+    <div class="att-stat"><div class="att-icon" style="color:var(--yellow)">⏰</div><div><div class="att-num" id="stat-late">-</div><div class="att-label">Late</div></div></div>
+    <div class="att-stat"><div class="att-icon" style="color:var(--yellow)">ℹ</div><div><div class="att-num" id="stat-leave">-</div><div class="att-label">On Leave</div></div></div>
+    <div class="att-stat"><div class="att-icon" style="color:var(--red)">👤</div><div><div class="att-num" id="stat-absent">-</div><div class="att-label">Absent</div></div></div>
   </div>
 
   <div class="att-bottom">
-    <div class="att-big blue">
-      <div class="ab-icon">⏱</div>
-      <div class="ab-val">94.5</div>
-      <div class="ab-label">Total Hours Worked · Today's total across all employees</div>
-    </div>
-    <div class="att-big green">
-      <div class="ab-icon">⏱</div>
-      <div class="ab-val">8.5</div>
-      <div class="ab-label">Average Hours · Average hours per employee</div>
+    <div class="att-big blue"><div class="ab-icon">⏱</div><div class="ab-val" id="stat-total-hours">-</div><div class="ab-label">Total Hours Worked · Today's total across all employees</div></div>
+    <div class="att-big green"><div class="ab-icon">⏱</div><div class="ab-val" id="stat-overtime">-</div><div class="ab-label">Total Overtime · Today's overtime hours</div></div>
+  </div>
+
+  <!-- Employee Personal Summary (shown only for employees) -->
+  <div id="emp-summary-card" class="card" style="display:none;margin-top:20px;">
+    <h3 style="margin:0 0 16px;font-size:16px;font-weight:700;">📊 My Monthly Summary</h3>
+    <div class="records-summary">
+      <div class="card"><div style="color:var(--green);font-size:13px;font-weight:700;margin-bottom:4px;">● Days Present</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-present">-</div></div>
+      <div class="card"><div style="color:var(--yellow);font-size:13px;font-weight:700;margin-bottom:4px;">⏰ Overtime Hours</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-overtime">-</div></div>
+      <div class="card"><div style="color:var(--red);font-size:13px;font-weight:700;margin-bottom:4px;">✕ Absences</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-absences">-</div></div>
     </div>
   </div>
 </div>
 
-<!-- ---- RECORDS ---- -->
+<!-- ═══════ RECORDS TAB ═══════ -->
 <div id="att-records" style="display:none;">
+  <!-- Admin search controls -->
+  <div id="att-records-controls" style="display:none;margin-bottom:16px;">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+      <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Search Employee</label>
+        <input type="text" id="att-search" placeholder="Name..." style="padding:6px 12px;border-radius:6px;font-size:13px;border:1px solid var(--border);background:var(--bg-alt);color:var(--text);width:200px;" onkeyup="loadAttRecords()" /></div>
+      <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Date</label>
+        <input type="date" id="att-date-filter" style="padding:6px 12px;border-radius:6px;font-size:13px;border:1px solid var(--border);background:var(--bg-alt);color:var(--text);" onchange="loadAttRecords()" /></div>
+      <button class="btn btn-outline btn-sm" onclick="clearAttFilters()">Clear Filters</button>
+    </div>
+  </div>
+
   <div class="table-wrap" style="margin-bottom:20px;">
     <table>
       <thead>
-        <tr><th>Employee</th><th>Time In</th><th>Time Out</th><th>Hours Worked</th><th>Status</th></tr>
+        <tr>
+          <th>Employee</th><th>Date</th><th>Time In</th><th>Time Out</th>
+          <th>Hours</th><th>OT</th><th>Status</th>
+          <th id="att-action-col" style="display:none;">Actions</th>
+        </tr>
       </thead>
-      <tbody>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--yellow)">Late</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--yellow)">Late</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--red)">Absent</span></td></tr>
-        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+      <tbody id="att-records-tbody">
+        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">Loading...</td></tr>
       </tbody>
     </table>
   </div>
+</div>
 
-  <div class="records-summary">
-    <div class="card">
-      <div style="color:var(--green);font-size:13px;font-weight:700;margin-bottom:4px;">● Attendance Rate</div>
-      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">92%</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:92%;background:var(--green)"></div></div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">+7% from last week</div>
+<!-- ═══════ OVERTIME TAB ═══════ -->
+<div id="att-overtime" style="display:none;">
+  <div class="card" style="margin-bottom:20px;">
+    <h3 style="margin:0 0 16px;font-size:16px;font-weight:700;">📝 Manual Overtime Encoding</h3>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Encode overtime hours from physical paper records for production floor workers.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:flex-end;">
+      <div>
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Employee</label>
+        <select id="ot-employee" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);">
+          <option value="">-- Select Employee --</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Date</label>
+        <input type="date" id="ot-date" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" />
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Overtime Hours</label>
+        <input type="number" id="ot-hours" min="0" max="24" step="0.5" placeholder="e.g. 2.5" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" />
+      </div>
+      <button class="btn btn-primary" onclick="encodeOvertime()">💾 Encode</button>
     </div>
-    <div class="card">
-      <div style="color:var(--blue);font-size:13px;font-weight:700;margin-bottom:4px;">◉ Punctuality Rate</div>
-      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">85%</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:85%;background:var(--blue)"></div></div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">-7% from last week</div>
+  </div>
+
+  <!-- OT records table -->
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Employee</th><th>Date</th><th>Regular Hours</th><th>OT Hours</th><th>Encoded By</th></tr></thead>
+      <tbody id="ot-records-tbody">
+        <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px;">Select an employee to view records</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════ AUDIT LOG TAB ═══════ -->
+<div id="att-audit" style="display:none;">
+  <div class="card" style="padding:0;overflow:hidden;border-radius:12px;">
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt);">
+      <h3 style="margin:0;font-size:16px;font-weight:700;">🔒 System Audit Log</h3>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">Immutable record of all manual overrides and corrections — Non-repudiation trail</div>
     </div>
-    <div class="card">
-      <div style="color:var(--yellow);font-size:13px;font-weight:700;margin-bottom:4px;">⏰ Overtime Hours</div>
-      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">24h</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:60%;background:var(--yellow)"></div></div>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;">This week</div>
+    <div class="table-wrap" style="margin:0;border:none;">
+      <table style="margin:0;border:none;">
+        <thead><tr><th>Timestamp</th><th>Performed By</th><th>Employee</th><th>Action</th><th>Old Value</th><th>New Value</th><th>IP Address</th></tr></thead>
+        <tbody id="audit-tbody">
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px;">Loading...</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
 
-<!-- ---- OVERTIME ---- -->
-<div id="att-overtime" style="display:none;">
-  <div style="display:flex;gap:8px;margin-bottom:16px;">
-    <button class="btn btn-primary btn-sm">All Requests</button>
-    <button class="btn btn-outline btn-sm">Pending</button>
-    <button class="btn btn-outline btn-sm">Approved</button>
-    <button class="btn btn-outline btn-sm">Rejected</button>
-  </div>
-
-  <div class="table-wrap" style="margin-bottom:20px;">
-    <table>
-      <thead>
-        <tr><th>Request ID</th><th>Employee</th><th>Department</th><th>Date</th><th>Reg Hours</th><th>OT Hours</th><th>Rate</th><th>OT Pay</th><th>Reason</th><th>Status</th><th>Actions</th></tr>
-      </thead>
-      <tbody>
-        <tr><td style="color:var(--accent)">OT-001</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
-        <tr><td style="color:var(--accent)">OT-002</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>2h</td><td>1x</td><td>₱200</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
-        <tr><td style="color:var(--accent)">OT-003</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-yellow">Pending</span></td><td>•••</td></tr>
-        <tr><td style="color:var(--accent)">OT-004</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>3h</td><td>1x</td><td>₱300</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
-        <tr><td style="color:var(--accent)">OT-005</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
-        <tr><td style="color:var(--accent)">OT-006</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>2h</td><td>1x</td><td>₱200</td><td>Peak season</td><td><span class="badge badge-red">Rejected</span></td><td>•••</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Employee Overtime Summary – February 2026</div>
-    <div class="ot-row"><div class="ot-name">Chris Brown</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:90%;background:#e05c7a;"></div></div><div class="ot-val">18h</div></div>
-    <div class="ot-row"><div class="ot-name">Serjo Justine</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:70%;background:#f5a623;"></div></div><div class="ot-val">14h</div></div>
-    <div class="ot-row"><div class="ot-name">LeBron James</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:55%;background:#4f7cff;"></div></div><div class="ot-val">11h</div></div>
-    <div class="ot-row"><div class="ot-name">Boyd Amorado</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:40%;background:#22d3a5;"></div></div><div class="ot-val">8h</div></div>
-    <div class="ot-row"><div class="ot-name">Nikki Minaj</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:30%;background:#7c5cfc;"></div></div><div class="ot-val">6h</div></div>
+<!-- ═══════ OVERRIDE MODAL ═══════ -->
+<div id="override-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:var(--bg);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4);width:90%;max-width:440px;border:1px solid var(--border);">
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt);border-radius:12px 12px 0 0;">
+      <h3 style="margin:0;font-size:16px;font-weight:700;">⚠️ Override Attendance</h3>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">This action is permanently recorded in the audit log.</div>
+    </div>
+    <div style="padding:20px 24px;">
+      <div id="override-emp-info" style="margin-bottom:16px;padding:12px;background:var(--bg-alt);border-radius:8px;font-size:13px;"></div>
+      <input type="hidden" id="override-att-id" />
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+        <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Time In</label>
+          <input type="time" id="override-time-in" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" /></div>
+        <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Time Out</label>
+          <input type="time" id="override-time-out" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" /></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn btn-outline" onclick="closeOverrideModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitOverride()">⚠️ Confirm Override</button>
+      </div>
+    </div>
   </div>
 </div>

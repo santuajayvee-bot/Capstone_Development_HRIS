@@ -12,6 +12,7 @@ const { login, me }                          = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
+const attendanceRoutes                       = require('./server/attendance');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +66,9 @@ app.use('/api/payroll', payrollRoutes);
 
 // 201-File Management (Auth required, role-based per endpoint)
 app.use('/api/201-files', requireAuth, fileManagementRoutes);
+
+// Attendance Module (QR, Geofence, Device Binding, Audit)
+app.use('/api/attendance', attendanceRoutes);
 
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
@@ -501,19 +505,7 @@ app.patch('/api/leave/:id/status', requireAuth, requireRole(['hr_admin']), async
   } catch (err) { res.status(500).json({ error: 'Failed to update leave.' }); }
 });
 
-// Attendance
-app.get('/api/attendance', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  try {
-    const pool = require('./config/db');
-    let q = `SELECT a.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
-             FROM attendance a JOIN employees e ON e.id = a.employee_id`;
-    const p = [];
-    if (req.user.role === 'employee') { q += ' WHERE a.employee_id = ?'; p.push(req.user.employeeId); }
-    q += ' ORDER BY a.date DESC LIMIT 100';
-    const [rows] = await pool.execute(q, p);
-    res.json(rows);
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch attendance.' }); }
-});
+// Attendance — now handled by /api/attendance router (server/attendance.js)
 
 // General Requests (COE, COS, Exit)
 app.get('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) => {
