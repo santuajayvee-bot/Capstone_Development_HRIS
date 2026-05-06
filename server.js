@@ -438,11 +438,18 @@ app.get('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), async 
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
 });
 
-app.post('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), upload.single('attachment'), async (req, res) => {
+app.post('/api/leave', requireAuth, requireRole([...ROLES.admin_any, 'employee']), upload.single('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { type, date_from, date_to, days, reason, employee_id } = req.body;
-    const empId = req.user.role === 'employee' ? req.user.employeeId : parseInt(employee_id);
+    // For employees, always use their own ID from the token.
+    // For admins/HR, prefer body employee_id (manual encoding), fall back to their own linked employee_id.
+    let empId;
+    if (req.user.role === 'employee') {
+      empId = req.user.employeeId;
+    } else {
+      empId = employee_id ? parseInt(employee_id) : req.user.employeeId;
+    }
     
     console.log('POST /api/leave - req.user:', req.user);
     console.log('POST /api/leave - req.body:', req.body);
@@ -451,7 +458,21 @@ app.post('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), uploa
     
     if (!empId) {
       console.error('Error: No employee_id found');
-      return res.status(400).json({ error: 'Employee ID is required.' });
+      return res.status(400).json({ error: 'Your admin account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
+    }
+
+    // Check if employee is eligible for leave (not Agency Worker)
+    const [empRows] = await pool.execute('SELECT employment_type FROM employees WHERE id = ?', [empId]);
+    if (empRows.length > 0) {
+      const empType = (empRows[0].employment_type || '').toLowerCase();
+      if (empType.includes('agency') || empType.includes('contractual')) {
+         // Delete uploaded file if exists
+         if (req.file) {
+            const fs = require('fs');
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+         }
+         return res.status(403).json({ error: 'Agency/Contractual workers are not authorized to file leave requests. Please contact your manpower agency.' });
+      }
     }
     
     // Save file path if attachment was uploaded
@@ -512,8 +533,14 @@ app.post('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) 
   try {
     const pool = require('./config/db');
     const { type, reason, employee_id } = req.body;
-    const empId = req.user.role === 'employee' ? req.user.employeeId : employee_id;
-    if (!empId) return res.status(400).json({ error: 'Employee ID is required.' });
+    // For employees, use token ID. For admins, prefer body, fall back to token.
+    let empId;
+    if (req.user.role === 'employee') {
+      empId = req.user.employeeId;
+    } else {
+      empId = employee_id ? parseInt(employee_id) : req.user.employeeId;
+    }
+    if (!empId) return res.status(400).json({ error: 'Your admin account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
     if (!['COE','COS','Request Exit'].includes(type)) return res.status(400).json({ error: 'Invalid request type.' });
     const [result] = await pool.execute(
       `INSERT INTO general_requests (employee_id, type, reason) VALUES (?,?,?)`,
