@@ -1,0 +1,36 @@
+/* ============================================================
+   BLOCKCHAIN.CSS
+   ============================================================ */
+
+.block-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.block-chain-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.block-item {
+  flex-shrink: 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px; width: 120px; font-size: 11px;
+}
+.block-item.confirmed { border-color: var(--green); background: rgba(34,211,165,0.08); }
+.block-item.pending   { border-color: var(--yellow); background: rgba(245,166,35,0.08); }
+.block-item .bk-label { color: var(--muted); margin-bottom: 4px; }
+.block-item .bk-hash  { font-family: monospace; font-size: 10px; word-break: break-all; color: var(--accent); }
+.block-item .bk-meta  { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+.block-arrow { display: flex; align-items: center; color: var(--muted); font-size: 18px; }
+
+/* Transaction logs */
+.tx-hash { font-family: monospace; font-size: 11px; color: var(--muted); }
+.tx-block { color: var(--accent); }

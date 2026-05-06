@@ -1,0 +1,133 @@
+<!-- ============================================================
+     pages/attendance.html — Attendance Tracking page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Attendance Tracking</div>
+    <div class="section-sub">Monitor employee attendance working hours</div>
+  </div>
+  <div class="page-header-right">
+    <div class="tabs" style="margin-bottom:0;">
+      <div class="tab active"  onclick="switchAttTab('overview', this)">Overview</div>
+      <div class="tab"         onclick="switchAttTab('records',  this)">Records</div>
+      <div class="tab"         onclick="switchAttTab('overtime', this)">Overtime</div>
+    </div>
+    <button class="btn btn-outline btn-sm">⬆ Export Report</button>
+  </div>
+</div>
+
+<!-- ---- OVERVIEW ---- -->
+<div id="att-overview">
+  <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">
+    📅 27/02/2026 — Showing attendance for Friday, February 27, 2026
+  </div>
+
+  <div class="att-stats">
+    <div class="att-stat">
+      <div class="att-icon" style="color:var(--green)">✓</div>
+      <div><div class="att-num">8</div><div class="att-label">Present</div></div>
+    </div>
+    <div class="att-stat">
+      <div class="att-icon" style="color:var(--yellow)">⏰</div>
+      <div><div class="att-num">8</div><div class="att-label">Late</div></div>
+    </div>
+    <div class="att-stat">
+      <div class="att-icon" style="color:var(--yellow)">ℹ</div>
+      <div><div class="att-num">8</div><div class="att-label">On Leave</div></div>
+    </div>
+    <div class="att-stat">
+      <div class="att-icon" style="color:var(--red)">👤</div>
+      <div><div class="att-num">8</div><div class="att-label">Absent</div></div>
+    </div>
+  </div>
+
+  <div class="att-bottom">
+    <div class="att-big blue">
+      <div class="ab-icon">⏱</div>
+      <div class="ab-val">94.5</div>
+      <div class="ab-label">Total Hours Worked · Today's total across all employees</div>
+    </div>
+    <div class="att-big green">
+      <div class="ab-icon">⏱</div>
+      <div class="ab-val">8.5</div>
+      <div class="ab-label">Average Hours · Average hours per employee</div>
+    </div>
+  </div>
+</div>
+
+<!-- ---- RECORDS ---- -->
+<div id="att-records" style="display:none;">
+  <div class="table-wrap" style="margin-bottom:20px;">
+    <table>
+      <thead>
+        <tr><th>Employee</th><th>Time In</th><th>Time Out</th><th>Hours Worked</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--yellow)">Late</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--yellow)">Late</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--red)">Absent</span></td></tr>
+        <tr><td>Serjo Justine</td><td>9:00</td><td>18:00</td><td>9h</td><td><span style="color:var(--green)">Present</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="records-summary">
+    <div class="card">
+      <div style="color:var(--green);font-size:13px;font-weight:700;margin-bottom:4px;">● Attendance Rate</div>
+      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">92%</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:92%;background:var(--green)"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">+7% from last week</div>
+    </div>
+    <div class="card">
+      <div style="color:var(--blue);font-size:13px;font-weight:700;margin-bottom:4px;">◉ Punctuality Rate</div>
+      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">85%</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:85%;background:var(--blue)"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">-7% from last week</div>
+    </div>
+    <div class="card">
+      <div style="color:var(--yellow);font-size:13px;font-weight:700;margin-bottom:4px;">⏰ Overtime Hours</div>
+      <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;">24h</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:60%;background:var(--yellow)"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">This week</div>
+    </div>
+  </div>
+</div>
+
+<!-- ---- OVERTIME ---- -->
+<div id="att-overtime" style="display:none;">
+  <div style="display:flex;gap:8px;margin-bottom:16px;">
+    <button class="btn btn-primary btn-sm">All Requests</button>
+    <button class="btn btn-outline btn-sm">Pending</button>
+    <button class="btn btn-outline btn-sm">Approved</button>
+    <button class="btn btn-outline btn-sm">Rejected</button>
+  </div>
+
+  <div class="table-wrap" style="margin-bottom:20px;">
+    <table>
+      <thead>
+        <tr><th>Request ID</th><th>Employee</th><th>Department</th><th>Date</th><th>Reg Hours</th><th>OT Hours</th><th>Rate</th><th>OT Pay</th><th>Reason</th><th>Status</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        <tr><td style="color:var(--accent)">OT-001</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
+        <tr><td style="color:var(--accent)">OT-002</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>2h</td><td>1x</td><td>₱200</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
+        <tr><td style="color:var(--accent)">OT-003</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-yellow">Pending</span></td><td>•••</td></tr>
+        <tr><td style="color:var(--accent)">OT-004</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>3h</td><td>1x</td><td>₱300</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
+        <tr><td style="color:var(--accent)">OT-005</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>1h</td><td>1x</td><td>₱100</td><td>Peak season</td><td><span class="badge badge-green">Approved</span></td><td>•••</td></tr>
+        <tr><td style="color:var(--accent)">OT-006</td><td>Chris Brown</td><td>Production</td><td>Feb 26, 2026</td><td>8h</td><td>2h</td><td>1x</td><td>₱200</td><td>Peak season</td><td><span class="badge badge-red">Rejected</span></td><td>•••</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Employee Overtime Summary – February 2026</div>
+    <div class="ot-row"><div class="ot-name">Chris Brown</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:90%;background:#e05c7a;"></div></div><div class="ot-val">18h</div></div>
+    <div class="ot-row"><div class="ot-name">Serjo Justine</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:70%;background:#f5a623;"></div></div><div class="ot-val">14h</div></div>
+    <div class="ot-row"><div class="ot-name">LeBron James</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:55%;background:#4f7cff;"></div></div><div class="ot-val">11h</div></div>
+    <div class="ot-row"><div class="ot-name">Boyd Amorado</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:40%;background:#22d3a5;"></div></div><div class="ot-val">8h</div></div>
+    <div class="ot-row"><div class="ot-name">Nikki Minaj</div><div class="ot-bar-wrap"><div class="ot-bar" style="width:30%;background:#7c5cfc;"></div></div><div class="ot-val">6h</div></div>
+  </div>
+</div>

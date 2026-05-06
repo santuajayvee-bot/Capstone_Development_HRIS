@@ -1,0 +1,214 @@
+<!-- ============================================================
+     pages/leave.html — Leave Management page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Leave Management</div>
+    <div class="section-sub">Review and Manage employee leave requests</div>
+  </div>
+</div>
+
+<!-- ── MANUAL ENCODING FORM (HR Admin) ────────────────────────────── -->
+<div id="manual-encoding-card" class="card" style="margin-bottom:30px; display: none;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h3 style="margin:0;font-size:16px;font-weight:600;">📝 Manual Leave Encoding</h3>
+    <button class="btn btn-sm btn-outline" onclick="toggleLeaveForm()" id="toggle-form-btn">+ Expand Form</button>
+  </div>
+
+  <div id="leave-form-container" style="display:none;background:var(--bg-alt);padding:20px;border-radius:6px;border:1px solid var(--border);">
+    <form id="manual-leave-form" onsubmit="submitManualLeave(event)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        
+        <!-- Employee Selection -->
+        <div class="form-group">
+          <label for="manual-employee">Employee Name / ID</label>
+          <select id="manual-employee" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:14px;">
+            <option value="">-- Loading Employees --</option>
+          </select>
+        </div>
+
+        <!-- Leave Type -->
+        <div class="form-group">
+          <label for="manual-leave-type">Leave Type</label>
+          <select id="manual-leave-type" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:14px;">
+            <option value="">-- Select Leave Type --</option>
+            <option value="Vacation">Vacation Leave</option>
+            <option value="Sick">Sick Leave</option>
+            <option value="Casual">Casual Leave</option>
+            <option value="Maternity">Maternity Leave</option>
+            <option value="Paternity">Paternity Leave</option>
+            <option value="Bereavement">Bereavement Leave</option>
+          </select>
+        </div>
+
+        <!-- Start Date -->
+        <div class="form-group">
+          <label for="manual-start-date">Start Date</label>
+          <input type="date" id="manual-start-date" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:14px;" />
+        </div>
+
+        <!-- End Date -->
+        <div class="form-group">
+          <label for="manual-end-date">End Date</label>
+          <input type="date" id="manual-end-date" required style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:14px;" />
+        </div>
+
+      </div>
+
+      <!-- Reason -->
+      <div class="form-group" style="margin-bottom:16px;">
+        <label for="manual-reason">Reason for Leave</label>
+        <textarea id="manual-reason" placeholder="Enter reason for the leave request..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:14px;min-height:80px;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+
+      <!-- Attachments -->
+      <div class="form-group" style="margin-bottom:16px;">
+        <label for="manual-attachment">Attachments (Optional)</label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="file" id="manual-attachment" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="flex:1;" />
+          <span style="font-size:12px;color:var(--muted);">Max 5MB (PDF, DOC, DOCX, JPG, PNG)</span>
+        </div>
+      </div>
+
+      <!-- Policy Warning -->
+      <div id="policy-warning" style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:12px;margin-bottom:16px;font-size:13px;color:#856404;display:none;">
+        ⚠️ <strong>Policy Alert:</strong> <span id="warning-text"></span>
+      </div>
+
+      <!-- Action Buttons -->
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button type="button" class="btn btn-outline" onclick="clearLeaveForm()">Cancel</button>
+        <button type="submit" class="btn btn-primary">💾 Save & Encode Leave</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Leave Management Dashboard -->
+<div id="leave-dashboard-container" class="card" style="padding:0;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--bg);margin-bottom:20px;">
+  
+  <!-- Dashboard Header & Tabs -->
+  <div style="padding:24px 30px;border-bottom:1px solid var(--border);background:var(--bg-alt);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;">
+      <div>
+        <h2 style="margin:0;font-size:22px;font-weight:700;color:var(--text);">Leave Management</h2>
+        <div style="font-size:13px;color:var(--muted);margin-top:6px;">Review and manage employee leave requests.</div>
+      </div>
+      
+      <!-- Pill-shaped Tab Menu -->
+      <div id="leave-tabs-container" style="display:inline-flex;background:rgba(0,0,0,0.04);padding:4px;border-radius:50px;border:1px solid var(--border);">
+        <button id="leave-tab-pending" class="btn" style="border:none;border-radius:50px;padding:6px 16px;font-size:13px;font-weight:600;background:var(--bg);box-shadow:0 1px 3px rgba(0,0,0,0.1);color:var(--text);" onclick="switchLeaveTab('pending')">Pending Inbox</button>
+        <button id="leave-tab-history" class="btn" style="border:none;border-radius:50px;padding:6px 16px;font-size:13px;font-weight:600;background:transparent;box-shadow:none;color:var(--muted);" onclick="switchLeaveTab('history')">Action History</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Action History Controls (Hidden by default) -->
+  <div id="leave-history-controls" style="display:none;padding:16px 30px;border-bottom:1px solid var(--border);background:var(--bg);align-items:center;gap:16px;flex-wrap:wrap;">
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);">Date Range</label>
+      <select id="leave-date-filter" class="form-control" style="padding:6px 12px;border-radius:6px;font-size:13px;min-width:140px;" onchange="renderLeaveTable()">
+        <option value="30">Last 30 Days</option>
+        <option value="90">Last 90 Days</option>
+        <option value="365">Last 1 Year</option>
+        <option value="all">All Time</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:200px;">
+      <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);">Search Employee</label>
+      <input type="text" id="leave-search" placeholder="Search by name..." class="form-control" style="padding:6px 12px;border-radius:6px;font-size:13px;width:100%;max-width:300px;" onkeyup="renderLeaveTable()" />
+    </div>
+  </div>
+
+  <!-- Table Container -->
+  <div class="table-wrap" style="margin:0;border:none;">
+    <table style="margin:0;border:none;width:100%;text-align:left;border-collapse:collapse;">
+      <thead style="background:rgba(0,0,0,0.02);border-bottom:1px solid var(--border);">
+        <tr>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Employee</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Request Type</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Dates & Duration</th>
+          <th style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Reason</th>
+          <th id="leave-dynamic-col-head" style="padding:16px 24px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="leave-tbody">
+        <!-- Rows rendered by JS -->
+      </tbody>
+    </table>
+    
+    <!-- Empty State -->
+    <div id="leave-empty-state" style="display:none;padding:60px 20px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">🎉</div>
+      <h3 style="margin:0;font-size:18px;font-weight:600;color:var(--text);">You're all caught up!</h3>
+      <div style="font-size:14px;color:var(--muted);margin-top:8px;">No pending requests require your attention.</div>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div id="leave-pagination" style="display:flex;justify-content:space-between;align-items:center;padding:16px 30px;border-top:1px solid var(--border);background:var(--bg-alt);">
+    <div id="leave-page-info" style="font-size:13px;color:var(--muted);">Showing 0 results</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" style="padding:4px 12px;font-size:12px;border-radius:6px;" onclick="prevLeavePage()">Previous</button>
+      <button class="btn btn-outline" style="padding:4px 12px;font-size:12px;border-radius:6px;" onclick="nextLeavePage()">Next</button>
+    </div>
+  </div>
+</div>
+
+<div class="calendar-hint">
+  <div>
+    <div style="font-size:14px;font-weight:700;">📅 Calendar View</div>
+    <div style="font-size:12px;color:var(--muted);">View all leave requests in a calendar view</div>
+  </div>
+  <button class="btn btn-primary" onclick="openLeaveCalendar()">Open Calendar</button>
+</div>
+
+<!-- Calendar Modal -->
+<div id="leave-calendar-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(15, 23, 42, 0.85);backdrop-filter:blur(6px);z-index:9999;align-items:center;justify-content:center;opacity:0;transition:opacity 0.3s ease;">
+  <div style="background:var(--bg);border-radius:12px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);width:95%;max-width:1200px;height:90vh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);">
+    
+    <!-- Modal Header -->
+    <div style="padding:24px 30px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg-alt);">
+      <div>
+        <h2 style="margin:0;font-size:24px;font-weight:700;display:flex;align-items:center;gap:10px;">
+          📅 Company Leave Calendar
+        </h2>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px;">View team availability and approved absences</div>
+      </div>
+      <button class="btn btn-outline" onclick="closeLeaveCalendar()" style="border-radius:50px;padding:8px 16px;">✕ Close View</button>
+    </div>
+    
+    <!-- Modal Body (Calendar Area) -->
+    <div style="flex:1;display:flex;flex-direction:column;padding:24px 30px;overflow:hidden;">
+      
+      <!-- Controls & Legend -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:16px;">
+        <div style="display:flex;gap:15px;font-size:13px;background:var(--bg-alt);padding:10px 16px;border-radius:8px;border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);"></div>
+            <span style="font-weight:600;">Approved</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:12px;height:12px;border-radius:50%;background:var(--yellow);box-shadow:0 0 8px var(--yellow);"></div>
+            <span style="font-weight:600;">Pending</span>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:16px;background:var(--bg-alt);padding:6px;border-radius:8px;border:1px solid var(--border);">
+          <button class="btn btn-sm btn-outline" id="prev-month-btn" onclick="previousMonth()" style="border:none;">&larr; Prev</button>
+          <h3 id="calendar-month-year" style="margin:0;min-width:160px;text-align:center;font-size:18px;font-weight:700;">March 2026</h3>
+          <button class="btn btn-sm btn-outline" id="next-month-btn" onclick="nextMonth()" style="border:none;">Next &rarr;</button>
+        </div>
+      </div>
+
+      <!-- Calendar Grid Container -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border);border-radius:8px;background:var(--bg-alt);">
+        <!-- Day Headers -->
+        <div id="calendar-headers" style="display:grid;grid-template-columns:repeat(7,1fr);background:rgba(0,0,0,0.2);border-bottom:1px solid var(--border);"></div>
+        <!-- Days -->
+        <div id="leave-calendar" style="flex:1;display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:minmax(100px, 1fr);overflow-y:auto;background:var(--bg);"></div>
+      </div>
+
+    </div>
+  </div>
+</div>

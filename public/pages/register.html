@@ -1,0 +1,229 @@
+<!-- ============================================================
+     pages/register.html — Register Employee page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Employees</div>
+    <div class="section-sub">Manage organization's workforce</div>
+  </div>
+  <div class="page-header-right">
+    <button class="btn btn-outline" onclick="switchRegisterView('manage')">⚙ Manage Employee</button>
+    <button class="btn btn-primary" onclick="switchRegisterView('add')">+ Add Employee</button>
+  </div>
+</div>
+
+<!-- MANAGE VIEW - Employee List -->
+<div id="register-manage-view" style="display:none;">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3>Employee List</h3>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <input id="manage-search" type="text" placeholder="Search employees..." style="padding:8px 12px;border:1px solid #dee2e6;border-radius:6px;width:200px;" />
+        <select id="manage-status" style="padding:8px 12px;border:1px solid #dee2e6;border-radius:6px;">
+          <option value="">All Status</option>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+        </select>
+        <select id="manage-dept" style="padding:8px 12px;border:1px solid #dee2e6;border-radius:6px;">
+          <option value="">All Departments</option>
+          <option value="HR">HR</option>
+          <option value="Accounting">Accounting</option>
+          <option value="Production">Production</option>
+          <option value="Logistics">Logistics</option>
+          <option value="Personnel">Personnel</option>
+        </select>
+      </div>
+    </div>
+    <div id="manage-emp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;"></div>
+  </div>
+</div>
+
+<!-- ADD/EDIT VIEW - Employee Form -->
+<div id="register-form-view" style="display:block;">
+  <div class="card">
+    <div class="form-tabs">
+      <div class="form-tab active" onclick="switchFormTab(this)">Personal Info</div>
+      <div class="form-tab" onclick="switchFormTab(this)">Employment Details</div>
+      <div class="form-tab" onclick="switchFormTab(this)">Payroll &amp; Compensation</div>
+      <div class="form-tab" onclick="switchFormTab(this)">Documents</div>
+    </div>
+
+    <!-- Personal Info -->
+    <div id="form-personal" class="form-section">
+      <div class="form-grid">
+        <div class="form-group"><label>Employee ID</label><input id="emp-id" placeholder="EMP-00001" /></div>
+        <div class="form-group"><label>Suffix</label><select id="emp-suffix"><option>None</option><option>Jr.</option><option>Sr.</option><option>III</option></select></div>
+        <div class="form-group"><label>First Name</label><input id="emp-first-name" placeholder="First name" /></div>
+        <div class="form-group"><label>Middle Name</label><input id="emp-middle-name" placeholder="Middle name" /></div>
+        <div class="form-group"><label>Last Name</label><input id="emp-last-name" placeholder="Last name" /></div>
+        <div class="form-group"><label>Contact Number</label><input id="emp-contact" placeholder="+63 9XX XXX XXXX" /></div>
+        <div class="form-group"><label>Nationality</label><select id="emp-nationality"><option>Filipino</option><option>American</option><option>Other</option></select></div>
+        <div class="form-group"><label>Date of Birth</label><input id="emp-dob" type="date" /></div>
+        <div class="form-group"><label>Gender</label><select id="emp-gender"><option>Male</option><option>Female</option><option>Prefer not to say</option></select></div>
+        <div class="form-group"><label>Email Address</label><input id="emp-email" type="email" placeholder="email@example.com" /></div>
+        <div class="form-group full"><label>Residential Address</label><input id="emp-address" placeholder="Full address" /></div>
+        <div class="form-group"><label>Emergency Contact Name</label><input id="emp-emerg-name" placeholder="Contact name" /></div>
+        <div class="form-group"><label>Emergency Contact Number</label><input id="emp-emerg-phone" placeholder="+63 9XX XXX XXXX" /></div>
+      </div>
+    </div>
+
+    <!-- Employment Details -->
+    <div id="form-employment" class="form-section" style="display:none;">
+      <div class="form-grid">
+        <div class="form-group"><label>Department</label><select id="emp-dept"><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></div>
+        <div class="form-group"><label>Position / Job Title</label><input id="emp-position" placeholder="e.g. HR Officer" /></div>
+        <div class="form-group"><label>Employment Type</label><select id="emp-type"><option>Full-time</option><option>Part-time</option><option>Contractual</option></select></div>
+        <div class="form-group"><label>Date Hired</label><input id="emp-hired-date" type="date" /></div>
+        <div class="form-group"><label>Immediate Supervisor</label><input id="emp-supervisor" placeholder="Supervisor name" /></div>
+        <div class="form-group"><label>Work Location</label><input id="emp-location" placeholder="Branch / Site" /></div>
+      </div>
+    </div>
+
+    <!-- Payroll & Compensation -->
+    <div id="form-payroll" class="form-section" style="display:none;">
+      <!-- Wage Type Selection -->
+      <div style="margin-bottom:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Wage Type</h4>
+        <div class="form-group">
+          <label>Wage Type</label>
+          <select id="emp-wage-type" onchange="updateWageTypeUI()">
+            <option value="">-- Select Wage Type --</option>
+            <option value="Base Salary">Base Salary (Fixed Monthly)</option>
+            <option value="Hourly">Hourly (with Overtime)</option>
+            <option value="Per-Piece">Per-Piece (Production)</option>
+            <option value="Per-Trip">Per-Trip (Logistics)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Base Salary Fields (default) -->
+      <div id="wage-base-salary" style="display:none;margin-bottom:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Base Salary Configuration</h4>
+        <div class="form-grid">
+          <div class="form-group"><label>Monthly Salary</label><input id="emp-salary" type="number" placeholder="0.00" /></div>
+          <div class="form-group"><label>Pay Frequency</label><select id="emp-pay-freq"><option>Monthly</option><option>Semi-monthly</option><option>Weekly</option></select></div>
+        </div>
+      </div>
+
+      <!-- Hourly Wage Fields -->
+      <div id="wage-hourly" style="display:none;margin-bottom:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Hourly Wage Configuration</h4>
+        <div class="form-grid">
+          <div class="form-group"><label>Hourly Rate (₱)</label><input id="emp-hourly-rate" type="number" placeholder="0.00" step="0.01" /></div>
+          <div class="form-group"><label>Overtime Rate (₱/hour)</label><input id="emp-overtime-rate" type="number" placeholder="0.00" step="0.01" /></div>
+        </div>
+      </div>
+
+      <!-- Production Wage Fields (Per-Piece) -->
+      <div id="wage-production" style="display:none;margin-bottom:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Production Wage Configuration</h4>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">Set base rate and sewing-type specific rates</p>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label>Base Per-Piece Rate (₱)</label>
+          <input id="emp-prod-base-rate" type="number" placeholder="0.00" step="0.01" />
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:12px;">
+          <h5 style="font-weight:600;margin-bottom:12px;font-size:12px;">Sewing Type Rates</h5>
+          <div id="emp-sewing-rates" class="wage-rate-grid">
+            <!-- Populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Logistics Wage Fields (Per-Trip) -->
+      <div id="wage-logistics" style="display:none;margin-bottom:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Logistics Wage Configuration</h4>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">Set per-trip rates by region</p>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:12px;">
+          <h5 style="font-weight:600;margin-bottom:12px;font-size:12px;">Region Rates</h5>
+          <div id="emp-logistics-rates" class="wage-rate-grid">
+            <!-- Populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Government IDs & Deductions -->
+      <div style="margin-top:24px;">
+        <h4 style="font-weight:600;margin-bottom:12px;">Government IDs & Bank Details</h4>
+        <div class="form-grid">
+          <div class="form-group"><label>SSS Number</label><input id="emp-sss" placeholder="XX-XXXXXXX-X" /></div>
+          <div class="form-group"><label>PhilHealth Number</label><input id="emp-philhealth" placeholder="XXXX-XXXX-XXXX" /></div>
+          <div class="form-group"><label>Pag-IBIG Number</label><input id="emp-pagibig" placeholder="XXXX-XXXX-XXXX" /></div>
+          <div class="form-group"><label>TIN</label><input id="emp-tin" placeholder="XXX-XXX-XXX" /></div>
+          <div class="form-group"><label>Bank Name</label><input id="emp-bank" placeholder="e.g. BDO" /></div>
+          <div class="form-group"><label>Bank Account Number</label><input id="emp-bank-account" placeholder="Account number" /></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Documents -->
+    <div id="form-documents" class="form-section" style="display:none;">
+      <div style="display:flex;flex-direction:column;gap:20px;">
+        <!-- Helper Text -->
+        <div style="background:#e7f3ff;border-left:4px solid #2196F3;padding:12px;border-radius:4px;font-size:13px;color:#1976d2;">
+          📎 Upload a file, or choose a file you've already uploaded.
+        </div>
+
+        <!-- Selected Files Preview (Chips) -->
+        <div id="selected-files-preview" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;align-items:center;">
+          <!-- Files will be added here as chips -->
+        </div>
+
+        <!-- Upload Section -->
+        <div>
+          <h4 style="margin-bottom:12px;font-weight:600;">Upload Documents</h4>
+          <div style="display:flex;flex-direction:column;gap:16px;">
+            <!-- Resume -->
+            <div class="document-upload-box">
+              <label style="font-weight:600;margin-bottom:8px;display:block;">Resume / CV</label>
+              <input type="file" id="doc-resume" accept=".pdf,.doc,.docx" style="display:none;" />
+              <div class="dropzone" onclick="document.getElementById('doc-resume').click()" style="cursor:pointer;">
+                <div id="resume-status">⬆ Upload Resume / CV</div>
+              </div>
+            </div>
+
+            <!-- Government ID -->
+            <div class="document-upload-box">
+              <label style="font-weight:600;margin-bottom:8px;display:block;">Government ID</label>
+              <input type="file" id="doc-govid" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" />
+              <div class="dropzone" onclick="document.getElementById('doc-govid').click()" style="cursor:pointer;">
+                <div id="govid-status">⬆ Upload Government ID</div>
+              </div>
+            </div>
+
+            <!-- NBI Clearance -->
+            <div class="document-upload-box">
+              <label style="font-weight:600;margin-bottom:8px;display:block;">NBI Clearance</label>
+              <input type="file" id="doc-nbi" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" />
+              <div class="dropzone" onclick="document.getElementById('doc-nbi').click()" style="cursor:pointer;">
+                <div id="nbi-status">⬆ Upload NBI Clearance</div>
+              </div>
+            </div>
+
+            <!-- Other Documents -->
+            <div class="document-upload-box">
+              <label style="font-weight:600;margin-bottom:8px;display:block;">Other Documents</label>
+              <input type="file" id="doc-other" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="display:none;" />
+              <div class="dropzone" onclick="document.getElementById('doc-other').click()" style="cursor:pointer;">
+                <div id="other-status">⬆ Upload Other Documents</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Uploaded Documents List -->
+        <div>
+          <h4 style="margin-bottom:12px;font-weight:600;">Uploaded Documents (After Saving)</h4>
+          <div id="documents-list" style="display:flex;flex-direction:column;gap:8px;border:1px solid #dee2e6;border-radius:6px;padding:12px;min-height:60px;background:#f8f9fa;">
+            <div style="text-align:center;color:var(--muted);font-size:13px;padding:16px;">No documents uploaded yet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:24px;">
+      <button class="btn btn-outline" onclick="clearEmployeeForm()">Clear</button>
+      <button class="btn btn-green" onclick="saveEmployee()">Save</button>
+    </div>
+  </div>
+</div>

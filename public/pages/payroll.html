@@ -1,0 +1,42 @@
+<!-- ============================================================
+     pages/payroll.html — Payroll page content
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Payroll Records</div>
+    <div class="section-sub">Manage employee compensation and payroll processing</div>
+  </div>
+  <div class="page-header-right">
+    <button class="btn btn-outline">⬆ Export</button>
+    <button class="btn btn-primary" onclick="navigate('salary-calculation', null)">Process Payroll</button>
+  </div>
+</div>
+
+<div class="stat-grid" style="margin-bottom:24px;">
+  <div class="stat-card">
+    <div class="stat-label">Total Payroll</div>
+    <div class="stat-val">₱0</div>
+    <div class="stat-sub">N/A</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Employees Paid</div>
+    <div class="stat-val">0</div>
+    <div class="stat-sub">0 employees processed</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Average Salary</div>
+    <div class="stat-val">₱0</div>
+    <div class="stat-sub">Per Employee</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Deductions</div>
+    <div class="stat-val">₱0</div>
+    <div class="stat-sub">SSS, PhilHealth, etc.</div>
+  </div>
+</div>
+
+<div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
+  <div id="payroll-grid">
+    <!-- Rendered by payroll.js -->
+  </div>
+</div>

@@ -1,0 +1,112 @@
+<!-- ============================================================
+     pages/blockchain.html — Blockchain Records page content
+     ============================================================ -->
+<div class="section-title">Blockchain Records</div>
+<div class="section-sub">Immutable audit trail of HR and payroll transactions on-chain</div>
+
+<div class="block-stats">
+  <div class="stat-card">
+    <div class="stat-label">Total Records</div>
+    <div class="stat-val">7</div>
+    <div class="stat-sub">On-chain contracts</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">✓ Confirmed</div>
+    <div class="stat-val" style="color:var(--green)">6</div>
+    <div class="stat-sub">Finalized</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">⊖ Latest Block</div>
+    <div class="stat-val" style="font-size:18px">#18,294,325</div>
+    <div class="stat-sub">Most recent</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Value</div>
+    <div class="stat-val">145,000</div>
+    <div class="stat-sub">Settled Transactions</div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Block Chain</div>
+  <div class="block-chain-row">
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0x4A8f...</div>
+      <div class="bk-meta">Serjo Justine · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0xBf3c...</div>
+      <div class="bk-meta">Salary Comp. · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0x7D1a...</div>
+      <div class="bk-meta">Leave Req. · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item pending">
+      <div class="bk-label" style="color:var(--yellow)">PENDING</div>
+      <div class="bk-hash">0x2E9b...</div>
+      <div class="bk-meta">Emp Onboard · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0xC5f8...</div>
+      <div class="bk-meta">Payroll Run · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0xA3d2...</div>
+      <div class="bk-meta">OT Approval · GEN</div>
+    </div>
+    <div class="block-arrow">→</div>
+    <div class="block-item confirmed">
+      <div class="bk-label">VERIFIED</div>
+      <div class="bk-hash">0x8B6e...</div>
+      <div class="bk-meta">Deductions · GEN</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div style="font-size:14px;font-weight:700;">Transaction Logs</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <input id="tx-search" class="search-input" style="width:180px;" placeholder="🔍 Search Transactions" />
+      <select id="tx-type" class="filter-select">
+        <option value="">All Types</option>
+        <option>Payroll Disbursement</option>
+        <option>Salary Computation</option>
+        <option>Employee Onboarding</option>
+      </select>
+      <select id="tx-status" class="filter-select">
+        <option value="">All Status</option>
+        <option>Confirmed</option>
+        <option>Pending</option>
+      </select>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Block</th>
+        <th>Transaction Hash</th>
+        <th>Type</th>
+        <th>Employee</th>
+        <th>Amount</th>
+        <th>Timestamp</th>
+        <th>Status</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody id="tx-tbody">
+      <!-- Rendered by blockchain.js -->
+    </tbody>
+  </table>
+</div>

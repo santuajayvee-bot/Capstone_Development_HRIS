@@ -1,0 +1,96 @@
+<!-- ============================================================
+     pages/requests.html — Request Module
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Request Module</div>
+    <div class="section-sub">Submit and manage your requests</div>
+  </div>
+</div>
+
+<!-- Create Request Form -->
+<div class="card" style="max-width:640px; margin-bottom:28px;">
+  <div style="font-size:15px;font-weight:700;margin-bottom:16px;">Create New Request</div>
+
+  <div class="req-type-grid">
+    <div class="req-type selected" onclick="selectReq(this)" data-type="Leave Request">
+      <div class="req-type-title">Leave Request</div>
+      <div class="req-type-sub">Request a time off</div>
+    </div>
+    <div class="req-type" onclick="selectReq(this)" data-type="COE">
+      <div class="req-type-title">COE</div>
+      <div class="req-type-sub">Certificate of Employment</div>
+    </div>
+    <div class="req-type" onclick="selectReq(this)" data-type="COS">
+      <div class="req-type-title">COS</div>
+      <div class="req-type-sub">Certificate of Service</div>
+    </div>
+    <div class="req-type" onclick="selectReq(this)" data-type="Request Exit">
+      <div class="req-type-title">Request Exit</div>
+      <div class="req-type-sub">Request Exit Clearance</div>
+    </div>
+  </div>
+
+  <!-- Leave-only fields (dates + leave type) — hidden for COE/COS/Exit -->
+  <div id="req-leave-fields" class="form-grid">
+    <div class="form-group">
+      <label>Leave Type</label>
+      <select id="req-leave-type">
+        <option value="Casual">Casual</option>
+        <option value="Sick">Sick</option>
+        <option value="Vacation">Vacation</option>
+        <option value="Personal">Personal</option>
+        <option value="Emergency">Emergency</option>
+      </select>
+    </div>
+    <div class="form-group" style="visibility:hidden;"></div>
+    <div class="form-group">
+      <label>Start Date</label>
+      <input type="date" id="req-start" />
+    </div>
+    <div class="form-group">
+      <label>End Date</label>
+      <input type="date" id="req-end" />
+    </div>
+  </div>
+
+  <div class="form-grid">
+    <div class="form-group full">
+      <label>Reason</label>
+      <textarea id="req-reason" rows="3" placeholder="Enter reason..."></textarea>
+    </div>
+    <div class="form-group full">
+      <label>Attachments (Optional)</label>
+      <input type="file" id="req-attachment" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="padding:8px; border:1px solid var(--border); border-radius:4px; width:100%; font-size:14px; background:var(--bg-alt);" />
+      <div style="font-size:12px; color:var(--muted); margin-top:4px;">Max 5MB (PDF, DOC, DOCX, JPG, PNG)</div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end;gap:10px;">
+    <button class="btn btn-green" onclick="saveRequest()">Save Request</button>
+  </div>
+</div>
+
+<!-- Submitted Requests Table -->
+<div>
+  <div style="font-size:15px;font-weight:700;margin-bottom:14px;">Submitted Requests</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Employee</th>
+          <th>Type</th>
+          <th>Details</th>
+          <th>Reason</th>
+          <th>Submitted</th>
+          <th>Status</th>
+          <th id="req-action-col">Action</th>
+        </tr>
+      </thead>
+      <tbody id="req-all-tbody">
+        <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px;">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div id="req-count" style="font-size:12px;color:var(--muted);margin-top:8px;"></div>
+</div>

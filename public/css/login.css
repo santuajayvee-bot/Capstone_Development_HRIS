@@ -1,0 +1,63 @@
+/* ============================================================
+   LOGIN.CSS
+   ============================================================ */
+
+#login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 60% 50%, #1a2060 0%, #0f1117 70%);
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.login-card {
+  background: rgba(30,32,48,0.95);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 48px 44px;
+  width: 380px;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+  animation: fadeUp 0.5s ease;
+}
+
+.login-logo { text-align: center; margin-bottom: 28px; }
+.login-logo .logo-icon { width: 64px; height: 64px; margin: 0 auto 8px; font-size: 22px; }
+.login-brand {
+  font-family: 'Syne', sans-serif;
+  font-size: 18px; font-weight: 700;
+  letter-spacing: 4px; color: var(--accent);
+}
+
+.login-welcome {
+  font-family: 'Syne', sans-serif;
+  font-size: 24px; font-weight: 700;
+  text-align: center; margin-bottom: 28px;
+}
+
+.login-field { margin-bottom: 16px; }
+.login-field input {
+  width: 100%; padding: 13px 16px;
+  background: var(--bg); border: 1.5px solid var(--border);
+  border-radius: 10px; color: var(--text);
+  font-family: 'DM Sans', sans-serif; font-size: 14px;
+  outline: none; transition: .2s;
+}
+.login-field input:focus { border-color: var(--accent); background: #161822; }
+.login-field input::placeholder { color: var(--muted); }
+
+.btn-login {
+  width: 100%; padding: 13px; margin-top: 8px;
+  background: linear-gradient(135deg, #4f7cff, #22d3a5);
+  border: none; border-radius: 10px; color: #fff;
+  font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700;
+  cursor: pointer; letter-spacing: 1px; transition: .2s;
+}
+.btn-login:hover { opacity: .9; transform: translateY(-1px); }
+
+.login-err {
+  color: var(--red); font-size: 12px;
+  text-align: center; margin-top: 8px; display: none;
+}

@@ -1,0 +1,25 @@
+/* ============================================================
+   RECRUITMENT.CSS
+   ============================================================ */
+
+.pipeline {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.pipe-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  flex: 1;
+}
+.pipe-num   { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 800; }
+.pipe-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.pipe-card.applied   { border-color: #4f7cff; }
+.pipe-card.screening { border-color: #22d3a5; }
+.pipe-card.interview { border-color: #f5a623; }
+.pipe-card.offer     { border-color: #7c5cfc; }
+.pipe-card.hired     { border-color: #22d3a5; }
+.pipe-card.rejected  { border-color: #e05c7a; }
