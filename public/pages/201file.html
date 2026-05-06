@@ -39,16 +39,36 @@
     </div>
 
     <div id="sensitive-data-section" style="margin-top:20px;">
-      <h4>Sensitive Data</h4>
-      <form id="sensitive-data-form" onsubmit="return updateSensitiveData()" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <label>SSN / TIN<input id="sd-ssn" type="text" /></label>
-        <label>Tax ID<input id="sd-taxid" type="text" /></label>
-        <label>Bank Account<input id="sd-bank-account" type="text" /></label>
-        <label>Bank Routing<input id="sd-bank-routing" type="text" /></label>
-        <label>Emergency Contact Phone<input id="sd-emergency" type="text" /></label>
-        <label style="grid-column:1 / -1">Other Info<textarea id="sd-other" rows="3"></textarea></label>
-        <div id="sensitive-data-result" style="height:20px;margin-bottom:6px;font-size:13px;color:var(--green)"></div>
-        <button class="btn btn-primary" type="submit" style="grid-column:1 / -1;width:180px;">Save Sensitive Data</button>
+      <h4 style="margin-bottom:16px;">🔒 Sensitive Data</h4>
+      <form id="sensitive-data-form" onsubmit="return updateSensitiveData()" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:rgba(255,255,255,0.02);padding:16px;border-radius:8px;border:1px solid var(--border);">
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);">
+          <span>SSN / TIN</span>
+          <input id="sd-ssn" type="text" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);">
+          <span>Tax ID</span>
+          <input id="sd-taxid" type="text" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);">
+          <span>Bank Account Number</span>
+          <input id="sd-bank-account" type="text" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);">
+          <span>Bank Routing Number</span>
+          <input id="sd-bank-routing" type="text" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);grid-column:1 / -1;">
+          <span>Emergency Contact Phone</span>
+          <input id="sd-emergency" type="text" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);grid-column:1 / -1;">
+          <span>Additional Information</span>
+          <textarea id="sd-other" rows="3" style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);font-size:13px;font-family:inherit;resize:vertical;"></textarea>
+        </label>
+        <div style="grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <div id="sensitive-data-result" style="height:20px;font-size:13px;color:var(--green);font-weight:500;"></div>
+          <button class="btn btn-primary" type="submit" style="padding:8px 18px;font-size:13px;font-weight:600;">💾 Save Sensitive Data</button>
+        </div>
       </form>
     </div>
 
