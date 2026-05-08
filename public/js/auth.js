@@ -13,8 +13,7 @@ const ROLE_PERMISSIONS = {
     'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
   ],
   system_admin: [
-    'dashboard', 'employees', 'leave', 'requests',
-    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
+    'dashboard', 'system-admin', 'blockchain',
   ],
   payroll_officer: [
     'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
@@ -55,15 +54,8 @@ const NAV_CONFIG = {
   ],
   system_admin: [
     { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'employees', icon: '👥', label: 'Employees' },
-    { page: 'leave', icon: '📅', label: 'Leave Management' },
-    { page: 'requests', icon: '📋', label: 'Request' },
-    { page: 'attendance', icon: '⏰', label: 'Attendance' },
-    { page: '201file', icon: '📄', label: '201-File' },
-    { page: 'payroll', icon: '💰', label: 'Payroll' },
-    { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
-    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
-    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
+    { page: 'system-admin', icon: '🔐', label: 'System Admin' },
+    { page: 'blockchain', icon: '🔗', label: 'Audit Log' },
   ],
   payroll_officer: [
     { page: 'dashboard', icon: '⊞', label: 'Dashboard' },

@@ -1,0 +1,579 @@
+/* ============================================================
+   server/admin-rbac.js — Account Registration & RBAC Management
+   ============================================================
+   Zero Trust Security Model — Level 4 (System Admin) Only
+   
+   Features:
+   1. Strict Level 4 Authorization Middleware
+   2. Account Registration / Role Assignment (Use Case 17)
+   3. Immutable Audit Logging (ISO/IEC 27001 Non-Repudiation)
+   4. Role CRUD for System Administrator
+   5. AES-256 PII encryption on sensitive fields
+   ============================================================ */
+
+const express  = require('express');
+const argon2   = require('argon2');
+const router   = express.Router();
+const pool     = require('../config/db');
+const { requireAuth }    = require('./middleware');
+const { encryptPII, decryptPII } = require('./crypto');
+
+// ── Argon2 Configuration (OWASP recommended) ────────────────
+const ARGON2_OPTIONS = {
+  type:        argon2.argon2id,   // Hybrid: side-channel + GPU resistant
+  memoryCost:  65536,             // 64 MB
+  timeCost:    3,                 // 3 iterations
+  parallelism: 4,                 // 4 threads
+};
+
+// ── PII fields that require AES-256 encryption ──────────────
+const PII_FIELDS = [
+  'sss_number', 'philhealth_number', 'pagibig_number',
+  'tin', 'bank_account', 'bank_name',
+];
+
+/* ================================================================
+   MIDDLEWARE: requireLevel4 — Strict System Administrator Guard
+   ================================================================
+   Extracts role from the active JWT (set by requireAuth).
+   If the role is NOT system_admin (Level 4), the request is
+   immediately rejected with 403 Forbidden.
+   ================================================================ */
+function requireLevel4(req, res, next) {
+  const userRole = req.user?.role;
+
+  // Accept both 'system_admin' and legacy 'admin' mapped to Level 4
+  const LEVEL_4_ROLES = ['system_admin', 'admin'];
+
+  if (!userRole || !LEVEL_4_ROLES.includes(userRole)) {
+    // Log the unauthorized attempt
+    logAuditEntry(req, {
+      action: `UNAUTHORIZED_ACCESS_ATTEMPT: Role '${userRole}' tried to access Level 4 endpoint ${req.method} ${req.originalUrl}`,
+      module: 'RBAC_SECURITY',
+    }).catch(() => {});
+
+    return res.status(403).json({
+      error: 'Access denied.',
+      message: 'Only System Administrator (Level 4) can access this resource.',
+      required_level: 'Level 4',
+      your_role: userRole || 'unknown',
+    });
+  }
+
+  next();
+}
+
+/* ================================================================
+   HELPER: logAuditEntry — Immutable Audit Trail (Non-Repudiation)
+   ================================================================
+   Inserts into system_audit_log with parameterized queries.
+   This function is called within every mutation to guarantee
+   an unalterable record exists for ISO/IEC 27001 compliance.
+   ================================================================ */
+async function logAuditEntry(req, { action, module = 'RBAC', targetEmployeeId = null, oldValue = null, newValue = null }) {
+  const userId    = req.user?.id || 0;
+  const ipAddress = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+
+  await pool.execute(
+    `INSERT INTO system_audit_log 
+       (user_id, employee_id, target_employee_id, action_performed, module, old_value, new_value, ip_address, user_agent, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [userId, req.user?.employeeId || null, targetEmployeeId, action, module, oldValue, newValue, ipAddress, userAgent]
+  );
+}
+
+/* ================================================================
+   HELPER: extractClientIP — Get real client IP behind proxies
+   ================================================================ */
+function extractClientIP(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+    || req.socket?.remoteAddress
+    || 'unknown';
+}
+
+/* ================================================================
+   HELPER: sanitizeInput — Basic input sanitation
+   ================================================================ */
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return str;
+  return str.trim().replace(/[<>]/g, '');
+}
+
+// ── Apply auth + Level 4 guard to ALL routes in this router ──
+router.use(requireAuth);
+router.use(requireLevel4);
+
+/* ================================================================
+   POST /api/admin/register-role
+   ================================================================
+   Account Registration & Role Assignment (Use Case 17)
+   
+   Creates or updates a user account and assigns a role.
+   - Hashes password with Argon2id
+   - Encrypts PII with AES-256-GCM
+   - Logs immutable audit entry
+   
+   Body: {
+     employee_id:      (required) target employee's numeric ID
+     username:         (required) login username
+     password:         (required) default password
+     role_id:          (required) role to assign
+     pii: {            (optional) sensitive fields to encrypt
+       sss_number, tin, bank_account, ...
+     }
+   }
+   ================================================================ */
+router.post('/register-role', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { employee_id, username, password, role_id, pii } = req.body;
+
+    // ── Input Validation ─────────────────────────────────────
+    if (!employee_id || !username || !password || !role_id) {
+      return res.status(400).json({
+        error: 'Missing required fields.',
+        required: ['employee_id', 'username', 'password', 'role_id'],
+      });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({
+        error: 'Password must be at least 8 characters long.',
+      });
+    }
+
+    const cleanUsername = sanitizeInput(username).toLowerCase();
+    if (!/^[a-z0-9._-]+$/.test(cleanUsername)) {
+      return res.status(400).json({
+        error: 'Username may only contain lowercase letters, numbers, dots, hyphens, and underscores.',
+      });
+    }
+
+    // ── Verify employee exists ───────────────────────────────
+    const [empRows] = await conn.execute(
+      'SELECT id, first_name, last_name, employee_code FROM employees WHERE id = ?',
+      [employee_id]
+    );
+    if (empRows.length === 0) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    const employee = empRows[0];
+
+    // ── Verify role exists ───────────────────────────────────
+    const [roleRows] = await conn.execute(
+      'SELECT id, name, label, access_level FROM roles WHERE id = ?',
+      [role_id]
+    );
+    if (roleRows.length === 0) {
+      return res.status(404).json({ error: 'Role not found.' });
+    }
+    const assignedRole = roleRows[0];
+
+    // ── Hash password with Argon2id ──────────────────────────
+    const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
+
+    // ── Encrypt PII with AES-256-GCM (if provided) ──────────
+    let encryptedPiiPayload = null;
+    if (pii && typeof pii === 'object' && Object.keys(pii).length > 0) {
+      const piiToEncrypt = {};
+      for (const field of PII_FIELDS) {
+        if (pii[field]) {
+          piiToEncrypt[field] = sanitizeInput(pii[field]);
+        }
+      }
+      if (Object.keys(piiToEncrypt).length > 0) {
+        encryptedPiiPayload = encryptPII(piiToEncrypt);
+      }
+    }
+
+    // ── Begin Transaction ────────────────────────────────────
+    await conn.beginTransaction();
+
+    // Check if user account already exists for this employee
+    const [existingUser] = await conn.execute(
+      'SELECT id, role_id FROM users WHERE employee_id = ?',
+      [employee_id]
+    );
+
+    let userId;
+    let actionPerformed;
+    let oldValue = null;
+
+    if (existingUser.length > 0) {
+      // ── UPDATE existing account ────────────────────────────
+      const oldRoleId = existingUser[0].role_id;
+      userId = existingUser[0].id;
+
+      // Fetch old role name for audit
+      const [oldRoleRows] = await conn.execute('SELECT name, label FROM roles WHERE id = ?', [oldRoleId]);
+      oldValue = JSON.stringify({
+        role_id: oldRoleId,
+        role_name: oldRoleRows[0]?.name || 'unknown',
+        role_label: oldRoleRows[0]?.label || 'unknown',
+      });
+
+      await conn.execute(
+        `UPDATE users SET username = ?, password_hash = ?, role_id = ? WHERE id = ?`,
+        [cleanUsername, passwordHash, role_id, userId]
+      );
+
+      actionPerformed = `ROLE_UPDATED: Employee ${employee.employee_code} (${employee.first_name} ${employee.last_name}) role changed from ${oldRoleRows[0]?.label || oldRoleId} to ${assignedRole.label}`;
+
+    } else {
+      // ── INSERT new account ─────────────────────────────────
+      const [insertResult] = await conn.execute(
+        `INSERT INTO users (username, password_hash, role_id, employee_id, is_active) VALUES (?, ?, ?, ?, 1)`,
+        [cleanUsername, passwordHash, role_id, employee_id]
+      );
+      userId = insertResult.insertId;
+
+      actionPerformed = `ACCOUNT_CREATED: New account '${cleanUsername}' for Employee ${employee.employee_code} (${employee.first_name} ${employee.last_name}) with role ${assignedRole.label} (${assignedRole.access_level})`;
+    }
+
+    // ── Save encrypted PII to employees table ────────────────
+    if (encryptedPiiPayload) {
+      await conn.execute(
+        'UPDATE employees SET encrypted_pii = ? WHERE id = ?',
+        [encryptedPiiPayload, employee_id]
+      );
+    }
+
+    // ── Immutable Audit Log Entry (Non-Repudiation) ──────────
+    const newValue = JSON.stringify({
+      user_id: userId,
+      username: cleanUsername,
+      role_id: role_id,
+      role_name: assignedRole.name,
+      role_label: assignedRole.label,
+      access_level: assignedRole.access_level,
+      pii_encrypted: !!encryptedPiiPayload,
+    });
+
+    const adminIP = extractClientIP(req);
+    const adminUA = req.headers['user-agent'] || 'unknown';
+
+    await conn.execute(
+      `INSERT INTO system_audit_log 
+         (user_id, employee_id, target_employee_id, action_performed, module, old_value, new_value, ip_address, user_agent, timestamp)
+       VALUES (?, ?, ?, ?, 'RBAC', ?, ?, ?, ?, NOW())`,
+      [req.user.id, req.user.employeeId || null, employee_id, actionPerformed, oldValue, newValue, adminIP, adminUA]
+    );
+
+    // ── Commit Transaction ───────────────────────────────────
+    await conn.commit();
+
+    console.log(`✅ [RBAC] ${actionPerformed} — by Admin ID: ${req.user.id} from IP: ${adminIP}`);
+
+    return res.status(existingUser.length > 0 ? 200 : 201).json({
+      message: existingUser.length > 0 ? 'Account updated and role reassigned.' : 'Account registered with role assigned.',
+      data: {
+        user_id: userId,
+        username: cleanUsername,
+        employee_id: employee_id,
+        employee_name: `${employee.first_name} ${employee.last_name}`,
+        role: {
+          id: assignedRole.id,
+          name: assignedRole.name,
+          label: assignedRole.label,
+          access_level: assignedRole.access_level,
+        },
+        pii_encrypted: !!encryptedPiiPayload,
+      },
+    });
+
+  } catch (err) {
+    await conn.rollback();
+
+    // Handle duplicate username
+    if (err.code === 'ER_DUP_ENTRY' && err.message.includes('username')) {
+      return res.status(409).json({ error: 'Username already exists. Choose a different username.' });
+    }
+
+    console.error('❌ [RBAC] register-role error:', err.message);
+    return res.status(500).json({ error: 'Failed to register account.', details: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
+/* ================================================================
+   PUT /api/admin/update-role/:userId
+   ================================================================
+   Update an existing user's role assignment only.
+   Body: { role_id }
+   ================================================================ */
+router.put('/update-role/:userId', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const targetUserId = parseInt(req.params.userId, 10);
+    const { role_id } = req.body;
+
+    if (!role_id) {
+      return res.status(400).json({ error: 'role_id is required.' });
+    }
+
+    // Prevent self-demotion
+    if (targetUserId === req.user.id) {
+      return res.status(403).json({ error: 'You cannot change your own role.' });
+    }
+
+    // Verify user exists
+    const [userRows] = await conn.execute(
+      `SELECT u.id, u.username, u.role_id, u.employee_id, r.name AS old_role_name, r.label AS old_role_label
+       FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
+      [targetUserId]
+    );
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const targetUser = userRows[0];
+
+    // Verify new role exists
+    const [roleRows] = await conn.execute(
+      'SELECT id, name, label, access_level FROM roles WHERE id = ?',
+      [role_id]
+    );
+    if (roleRows.length === 0) {
+      return res.status(404).json({ error: 'Role not found.' });
+    }
+    const newRole = roleRows[0];
+
+    await conn.beginTransaction();
+
+    await conn.execute('UPDATE users SET role_id = ? WHERE id = ?', [role_id, targetUserId]);
+
+    // Audit log
+    const oldValue = JSON.stringify({ role_id: targetUser.role_id, role_name: targetUser.old_role_name });
+    const newValue = JSON.stringify({ role_id: newRole.id, role_name: newRole.name, access_level: newRole.access_level });
+    const action = `ROLE_REASSIGNED: User '${targetUser.username}' (ID: ${targetUserId}) changed from ${targetUser.old_role_label} to ${newRole.label}`;
+
+    await conn.execute(
+      `INSERT INTO system_audit_log 
+         (user_id, employee_id, target_employee_id, action_performed, module, old_value, new_value, ip_address, user_agent, timestamp)
+       VALUES (?, ?, ?, ?, 'RBAC', ?, ?, ?, ?, NOW())`,
+      [req.user.id, req.user.employeeId || null, targetUser.employee_id, action, oldValue, newValue, extractClientIP(req), req.headers['user-agent'] || 'unknown']
+    );
+
+    await conn.commit();
+
+    console.log(`✅ [RBAC] ${action} — by Admin ID: ${req.user.id}`);
+
+    return res.json({
+      message: 'Role updated successfully.',
+      data: { user_id: targetUserId, username: targetUser.username, new_role: newRole },
+    });
+
+  } catch (err) {
+    await conn.rollback();
+    console.error('❌ [RBAC] update-role error:', err.message);
+    return res.status(500).json({ error: 'Failed to update role.' });
+  } finally {
+    conn.release();
+  }
+});
+
+/* ================================================================
+   PUT /api/admin/users/:userId/credentials
+   ================================================================
+   Update a user's username and password.
+   Body: { username, password }
+   ================================================================ */
+router.put('/users/:userId/credentials', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const targetUserId = parseInt(req.params.userId, 10);
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Both username and password are required.' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    }
+
+    const cleanUsername = sanitizeInput(username).toLowerCase();
+    if (!/^[a-z0-9._-]+$/.test(cleanUsername)) {
+      return res.status(400).json({
+        error: 'Username may only contain lowercase letters, numbers, dots, hyphens, and underscores.',
+      });
+    }
+
+    // Verify user exists
+    const [userRows] = await conn.execute(
+      'SELECT id, username, employee_id FROM users WHERE id = ?',
+      [targetUserId]
+    );
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const targetUser = userRows[0];
+
+    const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
+
+    await conn.beginTransaction();
+
+    await conn.execute(
+      'UPDATE users SET username = ?, password_hash = ? WHERE id = ?',
+      [cleanUsername, passwordHash, targetUserId]
+    );
+
+    // Audit log
+    const oldValue = JSON.stringify({ username: targetUser.username });
+    const newValue = JSON.stringify({ username: cleanUsername, password_changed: true });
+    const action = `CREDENTIALS_UPDATED: Credentials updated for user ID ${targetUserId} (${targetUser.username} -> ${cleanUsername})`;
+
+    await conn.execute(
+      `INSERT INTO system_audit_log 
+         (user_id, employee_id, target_employee_id, action_performed, module, old_value, new_value, ip_address, user_agent, timestamp)
+       VALUES (?, ?, ?, ?, 'RBAC', ?, ?, ?, ?, NOW())`,
+      [req.user.id, req.user.employeeId || null, targetUser.employee_id, action, oldValue, newValue, extractClientIP(req), req.headers['user-agent'] || 'unknown']
+    );
+
+    await conn.commit();
+    console.log(`✅ [RBAC] ${action} — by Admin ID: ${req.user.id}`);
+
+    return res.json({ message: 'Credentials updated successfully.' });
+
+  } catch (err) {
+    await conn.rollback();
+    
+    if (err.code === 'ER_DUP_ENTRY' && err.message.includes('username')) {
+      return res.status(409).json({ error: 'Username already exists. Choose a different username.' });
+    }
+
+    console.error('❌ [RBAC] update credentials error:', err.message);
+    return res.status(500).json({ error: 'Failed to update credentials.' });
+  } finally {
+    conn.release();
+  }
+});
+
+/* ================================================================
+   GET /api/admin/roles — List all roles with access levels
+   ================================================================ */
+router.get('/roles', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id, name, label, access_level, created_at FROM roles ORDER BY id'
+    );
+    return res.json(rows);
+  } catch (err) {
+    console.error('❌ [RBAC] list roles error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch roles.' });
+  }
+});
+
+/* ================================================================
+   GET /api/admin/users — List all user accounts with roles
+   ================================================================ */
+router.get('/users', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT u.id, u.username, u.role_id, u.employee_id, u.is_active, u.last_login, u.created_at,
+              r.name AS role_name, r.label AS role_label, r.access_level,
+              e.first_name, e.last_name, e.employee_code
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       LEFT JOIN employees e ON e.id = u.employee_id
+       ORDER BY u.id`
+    );
+    return res.json(rows);
+  } catch (err) {
+    console.error('❌ [RBAC] list users error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch users.' });
+  }
+});
+
+/* ================================================================
+   PATCH /api/admin/users/:userId/deactivate — Deactivate account
+   ================================================================ */
+router.patch('/users/:userId/deactivate', async (req, res) => {
+  try {
+    const targetUserId = parseInt(req.params.userId, 10);
+
+    if (targetUserId === req.user.id) {
+      return res.status(403).json({ error: 'You cannot deactivate your own account.' });
+    }
+
+    const [result] = await pool.execute(
+      'UPDATE users SET is_active = 0 WHERE id = ?',
+      [targetUserId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    await logAuditEntry(req, {
+      action: `ACCOUNT_DEACTIVATED: User ID ${targetUserId} deactivated by Admin`,
+      targetEmployeeId: null,
+    });
+
+    return res.json({ message: 'Account deactivated.' });
+  } catch (err) {
+    console.error('❌ [RBAC] deactivate error:', err.message);
+    return res.status(500).json({ error: 'Failed to deactivate account.' });
+  }
+});
+
+/* ================================================================
+   PATCH /api/admin/users/:userId/activate — Reactivate account
+   ================================================================ */
+router.patch('/users/:userId/activate', async (req, res) => {
+  try {
+    const targetUserId = parseInt(req.params.userId, 10);
+
+    const [result] = await pool.execute(
+      'UPDATE users SET is_active = 1 WHERE id = ?',
+      [targetUserId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    await logAuditEntry(req, {
+      action: `ACCOUNT_ACTIVATED: User ID ${targetUserId} reactivated by Admin`,
+      targetEmployeeId: null,
+    });
+
+    return res.json({ message: 'Account activated.' });
+  } catch (err) {
+    console.error('❌ [RBAC] activate error:', err.message);
+    return res.status(500).json({ error: 'Failed to activate account.' });
+  }
+});
+
+/* ================================================================
+   GET /api/admin/audit-log — View RBAC audit trail
+   ================================================================ */
+router.get('/audit-log', async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    const module = req.query.module || null;
+
+    let query = `SELECT sal.*, u.username AS admin_username
+                 FROM system_audit_log sal
+                 LEFT JOIN users u ON u.id = sal.user_id`;
+    const params = [];
+
+    if (module) {
+      query += ' WHERE sal.module = ?';
+      params.push(module);
+    }
+
+    // Use string interpolation for LIMIT/OFFSET (safe — values are parseInt'd above)
+    query += ` ORDER BY sal.timestamp DESC LIMIT ${limit} OFFSET ${offset}`;
+
+    const [rows] = await pool.execute(query, params);
+    return res.json(rows);
+  } catch (err) {
+    console.error('❌ [RBAC] audit-log error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch audit log.' });
+  }
+});
+
+module.exports = router;

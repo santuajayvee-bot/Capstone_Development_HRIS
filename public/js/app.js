@@ -14,6 +14,7 @@ const PAGE_TITLES = {
   'salary-calculation': 'Salary Calculation',
   onboarding: 'HR Officer – Recruitment Management',
   blockchain: 'Blockchain',
+  'system-admin': 'System Administration',
 };
 
 function navigate(pageId, navEl) {
@@ -67,6 +68,11 @@ function navigate(pageId, navEl) {
     if (typeof loadSalaryCalculations === 'function') {
       loadSalaryCalculations();
     }
+  }
+
+  // When navigating to system-admin, initialize the module
+  if (pageId === 'system-admin' && typeof initSystemAdmin === 'function') {
+    initSystemAdmin();
   }
 }
 

@@ -1,0 +1,308 @@
+<!-- ============================================================
+     pages/system-admin.html — System Administration Interface
+     Account Registration & RBAC Management (Level 4 Only)
+     ============================================================ -->
+
+<!-- Tab Navigation -->
+<div class="sysadmin-tabs" id="sysadmin-tabs">
+  <button class="sysadmin-tab active" data-tab="accounts" onclick="switchSysAdminTab('accounts', this)">
+    <span class="tab-icon">👤</span> Account Management
+  </button>
+  <button class="sysadmin-tab" data-tab="roles" onclick="switchSysAdminTab('roles', this)">
+    <span class="tab-icon">🛡️</span> Role & Access Control
+  </button>
+  <button class="sysadmin-tab" data-tab="audit" onclick="switchSysAdminTab('audit', this)">
+    <span class="tab-icon">📋</span> Audit Trail
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 1: ACCOUNT MANAGEMENT
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-panel active" id="panel-accounts">
+
+  <!-- Stats Bar -->
+  <div class="sysadmin-stats">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-total-users">—</div>
+      <div class="stat-label">Total Accounts</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-active-users">—</div>
+      <div class="stat-label">Active</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-inactive-users">—</div>
+      <div class="stat-label">Inactive</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-unlinked-employees">—</div>
+      <div class="stat-label">Unlinked Employees</div>
+    </div>
+  </div>
+
+  <!-- Action Bar -->
+  <div class="sysadmin-action-bar">
+    <div class="action-left">
+      <input type="text" id="user-search" placeholder="Search by username or employee name..." class="sysadmin-search" oninput="filterUserTable()" />
+      <select id="user-role-filter" class="sysadmin-select" onchange="filterUserTable()">
+        <option value="">All Roles</option>
+      </select>
+      <select id="user-status-filter" class="sysadmin-select" onchange="filterUserTable()">
+        <option value="">All Status</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+      </select>
+    </div>
+    <button class="btn-sysadmin-primary" onclick="showRegisterModal()">
+      + Register Account
+    </button>
+  </div>
+
+  <!-- User Accounts Table -->
+  <div class="sysadmin-table-wrapper">
+    <table class="sysadmin-table" id="users-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Username</th>
+          <th>Employee</th>
+          <th>Role</th>
+          <th>Access Level</th>
+          <th>Status</th>
+          <th>Last Login</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr><td colspan="8" class="table-empty">Loading accounts...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 2: ROLE & ACCESS CONTROL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-panel" id="panel-roles">
+  <div class="roles-grid" id="roles-grid">
+    <!-- Populated by JS -->
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 3: AUDIT TRAIL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-panel" id="panel-audit">
+  <div class="sysadmin-action-bar">
+    <div class="action-left">
+      <select id="audit-module-filter" class="sysadmin-select" onchange="loadAuditLog()">
+        <option value="">All Modules</option>
+        <option value="RBAC">RBAC</option>
+        <option value="RBAC_SECURITY">Security Events</option>
+      </select>
+    </div>
+    <button class="btn-sysadmin-outline" onclick="loadAuditLog()">
+      ↻ Refresh
+    </button>
+  </div>
+
+  <div class="sysadmin-table-wrapper">
+    <table class="sysadmin-table" id="audit-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Admin</th>
+          <th>Action</th>
+          <th>Module</th>
+          <th>IP Address</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="audit-tbody">
+        <tr><td colspan="6" class="table-empty">Loading audit trail...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MODAL: Register / Update Account
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-modal-overlay" id="register-modal" style="display:none;">
+  <div class="sysadmin-modal">
+    <div class="modal-header">
+      <h3 id="register-modal-title">Register New Account</h3>
+      <button class="modal-close" onclick="closeRegisterModal()">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <!-- Step Indicator -->
+      <div class="modal-steps">
+        <div class="step active" data-step="1"><span>1</span> Select Employee</div>
+        <div class="step" data-step="2"><span>2</span> Account Setup</div>
+        <div class="step" data-step="3"><span>3</span> Sensitive Data</div>
+      </div>
+
+      <!-- Step 1: Select Employee -->
+      <div class="modal-step-content active" id="reg-step-1">
+        <label class="sysadmin-label">Select Employee</label>
+        <select id="reg-employee-id" class="sysadmin-input" onchange="onEmployeeSelect()">
+          <option value="">— Choose an employee —</option>
+        </select>
+        <div id="reg-employee-preview" class="employee-preview" style="display:none;">
+          <div class="preview-row"><span>Name:</span> <strong id="preview-name">—</strong></div>
+          <div class="preview-row"><span>Code:</span> <strong id="preview-code">—</strong></div>
+          <div class="preview-row"><span>Department:</span> <strong id="preview-dept">—</strong></div>
+          <div class="preview-row"><span>Position:</span> <strong id="preview-position">—</strong></div>
+          <div class="preview-row"><span>Existing Account:</span> <strong id="preview-account">None</strong></div>
+        </div>
+      </div>
+
+      <!-- Step 2: Account Setup -->
+      <div class="modal-step-content" id="reg-step-2">
+        <div class="form-row">
+          <div class="form-col">
+            <label class="sysadmin-label">Username</label>
+            <input type="text" id="reg-username" class="sysadmin-input" placeholder="e.g. john.doe" autocomplete="off" />
+            <small class="input-hint">Lowercase letters, numbers, dots, hyphens only</small>
+          </div>
+          <div class="form-col">
+            <label class="sysadmin-label">Assign Role</label>
+            <select id="reg-role-id" class="sysadmin-input">
+              <option value="">— Select Role —</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-col">
+            <label class="sysadmin-label">Default Password</label>
+            <div class="password-field">
+              <input type="password" id="reg-password" class="sysadmin-input" placeholder="Minimum 8 characters" autocomplete="new-password" />
+              <button type="button" class="toggle-password" onclick="togglePasswordVisibility()">👁</button>
+            </div>
+          </div>
+          <div class="form-col">
+            <label class="sysadmin-label">Confirm Password</label>
+            <input type="password" id="reg-password-confirm" class="sysadmin-input" placeholder="Re-enter password" autocomplete="new-password" />
+          </div>
+        </div>
+        <div class="password-strength" id="password-strength"></div>
+      </div>
+
+      <!-- Step 3: Sensitive Data (PII) -->
+      <div class="modal-step-content" id="reg-step-3">
+        <div class="pii-notice">
+          <span class="pii-icon">🔒</span>
+          <div>
+            <strong>AES-256 Encrypted Storage</strong>
+            <p>These fields are encrypted before saving. They cannot be viewed in plain text in the database.</p>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-col">
+            <label class="sysadmin-label">SSS Number</label>
+            <input type="text" id="reg-sss" class="sysadmin-input" placeholder="XX-XXXXXXX-X" />
+          </div>
+          <div class="form-col">
+            <label class="sysadmin-label">PhilHealth Number</label>
+            <input type="text" id="reg-philhealth" class="sysadmin-input" placeholder="XXXX-XXXX-XXXX" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-col">
+            <label class="sysadmin-label">Pag-IBIG Number</label>
+            <input type="text" id="reg-pagibig" class="sysadmin-input" placeholder="XXXX-XXXX-XXXX" />
+          </div>
+          <div class="form-col">
+            <label class="sysadmin-label">TIN</label>
+            <input type="text" id="reg-tin" class="sysadmin-input" placeholder="XXX-XXX-XXX" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-col">
+            <label class="sysadmin-label">Bank Name</label>
+            <input type="text" id="reg-bank-name" class="sysadmin-input" placeholder="e.g. BDO, BPI" />
+          </div>
+          <div class="form-col">
+            <label class="sysadmin-label">Bank Account Number</label>
+            <input type="text" id="reg-bank-account" class="sysadmin-input" placeholder="Account number" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-sysadmin-outline" id="btn-reg-back" onclick="regStepBack()" style="display:none;">← Back</button>
+      <div style="flex:1"></div>
+      <button class="btn-sysadmin-outline" onclick="closeRegisterModal()">Cancel</button>
+      <button class="btn-sysadmin-primary" id="btn-reg-next" onclick="regStepNext()">Next →</button>
+      <button class="btn-sysadmin-primary" id="btn-reg-submit" onclick="submitRegistration()" style="display:none;">
+        🔒 Register Account
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MODAL: Update Role
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-modal-overlay" id="role-modal" style="display:none;">
+  <div class="sysadmin-modal sysadmin-modal-sm">
+    <div class="modal-header">
+      <h3>Update User Role</h3>
+      <button class="modal-close" onclick="closeRoleModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="employee-preview" style="display:block;">
+        <div class="preview-row"><span>User:</span> <strong id="role-modal-username">—</strong></div>
+        <div class="preview-row"><span>Current Role:</span> <strong id="role-modal-current">—</strong></div>
+      </div>
+      <label class="sysadmin-label" style="margin-top:16px;">New Role</label>
+      <select id="role-modal-new-role" class="sysadmin-input"></select>
+      <input type="hidden" id="role-modal-user-id" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sysadmin-outline" onclick="closeRoleModal()">Cancel</button>
+      <button class="btn-sysadmin-primary" onclick="submitRoleUpdate()">Update Role</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MODAL: Edit Credentials
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-modal-overlay" id="credentials-modal" style="display:none;">
+  <div class="sysadmin-modal sysadmin-modal-sm">
+    <div class="modal-header">
+      <h3>Edit Credentials</h3>
+      <button class="modal-close" onclick="closeCredentialsModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="employee-preview" style="display:block;">
+        <div class="preview-row"><span>User:</span> <strong id="cred-modal-username-display">—</strong></div>
+      </div>
+      <label class="sysadmin-label" style="margin-top:16px;">New Username</label>
+      <input type="text" id="cred-modal-username" class="sysadmin-input" placeholder="e.g. john.doe" autocomplete="off" />
+      <small class="input-hint">Lowercase letters, numbers, dots, hyphens only</small>
+      
+      <label class="sysadmin-label" style="margin-top:16px;">New Password</label>
+      <div class="password-field">
+        <input type="password" id="cred-modal-password" class="sysadmin-input" placeholder="Minimum 8 characters" autocomplete="new-password" />
+        <button type="button" class="toggle-password" onclick="toggleCredPasswordVisibility()">👁</button>
+      </div>
+      
+      <label class="sysadmin-label" style="margin-top:16px;">Confirm Password</label>
+      <input type="password" id="cred-modal-password-confirm" class="sysadmin-input" placeholder="Re-enter new password" autocomplete="new-password" />
+
+      <input type="hidden" id="cred-modal-user-id" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sysadmin-outline" onclick="closeCredentialsModal()">Cancel</button>
+      <button class="btn-sysadmin-primary" onclick="submitCredentialsUpdate()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Notification -->
+<div class="sysadmin-toast" id="sysadmin-toast" style="display:none;"></div>

@@ -13,6 +13,7 @@ const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
+const adminRbacRoutes                        = require('./server/admin-rbac');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -69,6 +70,9 @@ app.use('/api/201-files', requireAuth, fileManagementRoutes);
 
 // Attendance Module (QR, Geofence, Device Binding, Audit)
 app.use('/api/attendance', attendanceRoutes);
+
+// Admin RBAC Module — Account Registration & Role Management (Level 4 only)
+app.use('/api/admin', adminRbacRoutes);
 
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {

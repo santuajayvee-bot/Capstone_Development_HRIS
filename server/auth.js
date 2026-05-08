@@ -3,6 +3,7 @@
    ============================================================ */
 
 const bcrypt = require('bcrypt');
+const argon2 = require('argon2');
 const jwt    = require('jsonwebtoken');
 const { findByUsername, updateLastLogin } = require('./users');
 
@@ -34,7 +35,13 @@ async function login(req, res) {
     }
 
     // 3. Verify password
-    const valid = await bcrypt.compare(password, user.password_hash);
+    let valid = false;
+    if (user.password_hash.startsWith('$argon2')) {
+      valid = await argon2.verify(user.password_hash, password);
+    } else {
+      valid = await bcrypt.compare(password, user.password_hash);
+    }
+    
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
