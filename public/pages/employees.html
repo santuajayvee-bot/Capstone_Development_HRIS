@@ -214,7 +214,7 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline" onclick="switchView('manage')">⚙ Manage Employee</button>
-    <button class="btn btn-primary" onclick="switchView('manage')">+ Add Employee</button>
+    <button class="btn btn-primary" onclick="openAddEmployeeModal()">+ Add Employee</button>
   </div>
 </div>
 
@@ -502,10 +502,7 @@
   
   <div class="manage-header">
     <h3>Manage Employees</h3>
-    <div style="display:flex;gap:8px;">
-      <button onclick="openAddEmployeeModal()" style="padding:8px 16px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">+ New Employee</button>
-      <button onclick="switchView('list')">← Back to List</button>
-    </div>
+    <button onclick="switchView('list')">← Back to List</button>
   </div>
 
   <div class="manage-filters">
