@@ -8,7 +8,7 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline">⬆ Export</button>
-    <button class="btn btn-primary" onclick="navigate('salary-calculation', null)">Process Payroll</button>
+    <button class="btn btn-primary" onclick="openRunPayrollModal()">Process Payroll</button>
   </div>
 </div>
 
@@ -38,5 +38,36 @@
 <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
   <div id="payroll-grid">
     <!-- Rendered by payroll.js -->
+  </div>
+</div>
+
+<!-- Salary Calculation Records Section -->
+<div style="margin-top: 40px;">
+  <div class="page-header" style="margin-bottom: 20px;">
+    <div>
+      <div class="section-title">Salary Calculation Records</div>
+      <div class="section-sub">Audit trail of all salary calculations • For record keeping and compliance</div>
+    </div>
+    <div class="page-header-right">
+      <input type="date" id="salary-calc-filter-date" placeholder="Filter by date" style="
+        padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+        border-radius: 8px; color: var(--text); font-size: 13px; margin-right: 8px;
+      " />
+      <select id="salary-calc-filter-status" style="
+        padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+        border-radius: 8px; color: var(--text); font-size: 13px;
+      ">
+        <option value="">All Status</option>
+        <option value="Draft">Draft</option>
+        <option value="Submitted">Submitted</option>
+        <option value="Approved">Approved</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
+    <div id="salary-calculations-grid">
+      <!-- Rendered by payroll.js -->
+    </div>
   </div>
 </div>

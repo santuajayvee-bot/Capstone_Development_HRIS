@@ -243,7 +243,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
 
 // Show appropriate wage structure form based on wage type
 function showWageStructureForm(wageType) {
-  console.log('� showWageStructureForm called with:', wageType);
+  console.log('🔄 showWageStructureForm called with:', wageType);
   
   const perPieceSection = document.getElementById('per-piece-section');
   const perTripSection = document.getElementById('per-trip-section');
@@ -307,6 +307,14 @@ function showWageStructureForm(wageType) {
     }
     
     console.log('✅ Per-Trip form ready with', logisticsRegions.length, 'regions');
+  } else if (wageType === 'Base Salary' || wageType === 'Hourly') {
+    // For Base Salary and Hourly, hide the per-piece and per-trip sections
+    console.log('✅ Showing form for wage type:', wageType);
+    perPieceSection.style.display = 'none';
+    perTripSection.style.display = 'none';
+    
+    // The rate is fixed, so just allowances apply
+    console.log('ℹ️ Salary calculated based on fixed rate and allowances');
   } else {
     console.warn('⚠️ Unknown wage type:', wageType);
     perPieceSection.style.display = 'none';
@@ -321,7 +329,7 @@ function calculateSalaryNow() {
   let qty = 0;
   let actualRate = currentSalaryEmployee.rate;
   
-  // Determine quantity based on wage type
+  // Determine quantity and rate based on wage type
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
     const pieces = parseFloat(document.getElementById('salary-pieces').value) || 0;
     qty = pieces;
@@ -353,6 +361,16 @@ function calculateSalaryNow() {
         console.log(`📊 Per-Trip: ${trips} trips in ${region.name} @ ₱${actualRate.toFixed(2)}/trip`);
       }
     }
+  } else if (currentSalaryEmployee.wageType === 'Base Salary') {
+    // For Base Salary, the rate is the monthly salary
+    qty = 1;
+    console.log(`📊 Base Salary: ₱${actualRate.toFixed(2)} per month`);
+  } else if (currentSalaryEmployee.wageType === 'Hourly') {
+    // For Hourly, ask user for hours worked (default 160 hours per month = 8 hours * 20 work days)
+    const otHours = parseFloat(document.getElementById('salary-ot-hours').value) || 0;
+    // Assuming standard 160 work hours per month, or user can input custom hours
+    qty = 160 + otHours; // Base 160 hours + overtime
+    console.log(`📊 Hourly: ${qty} hours @ ₱${actualRate.toFixed(2)}/hour`);
   }
   
   const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
@@ -410,97 +428,282 @@ function attachSalaryInputListeners() {
 
 
 // Save functions
-function saveSalaryAsDraft() {
+async function saveSalaryAsDraft() {
   if (!currentSalaryEmployee) {
-    alert('Select an employee first');
+    alert('❌ Select an employee first');
     return;
   }
-  alert('✅ Draft saved!');
+  
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log('💾 SAVING SALARY CALCULATION AS DRAFT');
+  console.log('───────────────────────────────────────────────────────────');
+  console.log('Employee:', currentSalaryEmployee.code, '-', currentSalaryEmployee.first);
+  console.log('Wage Type:', currentSalaryEmployee.wageType);
+  
+  // Collect calculation data
+  const draftData = {
+    employee_id: currentSalaryEmployee.id,
+    wage_type: currentSalaryEmployee.wageType,
+    salary_data: collectSalaryData(),
+    saved_at: new Date().toISOString(),
+    status: 'draft'
+  };
+  
+  console.log('Draft Data:', draftData);
+  
+  // Save to localStorage for draft persistence
+  const drafts = JSON.parse(localStorage.getItem('salaryDrafts') || '{}');
+  drafts[currentSalaryEmployee.id] = draftData;
+  localStorage.setItem('salaryDrafts', JSON.stringify(drafts));
+  
+  console.log('✅ Draft saved to browser storage');
+  alert('✅ Salary calculation saved as draft!\n(Local storage - can be restored in this session)');
+  console.log('═══════════════════════════════════════════════════════════\n');
+}
+
+// Helper: Collect all salary calculation data
+function collectSalaryData() {
+  const wageType = currentSalaryEmployee.wageType;
+  const data = {
+    employee_id: currentSalaryEmployee.id,
+    employee_code: currentSalaryEmployee.code,
+    employee_name: `${currentSalaryEmployee.first} ${currentSalaryEmployee.last}`,
+    wage_type: wageType,
+    rate: currentSalaryEmployee.rate,
+    housing: parseFloat(document.getElementById('salary-housing').value) || 0,
+    meal: parseFloat(document.getElementById('salary-meal').value) || 0,
+    transport: parseFloat(document.getElementById('salary-transport').value) || 0,
+    bonus: parseFloat(document.getElementById('salary-bonus').value) || 0,
+    ot_hours: parseFloat(document.getElementById('salary-ot-hours').value) || 0,
+    calculation_date: new Date().toISOString().split('T')[0]
+  };
+  
+  // Add wage-type specific data
+  if (wageType === 'Per-Piece') {
+    data.pieces = parseFloat(document.getElementById('salary-pieces').value) || 0;
+    data.other_sewing = {};
+    document.querySelectorAll('[data-sewing-id]').forEach(input => {
+      const sewingId = input.getAttribute('data-sewing-id');
+      const value = parseFloat(input.value) || 0;
+      if (value > 0) {
+        data.other_sewing[sewingId] = value;
+      }
+    });
+  } else if (wageType === 'Per-Trip') {
+    data.trips = parseFloat(document.getElementById('salary-trips').value) || 0;
+    data.region_id = document.getElementById('salary-region').value || null;
+  } else if (wageType === 'Base Salary' || wageType === 'Hourly') {
+    data.quantity = 1; // Base Salary is monthly, Hourly is monthly hours
+  }
+  
+  return data;
 }
 
 async function saveCalculation() {
   if (!currentSalaryEmployee) {
-    alert('Select an employee first');
+    alert('❌ Select an employee first');
     return;
   }
   
-  // Collect data based on wage type
-  let qty = 0;
-  let region = null;
-  const isSewingType = currentSalaryEmployee.wageType === 'Per-Piece';
+  console.log('\n═══════════════════════════════════════════════════════════');
+  console.log('💾 SAVING SALARY CALCULATION');
+  console.log('───────────────────────────────────────────────────────────');
+  console.log('Employee:', currentSalaryEmployee.code, '-', currentSalaryEmployee.first);
+  console.log('Wage Type:', currentSalaryEmployee.wageType);
   
-  if (isSewingType) {
-    // Per-Piece wage type
-    qty = parseFloat(document.getElementById('salary-pieces').value) || 0;
-    if (qty === 0) {
-      alert('Enter pieces completed');
-      return;
-    }
-    console.log(`✅ Saving Per-Piece transaction: ${qty} pieces`);
-  } else {
-    // Per-Trip wage type
-    qty = parseFloat(document.getElementById('salary-trips').value) || 0;
-    region = document.getElementById('salary-region').value;
-    if (qty === 0) {
-      alert('Enter trips completed');
-      return;
-    }
-    if (!region) {
-      alert('Select delivery region');
-      return;
-    }
-    console.log(`✅ Saving Per-Trip transaction: ${qty} trips in region ${region}`);
-  }
+  const wageType = currentSalaryEmployee.wageType;
   
   try {
-    const today = new Date();
-    const endpoint = isSewingType ? 'production' : 'logistics';
-    const payload = {
-      employee_id: currentSalaryEmployee.id,
-      quantity: qty,
-      rate: currentSalaryEmployee.rate,
-      month_year: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`,
-      week_number: Math.ceil(today.getDate() / 7),
-      transaction_date: today.toISOString().split('T')[0]
-    };
-    
-    // Add region for Per-Trip
-    if (!isSewingType && region) {
-      payload.region_id = parseInt(region);
-    }
-    
-    console.log('📤 Sending payload:', payload);
-    
-    const res = await apiFetch(`/api/payroll/transactions/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    
-    if (res.ok) {
-      const result = await res.json();
-      console.log('✅ Transaction saved:', result);
-      alert('✅ Calculation saved successfully!');
-      
-      // Reset form
-      document.getElementById('salary-employee-search').value = '';
-      document.getElementById('salary-pieces').value = '';
-      document.getElementById('salary-trips').value = '';
-      document.getElementById('salary-region').value = '';
-      currentSalaryEmployee = null;
-      
-      // Clear summary
-      document.getElementById('summary-employee').textContent = '—';
-      document.getElementById('summary-base').textContent = '₱0.00';
-      document.getElementById('summary-gross').textContent = '₱0.00';
-      document.getElementById('summary-net').textContent = '₱0.00';
-    } else {
-      const errText = await res.text();
-      console.error('❌ Save failed:', res.status, errText);
-      alert('Failed to save: ' + errText);
+    if (wageType === 'Per-Piece') {
+      await saveProductionTransaction();
+    } else if (wageType === 'Per-Trip') {
+      await saveLogisticsTransaction();
+    } else if (wageType === 'Base Salary' || wageType === 'Hourly') {
+      await saveSalaryRecord();
     }
   } catch (e) {
-    console.error('❌ Error:', e);
+    console.error('❌ Error during save:', e);
     alert('Error: ' + e.message);
   }
+  console.log('═══════════════════════════════════════════════════════════\n');
+}
+
+// Save production transaction for Per-Piece
+async function saveProductionTransaction() {
+  const pieces = parseFloat(document.getElementById('salary-pieces').value) || 0;
+  
+  if (pieces === 0) {
+    alert('❌ Enter pieces completed');
+    return;
+  }
+  
+  console.log(`📊 Per-Piece: ${pieces} pieces @ ₱${currentSalaryEmployee.rate}/piece`);
+  
+  const today = new Date();
+  const payload = {
+    employee_id: currentSalaryEmployee.id,
+    sewing_type_id: 1, // Default - can be enhanced
+    quantity: pieces,
+    rate: currentSalaryEmployee.rate,
+    transaction_date: today.toISOString().split('T')[0]
+  };
+  
+  console.log('📤 Sending payload:', payload);
+  
+  const res = await apiFetch('/api/payroll/transactions/production', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  
+  if (res.ok) {
+    const result = await res.json();
+    console.log('✅ Production transaction saved:', result);
+    alert(`✅ Transaction saved!\n${result.message}`);
+    resetCalculationForm();
+  } else {
+    const errText = await res.text();
+    throw new Error(errText || 'Failed to save transaction');
+  }
+}
+
+// Save logistics transaction for Per-Trip
+async function saveLogisticsTransaction() {
+  const trips = parseFloat(document.getElementById('salary-trips').value) || 0;
+  const regionId = document.getElementById('salary-region').value;
+  
+  if (trips === 0) {
+    alert('❌ Enter trips completed');
+    return;
+  }
+  
+  if (!regionId) {
+    alert('❌ Select delivery region');
+    return;
+  }
+  
+  console.log(`📊 Per-Trip: ${trips} trips in region ${regionId} @ ₱${currentSalaryEmployee.rate}/trip`);
+  
+  const today = new Date();
+  const payload = {
+    employee_id: currentSalaryEmployee.id,
+    logistics_region_id: parseInt(regionId),
+    rate: currentSalaryEmployee.rate,
+    trip_reference: `Trip-${today.getTime()}`,
+    transaction_date: today.toISOString().split('T')[0]
+  };
+  
+  console.log('📤 Sending payload:', payload);
+  
+  const res = await apiFetch('/api/payroll/transactions/logistics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  
+  if (res.ok) {
+    const result = await res.json();
+    console.log('✅ Logistics transaction saved:', result);
+    alert(`✅ Transaction saved!\n${result.message}`);
+    resetCalculationForm();
+  } else {
+    const errText = await res.text();
+    throw new Error(errText || 'Failed to save transaction');
+  }
+}
+
+// Save salary record for Base Salary / Hourly
+async function saveSalaryRecord() {
+  console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
+  
+  // Collect all calculation data
+  const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
+  const meal = parseFloat(document.getElementById('salary-meal').value) || 0;
+  const transport = parseFloat(document.getElementById('salary-transport').value) || 0;
+  const bonus = parseFloat(document.getElementById('salary-bonus').value) || 0;
+  const otHours = parseFloat(document.getElementById('salary-ot-hours').value) || 0;
+  
+  // Calculate gross pay
+  const basePayAmount = currentSalaryEmployee.rate;
+  const totalAllowances = housing + meal + transport + bonus;
+  const grossPay = basePayAmount + totalAllowances;
+  
+  // Calculate deductions (4.5% SSS, 2% Pag-IBIG, 2.75% PhilHealth)
+  const sssDeduction = grossPay * 0.045;
+  const pagibigDeduction = grossPay * 0.02;
+  const philhealthDeduction = grossPay * 0.0275;
+  const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
+  
+  // Calculate net pay
+  const netPay = grossPay - totalDeductions;
+  
+  console.log('💰 Salary Summary:');
+  console.log('  Base:', basePayAmount);
+  console.log('  Allowances:', totalAllowances);
+  console.log('  Gross:', grossPay);
+  console.log('  Deductions:', totalDeductions);
+  console.log('  Net:', netPay);
+  
+  const today = new Date();
+  const payload = {
+    employee_id: currentSalaryEmployee.id,
+    wage_type_id: currentSalaryEmployee.wageTypeId || 1, // Default to Base Salary
+    base_rate: currentSalaryEmployee.rate,
+    quantity: 1,
+    housing_allowance: housing,
+    meal_allowance: meal,
+    transport_allowance: transport,
+    bonus_allowance: bonus,
+    total_allowances: totalAllowances,
+    overtime_hours: otHours,
+    overtime_amount: 0,
+    gross_pay: grossPay,
+    sss_deduction: sssDeduction,
+    pagibig_deduction: pagibigDeduction,
+    philhealth_deduction: philhealthDeduction,
+    total_deductions: totalDeductions,
+    net_pay: netPay,
+    calculation_date: today.toISOString().split('T')[0]
+  };
+  
+  console.log('📤 Sending payload to API:', payload);
+  
+  const res = await apiFetch('/api/payroll/salary-calculation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  
+  if (res.ok) {
+    const result = await res.json();
+    console.log('✅ Salary calculation saved to database:', result);
+    alert(`✅ Salary calculation saved to database!\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\nGross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`);
+    resetCalculationForm();
+  } else {
+    const errText = await res.text();
+    throw new Error(errText || 'Failed to save salary calculation');
+  }
+}
+
+// Reset the calculation form
+function resetCalculationForm() {
+  document.getElementById('salary-employee-search').value = '';
+  document.getElementById('salary-pieces').value = '';
+  document.getElementById('salary-trips').value = '';
+  document.getElementById('salary-region').value = '';
+  document.getElementById('salary-housing').value = '0';
+  document.getElementById('salary-meal').value = '0';
+  document.getElementById('salary-transport').value = '0';
+  document.getElementById('salary-bonus').value = '0';
+  document.getElementById('salary-ot-hours').value = '0';
+  
+  document.getElementById('summary-employee').textContent = '—';
+  document.getElementById('summary-base').textContent = '₱0.00';
+  document.getElementById('summary-allowances').textContent = '₱0.00';
+  document.getElementById('summary-gross').textContent = '₱0.00';
+  document.getElementById('summary-total-deductions').textContent = '₱0.00';
+  document.getElementById('summary-net').textContent = '₱0.00';
+  
+  currentSalaryEmployee = null;
+  console.log('✅ Form reset');
 }

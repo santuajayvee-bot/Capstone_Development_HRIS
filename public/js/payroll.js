@@ -310,18 +310,6 @@ async function viewPayslipDetails(employeeId, employeeName, monthYear) {
     alert('Failed to load payslip details');
   }
 }
-    `;
-    
-    // Add modal to page
-    const modalDiv = document.createElement('div');
-    modalDiv.innerHTML = modalHTML;
-    document.body.appendChild(modalDiv.firstElementChild);
-    
-  } catch (err) {
-    console.error('Error viewing employee details:', err);
-    alert('Failed to load employee details');
-  }
-}
 
 function renderPayroll() {
   const grid = document.getElementById('payroll-grid');
@@ -438,6 +426,129 @@ function updatePayrollStats(summary) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// Load and display salary calculation records
+async function loadSalaryCalculations() {
+  try {
+    const filterDate = document.getElementById('salary-calc-filter-date')?.value;
+    const filterStatus = document.getElementById('salary-calc-filter-status')?.value;
+
+    let url = '/api/payroll/salary-calculations?limit=500';
+    if (filterStatus) url += `&status=${filterStatus}`;
+    if (filterDate) url += `&from_date=${filterDate}&to_date=${filterDate}`;
+
+    const response = await apiFetch(url);
+    if (!response.ok) {
+      throw new Error('Failed to load salary calculations');
+    }
+
+    const data = await response.json();
+    renderSalaryCalculations(data.records || []);
+  } catch (err) {
+    console.error('Error loading salary calculations:', err);
+    const grid = document.getElementById('salary-calculations-grid');
+    if (grid) {
+      grid.innerHTML = `
+        <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
+          <div style="font-size: 14px; color: var(--red);">
+            ❌ Error loading salary calculations: ${err.message}
+          </div>
+        </div>
+      `;
+    }
+  }
+}
+
+// Render salary calculation records in a table
+function renderSalaryCalculations(records) {
+  const grid = document.getElementById('salary-calculations-grid');
+  if (!grid) return;
+
+  if (records.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
+        <div style="font-size: 14px; color: var(--muted);">
+          📋 No salary calculation records found.
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const table = `
+    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+      <thead>
+        <tr style="border-bottom: 2px solid var(--border); background: var(--card);">
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Date</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Employee</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Code</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Department</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Wage Type</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Base Rate</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Gross Pay</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Deductions</th>
+          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--text);">Net Pay</th>
+          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${records.map(r => {
+          const statusColor = r.status === 'Approved' ? 'var(--green)' : 
+                             r.status === 'Submitted' ? 'var(--yellow)' : 'var(--muted)';
+          const statusBg = r.status === 'Approved' ? 'rgba(34, 211, 165, 0.2)' :
+                          r.status === 'Submitted' ? 'rgba(245, 166, 35, 0.2)' : 'rgba(128, 128, 128, 0.2)';
+          const calcDate = new Date(r.calculation_date).toLocaleDateString('en-US', { 
+            year: 'numeric', month: 'short', day: 'numeric' 
+          });
+          
+          return `
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 12px; color: var(--text); font-size: 12px;">${calcDate}</td>
+              <td style="padding: 12px; color: var(--text); font-weight: 500;">${r.employee_name}</td>
+              <td style="padding: 12px; color: var(--muted); font-family: 'Courier New', monospace; font-size: 12px;">${r.employee_code}</td>
+              <td style="padding: 12px; color: var(--muted);">${r.department || 'N/A'}</td>
+              <td style="padding: 12px; color: var(--text);">${r.wage_type || 'N/A'}</td>
+              <td style="padding: 12px; text-align: right; color: var(--text);">₱${parseFloat(r.base_rate || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--text); font-weight: 600;">₱${parseFloat(r.gross_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--red);">₱${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: right; color: var(--accent); font-weight: 700;">₱${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+              <td style="padding: 12px; text-align: center;">
+                <span style="background: ${statusBg}; color: ${statusColor}; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
+                  ${r.status || 'Draft'}
+                </span>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  grid.innerHTML = table;
+}
+
+// Export functions to global scope FIRST
+window.loadPayrollRecords = loadPayrollRecords;
+window.renderPayroll = renderPayroll;
+window.updatePayrollStats = updatePayrollStats;
+window.openRunPayrollModal = openRunPayrollModal;
+window.runPayroll = runPayroll;
+window.loadSalaryCalculations = loadSalaryCalculations;
+window.renderSalaryCalculations = renderSalaryCalculations;
+
+// Load data when DOM is ready or if already ready
+function initializePayroll() {
   loadPayrollRecords();
-});
+  loadSalaryCalculations();
+
+  // Add filter event listeners
+  document.getElementById('salary-calc-filter-date')?.addEventListener('change', loadSalaryCalculations);
+  document.getElementById('salary-calc-filter-status')?.addEventListener('change', loadSalaryCalculations);
+}
+
+// Check if DOM is already loaded
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializePayroll);
+} else {
+  // DOM already loaded, initialize immediately
+  initializePayroll();
+}

@@ -274,7 +274,7 @@ function filterEmployees() {
 }
 
 /* View Switching */
-function switchView(view) {
+async function switchView(view) {
   CURRENT_VIEW = view;
   const filterBar = document.querySelector('.filter-bar');
   const empTable = document.getElementById('emp-table');
@@ -656,6 +656,7 @@ function switchEditTab(tabName) {
   document.getElementById('edit-tab-personal').style.display = 'none';
   document.getElementById('edit-tab-employment').style.display = 'none';
   document.getElementById('edit-tab-payroll').style.display = 'none';
+  document.getElementById('edit-tab-photo').style.display = 'none';
   
   // Remove active state from all buttons
   document.querySelectorAll('.edit-tab-btn').forEach(btn => {
@@ -668,7 +669,8 @@ function switchEditTab(tabName) {
   const tabMap = {
     'personal': 'edit-tab-personal',
     'employment': 'edit-tab-employment',
-    'payroll': 'edit-tab-payroll'
+    'payroll': 'edit-tab-payroll',
+    'photo': 'edit-tab-photo'
   };
   
   if (tabMap[tabName]) {
@@ -677,7 +679,14 @@ function switchEditTab(tabName) {
   
   // Find and activate the clicked button
   document.querySelectorAll('.edit-tab-btn').forEach(btn => {
-    if (btn.textContent.includes(tabName === 'personal' ? 'Personal' : tabName === 'employment' ? 'Employment' : 'Payroll')) {
+    const btnText = btn.textContent;
+    let match = false;
+    if (tabName === 'personal' && btnText.includes('Personal')) match = true;
+    if (tabName === 'employment' && btnText.includes('Employment')) match = true;
+    if (tabName === 'payroll' && btnText.includes('Payroll')) match = true;
+    if (tabName === 'photo' && btnText.includes('Photo')) match = true;
+    
+    if (match) {
       btn.classList.add('active');
       btn.style.borderBottomColor = '#4f7cff';
       btn.style.color = '#333';
@@ -715,6 +724,12 @@ function editEmployee(empId) {
   document.getElementById('edit-payroll-wage-type').value = employee.wage_type || '';
   document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
   
+  // Load employee photo
+  loadEmployeePhotoPreview(employee.id);
+  
+  // Reset file input
+  document.getElementById('edit-emp-photo-input').value = '';
+  
   // Reset to first tab
   switchEditTab('personal');
   
@@ -742,11 +757,17 @@ function openAddEmployeeModal() {
   document.getElementById('edit-payroll-wage-type').value = '';
   document.getElementById('edit-payroll-rate').value = '';
   
+  // Reset photo section
+  document.getElementById('edit-emp-photo-preview').style.display = 'none';
+  document.getElementById('edit-emp-no-photo').style.display = 'flex';
+  document.getElementById('edit-emp-photo-input').value = '';
+  
   // Reset tabs to show personal info
   document.querySelectorAll('.edit-tab-btn').forEach(btn => btn.classList.remove('active'));
   document.getElementById('edit-tab-personal').style.display = 'block';
   document.getElementById('edit-tab-employment').style.display = 'none';
   document.getElementById('edit-tab-payroll').style.display = 'none';
+  document.getElementById('edit-tab-photo').style.display = 'none';
   document.querySelectorAll('.edit-tab-btn')[0].classList.add('active');
   
   // Show modal
@@ -1341,6 +1362,120 @@ async function saveEmpPayrollConfig() {
   }
 }
 
+// ============================================================
+// EMPLOYEE PHOTO MANAGEMENT
+// ============================================================
+
+async function loadEmployeePhotoPreview(employeeId) {
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}/photo`);
+    if (response && response.ok) {
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const preview = document.getElementById('edit-emp-photo-preview');
+      const noPhoto = document.getElementById('edit-emp-no-photo');
+      
+      preview.src = url;
+      preview.style.display = 'block';
+      noPhoto.style.display = 'none';
+    } else {
+      // No photo found
+      document.getElementById('edit-emp-photo-preview').style.display = 'none';
+      document.getElementById('edit-emp-no-photo').style.display = 'flex';
+    }
+  } catch (err) {
+    console.log('No photo found for employee:', err.message);
+    document.getElementById('edit-emp-photo-preview').style.display = 'none';
+    document.getElementById('edit-emp-no-photo').style.display = 'flex';
+  }
+}
+
+async function uploadEmployeePhoto() {
+  if (!currentEditingEmployeeId) {
+    await showAlert('No employee selected', 'Error', 'error');
+    return;
+  }
+
+  const fileInput = document.getElementById('edit-emp-photo-input');
+  if (!fileInput.files || fileInput.files.length === 0) {
+    await showAlert('Please select a photo to upload', 'Warning', 'warning');
+    return;
+  }
+
+  const file = fileInput.files[0];
+  
+  // Validate file size (5MB)
+  if (file.size > 5 * 1024 * 1024) {
+    await showAlert('File size exceeds 5MB limit', 'Error', 'error');
+    return;
+  }
+
+  // Validate file type
+  if (!['image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+    await showAlert('Only JPG, JPEG, and PNG files are allowed', 'Error', 'error');
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}/photo`, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to upload photo');
+    }
+
+    await showAlert('Photo uploaded successfully!', 'Success', 'success');
+    
+    // Reload photo preview
+    await loadEmployeePhotoPreview(currentEditingEmployeeId);
+    
+    // Clear file input
+    fileInput.value = '';
+  } catch (error) {
+    console.error('Error uploading photo:', error);
+    await showAlert('Failed to upload photo: ' + error.message, 'Error', 'error');
+  }
+}
+
+async function deleteEmployeePhoto() {
+  if (!currentEditingEmployeeId) {
+    await showAlert('No employee selected', 'Error', 'error');
+    return;
+  }
+
+  const confirmed = await showConfirm('Are you sure you want to delete this employee photo?', 'Delete Photo', 'Delete', 'Cancel');
+  if (!confirmed) return;
+
+  try {
+    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}/photo`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete photo');
+    }
+
+    await showAlert('Photo deleted successfully', 'Success', 'success');
+    
+    // Reset preview
+    document.getElementById('edit-emp-photo-preview').style.display = 'none';
+    document.getElementById('edit-emp-no-photo').style.display = 'flex';
+    
+    // Clear file input
+    document.getElementById('edit-emp-photo-input').value = '';
+  } catch (error) {
+    console.error('Error deleting photo:', error);
+    await showAlert('Failed to delete photo: ' + error.message, 'Error', 'error');
+  }
+}
+
 // Expose functions globally
 window.openEmployeeDetailModal = openEmployeeDetailModal;
 window.closeEmployeeDetail = closeEmployeeDetail;
@@ -1355,6 +1490,9 @@ window.editEmployee = editEmployeeFromManage;
 window.editEmployeeFromManage = editEmployeeFromManage;
 window.toggleEmployeeStatus = toggleEmployeeStatus;
 window.deleteEmployeeFromManage = deleteEmployeeFromManage;
+window.uploadEmployeePhoto = uploadEmployeePhoto;
+window.deleteEmployeePhoto = deleteEmployeePhoto;
+window.loadEmployeePhotoPreview = loadEmployeePhotoPreview;
 
 // Expose refresh function globally for manual refresh
 window.refreshEmployees = fetchEmployees;

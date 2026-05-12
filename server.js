@@ -424,6 +424,110 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
   }
 });
 
+// ============================================================
+// EMPLOYEE PHOTOS — Upload, retrieve, and delete employee photos
+// ============================================================
+
+// Upload employee photo (store as base64 in database)
+app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), upload.single('photo'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'No photo provided.' });
+    }
+
+    console.log('\n=== POST /api/employees/:id/photo ===');
+    console.log('Employee ID:', id);
+    console.log('Photo file:', req.file.filename);
+    console.log('Photo size:', req.file.size);
+
+    // Read file and convert to base64
+    const fileData = fs.readFileSync(req.file.path);
+    
+    // Insert or replace photo record
+    const [result] = await pool.execute(
+      `INSERT INTO employee_photos (employee_id, photo_data, photo_mime_type, photo_size)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+       photo_data = VALUES(photo_data),
+       photo_mime_type = VALUES(photo_mime_type),
+       photo_size = VALUES(photo_size),
+       updated_at = NOW()`,
+      [id, fileData, req.file.mimetype, req.file.size]
+    );
+
+    // Delete temporary file
+    fs.unlinkSync(req.file.path);
+
+    console.log('✅ Employee photo uploaded successfully');
+    return res.status(200).json({
+      message: 'Photo uploaded successfully.',
+      file_name: req.file.originalname,
+      file_size: req.file.size
+    });
+    
+  } catch (err) {
+    console.error('Error uploading photo:', err.message);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    return res.status(500).json({ error: 'Failed to upload photo.', details: err.message });
+  }
+});
+
+// Get employee photo
+app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    const [photos] = await pool.execute(
+      `SELECT photo_data, photo_mime_type FROM employee_photos WHERE employee_id = ?`,
+      [id]
+    );
+
+    if (photos.length === 0) {
+      return res.status(404).json({ error: 'No photo found for this employee.' });
+    }
+
+    const { photo_data, photo_mime_type } = photos[0];
+    
+    // Send binary photo data
+    res.set('Content-Type', photo_mime_type);
+    res.send(photo_data);
+    
+  } catch (err) {
+    console.error('Error fetching photo:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch photo.', details: err.message });
+  }
+});
+
+// Delete employee photo
+app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    const [result] = await pool.execute(
+      `DELETE FROM employee_photos WHERE employee_id = ?`,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'No photo found for this employee.' });
+    }
+
+    console.log('✅ Employee photo deleted successfully');
+    return res.status(200).json({ message: 'Photo deleted successfully.' });
+    
+  } catch (err) {
+    console.error('Error deleting photo:', err.message);
+    return res.status(500).json({ error: 'Failed to delete photo.', details: err.message });
+  }
+});
+
 // Leave
 app.get('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), async (req, res) => {
   try {
