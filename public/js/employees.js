@@ -293,7 +293,7 @@ function switchView(view) {
     const user = userStr ? JSON.parse(userStr) : null;
     const adminRoles = ['admin', 'hr_admin', 'system_admin'];
     if (!adminRoles.includes(user?.role)) {
-      alert('Only administrators can access this feature.');
+      await showAlert('Only administrators can access this feature.', 'Access Denied', 'error');
       return;
     }
     // Show manage view, hide list view
@@ -448,7 +448,8 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
   const newStatus = currentStatus === 'Active' ? 'Inactive' : 'Active';
   const confirmMsg = `Are you sure you want to ${newStatus === 'Active' ? 'activate' : 'deactivate'} this employee?`;
   
-  if (!confirm(confirmMsg)) return;
+  const confirmed = await showConfirm(confirmMsg, 'Confirm Action', 'Yes', 'Cancel');
+  if (!confirmed) return;
 
   try {
     const response = await apiFetch(`/api/employees/${employeeId}/status`, {
@@ -463,23 +464,23 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
     }
 
     const data = await response.json();
-    alert(data.message || 'Status updated successfully');
+    await showAlert(data.message || 'Status updated successfully', 'Success', 'success');
     
     // Refresh the employee list
     await fetchEmployees();
     loadManageEmployeeList();
   } catch (error) {
     console.error('Error updating status:', error);
-    alert('Failed to update employee status: ' + error.message);
+    await showAlert('Failed to update employee status: ' + error.message, 'Error', 'error');
   }
 }
 
-function editEmployeeFromManage(employeeId) {
+async function editEmployeeFromManage(employeeId) {
   console.log('Editing employee ID:', employeeId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
   console.log('Found employee:', employee);
   if (!employee) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
 
@@ -504,11 +505,12 @@ function editEmployeeFromManage(employeeId) {
 async function deleteEmployeeFromManage(employeeId) {
   const emp = EMPLOYEES.find(e => e.id === parseInt(employeeId));
   if (!emp) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
   
-  if (!confirm(`Are you sure you want to delete ${emp.name}? This action cannot be undone.`)) return;
+  const confirmed = await showConfirm(`Are you sure you want to delete ${emp.name}? This action cannot be undone.`, 'Delete Employee', 'Delete', 'Cancel');
+  if (!confirmed) return;
   
   try {
     const response = await apiFetch(`/api/employees/${employeeId}`, {
@@ -522,14 +524,14 @@ async function deleteEmployeeFromManage(employeeId) {
     }
 
     const data = await response.json();
-    alert(data.message || 'Employee deleted successfully');
+    await showAlert(data.message || 'Employee deleted successfully', 'Success', 'success');
     
     // Refresh the employee list
     await fetchEmployees();
     loadManageEmployeeList();
   } catch (error) {
     console.error('Error deleting employee:', error);
-    alert('Failed to delete employee: ' + error.message);
+    await showAlert('Failed to delete employee: ' + error.message, 'Error', 'error');
   }
 }
 
@@ -801,7 +803,7 @@ async function saveEditedEmployee() {
   const baseRate = document.getElementById('edit-payroll-rate').value;
 
   if (!firstName || !lastName || !email) {
-    alert('First name, last name, and email are required');
+    await showAlert('First name, last name, and email are required', 'Validation Error', 'warning');
     return;
   }
 
@@ -870,7 +872,7 @@ async function saveEditedEmployee() {
     }
 
     const message = isAddingNew ? 'Employee added successfully!' : 'Employee updated successfully!';
-    alert(message);
+    await showAlert(message, 'Success', 'success');
     closeEditEmployeeModal();
     
     // Refresh the employee list
@@ -878,7 +880,7 @@ async function saveEditedEmployee() {
     loadManageEmployeeList(EMPLOYEES);
   } catch (error) {
     console.error('Error saving employee:', error);
-    alert('Failed to save employee: ' + error.message);
+    await showAlert('Failed to save employee: ' + error.message, 'Error', 'error');
   }
 }
 
@@ -1198,14 +1200,14 @@ async function saveEmpPayrollConfig() {
   const wageTypeSelect = document.getElementById('emp-payroll-wage-select');
   if (!wageTypeSelect) {
     console.error('❌ Wage type select element not found!');
-    alert('❌ Form error: wage type selector not found');
+    await showAlert('❌ Form error: wage type selector not found', 'Error', 'error');
     return;
   }
   
   const wageTypeId = wageTypeSelect.value;
   if (!wageTypeId) {
     console.warn('❌ No wage type selected - User must select a wage type first');
-    alert('❌ Please select a wage type first');
+    await showAlert('❌ Please select a wage type first', 'Warning', 'warning');
     return;
   }
   
@@ -1239,7 +1241,7 @@ async function saveEmpPayrollConfig() {
     console.log('→ Collecting HOURLY rates...');
     if (hourlyRate <= 0) {
       console.error('❌ VALIDATION FAILED: Hourly rate must be > 0, got:', hourlyRate);
-      alert('❌ For Hourly wage: Please enter a VALID hourly rate (must be greater than 0)');
+      await showAlert('❌ For Hourly wage: Please enter a VALID hourly rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
     console.log('   ✅ Hourly rate is valid:', hourlyRate);
@@ -1282,7 +1284,7 @@ async function saveEmpPayrollConfig() {
     console.log('→ Collecting BASE SALARY rates...');
     if (primaryRate <= 0) {
       console.error('❌ VALIDATION FAILED: Base salary must be > 0, got:', primaryRate);
-      alert('❌ For ' + wageTypeMap[wageTypeId] + ': Please enter a VALID rate (must be greater than 0)');
+      await showAlert('❌ For ' + wageTypeMap[wageTypeId] + ': Please enter a VALID rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
     console.log('   ✅ Base salary is valid:', primaryRate);
@@ -1297,7 +1299,7 @@ async function saveEmpPayrollConfig() {
   }
   
   if (rates.length === 0) {
-    alert('❌ Please enter at least one rate value');
+    await showAlert('❌ Please enter at least one rate value', 'Validation Error', 'warning');
     console.warn('No rates to save:', { wageTypeId, primaryRate, hourlyRate, overtimeRate });
     return;
   }
