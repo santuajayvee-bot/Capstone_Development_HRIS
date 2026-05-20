@@ -472,11 +472,28 @@ async function saveRequest() {
     const startDate = document.getElementById('req-start')?.value;
     const endDate   = document.getElementById('req-end')?.value;
     const attachment = document.getElementById('req-attachment')?.files[0];
-    if (!startDate) { alert('Please select a start date.'); return; }
+    
+    // Validate start date
+    if (!startDate) { alert('❌ Please select a start date.'); return; }
+    
+    // Validate dates are valid
+    const start = new Date(startDate);
+    if (isNaN(start.getTime())) { alert('❌ Start date is invalid.'); return; }
+    
+    if (endDate) {
+      const end = new Date(endDate);
+      if (isNaN(end.getTime())) { alert('❌ End date is invalid.'); return; }
+      if (end < start) { alert('❌ End date must be on or after start date.'); return; }
+    }
+    
     const days = Math.max(Math.ceil((new Date(endDate || startDate) - new Date(startDate)) / 86400000) + 1, 1);
+    
+    console.log('Filing leave request:', { leaveType, startDate, endDate, days, reason });
     
     try {
       const payload = { type: leaveType, date_from: startDate, date_to: endDate || startDate, days, reason, employee_id: CURRENT_USER.employeeId };
+      console.log('Payload:', JSON.stringify(payload, null, 2));
+      
       let res;
       
       if (attachment) {
