@@ -19,7 +19,7 @@ const ROLE_PERMISSIONS = {
     'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
   ],
   payroll_manager: [
-    'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
+    'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests', 'reports',
   ],
   employee: [
     'dashboard', 'employee-dashboard', 'leave', 'requests', 'attendance',
@@ -71,6 +71,7 @@ const NAV_CONFIG = {
     { page: 'leave', icon: '📅', label: 'Leave Management' },
     { page: 'payroll', icon: '💰', label: 'Payroll' },
     { page: 'salary-calculation', icon: '🧮', label: 'Salary Calc' },
+    { page: 'reports', icon: '📊', label: 'Reports' },
     { page: 'requests', icon: '📋', label: 'Request' },
   ],
   employee: [
