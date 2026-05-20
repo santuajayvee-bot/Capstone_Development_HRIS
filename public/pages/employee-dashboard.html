@@ -1,0 +1,214 @@
+<!-- ============================================================
+     pages/employee-dashboard.html — Employee Actor Module UI
+     Secure-by-Design: RBAC-restricted Employee-only interface
+     ============================================================ -->
+
+<!-- Tab Navigation -->
+<div class="emp-tabs" id="emp-tabs">
+  <button class="emp-tab active" data-tab="overview" onclick="switchEmpTab('overview', this)">
+    <span class="tab-icon">⊞</span> Overview
+  </button>
+  <button class="emp-tab" data-tab="201file" onclick="switchEmpTab('201file', this)">
+    <span class="tab-icon">📄</span> My 201-File
+  </button>
+  <button class="emp-tab" data-tab="payslips" onclick="switchEmpTab('payslips', this)">
+    <span class="tab-icon">💰</span> My Payslips
+  </button>
+  <button class="emp-tab" data-tab="settings" onclick="switchEmpTab('settings', this)">
+    <span class="tab-icon">⚙</span> My Info
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 1: OVERVIEW DASHBOARD
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="emp-panel active" id="emp-panel-overview">
+  <div class="emp-welcome" id="emp-welcome">
+    <div class="emp-welcome-text">
+      <h2 id="emp-greeting">Welcome back!</h2>
+      <p id="emp-role-desc">Loading your dashboard...</p>
+    </div>
+    <div class="emp-welcome-badge">
+      <span class="emp-security-badge">🔒 Secure Session</span>
+    </div>
+  </div>
+
+  <div class="emp-stat-grid">
+    <div class="emp-stat-card">
+      <div class="emp-stat-icon">💰</div>
+      <div class="emp-stat-body">
+        <div class="emp-stat-label">Latest Net Pay</div>
+        <div class="emp-stat-value" id="emp-stat-netpay">—</div>
+        <div class="emp-stat-sub" id="emp-stat-period">No payslip available</div>
+      </div>
+    </div>
+    <div class="emp-stat-card">
+      <div class="emp-stat-icon">📄</div>
+      <div class="emp-stat-body">
+        <div class="emp-stat-label">201-File Documents</div>
+        <div class="emp-stat-value" id="emp-stat-docs">—</div>
+        <div class="emp-stat-sub">Uploaded files</div>
+      </div>
+    </div>
+    <div class="emp-stat-card">
+      <div class="emp-stat-icon">📅</div>
+      <div class="emp-stat-body">
+        <div class="emp-stat-label">Pending Leaves</div>
+        <div class="emp-stat-value" id="emp-stat-leaves">—</div>
+        <div class="emp-stat-sub">Awaiting approval</div>
+      </div>
+    </div>
+    <div class="emp-stat-card">
+      <div class="emp-stat-icon">⏰</div>
+      <div class="emp-stat-body">
+        <div class="emp-stat-label">Today's Status</div>
+        <div class="emp-stat-value" id="emp-stat-attendance">—</div>
+        <div class="emp-stat-sub" id="emp-stat-clock">Not clocked in</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Latest Payslip Preview -->
+  <div class="emp-card" id="emp-latest-payslip-card" style="display:none;">
+    <div class="emp-card-header">
+      <h3>📋 Latest Payslip Summary</h3>
+      <span class="emp-payslip-status" id="emp-payslip-status-badge">—</span>
+    </div>
+    <div class="emp-payslip-preview">
+      <div class="emp-payslip-row">
+        <span>Period</span><strong id="emp-ps-period">—</strong>
+      </div>
+      <div class="emp-payslip-row">
+        <span>Gross Earnings</span><strong id="emp-ps-earnings">—</strong>
+      </div>
+      <div class="emp-payslip-row">
+        <span>Total Deductions</span><strong id="emp-ps-deductions">—</strong>
+      </div>
+      <div class="emp-payslip-divider"></div>
+      <div class="emp-payslip-row emp-payslip-net">
+        <span>Net Pay</span><strong id="emp-ps-netpay">—</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 2: 201-FILE VIEW (Information Disclosure Protection)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="emp-panel" id="emp-panel-201file">
+  <div class="emp-card">
+    <div class="emp-card-header">
+      <h3>🔐 My 201-File — Employee Record</h3>
+      <span class="emp-crypto-badge">AES-256 Protected</span>
+    </div>
+
+    <!-- Demographics -->
+    <div class="emp-section-title">Personal Demographics</div>
+    <div class="emp-info-grid" id="emp-demographics">
+      <div class="emp-info-item"><span>Employee Code</span><strong id="emp-201-code">—</strong></div>
+      <div class="emp-info-item"><span>Full Name</span><strong id="emp-201-name">—</strong></div>
+      <div class="emp-info-item"><span>Email</span><strong id="emp-201-email">—</strong></div>
+      <div class="emp-info-item"><span>Contact</span><strong id="emp-201-contact">—</strong></div>
+      <div class="emp-info-item"><span>Date of Birth</span><strong id="emp-201-dob">—</strong></div>
+      <div class="emp-info-item"><span>Gender</span><strong id="emp-201-gender">—</strong></div>
+      <div class="emp-info-item"><span>Nationality</span><strong id="emp-201-nationality">—</strong></div>
+      <div class="emp-info-item"><span>Address</span><strong id="emp-201-address">—</strong></div>
+    </div>
+
+    <!-- Employment Info -->
+    <div class="emp-section-title">Employment Information</div>
+    <div class="emp-info-grid">
+      <div class="emp-info-item"><span>Department</span><strong id="emp-201-dept">—</strong></div>
+      <div class="emp-info-item"><span>Position</span><strong id="emp-201-position">—</strong></div>
+      <div class="emp-info-item"><span>Employment Type</span><strong id="emp-201-type">—</strong></div>
+      <div class="emp-info-item"><span>Date Hired</span><strong id="emp-201-hired">—</strong></div>
+      <div class="emp-info-item"><span>Status</span><strong id="emp-201-status">—</strong></div>
+    </div>
+
+    <!-- Statutory IDs (Decrypted PII) -->
+    <div class="emp-section-title">
+      <span>🔒 Statutory IDs</span>
+      <small class="emp-pii-notice">Decrypted from AES-256-GCM encrypted storage</small>
+    </div>
+    <div class="emp-info-grid" id="emp-pii-grid">
+      <div class="emp-info-item emp-pii-field"><span>SSS Number</span><strong id="emp-201-sss">—</strong></div>
+      <div class="emp-info-item emp-pii-field"><span>PhilHealth</span><strong id="emp-201-philhealth">—</strong></div>
+      <div class="emp-info-item emp-pii-field"><span>Pag-IBIG</span><strong id="emp-201-pagibig">—</strong></div>
+      <div class="emp-info-item emp-pii-field"><span>TIN</span><strong id="emp-201-tin">—</strong></div>
+      <div class="emp-info-item emp-pii-field"><span>Bank Name</span><strong id="emp-201-bank">—</strong></div>
+      <div class="emp-info-item emp-pii-field"><span>Bank Account</span><strong id="emp-201-bankacct">—</strong></div>
+    </div>
+
+    <!-- Documents -->
+    <div class="emp-section-title">📎 Uploaded Documents</div>
+    <div id="emp-201-docs">
+      <p style="color:var(--muted); font-size:13px;">Loading documents...</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 3: DIGITAL PAYSLIPS (Repudiation Protection)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="emp-panel" id="emp-panel-payslips">
+  <div class="emp-card">
+    <div class="emp-card-header">
+      <h3>💰 My Digital Payslips</h3>
+      <span class="emp-crypto-badge">SHA-256 Verified</span>
+    </div>
+    <p style="color:var(--muted); font-size:12px; margin-bottom:16px;">
+      Each payslip is verified against the immutable blockchain ledger using SHA-256 hash comparison.
+    </p>
+    <div class="sysadmin-table-wrapper">
+      <table class="sysadmin-table" id="emp-payslips-table">
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th>Wage Type</th>
+            <th>Gross</th>
+            <th>Deductions</th>
+            <th>Net Pay</th>
+            <th>Status</th>
+            <th>Integrity</th>
+          </tr>
+        </thead>
+        <tbody id="emp-payslips-tbody">
+          <tr><td colspan="7" class="table-empty">Loading payslips...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 4: MY INFO — Emergency Contact Form (Input Hardening)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="emp-panel" id="emp-panel-settings">
+  <div class="emp-card">
+    <div class="emp-card-header">
+      <h3>⚙ Update Emergency Contact</h3>
+      <span class="emp-crypto-badge">Input Hardened</span>
+    </div>
+    <p style="color:var(--muted); font-size:12px; margin-bottom:16px;">
+      All inputs are sanitized against SQL Injection and XSS payloads before processing.
+    </p>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="emp-ec-name">Emergency Contact Name</label>
+        <input type="text" id="emp-ec-name" placeholder="Full name of emergency contact" maxlength="100" />
+      </div>
+      <div class="form-group">
+        <label for="emp-ec-num">Emergency Contact Number</label>
+        <input type="text" id="emp-ec-num" placeholder="e.g. +63 917 123 4567" maxlength="20" />
+      </div>
+    </div>
+    <button class="btn-sysadmin-primary" onclick="submitEmergencyContact()" id="btn-ec-submit">
+      💾 Save Changes
+    </button>
+    <div id="emp-ec-feedback" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="sysadmin-toast" id="emp-toast" style="display:none;"></div>

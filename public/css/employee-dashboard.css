@@ -1,0 +1,240 @@
+/* ============================================================
+   employee-dashboard.css — Employee Actor Module Styles
+   ============================================================ */
+
+/* ── Tab Navigation ──────────────────────────────────────────── */
+.emp-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--card2);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 24px;
+  width: fit-content;
+}
+.emp-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.emp-tab:hover { color: var(--text); background: rgba(79,124,255,0.07); }
+.emp-tab.active { color: #fff; background: var(--accent); box-shadow: 0 2px 8px rgba(79,124,255,0.3); }
+.emp-tab .tab-icon { font-size: 15px; }
+
+/* ── Panels ──────────────────────────────────────────────────── */
+.emp-panel { display: none; animation: fadeIn 0.3s ease; }
+.emp-panel.active { display: block; }
+
+/* ── Welcome Banner ──────────────────────────────────────────── */
+.emp-welcome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(135deg, rgba(79,124,255,0.12), rgba(34,211,165,0.08));
+  border: 1px solid rgba(79,124,255,0.2);
+  border-radius: 14px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.emp-welcome h2 {
+  font-family: 'Syne', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.emp-welcome p { color: var(--muted); font-size: 13px; }
+.emp-security-badge {
+  background: rgba(34,211,165,0.15);
+  color: var(--green);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ── Stat Grid ───────────────────────────────────────────────── */
+.emp-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.emp-stat-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  transition: all 0.2s ease;
+}
+.emp-stat-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 12px rgba(79,124,255,0.08);
+}
+.emp-stat-icon { font-size: 28px; flex-shrink: 0; }
+.emp-stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+.emp-stat-value { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; margin: 2px 0; }
+.emp-stat-sub { font-size: 11px; color: var(--muted); }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.emp-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.emp-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.emp-card-header h3 {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+.emp-crypto-badge {
+  background: rgba(124,92,252,0.15);
+  color: var(--purple);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Payslip Preview ─────────────────────────────────────────── */
+.emp-payslip-preview { display: flex; flex-direction: column; gap: 10px; }
+.emp-payslip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+.emp-payslip-row span { color: var(--muted); }
+.emp-payslip-row strong { color: var(--text); }
+.emp-payslip-divider { height: 1px; background: var(--border); margin: 4px 0; }
+.emp-payslip-net strong { color: var(--accent); font-size: 18px; }
+.emp-payslip-status {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* ── 201-File Info Grid ──────────────────────────────────────── */
+.emp-section-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  margin: 20px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.emp-pii-notice {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--purple);
+  background: rgba(124,92,252,0.1);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.emp-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.emp-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.emp-info-item span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600; }
+.emp-info-item strong { font-size: 13px; color: var(--text); }
+.emp-pii-field {
+  border-color: rgba(124,92,252,0.25);
+  background: rgba(124,92,252,0.03);
+}
+
+/* ── Integrity Badges ────────────────────────────────────────── */
+.integrity-verified {
+  background: rgba(34,211,165,0.15);
+  color: var(--green);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.integrity-tampered {
+  background: rgba(224,92,122,0.15);
+  color: var(--red);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  animation: pulse-red 1.5s infinite;
+}
+.integrity-unverified {
+  background: rgba(245,166,35,0.15);
+  color: var(--yellow);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+}
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224,92,122,0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(224,92,122,0); }
+}
+
+/* ── Documents List ──────────────────────────────────────────── */
+.emp-doc-list { display: flex; flex-direction: column; gap: 8px; }
+.emp-doc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.emp-doc-item .doc-type {
+  font-weight: 600;
+  color: var(--accent);
+}
+.emp-doc-item .doc-date {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .emp-stat-grid { grid-template-columns: 1fr 1fr; }
+  .emp-info-grid { grid-template-columns: 1fr; }
+  .emp-tabs { flex-wrap: wrap; }
+}

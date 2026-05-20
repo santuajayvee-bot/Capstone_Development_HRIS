@@ -15,6 +15,9 @@ const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '8h';
  * Body: { username, password }
  * Returns: { token, user: { id, username, role, roleLabel, employeeId } }
  */
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MINUTES = 15;
+
 async function login(req, res) {
   const { username, password } = req.body;
 
@@ -23,6 +26,8 @@ async function login(req, res) {
   }
 
   try {
+    const pool = require('../config/db');
+
     // 1. Find user
     const user = await findByUsername(username.trim().toLowerCase());
     if (!user) {
@@ -34,7 +39,27 @@ async function login(req, res) {
       return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
     }
 
-    // 3. Verify password
+    // 3. Check account lockout (Spoofing mitigation — STRIDE)
+    try {
+      const [lockRows] = await pool.execute(
+        'SELECT login_attempts, locked_until FROM users WHERE id = ?',
+        [user.id]
+      );
+      if (lockRows.length > 0) {
+        const { login_attempts, locked_until } = lockRows[0];
+        if (locked_until && new Date(locked_until) > new Date()) {
+          const minutesLeft = Math.ceil((new Date(locked_until) - new Date()) / 60000);
+          console.log(`\n🔒 [SECURITY] ACCOUNT_LOCKED: User '${user.username}' — ${minutesLeft} min remaining`);
+          return res.status(423).json({
+            error: `Account locked due to ${MAX_LOGIN_ATTEMPTS} failed attempts. Try again in ${minutesLeft} minute(s).`,
+          });
+        }
+      }
+    } catch (lockErr) {
+      // Columns may not exist yet — proceed without lockout
+    }
+
+    // 4. Verify password (supports both Argon2 and bcrypt)
     let valid = false;
     if (user.password_hash.startsWith('$argon2')) {
       valid = await argon2.verify(user.password_hash, password);
@@ -43,21 +68,59 @@ async function login(req, res) {
     }
     
     if (!valid) {
+      // Increment failed attempts
+      try {
+        const [lockRows] = await pool.execute(
+          'SELECT login_attempts FROM users WHERE id = ?', [user.id]
+        );
+        const attempts = (lockRows[0]?.login_attempts || 0) + 1;
+
+        if (attempts >= MAX_LOGIN_ATTEMPTS) {
+          // Lock account
+          await pool.execute(
+            'UPDATE users SET login_attempts = ?, locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?',
+            [attempts, LOCKOUT_DURATION_MINUTES, user.id]
+          );
+          console.log(`\n🔒 [SECURITY] ACCOUNT_LOCKED: User '${user.username}' locked after ${MAX_LOGIN_ATTEMPTS} failed attempts`);
+          return res.status(423).json({
+            error: `Account locked after ${MAX_LOGIN_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_DURATION_MINUTES} minutes.`,
+          });
+        } else {
+          await pool.execute(
+            'UPDATE users SET login_attempts = ? WHERE id = ?', [attempts, user.id]
+          );
+          console.log(`\n⚠️  [AUTH] Failed login attempt ${attempts}/${MAX_LOGIN_ATTEMPTS} for user '${user.username}'`);
+        }
+      } catch (lockErr) {
+        // Columns may not exist — continue
+      }
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    // 4. Sign JWT
+    // 5. Successful login — reset lockout counter
+    try {
+      await pool.execute(
+        'UPDATE users SET login_attempts = 0, locked_until = NULL WHERE id = ?',
+        [user.id]
+      );
+    } catch (lockErr) {
+      // Columns may not exist — continue
+    }
+
+    // 6. Sign JWT
     const payload = {
       id:         user.id,
       username:   user.username,
-      role:       user.role,          // 'admin' | 'payroll_officer' | 'payroll_manager' | 'employee'
+      role:       user.role,
       roleLabel:  user.role_label,
       employeeId: user.employee_id,
     };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
-    // 5. Update last login
+    // 7. Update last login
     await updateLastLogin(user.id);
+
+    console.log(`\n✅ [AUTH] Successful login: ${user.username} (${user.role})`);
 
     return res.json({
       token,

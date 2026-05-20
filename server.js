@@ -14,6 +14,7 @@ const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
 const adminRbacRoutes                        = require('./server/admin-rbac');
+const employeeDashboardRoutes                = require('./server/employee-dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -73,6 +74,9 @@ app.use('/api/attendance', attendanceRoutes);
 
 // Admin RBAC Module — Account Registration & Role Management (Level 4 only)
 app.use('/api/admin', adminRbacRoutes);
+
+// Employee Actor Module — Employee-only dashboard, 201-file, payslips
+app.use('/api/employee', employeeDashboardRoutes);
 
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {

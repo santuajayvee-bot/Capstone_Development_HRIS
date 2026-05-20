@@ -15,6 +15,7 @@ const PAGE_TITLES = {
   onboarding: 'HR Officer – Recruitment Management',
   blockchain: 'Blockchain',
   'system-admin': 'System Administration',
+  'employee-dashboard': 'Employee Dashboard',
 };
 
 function navigate(pageId, navEl) {
@@ -73,6 +74,11 @@ function navigate(pageId, navEl) {
   // When navigating to system-admin, initialize the module
   if (pageId === 'system-admin' && typeof initSystemAdmin === 'function') {
     initSystemAdmin();
+  }
+
+  // When navigating to employee-dashboard, initialize the module
+  if (pageId === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
+    initEmployeeDashboard();
   }
 }
 

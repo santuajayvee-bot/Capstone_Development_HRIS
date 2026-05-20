@@ -22,7 +22,7 @@ const ROLE_PERMISSIONS = {
     'dashboard', 'attendance', 'leave', 'payroll', 'salary-calculation', 'requests',
   ],
   employee: [
-    'dashboard', 'leave', 'requests', 'attendance',
+    'dashboard', 'employee-dashboard', 'leave', 'requests', 'attendance',
   ],
 };
 
@@ -74,7 +74,7 @@ const NAV_CONFIG = {
     { page: 'requests', icon: '📋', label: 'Request' },
   ],
   employee: [
-    { page: 'dashboard', icon: '⊞', label: 'My Dashboard' },
+    { page: 'employee-dashboard', icon: '⊞', label: 'My Dashboard' },
     { page: 'leave', icon: '📅', label: 'My Leave' },
     { page: 'requests', icon: '📋', label: 'My Requests' },
     { page: 'attendance', icon: '⏰', label: 'My Attendance' },

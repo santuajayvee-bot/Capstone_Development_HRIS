@@ -45,8 +45,9 @@ async function doLogin() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display          = 'block';
 
-    // Navigate to dashboard
-    navigate('dashboard', null);
+    // Navigate to role-appropriate dashboard
+    const landingPage = data.user.role === 'employee' ? 'employee-dashboard' : 'dashboard';
+    navigate(landingPage, null);
 
   } catch (err) {
     errEl.textContent   = 'Cannot reach server. Is it running?';
