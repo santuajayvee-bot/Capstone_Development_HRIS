@@ -694,4 +694,134 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
   }
 });
 
+// Finalize a payroll run (Lock it and generate blockchain hashes)
+router.post('/runs/:id/finalize', requireAuth, requireRole(['payroll_manager']), async (req, res) => {
+  const conn = await require('../config/db').getConnection();
+  try {
+    await conn.beginTransaction();
+    const runId = req.params.id;
+
+    // 1. Update payroll run status
+    await conn.execute(
+      'UPDATE payroll_runs SET status = "Approved", approved_by = ?, approved_at = NOW() WHERE id = ?',
+      [req.user.id, runId]
+    );
+
+    // 2. Generate hashes for each payslip in this run
+    const [slips] = await conn.execute('SELECT id, employee_id, net_pay FROM payslips WHERE payroll_run_id = ?', [runId]);
+    
+    const crypto = require('crypto');
+    for (const slip of slips) {
+      const dataToHash = `${slip.id}-${slip.employee_id}-${slip.net_pay}-${Date.now()}`;
+      const hash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+      
+      await conn.execute(
+        'UPDATE payslips SET status = "Approved", blockchain_hash = ?, blockchain_timestamp = NOW() WHERE id = ?',
+        [hash, slip.id]
+      );
+    }
+
+    // 3. Log to audit log
+    await conn.execute(
+      'INSERT INTO audit_logs (user_id, action, details) VALUES (?, "FINALIZE_PAYROLL", ?)',
+      [req.user.id, `Finalized payroll run ${runId}. Generated ${slips.length} blockchain anchors.`]
+    );
+
+    await conn.commit();
+    res.json({ success: true, message: 'Payroll run finalized and cryptographically anchored.' });
+  } catch (err) {
+    await conn.rollback();
+    console.error('Error finalizing payroll:', err);
+    res.status(500).json({ error: 'Failed to finalize payroll' });
+  } finally {
+    conn.release();
+  }
+});
+
+// Official Financial Summary Report Data
+router.get('/reports/financial-summary', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { monthYear, branch, payrollRunId } = req.query;
+
+    let query = `
+      SELECT ps.id AS payslip_id, ps.total_earning, ps.net_pay,
+             e.id AS employee_id, e.employee_code, e.first_name, e.last_name, e.branch,
+             w.name AS wage_type_name, pr.month_year, pr.status AS run_status,
+             e.sss_number, e.philhealth_number, e.pagibig_number
+      FROM employees e
+      LEFT JOIN payslips ps ON e.id = ps.employee_id
+    `;
+    const params = [];
+
+    if (payrollRunId && payrollRunId !== 'all') {
+      if (payrollRunId === 'latest') {
+        query += ' AND ps.payroll_run_id = (SELECT MAX(id) FROM payroll_runs)';
+      } else {
+        query += ' AND ps.payroll_run_id = ?';
+        params.push(payrollRunId);
+      }
+    } else if (monthYear) {
+      query += ' AND pr.month_year = ?';
+      params.push(monthYear);
+    }
+    
+    query += `
+      LEFT JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
+      LEFT JOIN wage_types w ON w.id = ps.wage_type_id
+      WHERE 1=1
+    `;
+
+    if (branch && branch !== 'all') {
+      query += ' AND e.branch = ?';
+      params.push(branch);
+    }
+
+    query += ' ORDER BY e.employee_code';
+
+    const [payslips] = await pool.execute(query, params);
+
+    // For each payslip, fetch detailed calculations
+    for (let ps of payslips) {
+      if (!ps.payslip_id) {
+        ps.calculations = ['No Payslip Generated'];
+        ps.total_earning = 0;
+        ps.net_pay = 0;
+        ps.wage_type_name = 'N/A';
+      } else if (ps.wage_type_name === 'Piece-Rate' || ps.wage_type_name === 'Per-Piece') {
+        const [prods] = await pool.execute(`
+          SELECT st.name, pt.quantity, pt.rate, pt.amount, pt.transaction_date
+          FROM production_transactions pt
+          JOIN sewing_types st ON st.id = pt.sewing_type_id
+          WHERE pt.employee_id = ? AND pt.month_year = ?
+        `, [ps.employee_id, ps.month_year]);
+        ps.calculations = prods.map(p => `${p.name}: ${p.quantity} x ₱${p.rate} = ₱${p.amount}`);
+      } else if (ps.wage_type_name === 'Per-Trip' || ps.wage_type_name === 'Logistics') {
+        const [trips] = await pool.execute(`
+          SELECT lr.name, lt.rate, lt.amount, lt.trip_reference, lt.transaction_date
+          FROM logistics_transactions lt
+          JOIN logistics_regions lr ON lr.id = lt.logistics_region_id
+          WHERE lt.employee_id = ? AND lt.month_year = ?
+        `, [ps.employee_id, ps.month_year]);
+        ps.calculations = trips.map(t => `${t.name} (${t.trip_reference || 'Trip'}): ₱${t.rate}`);
+      } else {
+        ps.calculations = [`Fixed Wage: ₱${ps.total_earning}`];
+      }
+
+      // Fetch deductions breakdown
+      const [deductions] = await pool.execute(`
+        SELECT deduction_type, amount FROM employee_deductions 
+        WHERE employee_id = ? AND (end_date IS NULL OR end_date >= CURDATE())
+      `, [ps.employee_id]);
+      ps.deductions_breakdown = deductions;
+    }
+
+    res.json(payslips);
+  } catch (err) {
+    console.error('Error fetching financial summary data:', err);
+    res.status(500).json({ error: 'Failed to fetch financial summary data' });
+  }
+});
+
 module.exports = router;
+
