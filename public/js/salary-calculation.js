@@ -195,6 +195,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       id: parseInt(id),
       code, first, last, dept, pos,
       wageType: config.wage_type,
+      wageTypeId: config.wage_type_id || config.employee?.wage_type_id,
       rate: parseFloat(config.current_rate) || 0
     };
     
@@ -307,18 +308,48 @@ function showWageStructureForm(wageType) {
     }
     
     console.log('✅ Per-Trip form ready with', logisticsRegions.length, 'regions');
-  } else if (wageType === 'Base Salary' || wageType === 'Hourly') {
-    // For Base Salary and Hourly, hide the per-piece and per-trip sections
-    console.log('✅ Showing form for wage type:', wageType);
+  } else if (wageType === 'Hourly') {
+    console.log('✅ Showing form for Hourly wage type');
     perPieceSection.style.display = 'none';
     perTripSection.style.display = 'none';
     
-    // The rate is fixed, so just allowances apply
-    console.log('ℹ️ Salary calculated based on fixed rate and allowances');
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'block';
+    if (dailySection) dailySection.style.display = 'none';
+    
+    console.log('ℹ️ Salary calculated based on hours worked × hourly rate');
+  } else if (wageType === 'Daily') {
+    console.log('✅ Showing form for Daily wage type');
+    perPieceSection.style.display = 'none';
+    perTripSection.style.display = 'none';
+    
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'none';
+    if (dailySection) dailySection.style.display = 'block';
+    
+    console.log('ℹ️ Salary calculated based on days worked × daily rate');
+  } else if (wageType === 'Base Salary') {
+    console.log('✅ Showing form for Base Salary wage type');
+    perPieceSection.style.display = 'none';
+    perTripSection.style.display = 'none';
+    
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'none';
+    if (dailySection) dailySection.style.display = 'none';
+    
+    console.log('ℹ️ Salary is fixed monthly amount with allowances');
   } else {
     console.warn('⚠️ Unknown wage type:', wageType);
     perPieceSection.style.display = 'none';
     perTripSection.style.display = 'none';
+    
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'none';
+    if (dailySection) dailySection.style.display = 'none';
   }
 }
 
@@ -328,6 +359,7 @@ function calculateSalaryNow() {
   
   let qty = 0;
   let actualRate = currentSalaryEmployee.rate;
+  let calculationNote = '';
   
   // Determine quantity and rate based on wage type
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
@@ -346,6 +378,7 @@ function calculateSalaryNow() {
     });
     
     console.log(`📊 Per-Piece: ${pieces} base pieces + ${otherSewingTotal} other sewing = ${qty.toFixed(2)} total`);
+    calculationNote = `${pieces} pieces @ ₱${currentSalaryEmployee.rate}/piece`;
     
   } else if (currentSalaryEmployee.wageType === 'Per-Trip') {
     const trips = parseFloat(document.getElementById('salary-trips').value) || 0;
@@ -359,18 +392,36 @@ function calculateSalaryNow() {
       if (region) {
         actualRate = parseFloat(region.default_rate) || currentSalaryEmployee.rate;
         console.log(`📊 Per-Trip: ${trips} trips in ${region.name} @ ₱${actualRate.toFixed(2)}/trip`);
+        calculationNote = `${trips} trips @ ₱${actualRate}/trip (${region.name})`;
       }
     }
+    
+  } else if (currentSalaryEmployee.wageType === 'Hourly') {
+    // For Hourly: hours worked × hourly rate
+    const hoursWorked = parseFloat(document.getElementById('salary-hours-worked').value) || 0;
+    const otHours = parseFloat(document.getElementById('salary-ot-hours').value) || 0;
+    
+    qty = hoursWorked + otHours;
+    actualRate = currentSalaryEmployee.rate; // This is the hourly rate
+    
+    console.log(`📊 Hourly: ${hoursWorked} regular hours + ${otHours} OT hours = ${qty} total @ ₱${actualRate.toFixed(2)}/hour`);
+    calculationNote = `${hoursWorked} hours @ ₱${actualRate}/hour`;
+    
+  } else if (currentSalaryEmployee.wageType === 'Daily') {
+    // For Daily: days worked × daily rate
+    const daysWorked = parseFloat(document.getElementById('salary-days-worked').value) || 0;
+    
+    qty = daysWorked;
+    actualRate = currentSalaryEmployee.rate; // This is the daily rate
+    
+    console.log(`📊 Daily: ${daysWorked} days @ ₱${actualRate.toFixed(2)}/day`);
+    calculationNote = `${daysWorked} days @ ₱${actualRate}/day`;
+    
   } else if (currentSalaryEmployee.wageType === 'Base Salary') {
     // For Base Salary, the rate is the monthly salary
     qty = 1;
     console.log(`📊 Base Salary: ₱${actualRate.toFixed(2)} per month`);
-  } else if (currentSalaryEmployee.wageType === 'Hourly') {
-    // For Hourly, ask user for hours worked (default 160 hours per month = 8 hours * 20 work days)
-    const otHours = parseFloat(document.getElementById('salary-ot-hours').value) || 0;
-    // Assuming standard 160 work hours per month, or user can input custom hours
-    qty = 160 + otHours; // Base 160 hours + overtime
-    console.log(`📊 Hourly: ${qty} hours @ ₱${actualRate.toFixed(2)}/hour`);
+    calculationNote = 'Monthly salary';
   }
   
   const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
@@ -416,7 +467,7 @@ function calculateSalaryNow() {
 
 // Attach input listeners for calculation
 function attachSalaryInputListeners() {
-  const ids = ['salary-pieces', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity'];
+  const ids = ['salary-pieces', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked'];
   ids.forEach(id => {
     const elem = document.getElementById(id);
     if (elem) {
@@ -612,7 +663,7 @@ async function saveLogisticsTransaction() {
   }
 }
 
-// Save salary record for Base Salary / Hourly
+// Save salary record for Base Salary / Hourly / Daily
 async function saveSalaryRecord() {
   console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
   
@@ -623,8 +674,29 @@ async function saveSalaryRecord() {
   const bonus = parseFloat(document.getElementById('salary-bonus').value) || 0;
   const otHours = parseFloat(document.getElementById('salary-ot-hours').value) || 0;
   
-  // Calculate gross pay
-  const basePayAmount = currentSalaryEmployee.rate;
+  let hoursWorked = 0;
+  let daysWorked = 0;
+  let basePayAmount = currentSalaryEmployee.rate;
+  
+  // Handle different wage types
+  if (currentSalaryEmployee.wageType === 'Hourly') {
+    hoursWorked = parseFloat(document.getElementById('salary-hours-worked').value) || 0;
+    basePayAmount = (hoursWorked + otHours) * currentSalaryEmployee.rate;
+    
+    if (hoursWorked === 0) {
+      await showAlert('Please enter hours worked', 'Warning', 'warning');
+      return;
+    }
+  } else if (currentSalaryEmployee.wageType === 'Daily') {
+    daysWorked = parseFloat(document.getElementById('salary-days-worked').value) || 0;
+    basePayAmount = daysWorked * currentSalaryEmployee.rate;
+    
+    if (daysWorked === 0) {
+      await showAlert('Please enter days worked', 'Warning', 'warning');
+      return;
+    }
+  }
+  
   const totalAllowances = housing + meal + transport + bonus;
   const grossPay = basePayAmount + totalAllowances;
   
@@ -647,9 +719,11 @@ async function saveSalaryRecord() {
   const today = new Date();
   const payload = {
     employee_id: currentSalaryEmployee.id,
-    wage_type_id: currentSalaryEmployee.wageTypeId || 1, // Default to Base Salary
+    wage_type_id: currentSalaryEmployee.wageTypeId || 1,
     base_rate: currentSalaryEmployee.rate,
     quantity: 1,
+    hours_worked: hoursWorked,
+    days_worked: daysWorked,
     housing_allowance: housing,
     meal_allowance: meal,
     transport_allowance: transport,
@@ -677,7 +751,15 @@ async function saveSalaryRecord() {
   if (res.ok) {
     const result = await res.json();
     console.log('✅ Salary calculation saved to database:', result);
-    alert(`✅ Salary calculation saved to database!\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\nGross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`);
+    
+    let wageDetails = '';
+    if (currentSalaryEmployee.wageType === 'Hourly') {
+      wageDetails = `Hours Worked: ${hoursWorked}\n`;
+    } else if (currentSalaryEmployee.wageType === 'Daily') {
+      wageDetails = `Days Worked: ${daysWorked}\n`;
+    }
+    
+    await showAlert(`✅ Salary calculation saved!\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\n${wageDetails}Gross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 'Success', 'success');
     resetCalculationForm();
   } else {
     const errText = await res.text();
@@ -691,6 +773,8 @@ function resetCalculationForm() {
   document.getElementById('salary-pieces').value = '';
   document.getElementById('salary-trips').value = '';
   document.getElementById('salary-region').value = '';
+  document.getElementById('salary-hours-worked').value = '';
+  document.getElementById('salary-days-worked').value = '';
   document.getElementById('salary-housing').value = '0';
   document.getElementById('salary-meal').value = '0';
   document.getElementById('salary-transport').value = '0';

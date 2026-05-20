@@ -694,48 +694,80 @@ function switchEditTab(tabName) {
   });
 }
 
-function editEmployee(empId) {
+async function editEmployee(empId) {
   console.log('Editing employee ID:', empId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
   console.log('Found employee:', employee);
   if (!employee) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
 
   currentEditingEmployeeId = employee.id;
   
-  // Populate Personal Info Tab
-  document.getElementById('edit-emp-first-name').value = employee.first_name || '';
-  document.getElementById('edit-emp-last-name').value = employee.last_name || '';
-  document.getElementById('edit-emp-email').value = employee.email || '';
-  document.getElementById('edit-emp-phone').value = employee.contact_number || '';
-  document.getElementById('edit-emp-city').value = employee.residential_address || '';
-  
-  // Populate Employment Details Tab
-  document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
-  document.getElementById('edit-emp-position').value = employee.position || '';
-  document.getElementById('edit-emp-type').value = employee.employment_type || '';
-  document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
-  document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
-  document.getElementById('edit-emp-work-location').value = employee.work_location || '';
-  
-  // Populate Payroll & Compensation Tab
-  document.getElementById('edit-payroll-wage-type').value = employee.wage_type || '';
-  document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
-  
-  // Load employee photo
-  loadEmployeePhotoPreview(employee.id);
-  
-  // Reset file input
-  document.getElementById('edit-emp-photo-input').value = '';
-  
-  // Reset to first tab
-  switchEditTab('personal');
-  
-  // Open the modal
-  const modal = document.getElementById('edit-employee-modal');
-  if (modal) modal.style.setProperty('display', 'flex', 'important');
+  try {
+    // Populate Personal Info Tab
+    document.getElementById('edit-emp-first-name').value = employee.first_name || '';
+    document.getElementById('edit-emp-last-name').value = employee.last_name || '';
+    document.getElementById('edit-emp-email').value = employee.email || '';
+    document.getElementById('edit-emp-phone').value = employee.contact_number || '';
+    document.getElementById('edit-emp-city').value = employee.residential_address || '';
+    
+    // Populate Employment Details Tab
+    document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
+    document.getElementById('edit-emp-position').value = employee.position || '';
+    document.getElementById('edit-emp-type').value = employee.employment_type || '';
+    document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
+    document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
+    document.getElementById('edit-emp-work-location').value = employee.work_location || '';
+    
+    // Populate Payroll & Compensation Tab
+    // Convert wage type name to numeric ID for form select
+    let wageTypeId = '';
+    if (employee.wage_type) {
+      const wageTypeMap = {
+        'Base Salary': '1',
+        'Hourly': '2',
+        'Per-Piece': '3',
+        'Per-Piece (Sewing)': '3',
+        'Per-Trip': '4',
+        'Per-Trip (Logistics)': '4'
+      };
+      wageTypeId = wageTypeMap[employee.wage_type] || '';
+    }
+    document.getElementById('edit-payroll-wage-type').value = wageTypeId;
+    document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
+    
+    // Reset file input
+    const photoInput = document.getElementById('edit-emp-photo-input');
+    if (photoInput) photoInput.value = '';
+    
+    // Reset photo preview to placeholder
+    const photoPreview = document.getElementById('edit-emp-photo-preview');
+    const noPhotoPlaceholder = document.getElementById('edit-emp-no-photo');
+    if (photoPreview) photoPreview.style.display = 'none';
+    if (noPhotoPlaceholder) noPhotoPlaceholder.style.display = 'flex';
+    
+    // Load employee photo (async, don't await - let it happen in background)
+    loadEmployeePhotoPreview(employee.id).catch(err => {
+      console.log('Photo loading error (non-critical):', err.message);
+    });
+    
+    // Reset to first tab
+    switchEditTab('personal');
+    
+    // Open the modal
+    const modal = document.getElementById('edit-employee-modal');
+    if (modal) {
+      modal.style.display = 'flex';
+      console.log('✓ Edit modal opened for employee:', employee.employee_code);
+    } else {
+      console.error('❌ Edit modal element not found');
+    }
+  } catch (error) {
+    console.error('❌ Error in editEmployee:', error.message);
+    await showAlert('Error opening edit form: ' + error.message, 'Error', 'error');
+  }
 }
 
 function openAddEmployeeModal() {
@@ -1031,6 +1063,9 @@ async function openEmployeeDetailModal(employeeId) {
   
   // Employment details
   document.getElementById('emp-detail-dept').textContent = employee.department || '—';
+  document.getElementById('emp-detail-position').textContent = employee.position || '—';
+  document.getElementById('emp-detail-employment-type').textContent = employee.employment_type || '—';
+  document.getElementById('emp-detail-date-hired').textContent = employee.date_hired ? employee.date_hired.split('T')[0] : '—';
   
   // Reset tabs
   document.querySelectorAll('.emp-detail-tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -1486,7 +1521,6 @@ window.closeEditEmployeeModal = closeEditEmployeeModal;
 window.saveEditedEmployee = saveEditedEmployee;
 window.switchEditTab = switchEditTab;
 window.updateEditPayrollWageType = updateEditPayrollWageType;
-window.editEmployee = editEmployeeFromManage;
 window.editEmployeeFromManage = editEmployeeFromManage;
 window.toggleEmployeeStatus = toggleEmployeeStatus;
 window.deleteEmployeeFromManage = deleteEmployeeFromManage;
