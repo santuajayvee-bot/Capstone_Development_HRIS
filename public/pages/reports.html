@@ -1,0 +1,123 @@
+<!-- ============================================================
+     pages/reports.html — Reports Generation Module
+     ============================================================ -->
+<div class="page-header">
+  <div>
+    <div class="section-title">Reports Generation Module</div>
+    <div class="section-sub">Generate, export, and preview payroll and HR analytics reports.</div>
+  </div>
+</div>
+
+<div class="filter-bar" style="flex-wrap: wrap; margin-bottom: 24px;">
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    <label style="font-size:12px; color:var(--muted); font-weight:600;">Date From</label>
+    <input type="date" id="report-date-from" class="search-input" />
+  </div>
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    <label style="font-size:12px; color:var(--muted); font-weight:600;">Date To</label>
+    <input type="date" id="report-date-to" class="search-input" />
+  </div>
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    <label style="font-size:12px; color:var(--muted); font-weight:600;">Employee</label>
+    <select id="report-employee" class="filter-select">
+      <option value="all">All Employees</option>
+    </select>
+  </div>
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    <label style="font-size:12px; color:var(--muted); font-weight:600;">Payroll Period</label>
+    <select id="report-payroll-period" class="filter-select">
+      <option value="latest">Latest Period</option>
+      <option value="jan">Jan 1 - Jan 15, 2026</option>
+      <option value="feb">Feb 1 - Feb 15, 2026</option>
+    </select>
+  </div>
+  <div style="display:flex; flex-direction:column; gap:4px;">
+    <label style="font-size:12px; color:var(--muted); font-weight:600;">Export Format</label>
+    <select id="report-format" class="filter-select">
+      <option value="pdf">PDF Document (.pdf)</option>
+      <option value="excel">Excel Spreadsheet (.xlsx)</option>
+      <option value="csv">CSV File (.csv)</option>
+    </select>
+  </div>
+</div>
+
+
+
+<!-- Single Master Report Generation -->
+<div class="action-card blue" style="display: flex; align-items: center; justify-content: space-between; padding: 24px; margin-bottom: 24px; flex-direction: row; text-align: left; min-height: auto;">
+  <div style="display: flex; align-items: center; gap: 16px;">
+    <div class="ac-title" style="margin: 0; font-size: 18px;">Master Report</div>
+  </div>
+  <div style="display: flex; gap: 12px;">
+    <button class="btn btn-outline" onclick="previewMasterReport()" style="padding: 8px 16px; font-weight: 600;">Show Preview</button>
+    <button class="btn btn-primary" onclick="generateMasterReport()" style="padding: 8px 16px; font-weight: 600;">Download Report</button>
+  </div>
+</div>
+<!-- Report Preview Modal mapped perfectly to existing modal classes -->
+<div id="reportPreviewModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:var(--card);border-radius:12px;width:95%;max-width:900px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25); display:flex; flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <h3 id="previewModalTitle" style="margin:0;font-size:18px;font-weight:700;color:var(--text);">Master Report</h3>
+      <button onclick="closeReportPreview()" style="background:rgba(0,0,0,0.05);border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;color:var(--muted);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">✕</button>
+    </div>
+    
+    <div style="padding:24px; overflow-x:auto; flex:1;">
+      <table style="width:100%; border-collapse:collapse; font-size:14px; text-align:left;">
+        <thead style="background:var(--bg); border-bottom:2px solid var(--border);" id="previewTableHead">
+        </thead>
+        <tbody id="previewTableBody">
+        </tbody>
+      </table>
+    </div>
+    
+    <div style="display:flex;gap:12px;padding:16px 24px;border-top:1px solid var(--border);background:var(--bg);flex-shrink:0;">
+      <button onclick="closeReportPreview()" class="btn btn-outline" style="flex:1;">Close</button>
+      <button onclick="downloadOfficialLayout()" class="btn btn-outline" style="flex:1; border-color: #6f42c1; color: #6f42c1;">Official PDF (Short Bond)</button>
+      <button onclick="generateMasterReport()" class="btn btn-primary" style="flex:1;">Download Format</button>
+    </div>
+  </div>
+</div>
+
+<!-- Individual Preview Modal -->
+<div id="individualPreviewModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:var(--card);border-radius:12px;width:95%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <h3 style="margin:0;font-size:18px;font-weight:700;color:var(--text);">Individual Master Summary</h3>
+      <button onclick="closeIndividualPreview()" style="background:rgba(0,0,0,0.05);border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;color:var(--muted);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">✕</button>
+    </div>
+    
+    <div style="flex:1; overflow-y:auto; background:#f0f2f5; display:flex; justify-content:center; padding:30px;">
+      <!-- Short Bond Paper Container (8.5x11 inches approx) -->
+      <div id="bondPaperContainer" style="background:white; width:8.5in; min-height:11in; padding:1in; box-shadow:0 4px 15px rgba(0,0,0,0.1); position:relative; font-family:'Courier New', Courier, monospace; color:#333;">
+        <div id="bondWatermark" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-45deg); font-size:120px; color:rgba(200,200,200,0.15); font-weight:900; pointer-events:none; z-index:0; white-space:nowrap; letter-spacing:10px; font-family:sans-serif;">DRAFT</div>
+        
+        <div style="position:relative; z-index:1;">
+          <div style="text-align:center; border-bottom:2px solid #222; padding-bottom:15px; margin-bottom:25px;">
+            <h1 style="margin:0; font-size:20px; font-weight:bold; text-transform:uppercase; letter-spacing:1px; font-family:sans-serif;">Marulas Industrial Corporation</h1>
+            <h2 style="margin:8px 0 0 0; font-size:14px; color:#555; font-weight:normal; font-family:sans-serif;">INDIVIDUAL PAYROLL MASTER SUMMARY</h2>
+          </div>
+          
+          <div id="individualBondContent"></div>
+          
+          <div style="margin-top:80px; display:flex; justify-content:space-between; padding:0 20px;">
+            <div style="text-align:center;">
+              <div style="border-bottom:1px solid #222; width:220px; margin-bottom:8px;"></div>
+              <div style="font-size:12px; font-weight:bold; font-family:sans-serif;">PAYROLL MANAGER</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="border-bottom:1px solid #222; width:220px; margin-bottom:8px;"></div>
+              <div style="font-size:12px; font-weight:bold; font-family:sans-serif;">PRESIDENT / EXECUTIVE</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="display:flex;gap:12px;padding:16px 24px;border-top:1px solid var(--border);background:var(--bg);flex-shrink:0;">
+      <button onclick="closeIndividualPreview()" class="btn btn-outline" style="flex:1;">Close</button>
+      <button onclick="exportIndividualPDF()" class="btn btn-outline" style="flex:1; border-color:#198754; color:#198754;">Export PDF (Short Bond)</button>
+      <button onclick="exportIndividualExcel()" class="btn btn-outline" style="flex:1; border-color:#0d6efd; color:#0d6efd;">Export Excel</button>
+      <button onclick="exportIndividualCSV()" class="btn btn-outline" style="flex:1; border-color:#6c757d; color:#6c757d;">Export CSV</button>
+    </div>
+  </div>
+</div>
