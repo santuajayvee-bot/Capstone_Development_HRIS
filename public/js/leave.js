@@ -493,16 +493,21 @@ async function saveRequest() {
       }
 
       if (!res || !res.ok) { 
+        console.error('Leave request failed:', res?.status, res?.statusText);
         const eData = await res?.json().catch(() => null);
-        const eText = eData ? eData.error : await res?.text();
-        throw new Error(eText || 'Failed'); 
+        const eText = eData ? eData.error : await res?.text().catch(() => 'Unknown error');
+        console.error('Error details:', eText);
+        throw new Error(eText || 'Failed to submit'); 
       }
       
-      alert('Leave request submitted! Status: Pending approval');
+      const result = await res.json();
+      console.log('Leave request success:', result);
+      alert('✅ Leave request submitted! Status: Pending approval');
       clearRequestForm();
       loadAllRequests();
     } catch (err) { 
-      alert('Failed to submit leave request: ' + err.message); 
+      console.error('Exception in saveRequest:', err);
+      alert('❌ Failed to submit leave request:\n\n' + err.message); 
     }
   } else {
     try {
