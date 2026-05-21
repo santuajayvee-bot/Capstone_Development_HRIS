@@ -125,9 +125,11 @@ async function apiFetch(url, options = {}) {
   const res = await fetch(url, { ...options, headers });
 
   if (res.status === 401) {
-    // Token expired or invalid → force logout
-    logout();
-    return null;
+    // Token expired or invalid → log it but return response so caller can handle
+    console.warn('⚠️ 401 Unauthorized:', url);
+    // Optional: show a reconnect prompt or auto-logout after a delay
+    // For now, return the response so the caller can handle it
+    return res;
   }
   return res;
 }

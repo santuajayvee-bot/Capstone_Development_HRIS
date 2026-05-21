@@ -6,6 +6,7 @@ const FORM_SECTIONS = ['personal', 'employment', 'payroll', 'documents'];
 let EDIT_MODE = false;
 let EDIT_EMPLOYEE_ID = null;           // Stores the employee_code (e.g. "EMP00001")
 let EDIT_EMPLOYEE_NUMERIC_ID = null;   // Stores the numeric database ID (for API calls)
+let IS_SAVING = false;                 // Prevent double-submit
 
 // Store uploaded files temporarily (in memory before save)
 const UPLOADED_FILES = {
@@ -415,6 +416,13 @@ function switchFormTab(el) {
 }
 
 function saveEmployee() {
+  // Prevent double submission
+  if (IS_SAVING) {
+    console.warn('⚠️ Save already in progress - ignoring duplicate click');
+    return;
+  }
+  IS_SAVING = true;
+  
   // Collect form data from all sections using the new ID attributes
   const empIdInput = document.getElementById('emp-id');
   const empId = empIdInput?.value;
@@ -437,6 +445,7 @@ function saveEmployee() {
   
   // Validation: Employee code is required
   if (!empId || empId.trim() === '') {
+    IS_SAVING = false;  // Reset double-submit flag
     alert('Employee ID is missing. Please wait for the ID to generate or refresh the page.');
     console.error('Employee code is empty!');
     return;
@@ -492,6 +501,7 @@ function saveEmployee() {
   };
 
   if (!formData.first_name || !formData.last_name || !formData.email) {
+    IS_SAVING = false;  // Reset double-submit flag
     alert('First name, last name, and email are required.');
     console.error('Missing required fields:', { 
       first_name: formData.first_name, 
@@ -538,6 +548,7 @@ function saveEmployee() {
     console.log('Response data:', data);
     const message = isEditing ? 'Employee updated successfully!' : 'Employee added successfully!';
     alert(message);
+    IS_SAVING = false;  // Reset double-submit flag
     
     // Reset edit mode flags
     EDIT_MODE = false;
@@ -621,6 +632,7 @@ function saveEmployee() {
     }, 500); // Small delay to ensure database is updated
   })
   .catch(err => {
+    IS_SAVING = false;  // Reset double-submit flag on error
     console.error('Save error:', err);
     alert('Failed to save employee: ' + err.message);
   });

@@ -13,11 +13,50 @@ async function fetchCurrentUser(callback) {
       const data = await response.json();
       CURRENT_USER = data.user;
       console.log('Current user loaded:', CURRENT_USER);
+      
+      // Check wage type eligibility for leave requests
+      checkLeaveRequestEligibility();
     }
   } catch (error) {
     console.error('Error fetching current user:', error);
   }
   if (callback) callback();
+}
+
+// Check if employee is eligible to file leave requests based on wage type
+async function checkLeaveRequestEligibility() {
+  try {
+    if (!CURRENT_USER || !CURRENT_USER.employeeId) return;
+    
+    const empRes = await apiFetch(`/api/employees`);
+    if (!empRes || !empRes.ok) return;
+    
+    const employees = await empRes.json();
+    const currentEmp = employees.find(e => e.id === CURRENT_USER.employeeId);
+    
+    if (currentEmp) {
+      const wageType = (currentEmp.wage_type || '').toLowerCase();
+      const isBlockedWageType = wageType.includes('per-piece') || wageType.includes('per-trip');
+      
+      if (isBlockedWageType) {
+        // Disable Leave Request button
+        const leaveReqCard = document.querySelector('[data-type="Leave Request"]');
+        if (leaveReqCard) {
+          leaveReqCard.style.opacity = '0.5';
+          leaveReqCard.style.cursor = 'not-allowed';
+          leaveReqCard.style.pointerEvents = 'none';
+          
+          // Add warning text
+          const subtext = leaveReqCard.querySelector('.req-type-sub');
+          if (subtext) {
+            subtext.innerHTML += '<br><span style="font-size:11px;color:#d32f2f;margin-top:4px;display:block;">❌ Not available for your wage type</span>';
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error checking leave request eligibility:', err);
+  }
 }
 
 // ── Request type selector ─────────────────────────────────────
@@ -402,6 +441,28 @@ async function saveRequest() {
   const type = selectedEl
     ? (selectedEl.getAttribute('data-type') || selectedEl.querySelector('.req-type-title')?.textContent?.trim())
     : 'Leave Request';
+
+  // For Leave Requests, check if employee is eligible based on wage type
+  if (type === 'Leave Request') {
+    try {
+      const empRes = await apiFetch(`/api/employees`);
+      if (empRes && empRes.ok) {
+        const employees = await empRes.json();
+        const currentEmp = employees.find(e => e.id === CURRENT_USER.employeeId);
+        if (currentEmp) {
+          const wageType = (currentEmp.wage_type || '').toLowerCase();
+          // Only Base Salary and Hourly are allowed. Block Per-Piece and Per-Trip
+          if (wageType.includes('per-piece') || wageType.includes('per-trip')) {
+            alert('You are not authorized to file leave requests.\n\nOnly employees with Base Salary or Hourly wage types can file leave requests. Your wage type is: ' + currentEmp.wage_type);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error checking employee wage type:', err);
+      // Continue anyway if check fails - backend will validate
+    }
+  }
 
   const reason = document.getElementById('req-reason')?.value?.trim();
   if (!reason) { alert('Please enter a reason.'); return; }

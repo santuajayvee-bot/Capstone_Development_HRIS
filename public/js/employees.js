@@ -274,7 +274,7 @@ function filterEmployees() {
 }
 
 /* View Switching */
-function switchView(view) {
+async function switchView(view) {
   CURRENT_VIEW = view;
   const filterBar = document.querySelector('.filter-bar');
   const empTable = document.getElementById('emp-table');
@@ -293,7 +293,7 @@ function switchView(view) {
     const user = userStr ? JSON.parse(userStr) : null;
     const adminRoles = ['admin', 'hr_admin', 'system_admin'];
     if (!adminRoles.includes(user?.role)) {
-      alert('Only administrators can access this feature.');
+      await showAlert('Only administrators can access this feature.', 'Access Denied', 'error');
       return;
     }
     // Show manage view, hide list view
@@ -448,7 +448,8 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
   const newStatus = currentStatus === 'Active' ? 'Inactive' : 'Active';
   const confirmMsg = `Are you sure you want to ${newStatus === 'Active' ? 'activate' : 'deactivate'} this employee?`;
   
-  if (!confirm(confirmMsg)) return;
+  const confirmed = await showConfirm(confirmMsg, 'Confirm Action', 'Yes', 'Cancel');
+  if (!confirmed) return;
 
   try {
     const response = await apiFetch(`/api/employees/${employeeId}/status`, {
@@ -463,23 +464,23 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
     }
 
     const data = await response.json();
-    alert(data.message || 'Status updated successfully');
+    await showAlert(data.message || 'Status updated successfully', 'Success', 'success');
     
     // Refresh the employee list
     await fetchEmployees();
     loadManageEmployeeList();
   } catch (error) {
     console.error('Error updating status:', error);
-    alert('Failed to update employee status: ' + error.message);
+    await showAlert('Failed to update employee status: ' + error.message, 'Error', 'error');
   }
 }
 
-function editEmployeeFromManage(employeeId) {
+async function editEmployeeFromManage(employeeId) {
   console.log('Editing employee ID:', employeeId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
   console.log('Found employee:', employee);
   if (!employee) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
 
@@ -504,11 +505,12 @@ function editEmployeeFromManage(employeeId) {
 async function deleteEmployeeFromManage(employeeId) {
   const emp = EMPLOYEES.find(e => e.id === parseInt(employeeId));
   if (!emp) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
   
-  if (!confirm(`Are you sure you want to delete ${emp.name}? This action cannot be undone.`)) return;
+  const confirmed = await showConfirm(`Are you sure you want to delete ${emp.name}? This action cannot be undone.`, 'Delete Employee', 'Delete', 'Cancel');
+  if (!confirmed) return;
   
   try {
     const response = await apiFetch(`/api/employees/${employeeId}`, {
@@ -522,14 +524,14 @@ async function deleteEmployeeFromManage(employeeId) {
     }
 
     const data = await response.json();
-    alert(data.message || 'Employee deleted successfully');
+    await showAlert(data.message || 'Employee deleted successfully', 'Success', 'success');
     
     // Refresh the employee list
     await fetchEmployees();
     loadManageEmployeeList();
   } catch (error) {
     console.error('Error deleting employee:', error);
-    alert('Failed to delete employee: ' + error.message);
+    await showAlert('Failed to delete employee: ' + error.message, 'Error', 'error');
   }
 }
 
@@ -654,6 +656,7 @@ function switchEditTab(tabName) {
   document.getElementById('edit-tab-personal').style.display = 'none';
   document.getElementById('edit-tab-employment').style.display = 'none';
   document.getElementById('edit-tab-payroll').style.display = 'none';
+  document.getElementById('edit-tab-photo').style.display = 'none';
   
   // Remove active state from all buttons
   document.querySelectorAll('.edit-tab-btn').forEach(btn => {
@@ -666,7 +669,8 @@ function switchEditTab(tabName) {
   const tabMap = {
     'personal': 'edit-tab-personal',
     'employment': 'edit-tab-employment',
-    'payroll': 'edit-tab-payroll'
+    'payroll': 'edit-tab-payroll',
+    'photo': 'edit-tab-photo'
   };
   
   if (tabMap[tabName]) {
@@ -675,7 +679,14 @@ function switchEditTab(tabName) {
   
   // Find and activate the clicked button
   document.querySelectorAll('.edit-tab-btn').forEach(btn => {
-    if (btn.textContent.includes(tabName === 'personal' ? 'Personal' : tabName === 'employment' ? 'Employment' : 'Payroll')) {
+    const btnText = btn.textContent;
+    let match = false;
+    if (tabName === 'personal' && btnText.includes('Personal')) match = true;
+    if (tabName === 'employment' && btnText.includes('Employment')) match = true;
+    if (tabName === 'payroll' && btnText.includes('Payroll')) match = true;
+    if (tabName === 'photo' && btnText.includes('Photo')) match = true;
+    
+    if (match) {
       btn.classList.add('active');
       btn.style.borderBottomColor = '#4f7cff';
       btn.style.color = '#333';
@@ -683,42 +694,80 @@ function switchEditTab(tabName) {
   });
 }
 
-function editEmployee(empId) {
+async function editEmployee(empId) {
   console.log('Editing employee ID:', empId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
   console.log('Found employee:', employee);
   if (!employee) {
-    alert('Employee not found');
+    await showAlert('Employee not found', 'Error', 'error');
     return;
   }
 
   currentEditingEmployeeId = employee.id;
   
-  // Populate Personal Info Tab
-  document.getElementById('edit-emp-first-name').value = employee.first_name || '';
-  document.getElementById('edit-emp-last-name').value = employee.last_name || '';
-  document.getElementById('edit-emp-email').value = employee.email || '';
-  document.getElementById('edit-emp-phone').value = employee.contact_number || '';
-  document.getElementById('edit-emp-city').value = employee.residential_address || '';
-  
-  // Populate Employment Details Tab
-  document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
-  document.getElementById('edit-emp-position').value = employee.position || '';
-  document.getElementById('edit-emp-type').value = employee.employment_type || '';
-  document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
-  document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
-  document.getElementById('edit-emp-work-location').value = employee.work_location || '';
-  
-  // Populate Payroll & Compensation Tab
-  document.getElementById('edit-payroll-wage-type').value = employee.wage_type || '';
-  document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
-  
-  // Reset to first tab
-  switchEditTab('personal');
-  
-  // Open the modal
-  const modal = document.getElementById('edit-employee-modal');
-  if (modal) modal.style.setProperty('display', 'flex', 'important');
+  try {
+    // Populate Personal Info Tab
+    document.getElementById('edit-emp-first-name').value = employee.first_name || '';
+    document.getElementById('edit-emp-last-name').value = employee.last_name || '';
+    document.getElementById('edit-emp-email').value = employee.email || '';
+    document.getElementById('edit-emp-phone').value = employee.contact_number || '';
+    document.getElementById('edit-emp-city').value = employee.residential_address || '';
+    
+    // Populate Employment Details Tab
+    document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
+    document.getElementById('edit-emp-position').value = employee.position || '';
+    document.getElementById('edit-emp-type').value = employee.employment_type || '';
+    document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
+    document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
+    document.getElementById('edit-emp-work-location').value = employee.work_location || '';
+    
+    // Populate Payroll & Compensation Tab
+    // Convert wage type name to numeric ID for form select
+    let wageTypeId = '';
+    if (employee.wage_type) {
+      const wageTypeMap = {
+        'Base Salary': '1',
+        'Hourly': '2',
+        'Per-Piece': '3',
+        'Per-Piece (Sewing)': '3',
+        'Per-Trip': '4',
+        'Per-Trip (Logistics)': '4'
+      };
+      wageTypeId = wageTypeMap[employee.wage_type] || '';
+    }
+    document.getElementById('edit-payroll-wage-type').value = wageTypeId;
+    document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
+    
+    // Reset file input
+    const photoInput = document.getElementById('edit-emp-photo-input');
+    if (photoInput) photoInput.value = '';
+    
+    // Reset photo preview to placeholder
+    const photoPreview = document.getElementById('edit-emp-photo-preview');
+    const noPhotoPlaceholder = document.getElementById('edit-emp-no-photo');
+    if (photoPreview) photoPreview.style.display = 'none';
+    if (noPhotoPlaceholder) noPhotoPlaceholder.style.display = 'flex';
+    
+    // Load employee photo (async, don't await - let it happen in background)
+    loadEmployeePhotoPreview(employee.id).catch(err => {
+      console.log('Photo loading error (non-critical):', err.message);
+    });
+    
+    // Reset to first tab
+    switchEditTab('personal');
+    
+    // Open the modal
+    const modal = document.getElementById('edit-employee-modal');
+    if (modal) {
+      modal.style.display = 'flex';
+      console.log('✓ Edit modal opened for employee:', employee.employee_code);
+    } else {
+      console.error('❌ Edit modal element not found');
+    }
+  } catch (error) {
+    console.error('❌ Error in editEmployee:', error.message);
+    await showAlert('Error opening edit form: ' + error.message, 'Error', 'error');
+  }
 }
 
 function openAddEmployeeModal() {
@@ -740,11 +789,17 @@ function openAddEmployeeModal() {
   document.getElementById('edit-payroll-wage-type').value = '';
   document.getElementById('edit-payroll-rate').value = '';
   
+  // Reset photo section
+  document.getElementById('edit-emp-photo-preview').style.display = 'none';
+  document.getElementById('edit-emp-no-photo').style.display = 'flex';
+  document.getElementById('edit-emp-photo-input').value = '';
+  
   // Reset tabs to show personal info
   document.querySelectorAll('.edit-tab-btn').forEach(btn => btn.classList.remove('active'));
   document.getElementById('edit-tab-personal').style.display = 'block';
   document.getElementById('edit-tab-employment').style.display = 'none';
   document.getElementById('edit-tab-payroll').style.display = 'none';
+  document.getElementById('edit-tab-photo').style.display = 'none';
   document.querySelectorAll('.edit-tab-btn')[0].classList.add('active');
   
   // Show modal
@@ -801,7 +856,7 @@ async function saveEditedEmployee() {
   const baseRate = document.getElementById('edit-payroll-rate').value;
 
   if (!firstName || !lastName || !email) {
-    alert('First name, last name, and email are required');
+    await showAlert('First name, last name, and email are required', 'Validation Error', 'warning');
     return;
   }
 
@@ -870,7 +925,7 @@ async function saveEditedEmployee() {
     }
 
     const message = isAddingNew ? 'Employee added successfully!' : 'Employee updated successfully!';
-    alert(message);
+    await showAlert(message, 'Success', 'success');
     closeEditEmployeeModal();
     
     // Refresh the employee list
@@ -878,7 +933,7 @@ async function saveEditedEmployee() {
     loadManageEmployeeList(EMPLOYEES);
   } catch (error) {
     console.error('Error saving employee:', error);
-    alert('Failed to save employee: ' + error.message);
+    await showAlert('Failed to save employee: ' + error.message, 'Error', 'error');
   }
 }
 
@@ -1008,6 +1063,9 @@ async function openEmployeeDetailModal(employeeId) {
   
   // Employment details
   document.getElementById('emp-detail-dept').textContent = employee.department || '—';
+  document.getElementById('emp-detail-position').textContent = employee.position || '—';
+  document.getElementById('emp-detail-employment-type').textContent = employee.employment_type || '—';
+  document.getElementById('emp-detail-date-hired').textContent = employee.date_hired ? employee.date_hired.split('T')[0] : '—';
   
   // Reset tabs
   document.querySelectorAll('.emp-detail-tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -1198,14 +1256,14 @@ async function saveEmpPayrollConfig() {
   const wageTypeSelect = document.getElementById('emp-payroll-wage-select');
   if (!wageTypeSelect) {
     console.error('❌ Wage type select element not found!');
-    alert('❌ Form error: wage type selector not found');
+    await showAlert('❌ Form error: wage type selector not found', 'Error', 'error');
     return;
   }
   
   const wageTypeId = wageTypeSelect.value;
   if (!wageTypeId) {
     console.warn('❌ No wage type selected - User must select a wage type first');
-    alert('❌ Please select a wage type first');
+    await showAlert('❌ Please select a wage type first', 'Warning', 'warning');
     return;
   }
   
@@ -1239,7 +1297,7 @@ async function saveEmpPayrollConfig() {
     console.log('→ Collecting HOURLY rates...');
     if (hourlyRate <= 0) {
       console.error('❌ VALIDATION FAILED: Hourly rate must be > 0, got:', hourlyRate);
-      alert('❌ For Hourly wage: Please enter a VALID hourly rate (must be greater than 0)');
+      await showAlert('❌ For Hourly wage: Please enter a VALID hourly rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
     console.log('   ✅ Hourly rate is valid:', hourlyRate);
@@ -1282,7 +1340,7 @@ async function saveEmpPayrollConfig() {
     console.log('→ Collecting BASE SALARY rates...');
     if (primaryRate <= 0) {
       console.error('❌ VALIDATION FAILED: Base salary must be > 0, got:', primaryRate);
-      alert('❌ For ' + wageTypeMap[wageTypeId] + ': Please enter a VALID rate (must be greater than 0)');
+      await showAlert('❌ For ' + wageTypeMap[wageTypeId] + ': Please enter a VALID rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
     console.log('   ✅ Base salary is valid:', primaryRate);
@@ -1297,7 +1355,7 @@ async function saveEmpPayrollConfig() {
   }
   
   if (rates.length === 0) {
-    alert('❌ Please enter at least one rate value');
+    await showAlert('❌ Please enter at least one rate value', 'Validation Error', 'warning');
     console.warn('No rates to save:', { wageTypeId, primaryRate, hourlyRate, overtimeRate });
     return;
   }
@@ -1339,6 +1397,120 @@ async function saveEmpPayrollConfig() {
   }
 }
 
+// ============================================================
+// EMPLOYEE PHOTO MANAGEMENT
+// ============================================================
+
+async function loadEmployeePhotoPreview(employeeId) {
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}/photo`);
+    if (response && response.ok) {
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const preview = document.getElementById('edit-emp-photo-preview');
+      const noPhoto = document.getElementById('edit-emp-no-photo');
+      
+      preview.src = url;
+      preview.style.display = 'block';
+      noPhoto.style.display = 'none';
+    } else {
+      // No photo found
+      document.getElementById('edit-emp-photo-preview').style.display = 'none';
+      document.getElementById('edit-emp-no-photo').style.display = 'flex';
+    }
+  } catch (err) {
+    console.log('No photo found for employee:', err.message);
+    document.getElementById('edit-emp-photo-preview').style.display = 'none';
+    document.getElementById('edit-emp-no-photo').style.display = 'flex';
+  }
+}
+
+async function uploadEmployeePhoto() {
+  if (!currentEditingEmployeeId) {
+    await showAlert('No employee selected', 'Error', 'error');
+    return;
+  }
+
+  const fileInput = document.getElementById('edit-emp-photo-input');
+  if (!fileInput.files || fileInput.files.length === 0) {
+    await showAlert('Please select a photo to upload', 'Warning', 'warning');
+    return;
+  }
+
+  const file = fileInput.files[0];
+  
+  // Validate file size (5MB)
+  if (file.size > 5 * 1024 * 1024) {
+    await showAlert('File size exceeds 5MB limit', 'Error', 'error');
+    return;
+  }
+
+  // Validate file type
+  if (!['image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+    await showAlert('Only JPG, JPEG, and PNG files are allowed', 'Error', 'error');
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}/photo`, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to upload photo');
+    }
+
+    await showAlert('Photo uploaded successfully!', 'Success', 'success');
+    
+    // Reload photo preview
+    await loadEmployeePhotoPreview(currentEditingEmployeeId);
+    
+    // Clear file input
+    fileInput.value = '';
+  } catch (error) {
+    console.error('Error uploading photo:', error);
+    await showAlert('Failed to upload photo: ' + error.message, 'Error', 'error');
+  }
+}
+
+async function deleteEmployeePhoto() {
+  if (!currentEditingEmployeeId) {
+    await showAlert('No employee selected', 'Error', 'error');
+    return;
+  }
+
+  const confirmed = await showConfirm('Are you sure you want to delete this employee photo?', 'Delete Photo', 'Delete', 'Cancel');
+  if (!confirmed) return;
+
+  try {
+    const response = await apiFetch(`/api/employees/${currentEditingEmployeeId}/photo`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete photo');
+    }
+
+    await showAlert('Photo deleted successfully', 'Success', 'success');
+    
+    // Reset preview
+    document.getElementById('edit-emp-photo-preview').style.display = 'none';
+    document.getElementById('edit-emp-no-photo').style.display = 'flex';
+    
+    // Clear file input
+    document.getElementById('edit-emp-photo-input').value = '';
+  } catch (error) {
+    console.error('Error deleting photo:', error);
+    await showAlert('Failed to delete photo: ' + error.message, 'Error', 'error');
+  }
+}
+
 // Expose functions globally
 window.openEmployeeDetailModal = openEmployeeDetailModal;
 window.closeEmployeeDetail = closeEmployeeDetail;
@@ -1349,10 +1521,12 @@ window.closeEditEmployeeModal = closeEditEmployeeModal;
 window.saveEditedEmployee = saveEditedEmployee;
 window.switchEditTab = switchEditTab;
 window.updateEditPayrollWageType = updateEditPayrollWageType;
-window.editEmployee = editEmployeeFromManage;
 window.editEmployeeFromManage = editEmployeeFromManage;
 window.toggleEmployeeStatus = toggleEmployeeStatus;
 window.deleteEmployeeFromManage = deleteEmployeeFromManage;
+window.uploadEmployeePhoto = uploadEmployeePhoto;
+window.deleteEmployeePhoto = deleteEmployeePhoto;
+window.loadEmployeePhotoPreview = loadEmployeePhotoPreview;
 
 // Expose refresh function globally for manual refresh
 window.refreshEmployees = fetchEmployees;

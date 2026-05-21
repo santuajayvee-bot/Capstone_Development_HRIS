@@ -145,7 +145,21 @@
   </div>
 </div>
 
+<!-- Universal Modal for Alerts and Confirms -->
+<div id="universal-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:white;border-radius:12px;max-width:450px;width:90%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div id="modal-icon" style="font-size:48px;margin-bottom:16px;">ℹ️</div>
+    <h3 id="modal-title" style="margin:0 0 12px 0;font-size:18px;font-weight:600;color:#333;">Alert</h3>
+    <p id="modal-message" style="margin:0 0 24px 0;font-size:14px;color:#666;line-height:1.5;">Message</p>
+    <div id="modal-buttons" style="display:flex;gap:12px;justify-content:flex-end;">
+      <button id="modal-cancel" style="flex:1;padding:10px;background:#f0f0f0;color:#333;border:none;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Cancel</button>
+      <button id="modal-confirm" style="flex:1;padding:10px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;">OK</button>
+    </div>
+  </div>
+</div>
+
 <!-- JS Modules (order matters: auth first, then others) -->
+<script src="js/modal-utils.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/app.js"></script>
 <script src="js/login.js"></script>

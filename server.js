@@ -83,8 +83,14 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(
-      `SELECT e.*, d.name AS department FROM employees e
-       LEFT JOIN departments d ON d.id = e.department_id ORDER BY e.first_name`
+      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
+              e.nationality, e.date_of_birth, e.gender, e.residential_address, e.emergency_contact_name, e.emergency_contact_num, 
+              e.department_id, e.position, e.employment_type, e.date_hired, e.supervisor, e.work_location, e.status, e.wage_type_id,
+              d.name AS department, wt.name AS wage_type
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+       ORDER BY e.first_name`
     );
     
     console.log('\n=== GET /api/employees ===');
@@ -93,10 +99,11 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
       console.log('Sample employee data:', {
         employee_code: rows[0].employee_code,
         name: rows[0].first_name + ' ' + rows[0].last_name,
+        employment_type: rows[0].employment_type,
+        date_hired: rows[0].date_hired,
         department: rows[0].department,
         position: rows[0].position,
-        supervisor: rows[0].supervisor,
-        work_location: rows[0].work_location
+        wage_type: rows[0].wage_type
       });
     }
     
@@ -114,11 +121,12 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status, wage_type, base_rate, sewingRates } = req.body;
     
     console.log('\n=== POST /api/employees ===');
     console.log('User role:', req.user.role);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Payroll data received:', { wage_type, base_rate, sewingRates });
     
     if (!first_name || !last_name || !email) {
       console.error('❌ Missing required fields');
@@ -138,10 +146,76 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, employment_type || 'Full-time', date_hired || null, supervisor || null, work_location || null, status || 'Active']
     );
     
+    const employee_id = result.insertId;
     console.log('✅ Employee inserted successfully!');
-    console.log('Insert result:', { insertId: result.insertId, affectedRows: result.affectedRows });
+    console.log('Insert result:', { insertId: employee_id, affectedRows: result.affectedRows });
     console.log('Employee Code:', employee_code);
-    return res.status(201).json({ id: result.insertId, employee_code: employee_code, message: 'Employee added successfully.' });
+    
+    // Save wage configuration if provided
+    if (wage_type) {
+      try {
+        console.log('💾 Saving wage configuration for new employee...');
+        
+        // Get wage_type_id from wage type name
+        const [wageTypeRows] = await pool.execute(
+          'SELECT id FROM wage_types WHERE name = ?',
+          [wage_type]
+        );
+        
+        if (wageTypeRows.length > 0) {
+          const wage_type_id = wageTypeRows[0].id;
+          
+          // Update employee wage_type_id
+          await pool.execute(
+            'UPDATE employees SET wage_type_id = ? WHERE id = ?',
+            [wage_type_id, employee_id]
+          );
+          
+          console.log('✅ Updated employee wage_type_id to:', wage_type_id);
+          
+          // Save base rate for all wage types (or per-piece primary rate)
+          if (base_rate !== undefined && base_rate !== null && base_rate !== '') {
+            // Insert new base rate with wage_type_id
+            await pool.execute(
+              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, NOW())',
+              [employee_id, wage_type_id, parseFloat(base_rate)]
+            );
+            
+            console.log('✅ Saved base rate:', base_rate, 'for wage_type_id:', wage_type_id);
+          }
+          
+          // Save sewing type specific rates if provided
+          if (sewingRates && Array.isArray(sewingRates) && sewingRates.length > 0) {
+            for (const sewingRate of sewingRates) {
+              if (sewingRate.sewing_id && sewingRate.rate) {
+                try {
+                  await pool.execute(
+                    `INSERT INTO employee_wage_rates 
+                     (employee_id, wage_type_id, sewing_type_id, rate, effective_date) 
+                     VALUES (?, ?, ?, ?, NOW())`,
+                    [employee_id, wage_type_id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
+                  );
+                  console.log(`✅ Saved sewing rate for type ${sewingRate.sewing_id}: ${sewingRate.rate}`);
+                } catch (err) {
+                  console.warn('⚠️ Error saving sewing rate:', err.message);
+                }
+              }
+            }
+          }
+        } else {
+          console.warn('⚠️ Wage type not found:', wage_type);
+        }
+      } catch (err) {
+        console.warn('⚠️ Error saving wage configuration:', err.message);
+        // Don't fail the whole request if wage save fails, but return both success and warning
+      }
+    }
+    
+    return res.status(201).json({ 
+      id: employee_id, 
+      employee_code: employee_code, 
+      message: 'Employee added successfully with payroll configuration.' 
+    });
   } catch (err) { 
     console.error('❌ ERROR adding employee:');
     console.error('Message:', err.message);
@@ -253,10 +327,12 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
               }
             }
           }
+        } else {
+          console.warn('⚠️ Wage type not found:', wage_type);
         }
       } catch (err) {
-        console.warn('⚠️ Error saving wage configuration:', err.message);
-        // Don't fail the whole request if wage save fails
+        console.error('❌ Error saving wage configuration:', err.message);
+        // Log error but continue - don't fail entire request
       }
     }
     
@@ -436,6 +512,110 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
   }
 });
 
+// ============================================================
+// EMPLOYEE PHOTOS — Upload, retrieve, and delete employee photos
+// ============================================================
+
+// Upload employee photo (store as base64 in database)
+app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), upload.single('photo'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'No photo provided.' });
+    }
+
+    console.log('\n=== POST /api/employees/:id/photo ===');
+    console.log('Employee ID:', id);
+    console.log('Photo file:', req.file.filename);
+    console.log('Photo size:', req.file.size);
+
+    // Read file and convert to base64
+    const fileData = fs.readFileSync(req.file.path);
+    
+    // Insert or replace photo record
+    const [result] = await pool.execute(
+      `INSERT INTO employee_photos (employee_id, photo_data, photo_mime_type, photo_size)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+       photo_data = VALUES(photo_data),
+       photo_mime_type = VALUES(photo_mime_type),
+       photo_size = VALUES(photo_size),
+       updated_at = NOW()`,
+      [id, fileData, req.file.mimetype, req.file.size]
+    );
+
+    // Delete temporary file
+    fs.unlinkSync(req.file.path);
+
+    console.log('✅ Employee photo uploaded successfully');
+    return res.status(200).json({
+      message: 'Photo uploaded successfully.',
+      file_name: req.file.originalname,
+      file_size: req.file.size
+    });
+    
+  } catch (err) {
+    console.error('Error uploading photo:', err.message);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    return res.status(500).json({ error: 'Failed to upload photo.', details: err.message });
+  }
+});
+
+// Get employee photo
+app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    const [photos] = await pool.execute(
+      `SELECT photo_data, photo_mime_type FROM employee_photos WHERE employee_id = ?`,
+      [id]
+    );
+
+    if (photos.length === 0) {
+      return res.status(404).json({ error: 'No photo found for this employee.' });
+    }
+
+    const { photo_data, photo_mime_type } = photos[0];
+    
+    // Send binary photo data
+    res.set('Content-Type', photo_mime_type);
+    res.send(photo_data);
+    
+  } catch (err) {
+    console.error('Error fetching photo:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch photo.', details: err.message });
+  }
+});
+
+// Delete employee photo
+app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params; // numeric employee ID
+    
+    const [result] = await pool.execute(
+      `DELETE FROM employee_photos WHERE employee_id = ?`,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'No photo found for this employee.' });
+    }
+
+    console.log('✅ Employee photo deleted successfully');
+    return res.status(200).json({ message: 'Photo deleted successfully.' });
+    
+  } catch (err) {
+    console.error('Error deleting photo:', err.message);
+    return res.status(500).json({ error: 'Failed to delete photo.', details: err.message });
+  }
+});
+
 // Leave
 app.get('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), async (req, res) => {
   try {
@@ -473,17 +653,24 @@ app.post('/api/leave', requireAuth, requireRole([...ROLES.admin_any, 'employee']
       return res.status(400).json({ error: 'Your admin account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
     }
 
-    // Check if employee is eligible for leave (not Agency Worker)
-    const [empRows] = await pool.execute('SELECT employment_type FROM employees WHERE id = ?', [empId]);
+    // Check if employee is eligible for leave (only per-day and per-hour employees)
+    const [empRows] = await pool.execute(
+      `SELECT e.wage_type_id, wt.name as wage_type 
+       FROM employees e 
+       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id 
+       WHERE e.id = ?`, 
+      [empId]
+    );
     if (empRows.length > 0) {
-      const empType = (empRows[0].employment_type || '').toLowerCase();
-      if (empType.includes('agency') || empType.includes('contractual')) {
+      const wageType = (empRows[0].wage_type || '').toLowerCase();
+      // Only allow Base Salary and Hourly wage types. Block Per-Piece and Per-Trip
+      if (wageType.includes('per-piece') || wageType.includes('per-trip')) {
          // Delete uploaded file if exists
          if (req.file) {
             const fs = require('fs');
             if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
          }
-         return res.status(403).json({ error: 'Agency/Contractual workers are not authorized to file leave requests. Please contact your manpower agency.' });
+         return res.status(403).json({ error: 'Employees with Per-Piece or Per-Trip wage types are not authorized to file leave requests. Only employees with Base Salary or Hourly wage types can file leaves.' });
       }
     }
     

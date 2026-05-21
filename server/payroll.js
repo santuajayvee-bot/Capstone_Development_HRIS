@@ -230,17 +230,35 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
     const week = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
     const monthYear = date.toISOString().slice(0, 7);
 
-    const [result] = await pool.execute(`
+    // Calculate gross and net pay
+    const grossPay = quantity * rate;
+    const sssDeduction = grossPay * 0.045;
+    const pagibigDeduction = grossPay * 0.02;
+    const philhealthDeduction = grossPay * 0.0275;
+    const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
+    const netPay = grossPay - totalDeductions;
+
+    // Save to production_transactions
+    const [prodResult] = await pool.execute(`
       INSERT INTO production_transactions 
       (employee_id, sewing_type_id, quantity, rate, transaction_date, week_number, month_year)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [employee_id, sewing_type_id, quantity, rate, transaction_date, week, monthYear]);
 
+    // Also save to salary_calculations for display in records
+    const wage_type_id = 3; // Per-Piece wage type ID
+    const [salCalcResult] = await pool.execute(`
+      INSERT INTO salary_calculations 
+      (employee_id, wage_type_id, base_rate, quantity, gross_pay, sss_deduction, pagibig_deduction, philhealth_deduction, total_deductions, net_pay, calculation_date, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [employee_id, wage_type_id, rate, quantity, grossPay, sssDeduction, pagibigDeduction, philhealthDeduction, totalDeductions, netPay, transaction_date, 'Submitted']);
+
     res.json({ 
       success: true, 
-      id: result.insertId,
+      id: prodResult.insertId,
       amount: quantity * rate,
-      message: `Recorded ${quantity} pieces at ₱${rate} each`
+      message: `Recorded ${quantity} pieces at ₱${rate} each`,
+      salary_calculation_id: salCalcResult.insertId
     });
   } catch (err) {
     console.error('Error recording production transaction:', err);
@@ -259,21 +277,144 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
     const week = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
     const monthYear = date.toISOString().slice(0, 7);
 
-    const [result] = await pool.execute(`
+    // Calculate gross and net pay
+    const grossPay = rate;
+    const sssDeduction = grossPay * 0.045;
+    const pagibigDeduction = grossPay * 0.02;
+    const philhealthDeduction = grossPay * 0.0275;
+    const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
+    const netPay = grossPay - totalDeductions;
+
+    // Save to logistics_transactions
+    const [logResult] = await pool.execute(`
       INSERT INTO logistics_transactions 
       (employee_id, logistics_region_id, rate, amount, trip_reference, transaction_date, week_number, month_year)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [employee_id, logistics_region_id, rate, rate, trip_reference, transaction_date, week, monthYear]);
 
+    // Also save to salary_calculations for display in records
+    const wage_type_id = 4; // Per-Trip wage type ID
+    const [salCalcResult] = await pool.execute(`
+      INSERT INTO salary_calculations 
+      (employee_id, wage_type_id, base_rate, quantity, gross_pay, sss_deduction, pagibig_deduction, philhealth_deduction, total_deductions, net_pay, calculation_date, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [employee_id, wage_type_id, rate, 1, grossPay, sssDeduction, pagibigDeduction, philhealthDeduction, totalDeductions, netPay, transaction_date, 'Submitted']);
+
     res.json({ 
       success: true, 
-      id: result.insertId,
+      id: logResult.insertId,
       amount: rate,
-      message: `Recorded 1 trip to ${trip_reference || 'destination'} at ₱${rate}`
+      message: `Recorded 1 trip to ${trip_reference || 'destination'} at ₱${rate}`,
+      salary_calculation_id: salCalcResult.insertId
     });
   } catch (err) {
     console.error('Error recording logistics transaction:', err);
     res.status(500).json({ error: 'Failed to record transaction' });
+  }
+});
+
+// Save salary calculation (Base Salary or Hourly)
+router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const {
+      employee_id,
+      wage_type_id,
+      base_rate,
+      quantity,
+      hours_worked,
+      days_worked,
+      housing_allowance,
+      meal_allowance,
+      transport_allowance,
+      bonus_allowance,
+      total_allowances,
+      overtime_hours,
+      overtime_amount,
+      gross_pay,
+      sss_deduction,
+      pagibig_deduction,
+      philhealth_deduction,
+      total_deductions,
+      net_pay,
+      calculation_date
+    } = req.body;
+
+    console.log('\n=== POST /api/payroll/salary-calculation ===');
+    console.log('Employee ID:', employee_id);
+    console.log('Wage Type ID:', wage_type_id);
+    console.log('Gross:', gross_pay, '| Net:', net_pay);
+    console.log('Hours Worked:', hours_worked, '| Days Worked:', days_worked);
+
+    // Validate required fields
+    if (!employee_id || !wage_type_id || !base_rate || !gross_pay || !net_pay) {
+      return res.status(400).json({ 
+        error: 'Required fields: employee_id, wage_type_id, base_rate, gross_pay, net_pay' 
+      });
+    }
+
+    // Insert into salary_calculations table
+    const [result] = await pool.execute(`
+      INSERT INTO salary_calculations (
+        employee_id,
+        wage_type_id,
+        base_rate,
+        quantity,
+        hours_worked,
+        days_worked,
+        housing_allowance,
+        meal_allowance,
+        transport_allowance,
+        bonus_allowance,
+        total_allowances,
+        overtime_hours,
+        overtime_amount,
+        gross_pay,
+        sss_deduction,
+        pagibig_deduction,
+        philhealth_deduction,
+        total_deductions,
+        net_pay,
+        calculation_date,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      employee_id,
+      wage_type_id,
+      base_rate,
+      quantity || 1,
+      hours_worked || 0,
+      days_worked || 0,
+      housing_allowance || 0,
+      meal_allowance || 0,
+      transport_allowance || 0,
+      bonus_allowance || 0,
+      total_allowances || 0,
+      overtime_hours || 0,
+      overtime_amount || 0,
+      gross_pay,
+      sss_deduction || 0,
+      pagibig_deduction || 0,
+      philhealth_deduction || 0,
+      total_deductions || 0,
+      net_pay,
+      calculation_date || new Date().toISOString().split('T')[0],
+      'Submitted'
+    ]);
+
+    console.log('✅ Salary calculation saved with ID:', result.insertId);
+    
+    res.json({ 
+      success: true, 
+      id: result.insertId,
+      message: `Salary calculation saved for employee ID ${employee_id}`,
+      gross_pay,
+      net_pay,
+      calculation_id: result.insertId
+    });
+  } catch (err) {
+    console.error('❌ Error saving salary calculation:', err);
+    res.status(500).json({ error: 'Failed to save salary calculation: ' + err.message });
   }
 });
 
@@ -704,6 +845,191 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
   } catch (err) {
     console.error('Error fetching monthly summary:', err);
     res.status(500).json({ error: 'Failed to fetch monthly summary' });
+  }
+});
+
+// Get all salary calculation records (for audit trail and record keeping)
+router.get('/salary-calculations', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { employee_id, status, from_date, to_date, limit = 100 } = req.query;
+
+    let query = `
+      SELECT 
+        sc.id,
+        sc.employee_id,
+        CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+        e.employee_code,
+        d.name AS department,
+        e.position,
+        w.name AS wage_type,
+        sc.base_rate,
+        sc.quantity,
+        sc.hours_worked,
+        sc.days_worked,
+        sc.housing_allowance,
+        sc.meal_allowance,
+        sc.transport_allowance,
+        sc.bonus_allowance,
+        sc.total_allowances,
+        sc.overtime_hours,
+        sc.gross_pay,
+        sc.sss_deduction,
+        sc.pagibig_deduction,
+        sc.philhealth_deduction,
+        sc.total_deductions,
+        sc.net_pay,
+        sc.status,
+        sc.calculation_date,
+        sc.created_at,
+        sc.updated_at
+      FROM salary_calculations sc
+      JOIN employees e ON e.id = sc.employee_id
+      LEFT JOIN departments d ON d.id = e.department_id
+      LEFT JOIN wage_types w ON w.id = sc.wage_type_id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (employee_id) {
+      query += ' AND sc.employee_id = ?';
+      params.push(employee_id);
+    }
+
+    if (status) {
+      query += ' AND sc.status = ?';
+      params.push(status);
+    }
+
+    if (from_date) {
+      query += ' AND sc.calculation_date >= ?';
+      params.push(from_date);
+    }
+
+    if (to_date) {
+      query += ' AND sc.calculation_date <= ?';
+      params.push(to_date);
+    }
+
+    query += ' ORDER BY sc.created_at DESC LIMIT ?';
+    params.push(parseInt(limit) || 100);
+
+    const [records] = await pool.execute(query, params);
+
+    // Calculate summary statistics
+    const totalRecords = records.length;
+    const totalGross = records.reduce((sum, r) => sum + parseFloat(r.gross_pay || 0), 0);
+    const totalNet = records.reduce((sum, r) => sum + parseFloat(r.net_pay || 0), 0);
+    const totalDeductions = records.reduce((sum, r) => sum + parseFloat(r.total_deductions || 0), 0);
+
+    res.json({
+      records,
+      summary: {
+        totalRecords,
+        totalGross,
+        totalNet,
+        totalDeductions,
+        averageGross: totalRecords > 0 ? totalGross / totalRecords : 0,
+        averageNet: totalRecords > 0 ? totalNet / totalRecords : 0
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching salary calculations:', err);
+    res.status(500).json({ error: 'Failed to fetch salary calculations: ' + err.message });
+  }
+});
+
+// Convert pending salary calculations to payslips for a specific period
+router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { month_year } = req.body;
+
+    console.log('📊 Converting salary calculations to payslips for:', month_year);
+
+    if (!month_year) {
+      return res.status(400).json({ error: 'month_year is required' });
+    }
+
+    // Get or create payroll run for this month
+    let payrollRunId;
+    try {
+      const [existing] = await pool.execute(
+        'SELECT id FROM payroll_runs WHERE month_year = ?',
+        [month_year]
+      );
+
+      if (existing.length) {
+        payrollRunId = existing[0].id;
+        console.log('✅ Using existing payroll run ID:', payrollRunId);
+      } else {
+        // Create new payroll run
+        const firstDay = new Date(month_year + '-01');
+        const lastDay = new Date(new Date(firstDay).setMonth(firstDay.getMonth() + 1));
+        lastDay.setDate(0);
+        
+        const startDate = firstDay.toISOString().split('T')[0];
+        const endDate = lastDay.toISOString().split('T')[0];
+
+        const [runResult] = await pool.execute(`
+          INSERT INTO payroll_runs (month_year, start_date, end_date, created_by)
+          VALUES (?, ?, ?, ?)
+        `, [month_year, startDate, endDate, req.user.id || req.user.userId]);
+
+        payrollRunId = runResult.insertId;
+        console.log('✅ Created new payroll run ID:', payrollRunId);
+      }
+    } catch (dbErr) {
+      console.error('❌ Error with payroll run:', dbErr);
+      throw new Error(`Failed to get/create payroll run: ${dbErr.message}`);
+    }
+
+    // Find pending salary calculations for this month
+    let convertedCount = 0;
+    try {
+      const [calculations] = await pool.execute(`
+        SELECT sc.id, sc.employee_id, sc.wage_type_id, sc.gross_pay, sc.deductions, sc.net_pay
+        FROM salary_calculations sc
+        WHERE sc.month_year = ? AND sc.status = 'Submitted'
+        AND NOT EXISTS (
+          SELECT 1 FROM payslips p 
+          WHERE p.payroll_run_id = ? AND p.employee_id = sc.employee_id
+        )
+      `, [month_year, payrollRunId]);
+
+      console.log(`Found ${calculations.length} pending calculations to convert`);
+
+      for (const calc of calculations) {
+        try {
+          // Create payslip from salary calculation
+          await pool.execute(`
+            INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'Approved')
+          `, [payrollRunId, calc.employee_id, calc.wage_type_id, calc.gross_pay, calc.deductions, calc.net_pay]);
+
+          convertedCount++;
+          console.log(`✅ Converted calculation for employee ${calc.employee_id}`);
+        } catch (convertErr) {
+          console.error(`❌ Error converting calculation for employee ${calc.employee_id}:`, convertErr);
+        }
+      }
+    } catch (dbErr) {
+      console.error('❌ Error fetching calculations:', dbErr);
+      throw new Error(`Failed to fetch calculations: ${dbErr.message}`);
+    }
+
+    res.json({
+      success: true,
+      payrollRunId,
+      convertedCount,
+      message: `Converted ${convertedCount} salary calculations to payslips for ${month_year}`
+    });
+  } catch (err) {
+    console.error('❌ Error converting calculations:', err);
+    res.status(500).json({
+      error: 'Failed to convert calculations to payslips',
+      details: err.message
+    });
   }
 });
 
