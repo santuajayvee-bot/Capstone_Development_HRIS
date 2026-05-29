@@ -53,6 +53,20 @@ const upload = multer({
   }
 });
 
+function uploadSingle(fieldName) {
+  return (req, res, next) => {
+    upload.single(fieldName)(req, res, (err) => {
+      if (!err) return next();
+
+      const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+        ? 'File is too large. Maximum size is 5MB.'
+        : err.message || 'File upload failed.';
+
+      return res.status(400).json({ error: message });
+    });
+  };
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -84,9 +98,27 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     const pool = require('./config/db');
     const [rows] = await pool.execute(
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
-              e.nationality, e.date_of_birth, e.gender, e.residential_address, e.emergency_contact_name, e.emergency_contact_num, 
-              e.department_id, e.position, e.employment_type, e.date_hired, e.supervisor, e.work_location, e.status, e.wage_type_id,
-              d.name AS department, wt.name AS wage_type
+              e.work_email, e.mailing_address,
+              e.nationality, e.date_of_birth, e.place_of_birth, e.gender, e.marital_status, e.blood_type, e.religion,
+              e.residential_address, e.current_address, e.emergency_contact_name, e.emergency_contact_num,
+              e.emergency_contact_relationship, e.emergency_contact_secondary_num, e.emergency_contact_email, e.emergency_contact_address,
+              e.education_school, e.education_attainment, e.education_units, e.education_year_graduated,
+              e.education_jhs_school, e.education_jhs_attainment, e.education_jhs_from, e.education_jhs_to, e.education_jhs_year_graduated,
+              e.education_shs_school, e.education_shs_attainment, e.education_shs_from, e.education_shs_to, e.education_shs_year_graduated,
+              e.education_vocational_school, e.education_vocational_attainment, e.education_vocational_units, e.education_vocational_from, e.education_vocational_to, e.education_vocational_year_graduated,
+              e.education_college_school, e.education_college_attainment, e.education_college_units, e.education_college_from, e.education_college_to, e.education_college_year_graduated,
+              e.department_id, e.position, e.employment_type, e.date_hired, e.end_of_contract, e.supervisor, e.work_location,
+              e.shift_schedule, e.employee_level, e.employment_history, e.status, e.wage_type_id,
+              e.salary_grade, e.allowances, e.payroll_schedule,
+              e.sss_number, e.philhealth_number, e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account,
+              d.name AS department, wt.name AS wage_type,
+              (
+                SELECT ewr.rate
+                FROM employee_wage_rates ewr
+                WHERE ewr.employee_id = e.id
+                ORDER BY ewr.effective_date DESC, ewr.id DESC
+                LIMIT 1
+              ) AS basic_salary
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
@@ -109,7 +141,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     
     if (req.user.role === 'employee') return res.json(rows.filter(r => r.id === req.user.employeeId));
     res.json(rows);
-  } catch (err) { 
+  } catch (err) {
     console.error('Error fetching employees:', err);
     res.status(500).json({ error: 'Failed to fetch employees.' }); 
   }
@@ -121,7 +153,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status, wage_type, base_rate, sewingRates } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
     console.log('\n=== POST /api/employees ===');
     console.log('User role:', req.user.role);
@@ -141,9 +173,9 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     console.log('Executing INSERT for:', { employee_code, first_name, last_name, email });
     
     const [result] = await pool.execute(
-      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, employment_type || 'Full-time', date_hired || null, supervisor || null, work_location || null, status || 'Active']
+      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, mailing_address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, residential_address || null, current_address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
     );
     
     const employee_id = result.insertId;
@@ -234,7 +266,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     
     const pool = require('./config/db');
     const { id } = req.params; // numeric employee id
-    const { first_name, middle_name, last_name, suffix, email, contact_number, nationality, date_of_birth, gender, residential_address, emergency_contact_name, emergency_contact_num, department_id, position, employment_type, date_hired, supervisor, work_location, status, wage_type, base_rate, sewingRates } = req.body;
+    const { first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
     console.log('Employee ID:', id);
@@ -251,14 +283,32 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
 
     const [result] = await pool.execute(
       `UPDATE employees SET 
-        first_name=?, middle_name=?, last_name=?, suffix=?, email=?, contact_number=?, 
-        nationality=?, date_of_birth=?, gender=?, residential_address=?, emergency_contact_name=?, 
-        emergency_contact_num=?, department_id=?, position=?, employment_type=?, date_hired=?, supervisor=?, work_location=?, status=?
-       WHERE id=?`,
-      [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, 
-       nationality || 'Filipino', date_of_birth || null, gender || null, residential_address || null, 
-       emergency_contact_name || null, emergency_contact_num || null, department_id || null, position || null, 
-       employment_type || 'Full-time', date_hired || null, supervisor || null, work_location || null, status || 'Active', id]
+        first_name=?, middle_name=?, last_name=?, suffix=?, email=?, contact_number=?, work_email=?, mailing_address=?,
+        nationality=?, marital_status=?, date_of_birth=?, place_of_birth=?, gender=?, blood_type=?, religion=?, residential_address=?, current_address=?, emergency_contact_name=?,
+        emergency_contact_num=?, emergency_contact_relationship=?, emergency_contact_secondary_num=?, emergency_contact_email=?, emergency_contact_address=?,
+        education_school=?, education_attainment=?, education_units=?, education_year_graduated=?,
+        education_jhs_school=?, education_jhs_attainment=?, education_jhs_year_graduated=?,
+        education_shs_school=?, education_shs_attainment=?, education_shs_year_graduated=?,
+        education_jhs_from=?, education_jhs_to=?, education_shs_from=?, education_shs_to=?,
+        education_vocational_school=?, education_vocational_attainment=?, education_vocational_units=?, education_vocational_from=?, education_vocational_to=?, education_vocational_year_graduated=?,
+        education_college_school=?, education_college_attainment=?, education_college_units=?, education_college_from=?, education_college_to=?, education_college_year_graduated=?,
+        department_id=?, position=?, employment_type=?, date_hired=?, end_of_contract=?, supervisor=?, work_location=?, shift_schedule=?, employee_level=?, employment_history=?, status=?,
+        salary_grade=?, allowances=?, payroll_schedule=?,
+        sss_number=?, philhealth_number=?, pagibig_number=?, tin=?, tax_status=?, bank_name=?, bank_account=?
+       WHERE id=? OR employee_code=?`,
+      [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, mailing_address || null,
+       nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, residential_address || null, current_address || null,
+       emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null,
+       education_school || null, education_attainment || null, education_units || null, education_year_graduated || null,
+       education_jhs_school || null, education_jhs_attainment || null, education_jhs_year_graduated || null,
+       education_shs_school || null, education_shs_attainment || null, education_shs_year_graduated || null,
+       education_jhs_from || null, education_jhs_to || null, education_shs_from || null, education_shs_to || null,
+       education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null,
+       education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null,
+       department_id || null, position || null,
+       employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active',
+       salary_grade || null, allowances || null, payroll_schedule || null,
+       sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, id, id]
     );
     
     console.log('✅ UPDATE executed');
@@ -401,18 +451,15 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
 });
 
 // Upload employee document
-app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), upload.single('file'), async (req, res) => {
+app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), uploadSingle('file'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params; // id = employee_code
-    const { docType } = req.body;
+    const allowedDocTypes = new Set(['Resume', 'Government_ID', 'NBI_Clearance', 'Contract', 'Other']);
+    const docType = allowedDocTypes.has(req.body.docType) ? req.body.docType : 'Other';
     
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided.' });
-    }
-    
-    if (!docType) {
-      return res.status(400).json({ error: 'Document type is required.' });
     }
     
     console.log('\n=== POST /api/employees/:id/documents ===');
@@ -430,10 +477,18 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
     const employeeId = empRows[0].id;
     const filePath = `/uploads/${req.file.filename}`;
     
-    // Insert or update document record (REPLACE replaces if duplicate)
+    // Insert or update document record without deleting the existing row.
     const [result] = await pool.execute(
-      `REPLACE INTO documents (employee_id, document_type, file_name, file_path) 
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO documents (employee_id, document_type, file_name, file_path)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         file_name = VALUES(file_name),
+         file_path = VALUES(file_path),
+         uploaded_date = CURRENT_TIMESTAMP,
+         verification_status = 'Pending',
+         verified_by = NULL,
+         verified_at = NULL,
+         rejection_reason = NULL`,
       [employeeId, docType, req.file.originalname, filePath]
     );
     
@@ -509,6 +564,355 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
   } catch (err) {
     console.error('Error deleting document:', err.message);
     return res.status(500).json({ error: 'Failed to delete document.', details: err.message });
+  }
+});
+
+// Employee family members
+app.get('/api/employees/:id/family', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+
+    const [rows] = await pool.execute(
+      `SELECT id, employee_id, relationship_type, extension_name, first_name, middle_name, last_name,
+              date_of_birth, telephone_number, business_address, occupation, employer_name, deceased
+       FROM employee_family_members
+       WHERE employee_id = ?
+       ORDER BY relationship_type, last_name, first_name`,
+      [id]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching family members:', err.message);
+    res.status(500).json({ error: 'Failed to fetch family members.' });
+  }
+});
+
+app.post('/api/employees/:id/family', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const {
+      relationship_type,
+      extension_name,
+      first_name,
+      middle_name,
+      last_name,
+      date_of_birth,
+      telephone_number,
+      business_address,
+      occupation,
+      employer_name,
+      deceased
+    } = req.body;
+
+    if (!relationship_type || !first_name || !last_name) {
+      return res.status(400).json({ error: 'Relationship type, first name, and last name are required.' });
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO employee_family_members
+       (employee_id, relationship_type, extension_name, first_name, middle_name, last_name, date_of_birth,
+        telephone_number, business_address, occupation, employer_name, deceased)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        relationship_type,
+        extension_name || null,
+        first_name,
+        middle_name || null,
+        last_name,
+        date_of_birth || null,
+        telephone_number || null,
+        business_address || null,
+        occupation || null,
+        employer_name || null,
+        deceased === true || deceased === 'true' || deceased === '1' ? 1 : 0
+      ]
+    );
+
+    res.status(201).json({ id: result.insertId, message: 'Family member added.' });
+  } catch (err) {
+    console.error('Error adding family member:', err.message);
+    res.status(500).json({ error: 'Failed to add family member.' });
+  }
+});
+
+app.delete('/api/employees/:id/family/:familyId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, familyId } = req.params;
+
+    const [result] = await pool.execute(
+      'DELETE FROM employee_family_members WHERE id = ? AND employee_id = ?',
+      [familyId, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Family member not found.' });
+    }
+
+    res.json({ message: 'Family member deleted.' });
+  } catch (err) {
+    console.error('Error deleting family member:', err.message);
+    res.status(500).json({ error: 'Failed to delete family member.' });
+  }
+});
+
+// Employee previous work experiences
+app.get('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+
+    const [rows] = await pool.execute(
+      `SELECT id, employee_id, company_name, position_title, employment_type, date_from, date_to,
+              supervisor_name, company_address, reason_for_leaving
+       FROM employee_work_experiences
+       WHERE employee_id = ?
+       ORDER BY date_from DESC, company_name`,
+      [id]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching work experiences:', err.message);
+    res.status(500).json({ error: 'Failed to fetch work experiences.' });
+  }
+});
+
+app.post('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const {
+      company_name,
+      position_title,
+      employment_type,
+      date_from,
+      date_to,
+      supervisor_name,
+      company_address,
+      reason_for_leaving
+    } = req.body;
+
+    if (!company_name || !position_title) {
+      return res.status(400).json({ error: 'Company name and position title are required.' });
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO employee_work_experiences
+       (employee_id, company_name, position_title, employment_type, date_from, date_to,
+        supervisor_name, company_address, reason_for_leaving)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        company_name,
+        position_title,
+        employment_type || null,
+        date_from || null,
+        date_to || null,
+        supervisor_name || null,
+        company_address || null,
+        reason_for_leaving || null
+      ]
+    );
+
+    res.status(201).json({ id: result.insertId, message: 'Work experience added.' });
+  } catch (err) {
+    console.error('Error adding work experience:', err.message);
+    res.status(500).json({ error: 'Failed to add work experience.' });
+  }
+});
+
+app.delete('/api/employees/:id/work-experiences/:experienceId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, experienceId } = req.params;
+
+    const [result] = await pool.execute(
+      'DELETE FROM employee_work_experiences WHERE id = ? AND employee_id = ?',
+      [experienceId, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Work experience not found.' });
+    }
+
+    res.json({ message: 'Work experience deleted.' });
+  } catch (err) {
+    console.error('Error deleting work experience:', err.message);
+    res.status(500).json({ error: 'Failed to delete work experience.' });
+  }
+});
+
+// Employee education/training records
+app.get('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const [rows] = await pool.execute(
+      `SELECT id, employee_id, certification_name, issuing_organization, issue_date, expiry_date,
+              certificate_file_name, certificate_file_path
+       FROM employee_certifications
+       WHERE employee_id = ?
+       ORDER BY issue_date DESC, certification_name`,
+      [id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching certifications:', err.message);
+    res.status(500).json({ error: 'Failed to fetch certifications.' });
+  }
+});
+
+app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.staff_management), uploadSingle('certificate'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const { certification_name, issuing_organization, issue_date, expiry_date } = req.body;
+
+    if (!certification_name) return res.status(400).json({ error: 'Certification name is required.' });
+
+    const [result] = await pool.execute(
+      `INSERT INTO employee_certifications
+       (employee_id, certification_name, issuing_organization, issue_date, expiry_date, certificate_file_name, certificate_file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, certification_name, issuing_organization || null, issue_date || null, expiry_date || null, req.file?.originalname || null, req.file ? `/uploads/${req.file.filename}` : null]
+    );
+
+    res.status(201).json({ id: result.insertId, message: 'Certification added.' });
+  } catch (err) {
+    console.error('Error adding certification:', err.message);
+    res.status(500).json({ error: 'Failed to add certification.' });
+  }
+});
+
+app.delete('/api/employees/:id/certifications/:certificationId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, certificationId } = req.params;
+    const [rows] = await pool.execute('SELECT certificate_file_path FROM employee_certifications WHERE id = ? AND employee_id = ?', [certificationId, id]);
+
+    if (!rows.length) return res.status(404).json({ error: 'Certification not found.' });
+
+    if (rows[0].certificate_file_path) {
+      const filePath = path.join(__dirname, 'public', rows[0].certificate_file_path);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await pool.execute('DELETE FROM employee_certifications WHERE id = ? AND employee_id = ?', [certificationId, id]);
+    res.json({ message: 'Certification deleted.' });
+  } catch (err) {
+    console.error('Error deleting certification:', err.message);
+    res.status(500).json({ error: 'Failed to delete certification.' });
+  }
+});
+
+app.get('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const [rows] = await pool.execute(
+      `SELECT id, employee_id, training_name, provider, date_from, date_to, training_hours, remarks
+       FROM employee_trainings
+       WHERE employee_id = ?
+       ORDER BY date_from DESC, training_name`,
+      [id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching trainings:', err.message);
+    res.status(500).json({ error: 'Failed to fetch trainings.' });
+  }
+});
+
+app.post('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const { training_name, provider, date_from, date_to, training_hours, remarks } = req.body;
+
+    if (!training_name) return res.status(400).json({ error: 'Training name is required.' });
+
+    const [result] = await pool.execute(
+      `INSERT INTO employee_trainings
+       (employee_id, training_name, provider, date_from, date_to, training_hours, remarks)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, training_name, provider || null, date_from || null, date_to || null, training_hours || null, remarks || null]
+    );
+
+    res.status(201).json({ id: result.insertId, message: 'Training added.' });
+  } catch (err) {
+    console.error('Error adding training:', err.message);
+    res.status(500).json({ error: 'Failed to add training.' });
+  }
+});
+
+app.delete('/api/employees/:id/trainings/:trainingId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, trainingId } = req.params;
+    const [result] = await pool.execute('DELETE FROM employee_trainings WHERE id = ? AND employee_id = ?', [trainingId, id]);
+
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Training not found.' });
+    res.json({ message: 'Training deleted.' });
+  } catch (err) {
+    console.error('Error deleting training:', err.message);
+    res.status(500).json({ error: 'Failed to delete training.' });
+  }
+});
+
+app.get('/api/employees/:id/skills', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const [rows] = await pool.execute(
+      `SELECT id, employee_id, skill_name, proficiency, remarks
+       FROM employee_skills
+       WHERE employee_id = ?
+       ORDER BY skill_name`,
+      [id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching skills:', err.message);
+    res.status(500).json({ error: 'Failed to fetch skills.' });
+  }
+});
+
+app.post('/api/employees/:id/skills', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id } = req.params;
+    const { skill_name, proficiency, remarks } = req.body;
+
+    if (!skill_name) return res.status(400).json({ error: 'Skill name is required.' });
+
+    const [result] = await pool.execute(
+      'INSERT INTO employee_skills (employee_id, skill_name, proficiency, remarks) VALUES (?, ?, ?, ?)',
+      [id, skill_name, proficiency || null, remarks || null]
+    );
+
+    res.status(201).json({ id: result.insertId, message: 'Skill added.' });
+  } catch (err) {
+    console.error('Error adding skill:', err.message);
+    res.status(500).json({ error: 'Failed to add skill.' });
+  }
+});
+
+app.delete('/api/employees/:id/skills/:skillId', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, skillId } = req.params;
+    const [result] = await pool.execute('DELETE FROM employee_skills WHERE id = ? AND employee_id = ?', [skillId, id]);
+
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'Skill not found.' });
+    res.json({ message: 'Skill deleted.' });
+  } catch (err) {
+    console.error('Error deleting skill:', err.message);
+    res.status(500).json({ error: 'Failed to delete skill.' });
   }
 });
 
@@ -616,44 +1020,169 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
   }
 });
 
+const LEAVE_PERMISSION_ROLES = {
+  'leave.request.create': ['employee', 'hr_admin', 'admin', 'system_admin'],
+  'leave.manual.create': ['hr_admin', 'admin', 'system_admin'],
+  'leave.request.approve': ['hr_admin', 'admin', 'system_admin'],
+  'leave.request.view_all': ['hr_admin', 'admin', 'system_admin', 'payroll_manager'],
+  'leave.balance.manage': ['hr_admin', 'admin', 'system_admin'],
+  'leave.report.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager']
+};
+
+function hasLeavePermission(user, permission) {
+  return LEAVE_PERMISSION_ROLES[permission]?.includes(user?.role);
+}
+
+function requireLeavePermission(permission) {
+  return (req, res, next) => {
+    if (!hasLeavePermission(req.user, permission)) {
+      return res.status(403).json({ error: `Missing permission: ${permission}` });
+    }
+    next();
+  };
+}
+
+function normalizePayType(wageType) {
+  const value = String(wageType || '').toLowerCase();
+  if (value.includes('hour')) return 'Per Hour';
+  if (value.includes('trip')) return 'Per Trip';
+  if (value.includes('piece')) return 'Per Piece';
+  return 'Per Day';
+}
+
+function normalizeLeaveType(type) {
+  const value = String(type || '').toLowerCase();
+  if (value.includes('sick')) return 'Sick';
+  if (value.includes('emergency')) return 'Emergency';
+  return 'Vacation';
+}
+
+async function ensureLeaveBalance(pool, employeeId, leaveType, year) {
+  const defaults = { Vacation: 15, Sick: 10, Emergency: 5 };
+  await pool.execute(
+    `INSERT IGNORE INTO leave_balances (employee_id, leave_type, balance, used, year)
+     VALUES (?, ?, ?, 0, ?)`,
+    [employeeId, normalizeLeaveType(leaveType), defaults[normalizeLeaveType(leaveType)] || 0, year]
+  );
+}
+
+async function writeLeaveAudit(pool, leaveId, employeeId, actorUserId, action, remarks = null) {
+  await pool.execute(
+    `INSERT INTO leave_audit_trail (leave_request_id, employee_id, actor_user_id, action, remarks)
+     VALUES (?, ?, ?, ?, ?)`,
+    [leaveId || null, employeeId || null, actorUserId || null, action, remarks || null]
+  );
+}
+
 // Leave
-app.get('/api/leave', requireAuth, requireRole(['hr_admin', 'employee']), async (req, res) => {
+app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    let q = `SELECT lr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
-             FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id`;
+    let q = `SELECT lr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+                    d.name AS department, wt.name AS wage_type,
+                    CASE
+                      WHEN LOWER(COALESCE(wt.name, '')) LIKE '%hour%' THEN 'Per Hour'
+                      WHEN LOWER(COALESCE(wt.name, '')) LIKE '%trip%' THEN 'Per Trip'
+                      WHEN LOWER(COALESCE(wt.name, '')) LIKE '%piece%' THEN 'Per Piece'
+                      ELSE 'Per Day'
+                    END AS pay_type,
+                    filed.username AS filed_by_name,
+                    encoded.username AS encoded_by_name,
+                    reviewer.username AS reviewed_by_name
+             FROM leave_requests lr
+             JOIN employees e ON e.id = lr.employee_id
+             LEFT JOIN departments d ON d.id = e.department_id
+             LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+             LEFT JOIN users filed ON filed.id = lr.filed_by
+             LEFT JOIN users encoded ON encoded.id = lr.encoded_by
+             LEFT JOIN users reviewer ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
     const p = [];
-    if (req.user.role === 'employee') { q += ' WHERE lr.employee_id = ?'; p.push(req.user.employeeId); }
+    if (!hasLeavePermission(req.user, 'leave.request.view_all')) {
+      q += ' WHERE lr.employee_id = ?';
+      p.push(req.user.employeeId);
+    }
     q += ' ORDER BY lr.created_at DESC';
     const [rows] = await pool.execute(q, p);
     res.json(rows);
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
 });
 
-app.post('/api/leave', requireAuth, requireRole([...ROLES.admin_any, 'employee']), upload.single('attachment'), async (req, res) => {
+app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    const { type, date_from, date_to, days, reason, employee_id } = req.body;
-    // For employees, always use their own ID from the token.
-    // For admins/HR, prefer body employee_id (manual encoding), fall back to their own linked employee_id.
-    let empId;
-    if (req.user.role === 'employee') {
-      empId = req.user.employeeId;
-    } else {
-      empId = employee_id ? parseInt(employee_id) : req.user.employeeId;
-    }
-    
-    console.log('POST /api/leave - req.user:', req.user);
-    console.log('POST /api/leave - req.body:', req.body);
-    console.log('POST /api/leave - file:', req.file?.filename);
-    console.log('POST /api/leave - final empId:', empId);
-    
-    if (!empId) {
-      console.error('Error: No employee_id found');
-      return res.status(400).json({ error: 'Your admin account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
+    const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+    const employeeId = hasLeavePermission(req.user, 'leave.request.view_all')
+      ? parseInt(req.query.employee_id, 10)
+      : req.user.employeeId;
+
+    if (!employeeId) return res.status(400).json({ error: 'employee_id is required.' });
+
+    for (const type of ['Vacation', 'Sick', 'Emergency']) {
+      await ensureLeaveBalance(pool, employeeId, type, year);
     }
 
-    // Check if employee is eligible for leave (only per-day and per-hour employees)
+    const [rows] = await pool.execute(
+      `SELECT employee_id, leave_type, balance, used, year, (balance - used) AS remaining
+       FROM leave_balances
+       WHERE employee_id = ? AND year = ?
+       ORDER BY FIELD(leave_type, 'Vacation', 'Sick', 'Emergency')`,
+      [employeeId, year]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching leave balances:', err.message);
+    res.status(500).json({ error: 'Failed to fetch leave balances.' });
+  }
+});
+
+app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const employeeId = parseInt(req.body.employee_id, 10);
+    const leaveType = normalizeLeaveType(req.body.leave_type);
+    const year = parseInt(req.body.year, 10) || new Date().getFullYear();
+    const balance = Number(req.body.balance);
+
+    if (!employeeId || Number.isNaN(balance)) {
+      return res.status(400).json({ error: 'employee_id and balance are required.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO leave_balances (employee_id, leave_type, balance, used, year)
+       VALUES (?, ?, ?, 0, ?)
+       ON DUPLICATE KEY UPDATE balance = VALUES(balance)`,
+      [employeeId, leaveType, balance, year]
+    );
+    await writeLeaveAudit(pool, null, employeeId, req.user.id, 'balance_updated', `${leaveType} balance set to ${balance}`);
+    res.json({ message: 'Leave balance updated.' });
+  } catch (err) {
+    console.error('Error updating leave balance:', err.message);
+    res.status(500).json({ error: 'Failed to update leave balance.' });
+  }
+});
+
+app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attachment'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { type, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
+    const source = filing_source === 'Manual' ? 'Manual' : 'Portal';
+
+    if (source === 'Manual' && !hasLeavePermission(req.user, 'leave.manual.create')) {
+      return res.status(403).json({ error: 'Missing permission: leave.manual.create' });
+    }
+    if (source === 'Portal' && !hasLeavePermission(req.user, 'leave.request.create')) {
+      return res.status(403).json({ error: 'Missing permission: leave.request.create' });
+    }
+
+    let empId = source === 'Manual' ? parseInt(employee_id, 10) : req.user.employeeId;
+    if (source === 'Portal' && req.user.role !== 'employee' && employee_id) {
+      empId = parseInt(employee_id, 10);
+    }
+
+    if (!empId) {
+      return res.status(400).json({ error: 'Employee is required.' });
+    }
+
     const [empRows] = await pool.execute(
       `SELECT e.wage_type_id, wt.name as wage_type 
        FROM employees e 
@@ -661,43 +1190,132 @@ app.post('/api/leave', requireAuth, requireRole([...ROLES.admin_any, 'employee']
        WHERE e.id = ?`, 
       [empId]
     );
-    if (empRows.length > 0) {
-      const wageType = (empRows[0].wage_type || '').toLowerCase();
-      // Only allow Base Salary and Hourly wage types. Block Per-Piece and Per-Trip
-      if (wageType.includes('per-piece') || wageType.includes('per-trip')) {
-         // Delete uploaded file if exists
-         if (req.file) {
-            const fs = require('fs');
-            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-         }
-         return res.status(403).json({ error: 'Employees with Per-Piece or Per-Trip wage types are not authorized to file leave requests. Only employees with Base Salary or Hourly wage types can file leaves.' });
-      }
+    if (!empRows.length) return res.status(404).json({ error: 'Employee not found.' });
+
+    const payType = normalizePayType(empRows[0].wage_type);
+    if (source === 'Portal' && ['Per Trip', 'Per Piece'].includes(payType)) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(403).json({ error: 'Per Trip and Per Piece employees cannot file leave through the portal. HR must manually encode their leave records.' });
     }
-    
-    // Save file path if attachment was uploaded
+
     const filePath = req.file ? `/uploads/${req.file.filename}` : null;
-    
     const [result] = await pool.execute(
-      `INSERT INTO leave_requests (employee_id,type,date_from,date_to,days,reason,file_path) VALUES (?,?,?,?,?,?,?)`,
-      [empId, type, date_from, date_to, days || 1, reason, filePath]
+      `INSERT INTO leave_requests
+       (employee_id, type, date_from, date_to, days, reason, file_path, filing_source, remarks, filed_by, encoded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [empId, type, date_from, date_to, days || 1, reason, filePath, source, remarks || null, req.user.id, source === 'Manual' ? req.user.id : null]
     );
-    console.log('Leave request inserted with ID:', result.insertId);
+
+    await writeLeaveAudit(pool, result.insertId, empId, req.user.id, source === 'Manual' ? 'encoded' : 'filed', remarks || reason || null);
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
   } catch (err) { 
-    console.error('Error saving leave request:', err);
-    res.status(500).json({ error: 'Failed to submit leave.' }); 
+    console.error('Error saving leave request:', err.message);
+    res.status(500).json({ error: 'Failed to submit leave: ' + err.message });
   }
 });
 
-app.patch('/api/leave/:id/status', requireAuth, requireRole(['hr_admin']), async (req, res) => {
+app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.request.approve'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    const status = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
+    const remarks = req.body.remarks || null;
+    if (status === 'Rejected' && !remarks) {
+      return res.status(400).json({ error: 'Remarks are required when rejecting leave.' });
+    }
+
+    const [rows] = await pool.execute('SELECT * FROM leave_requests WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Leave request not found.' });
+    const leave = rows[0];
+    const leaveType = normalizeLeaveType(leave.type);
+    const year = new Date(leave.date_from).getFullYear();
+    await ensureLeaveBalance(pool, leave.employee_id, leaveType, year);
+
+    if (status === 'Approved' && leave.status !== 'Approved') {
+      await pool.execute(
+        `UPDATE leave_balances SET used = used + ? WHERE employee_id = ? AND leave_type = ? AND year = ?`,
+        [leave.days || 1, leave.employee_id, leaveType, year]
+      );
+    }
+    if (leave.status === 'Approved' && ['Rejected', 'Cancelled'].includes(status)) {
+      await pool.execute(
+        `UPDATE leave_balances SET used = GREATEST(used - ?, 0) WHERE employee_id = ? AND leave_type = ? AND year = ?`,
+        [leave.days || 1, leave.employee_id, leaveType, year]
+      );
+    }
+
     await pool.execute(
-      `UPDATE leave_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
-      [req.body.status, req.user.id, req.params.id]
+      `UPDATE leave_requests SET
+         status = ?,
+         reviewed_by = ?,
+         reviewed_at = NOW(),
+         approved_by = CASE WHEN ? = 'Approved' THEN ? ELSE approved_by END,
+         approved_at = CASE WHEN ? = 'Approved' THEN NOW() ELSE approved_at END,
+         rejected_by = CASE WHEN ? = 'Rejected' THEN ? ELSE rejected_by END,
+         rejected_at = CASE WHEN ? = 'Rejected' THEN NOW() ELSE rejected_at END,
+         rejection_remarks = CASE WHEN ? = 'Rejected' THEN ? ELSE rejection_remarks END,
+         remarks = COALESCE(?, remarks)
+       WHERE id = ?`,
+      [status, req.user.id, status, req.user.id, status, status, req.user.id, status, status, remarks, remarks, req.params.id]
     );
+    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, status.toLowerCase(), remarks);
     res.json({ message: 'Leave status updated.' });
-  } catch (err) { res.status(500).json({ error: 'Failed to update leave.' }); }
+  } catch (err) {
+    console.error('Error updating leave:', err.message);
+    res.status(500).json({ error: 'Failed to update leave.' });
+  }
+});
+
+app.get('/api/leave/audit', requireAuth, requireLeavePermission('leave.request.view_all'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [rows] = await pool.execute(
+      `SELECT lat.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name, u.username AS actor_name
+       FROM leave_audit_trail lat
+       LEFT JOIN employees e ON e.id = lat.employee_id
+       LEFT JOIN users u ON u.id = lat.actor_user_id
+       ORDER BY lat.created_at DESC
+       LIMIT 200`
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch leave audit trail.' });
+  }
+});
+
+app.get('/api/leave/reports/:reportType', requireAuth, requireLeavePermission('leave.report.view'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { reportType } = req.params;
+    const format = ['pdf', 'excel', 'csv'].includes(req.query.format) ? req.query.format : 'csv';
+    let rows = [];
+    if (reportType === 'balances') {
+      [rows] = await pool.execute(
+        `SELECT CONCAT(e.first_name,' ',e.last_name) AS employee, d.name AS department,
+                lb.leave_type, lb.balance, lb.used, (lb.balance - lb.used) AS remaining, lb.year
+         FROM leave_balances lb
+         JOIN employees e ON e.id = lb.employee_id
+         LEFT JOIN departments d ON d.id = e.department_id
+         ORDER BY e.last_name, lb.leave_type`
+      );
+    } else {
+      [rows] = await pool.execute(
+        `SELECT CONCAT(e.first_name,' ',e.last_name) AS employee, d.name AS department,
+                lr.type, lr.date_from, lr.date_to, lr.days, lr.filing_source, lr.status, lr.created_at
+         FROM leave_requests lr
+         JOIN employees e ON e.id = lr.employee_id
+         LEFT JOIN departments d ON d.id = e.department_id
+         ORDER BY lr.created_at DESC`
+      );
+    }
+    const keys = Object.keys(rows[0] || { report: 'No data' });
+    const csv = [keys.join(','), ...rows.map(row => keys.map(key => `"${String(row[key] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
+    const extension = format === 'excel' ? 'xls' : format;
+    res.setHeader('Content-Type', format === 'pdf' ? 'application/pdf' : format === 'excel' ? 'application/vnd.ms-excel' : 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportType}-leave-report.${extension}"`);
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to export leave report.' });
+  }
 });
 
 // Attendance — now handled by /api/attendance router (server/attendance.js)

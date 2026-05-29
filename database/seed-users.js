@@ -23,9 +23,9 @@ const USERS = [
   { username: 'payroll.manager', password: 'manager123', role_id: 3, employee_id: 3    },
   
   // Regular employees - role_id 4
-  { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 5    },
-  { username: 'chris.brown',     password: 'emp123',     role_id: 4, employee_id: 2    },
-  { username: 'lebron.james',    password: 'emp123',     role_id: 4, employee_id: 3    },
+  { username: 'serjo.justine',   password: 'emp123',     role_id: 4, employee_id: 37   },
+  { username: 'chris.brown',     password: 'emp123',     role_id: 4, employee_id: 11   },
+  { username: 'lebron.james',    password: 'emp123',     role_id: 4, employee_id: 41   },
   // Admin (Level 1) - role_id 1
   { username: 'admin', password: 'admin', role_id: 1, employee_id: null },
 ];

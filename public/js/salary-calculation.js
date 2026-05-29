@@ -4,6 +4,9 @@ let currentSalaryEmployee = null;
 let salaryEmpList = [];
 let sewingTypes = [];
 let logisticsRegions = [];
+let salaryPageInitialized = false;
+let salarySearchListenerAttached = false;
+let salaryInputListenersAttached = false;
 
 // Init when DOM ready
 window.addEventListener('DOMContentLoaded', () => {
@@ -22,6 +25,24 @@ window.addEventListener('DOMContentLoaded', () => {
   attachSalaryInputListeners();
   console.log('✅ Input listeners attached');
 });
+
+async function loadSalaryCalculationPage() {
+  if (!document.getElementById('salary-employee-search')) return;
+
+  if (!salaryPageInitialized) {
+    salaryPageInitialized = true;
+    try {
+      await fetchWageTypes();
+    } catch (err) {
+      console.error('Failed to load wage types:', err);
+    }
+    attachSalaryInputListeners();
+  }
+
+  await fetchSalaryEmpList();
+}
+
+document.addEventListener('partialsLoaded', loadSalaryCalculationPage);
 
 // Fetch wage type reference data (sewing types, logistics regions)
 async function fetchWageTypes() {
@@ -59,6 +80,9 @@ async function fetchWageTypes() {
 async function fetchSalaryEmpList() {
   try {
     const res = await apiFetch('/api/employees');
+    if (!res || !res.ok) {
+      throw new Error(res ? `HTTP ${res.status}` : 'No response from employee API');
+    }
     salaryEmpList = await res.json();
     console.log(`✅ Got ${salaryEmpList.length} employees for salary page`);
     attachSearchListener();
@@ -69,6 +93,8 @@ async function fetchSalaryEmpList() {
 
 // Attach search input listener
 function attachSearchListener() {
+  if (salarySearchListenerAttached) return;
+
   const search = document.getElementById('salary-employee-search');
   const dropdown = document.getElementById('salary-employee-dropdown');
   
@@ -79,9 +105,12 @@ function attachSearchListener() {
   
   console.log('✅ Search element found, attaching listeners');
   
+  salarySearchListenerAttached = true;
+
   // On focus - show all employees
-  search.addEventListener('focus', () => {
+  search.addEventListener('focus', async () => {
     console.log('Focus event - showing dropdown');
+    await fetchSalaryEmpList();
     showDropdownList(salaryEmpList);
   });
   
@@ -467,14 +496,19 @@ function calculateSalaryNow() {
 
 // Attach input listeners for calculation
 function attachSalaryInputListeners() {
+  if (salaryInputListenersAttached) return;
+
   const ids = ['salary-pieces', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked'];
+  let attachedAny = false;
   ids.forEach(id => {
     const elem = document.getElementById(id);
     if (elem) {
       elem.addEventListener('input', calculateSalaryNow);
       elem.addEventListener('change', calculateSalaryNow);
+      attachedAny = true;
     }
   });
+  salaryInputListenersAttached = attachedAny;
 }
 
 

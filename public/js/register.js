@@ -2,11 +2,13 @@
    REGISTER.JS — Register Employee form tab switching & save
    ============================================================ */
 
-const FORM_SECTIONS = ['personal', 'employment', 'payroll', 'documents'];
+const FORM_SECTIONS = ['personal', 'contact', 'employment', 'payroll', 'documents'];
 let EDIT_MODE = false;
 let EDIT_EMPLOYEE_ID = null;           // Stores the employee_code (e.g. "EMP00001")
 let EDIT_EMPLOYEE_NUMERIC_ID = null;   // Stores the numeric database ID (for API calls)
 let IS_SAVING = false;                 // Prevent double-submit
+let SELECTED_EMPLOYEE_PHOTO = null;
+let EMPLOYEE_PHOTO_PREVIEW_URL = null;
 
 // Store uploaded files temporarily (in memory before save)
 const UPLOADED_FILES = {
@@ -62,7 +64,7 @@ function applyRoleBasedAccess() {
   
   if (isPayrollOfficer) {
     // Disable all form inputs for payroll officer (read-only mode)
-    const allInputs = document.querySelectorAll('#form-register input, #form-register select, #form-register textarea');
+    const allInputs = document.querySelectorAll('#register-form-view input, #register-form-view select, #register-form-view textarea');
     allInputs.forEach(input => {
       input.disabled = true;
       input.style.opacity = '0.6';
@@ -147,21 +149,25 @@ function updateWageTypeUI() {
   const wageType = document.getElementById('emp-wage-type')?.value;
   
   // Hide all wage type UIs
-  document.getElementById('wage-base-salary').style.display = 'none';
-  document.getElementById('wage-hourly').style.display = 'none';
-  document.getElementById('wage-production').style.display = 'none';
-  document.getElementById('wage-logistics').style.display = 'none';
+  ['wage-base-salary', 'wage-hourly', 'wage-production', 'wage-logistics'].forEach(id => {
+    const panel = document.getElementById(id);
+    if (panel) panel.style.display = 'none';
+  });
   
   // Show selected wage type UI
   if (wageType === 'Base Salary') {
-    document.getElementById('wage-base-salary').style.display = 'block';
+    const panel = document.getElementById('wage-base-salary');
+    if (panel) panel.style.display = 'block';
   } else if (wageType === 'Hourly') {
-    document.getElementById('wage-hourly').style.display = 'block';
+    const panel = document.getElementById('wage-hourly');
+    if (panel) panel.style.display = 'block';
   } else if (wageType === 'Per-Piece') {
-    document.getElementById('wage-production').style.display = 'block';
+    const panel = document.getElementById('wage-production');
+    if (panel) panel.style.display = 'block';
     populateSewingTypeRates();
   } else if (wageType === 'Per-Trip') {
-    document.getElementById('wage-logistics').style.display = 'block';
+    const panel = document.getElementById('wage-logistics');
+    if (panel) panel.style.display = 'block';
     populateLogisticsRegionRates();
   }
 }
@@ -250,9 +256,21 @@ function loadEmployeeData() {
   
   const contactInput = document.getElementById('emp-contact');
   if (contactInput) contactInput.value = emp.contact_number || '';
+
+  const workEmailInput = document.getElementById('emp-work-email');
+  if (workEmailInput) workEmailInput.value = emp.work_email || '';
   
   const nationalityInput = document.getElementById('emp-nationality');
   if (nationalityInput) nationalityInput.value = emp.nationality || 'Filipino';
+
+  const placeOfBirthInput = document.getElementById('emp-place-of-birth');
+  if (placeOfBirthInput) placeOfBirthInput.value = emp.place_of_birth || '';
+
+  const bloodTypeInput = document.getElementById('emp-blood-type');
+  if (bloodTypeInput) bloodTypeInput.value = emp.blood_type || '';
+
+  const religionInput = document.getElementById('emp-religion');
+  if (religionInput) religionInput.value = emp.religion || '';
   
   const genderInput = document.getElementById('emp-gender');
   if (genderInput) genderInput.value = emp.gender || 'Male';
@@ -262,28 +280,91 @@ function loadEmployeeData() {
   
   const addressInput = document.getElementById('emp-address');
   if (addressInput) addressInput.value = emp.residential_address || '';
+
+  const currentAddressInput = document.getElementById('emp-current-address');
+  if (currentAddressInput) currentAddressInput.value = emp.current_address || '';
+
+  const mailingAddressInput = document.getElementById('emp-mailing-address');
+  if (mailingAddressInput) mailingAddressInput.value = emp.mailing_address || '';
   
   const emergNameInput = document.getElementById('emp-emerg-name');
   if (emergNameInput) emergNameInput.value = emp.emergency_contact_name || '';
   
   const emergPhoneInput = document.getElementById('emp-emerg-phone');
   if (emergPhoneInput) emergPhoneInput.value = emp.emergency_contact_num || '';
+
+  const emergRelationshipInput = document.getElementById('emp-emerg-relationship');
+  if (emergRelationshipInput) emergRelationshipInput.value = emp.emergency_contact_relationship || '';
+
+  const emergSecondaryPhoneInput = document.getElementById('emp-emerg-secondary-phone');
+  if (emergSecondaryPhoneInput) emergSecondaryPhoneInput.value = emp.emergency_contact_secondary_num || '';
+
+  const emergEmailInput = document.getElementById('emp-emerg-email');
+  if (emergEmailInput) emergEmailInput.value = emp.emergency_contact_email || '';
+
+  const emergAddressInput = document.getElementById('emp-emerg-address');
+  if (emergAddressInput) emergAddressInput.value = emp.emergency_contact_address || '';
+
+  const maritalInput = document.getElementById('emp-marital-status');
+  if (maritalInput) maritalInput.value = emp.marital_status || 'Single';
   
   // Populate Employment Details using specific selectors
   const positionInput = document.querySelector('#form-employment input#emp-position');
   if (positionInput) positionInput.value = emp.position || '';
   
   const typeInput = document.querySelector('#form-employment select#emp-type');
-  if (typeInput) typeInput.value = emp.employment_type || 'Full-time';
+  if (typeInput) typeInput.value = emp.employment_type || 'Regular';
+
+  const statusInput = document.querySelector('#form-employment select#emp-status-field');
+  if (statusInput) statusInput.value = emp.status || 'Active';
   
   const hiredDateInput = document.querySelector('#form-employment input#emp-hired-date');
   if (hiredDateInput) hiredDateInput.value = emp.date_hired || '';
+
+  const endContractInput = document.querySelector('#form-employment input#emp-end-contract');
+  if (endContractInput) endContractInput.value = emp.end_of_contract || '';
   
   const supervisorInput = document.querySelector('#form-employment input#emp-supervisor');
   if (supervisorInput) supervisorInput.value = emp.supervisor || '';
   
   const locationInput = document.querySelector('#form-employment input#emp-location');
   if (locationInput) locationInput.value = emp.work_location || '';
+
+  const shiftInput = document.querySelector('#form-employment select#emp-shift-schedule');
+  if (shiftInput) shiftInput.value = emp.shift_schedule || '';
+
+  const levelInput = document.querySelector('#form-employment select#emp-level');
+  if (levelInput) levelInput.value = emp.employee_level || '';
+
+  const employmentHistoryInput = document.querySelector('#form-employment textarea#emp-employment-history');
+  if (employmentHistoryInput) employmentHistoryInput.value = emp.employment_history || '';
+
+  const sssInput = document.getElementById('emp-sss');
+  if (sssInput) sssInput.value = emp.sss_number || '';
+
+  const philhealthInput = document.getElementById('emp-philhealth');
+  if (philhealthInput) philhealthInput.value = emp.philhealth_number || '';
+
+  const pagibigInput = document.getElementById('emp-pagibig');
+  if (pagibigInput) pagibigInput.value = emp.pagibig_number || '';
+
+  const tinInput = document.getElementById('emp-tin');
+  if (tinInput) tinInput.value = emp.tin || '';
+
+  const taxStatusInput = document.getElementById('emp-tax-status');
+  if (taxStatusInput) taxStatusInput.value = emp.tax_status || '';
+
+  const allowancesInput = document.getElementById('emp-allowances');
+  if (allowancesInput) allowancesInput.value = emp.allowances || '';
+
+  const payrollScheduleInput = document.getElementById('emp-pay-freq');
+  if (payrollScheduleInput) payrollScheduleInput.value = emp.payroll_schedule || 'Monthly';
+
+  const bankInput = document.getElementById('emp-bank');
+  if (bankInput) bankInput.value = emp.bank_name || '';
+
+  const bankAccountInput = document.getElementById('emp-bank-account');
+  if (bankAccountInput) bankAccountInput.value = emp.bank_account || '';
   
   // Set department by name (not ID) - use specific selector to avoid filter dropdown
   const deptSelect = document.querySelector('#form-employment select#emp-dept');
@@ -384,21 +465,29 @@ async function generateEmployeeID() {
   }
 }
 
-function switchFormTab(el) {
-  // Map tab text to section id
+function switchFormTab(tabOrEl) {
   const map = {
-    'Personal Info':          'personal',
-    'Employment Details':     'employment',
+    'Personal Info': 'personal',
+    'Contact Info': 'contact',
+    'Employment Details': 'employment',
+    'Employment Info': 'employment',
+    'Bank/Tax Record': 'payroll',
+    'Government/Tax': 'payroll',
+    'Compensation': 'payroll',
     'Payroll & Compensation': 'payroll',
-    'Documents':              'documents',
+    'Documents': 'documents',
   };
-  const key = el.textContent.trim();
-  const sectionId = map[key];
+
+  const sectionId = typeof tabOrEl === 'string'
+    ? tabOrEl
+    : (tabOrEl?.dataset?.formSection || map[tabOrEl?.textContent?.trim()]);
+
   if (!sectionId) return;
 
   // Update tab styles
   document.querySelectorAll('.form-tab').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
+  const activeTab = document.querySelector(`.form-tab[data-form-section="${sectionId}"]`);
+  if (activeTab) activeTab.classList.add('active');
 
   // Show/hide sections
   FORM_SECTIONS.forEach(s => {
@@ -432,6 +521,7 @@ function saveEmployee() {
   // window.PENDING_EDIT_MODE is set before navigation
   // window.IS_EDITING is set in loadEmployeeData()
   const isEditing = EDIT_MODE || window.PENDING_EDIT_MODE || window.IS_EDITING || false;
+  let savedEmployeeNumericId = EDIT_EMPLOYEE_NUMERIC_ID;
   
   // Debug log - VERY DETAILED
   console.log('====== saveEmployee DEBUG ======');
@@ -459,7 +549,9 @@ function saveEmployee() {
   console.log('emp-dept value:', document.querySelector('#form-employment select#emp-dept')?.value);
   console.log('emp-position value:', document.querySelector('#form-employment input#emp-position')?.value);
   console.log('emp-type value:', document.querySelector('#form-employment select#emp-type')?.value);
+  console.log('emp-status-field value:', document.querySelector('#form-employment select#emp-status-field')?.value);
   console.log('emp-hired-date value:', document.querySelector('#form-employment input#emp-hired-date')?.value);
+  console.log('emp-end-contract value:', document.querySelector('#form-employment input#emp-end-contract')?.value);
   console.log('emp-supervisor value:', document.querySelector('#form-employment input#emp-supervisor')?.value);
   console.log('emp-location value:', document.querySelector('#form-employment input#emp-location')?.value);
   console.log('Department name:', departmentName, '-> ID:', departmentId);
@@ -474,28 +566,48 @@ function saveEmployee() {
     suffix: document.getElementById('emp-suffix')?.value === 'None' ? null : document.getElementById('emp-suffix')?.value || null,
     email: document.getElementById('emp-email')?.value || '',
     contact_number: document.getElementById('emp-contact')?.value || null,
+    work_email: document.getElementById('emp-work-email')?.value || null,
     nationality: document.getElementById('emp-nationality')?.value || 'Filipino',
+    marital_status: document.getElementById('emp-marital-status')?.value || null,
     date_of_birth: document.getElementById('emp-dob')?.value || null,
+    place_of_birth: document.getElementById('emp-place-of-birth')?.value || null,
     gender: document.getElementById('emp-gender')?.value || null,
+    blood_type: document.getElementById('emp-blood-type')?.value || null,
+    religion: document.getElementById('emp-religion')?.value || null,
     residential_address: document.getElementById('emp-address')?.value || null,
+    current_address: document.getElementById('emp-current-address')?.value || null,
+    mailing_address: document.getElementById('emp-mailing-address')?.value || null,
     emergency_contact_name: document.getElementById('emp-emerg-name')?.value || null,
     emergency_contact_num: document.getElementById('emp-emerg-phone')?.value || null,
+    emergency_contact_relationship: document.getElementById('emp-emerg-relationship')?.value || null,
+    emergency_contact_secondary_num: document.getElementById('emp-emerg-secondary-phone')?.value || null,
+    emergency_contact_email: document.getElementById('emp-emerg-email')?.value || null,
+    emergency_contact_address: document.getElementById('emp-emerg-address')?.value || null,
     
     // Employment Details
     department_id: departmentId,
     position: document.querySelector('#form-employment input#emp-position')?.value || null,
-    employment_type: document.querySelector('#form-employment select#emp-type')?.value || 'Full-time',
+    employment_type: document.querySelector('#form-employment select#emp-type')?.value || 'Regular',
     date_hired: document.querySelector('#form-employment input#emp-hired-date')?.value || null,
+    end_of_contract: document.querySelector('#form-employment input#emp-end-contract')?.value || null,
     supervisor: document.querySelector('#form-employment input#emp-supervisor')?.value || null,
     work_location: document.querySelector('#form-employment input#emp-location')?.value || null,
-    status: 'Active',
+    shift_schedule: document.querySelector('#form-employment select#emp-shift-schedule')?.value || null,
+    employee_level: document.querySelector('#form-employment select#emp-level')?.value || null,
+    employment_history: document.querySelector('#form-employment textarea#emp-employment-history')?.value || null,
+    status: document.querySelector('#form-employment select#emp-status-field')?.value || 'Active',
     
     // Payroll Info
     wage_type_id: getWageTypeId(document.getElementById('emp-wage-type')?.value),
+    wage_type: document.getElementById('emp-wage-type')?.value || null,
+    base_rate: document.getElementById('emp-salary')?.value || document.getElementById('emp-hourly-rate')?.value || document.getElementById('emp-prod-base-rate')?.value || null,
+    allowances: document.getElementById('emp-allowances')?.value || null,
+    payroll_schedule: document.getElementById('emp-pay-freq')?.value || null,
     sss_number: document.getElementById('emp-sss')?.value || null,
     philhealth_number: document.getElementById('emp-philhealth')?.value || null,
     pagibig_number: document.getElementById('emp-pagibig')?.value || null,
     tin: document.getElementById('emp-tin')?.value || null,
+    tax_status: document.getElementById('emp-tax-status')?.value || null,
     bank_name: document.getElementById('emp-bank')?.value || null,
     bank_account: document.getElementById('emp-bank-account')?.value || null
   };
@@ -524,7 +636,7 @@ function saveEmployee() {
 
   // Determine if this is a new employee or update
   const method = isEditing ? 'PUT' : 'POST';
-  const endpoint = isEditing ? `/api/employees/${empId}` : '/api/employees';
+  const endpoint = isEditing ? `/api/employees/${EDIT_EMPLOYEE_NUMERIC_ID || empId}` : '/api/employees';
 
   // Use apiFetch which auto-attaches token
   apiFetch(endpoint, {
@@ -546,6 +658,7 @@ function saveEmployee() {
   })
   .then(data => {
     console.log('Response data:', data);
+    savedEmployeeNumericId = data.id || savedEmployeeNumericId;
     const message = isEditing ? 'Employee updated successfully!' : 'Employee added successfully!';
     alert(message);
     IS_SAVING = false;  // Reset double-submit flag
@@ -561,12 +674,19 @@ function saveEmployee() {
     const wageTypeId = getWageTypeId(document.getElementById('emp-wage-type')?.value);
     if (wageTypeId) {
       // Use numeric ID for API calls, fall back to employee code for new employees
-      const apiEmployeeId = EDIT_EMPLOYEE_NUMERIC_ID || empId;
+      const apiEmployeeId = savedEmployeeNumericId || empId;
       return saveWageConfiguration(apiEmployeeId, wageTypeId);
     }
     return null;
   })
   .then((wageResult) => {
+    if (SELECTED_EMPLOYEE_PHOTO) {
+      console.log('Uploading employee photo...');
+      return uploadEmployeePhoto(savedEmployeeNumericId || EDIT_EMPLOYEE_NUMERIC_ID);
+    }
+    return null;
+  })
+  .then(() => {
     // Upload documents if any files were selected
     const hasFiles = Object.values(UPLOADED_FILES).some(f => f !== null);
     if (hasFiles) {
@@ -906,6 +1026,12 @@ function initializeFileUploads() {
   const docIds = ['resume', 'govid', 'nbi', 'other'];
   let successCount = 0;
   let failCount = 0;
+
+  const photoInput = document.getElementById('emp-photo-input');
+  if (photoInput) {
+    photoInput.removeEventListener('change', handleEmployeePhotoSelect);
+    photoInput.addEventListener('change', handleEmployeePhotoSelect);
+  }
   
   docIds.forEach(docId => {
     const fileInput = document.getElementById(`doc-${docId}`);
@@ -929,6 +1055,86 @@ function initializeFileUploads() {
   } else {
     console.warn('⚠️ selected-files-preview element not found');
   }
+}
+
+function handleEmployeePhotoSelect(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+  const maxSize = 5 * 1024 * 1024;
+
+  if (!allowedTypes.includes(file.type)) {
+    alert('Please select a JPG or PNG photo.');
+    event.target.value = '';
+    return;
+  }
+
+  if (file.size > maxSize) {
+    alert(`Photo is too large. Maximum size is 5MB. Your file: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+    event.target.value = '';
+    return;
+  }
+
+  SELECTED_EMPLOYEE_PHOTO = file;
+
+  if (EMPLOYEE_PHOTO_PREVIEW_URL) {
+    URL.revokeObjectURL(EMPLOYEE_PHOTO_PREVIEW_URL);
+  }
+  EMPLOYEE_PHOTO_PREVIEW_URL = URL.createObjectURL(file);
+
+  const preview = document.getElementById('emp-photo-preview');
+  const placeholder = document.getElementById('emp-photo-placeholder');
+  const status = document.getElementById('emp-photo-status');
+
+  if (preview) {
+    preview.src = EMPLOYEE_PHOTO_PREVIEW_URL;
+    preview.style.display = 'block';
+  }
+  if (placeholder) placeholder.style.display = 'none';
+  if (status) status.textContent = file.name;
+}
+
+function clearEmployeePhotoSelection() {
+  SELECTED_EMPLOYEE_PHOTO = null;
+
+  if (EMPLOYEE_PHOTO_PREVIEW_URL) {
+    URL.revokeObjectURL(EMPLOYEE_PHOTO_PREVIEW_URL);
+    EMPLOYEE_PHOTO_PREVIEW_URL = null;
+  }
+
+  const input = document.getElementById('emp-photo-input');
+  const preview = document.getElementById('emp-photo-preview');
+  const placeholder = document.getElementById('emp-photo-placeholder');
+  const status = document.getElementById('emp-photo-status');
+
+  if (input) input.value = '';
+  if (preview) {
+    preview.removeAttribute('src');
+    preview.style.display = 'none';
+  }
+  if (placeholder) placeholder.style.display = '';
+  if (status) status.textContent = 'JPG or PNG, max 5MB';
+}
+
+async function uploadEmployeePhoto(employeeId) {
+  if (!SELECTED_EMPLOYEE_PHOTO || !employeeId) return null;
+
+  const formData = new FormData();
+  formData.append('photo', SELECTED_EMPLOYEE_PHOTO);
+
+  const response = await apiFetch(`/api/employees/${employeeId}/photo`, {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || error.details || 'Failed to upload employee photo');
+  }
+
+  clearEmployeePhotoSelection();
+  return response.json();
 }
 
 // Handle file selection
@@ -1081,6 +1287,7 @@ function clearUploadedFiles() {
   UPLOADED_FILES.govid = null;
   UPLOADED_FILES.nbi = null;
   UPLOADED_FILES.other = null;
+  clearEmployeePhotoSelection();
   
   document.getElementById('doc-resume').value = '';
   document.getElementById('doc-govid').value = '';
@@ -1242,8 +1449,13 @@ async function deleteDocument(docId) {
   }
 }
 
-// Auto-generate employee ID on page load
-document.addEventListener('DOMContentLoaded', () => {
+let REGISTER_PAGE_INITIALIZED = false;
+
+function initializeRegisterPage() {
+  if (!document.getElementById('register-form-view')) return;
+  if (REGISTER_PAGE_INITIALIZED) return;
+  REGISTER_PAGE_INITIALIZED = true;
+
   loadEmployeeData();
   generateEmployeeID();
   initializeFileUploads();
@@ -1253,4 +1465,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     applyRoleBasedAccess();
   }, 100);
-});
+}
+
+// Page partials are injected after DOMContentLoaded, so initialize once the
+// register form actually exists.
+document.addEventListener('DOMContentLoaded', initializeRegisterPage);
+document.addEventListener('partialsLoaded', initializeRegisterPage);

@@ -9,7 +9,7 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   font-size: 14px;
 }
 
@@ -96,6 +96,8 @@
   text-decoration: none;
   font-weight: 600;
   transition: color 0.2s;
+  overflow: visible;
+  position: relative;
 }
 
 .emp-table .emp-action:hover {

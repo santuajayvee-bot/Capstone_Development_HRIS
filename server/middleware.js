@@ -36,15 +36,24 @@ const ROLES = {
  */
 function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
+  console.log('[requireAuth] Authorization header present:', !!authHeader);
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.log('[requireAuth] No Bearer token found');
     return res.status(401).json({ error: 'No token provided.' });
   }
 
   const token = authHeader.slice(7);
+  console.log('[requireAuth] Token received, length:', token.length);
+  console.log('[requireAuth] JWT_SECRET defined:', !!JWT_SECRET);
+  console.log('[requireAuth] JWT_SECRET value:', JWT_SECRET ? '***secret***' : 'NOT SET');
+
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    console.log('[requireAuth] Token verified successfully for user:', req.user.username);
     next();
   } catch (err) {
+    console.error('[requireAuth] JWT verification failed:', err.name, err.message);
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({ error: 'Session expired. Please log in again.' });
     }

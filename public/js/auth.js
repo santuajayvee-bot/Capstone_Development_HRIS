@@ -5,12 +5,12 @@
 // ── Role → permitted pages ────────────────────────────────────
 const ROLE_PERMISSIONS = {
   admin: [
-    'dashboard', 'employees', 'leave', 'requests',
-    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
+    'dashboard', 'employees', 'register', 'leave', 'requests',
+    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file', 'employee-profile',
   ],
   hr_admin: [
-    'dashboard', 'employees', 'leave', 'requests',
-    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file',
+    'dashboard', 'employees', 'register', 'leave', 'requests',
+    'attendance', 'payroll', 'salary-calculation', 'onboarding', 'blockchain', '201file', 'employee-profile',
   ],
   system_admin: [
     'dashboard', 'system-admin', 'blockchain',

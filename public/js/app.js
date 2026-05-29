@@ -16,9 +16,10 @@ const PAGE_TITLES = {
   blockchain: 'Blockchain',
   'system-admin': 'System Administration',
   'employee-dashboard': 'Employee Dashboard',
+  'employee-profile': 'Employee Profile',
 };
 
-function navigate(pageId, navEl) {
+function navigate(pageId, navEl, params = null) {
   // Role guard — check permission before switching
   if (!canAccess(pageId)) {
     showAccessDenied();
@@ -37,6 +38,8 @@ function navigate(pageId, navEl) {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     navEl.classList.add('active');
   }
+
+  window.ROUTE_PARAMS = { pageId, ...(params || {}) };
   
   // When navigating to register, load employee data if editing
   if (pageId === 'register' && typeof loadEmployeeData === 'function') {
@@ -79,6 +82,14 @@ function navigate(pageId, navEl) {
   // When navigating to employee-dashboard, initialize the module
   if (pageId === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
     initEmployeeDashboard();
+  }
+
+  if (pageId === 'salary-calculation' && typeof loadSalaryCalculationPage === 'function') {
+    loadSalaryCalculationPage();
+  }
+
+  if (pageId === 'employee-profile' && typeof loadEmployeeProfilePage === 'function') {
+    loadEmployeeProfilePage(params || {});
   }
 }
 

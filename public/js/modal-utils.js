@@ -1,8 +1,7 @@
 /**
- * Modal Utilities — Replace JavaScript alert() and confirm() with Bootstrap modals
+ * Modal Utilities - Bootstrap-style alert and confirm dialogs.
  */
 
-// Get modal elements
 const modalOverlay = document.getElementById('universal-modal');
 const modalTitle = document.getElementById('modal-title');
 const modalMessage = document.getElementById('modal-message');
@@ -12,7 +11,30 @@ const modalCancelBtn = document.getElementById('modal-cancel');
 
 let modalPromiseResolve = null;
 
-// Handle modal button clicks
+function setModalType(type) {
+  const normalizedType = ['info', 'success', 'warning', 'error'].includes(type) ? type : 'info';
+  const icons = {
+    info: 'i',
+    success: 'OK',
+    warning: '!',
+    error: '!'
+  };
+
+  modalIcon.textContent = icons[normalizedType];
+  modalIcon.className = `modal-icon-custom modal-icon-${normalizedType}`;
+  modalConfirmBtn.className = 'btn-modal btn-modal-primary';
+
+  if (normalizedType === 'success') modalConfirmBtn.className = 'btn-modal btn-modal-success';
+  if (normalizedType === 'warning') modalConfirmBtn.className = 'btn-modal btn-modal-warning';
+  if (normalizedType === 'error') modalConfirmBtn.className = 'btn-modal btn-modal-danger';
+
+  modalCancelBtn.className = 'btn-modal btn-modal-secondary';
+}
+
+function closeModal() {
+  modalOverlay.style.display = 'none';
+}
+
 modalConfirmBtn.addEventListener('click', () => {
   if (modalPromiseResolve) {
     modalPromiseResolve(true);
@@ -29,9 +51,8 @@ modalCancelBtn.addEventListener('click', () => {
   closeModal();
 });
 
-// Close modal when clicking outside (on backdrop)
-modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) {
+modalOverlay.addEventListener('click', (event) => {
+  if (event.target === modalOverlay) {
     if (modalPromiseResolve) {
       modalPromiseResolve(false);
       modalPromiseResolve = null;
@@ -40,81 +61,36 @@ modalOverlay.addEventListener('click', (e) => {
   }
 });
 
-/**
- * Show an alert modal
- * @param {string} message - Message to display
- * @param {string} title - Title (default: "Alert")
- * @param {string} type - Type: 'info', 'success', 'warning', 'error' (default: 'info')
- */
 async function showAlert(message, title = 'Alert', type = 'info') {
   return new Promise((resolve) => {
     modalPromiseResolve = () => resolve();
-    
-    // Set icon based on type
-    const icons = {
-      info: 'ℹ️',
-      success: '✓',
-      warning: '⚠️',
-      error: '❌'
-    };
-    
-    const colors = {
-      info: '#4f7cff',
-      success: '#10b981',
-      warning: '#f59e0b',
-      error: '#ef4444'
-    };
-    
-    modalIcon.textContent = icons[type] || icons.info;
+
+    setModalType(type);
     modalTitle.textContent = title;
     modalMessage.textContent = message;
     modalConfirmBtn.textContent = 'OK';
-    modalConfirmBtn.style.background = colors[type] || colors.info;
     modalCancelBtn.style.display = 'none';
-    
+
     modalOverlay.style.display = 'flex';
   });
 }
 
-/**
- * Show a confirmation modal
- * @param {string} message - Message to display
- * @param {string} title - Title (default: "Confirm")
- * @param {string} confirmText - Confirm button text (default: "Yes")
- * @param {string} cancelText - Cancel button text (default: "Cancel")
- * @returns {boolean} - true if confirmed, false if cancelled
- */
 async function showConfirm(message, title = 'Confirm', confirmText = 'Yes', cancelText = 'Cancel') {
   return new Promise((resolve) => {
     modalPromiseResolve = resolve;
-    
-    modalIcon.textContent = '❓';
+
+    setModalType('warning');
     modalTitle.textContent = title;
     modalMessage.textContent = message;
     modalConfirmBtn.textContent = confirmText;
-    modalConfirmBtn.style.background = '#ef4444';
+    modalConfirmBtn.className = 'btn-modal btn-modal-danger';
     modalCancelBtn.textContent = cancelText;
-    modalCancelBtn.style.display = 'block';
-    
+    modalCancelBtn.style.display = 'inline-flex';
+
     modalOverlay.style.display = 'flex';
   });
 }
 
-/**
- * Close the modal
- */
-function closeModal() {
-  modalOverlay.style.display = 'none';
-}
-
-/**
- * Override global alert and confirm if needed
- * Uncomment the lines below to make window.alert and window.confirm use modals
- */
-// window.alert = showAlert;
-// window.confirm = showConfirm;
-
-// Expose functions globally
 window.showAlert = showAlert;
 window.showConfirm = showConfirm;
 window.closeModal = closeModal;

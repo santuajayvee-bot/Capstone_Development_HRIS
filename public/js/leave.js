@@ -913,6 +913,314 @@ async function denyGenRequest(btn) {
   } catch (err) { alert('Failed to deny: ' + err.message); }
 }
 
+// Enhanced Leave Management module
+let LEAVE_EMPLOYEES = [];
+let LEAVE_AUDIT = [];
+
+function leaveStatusValue(status) {
+  return status === 'Denied' ? 'Rejected' : (status || 'Pending');
+}
+
+function leavePayType(wageType) {
+  const value = String(wageType || '').toLowerCase();
+  if (value.includes('hour')) return 'Per Hour';
+  if (value.includes('trip')) return 'Per Trip';
+  if (value.includes('piece')) return 'Per Piece';
+  return 'Per Day';
+}
+
+function leaveBadge(value, kind = '') {
+  return `<span class="leave-badge ${(kind || value || '').toLowerCase()}">${value || '-'}</span>`;
+}
+
+function isLeaveManager() {
+  return CURRENT_USER && CURRENT_USER.role !== 'employee';
+}
+
+async function loadLeaveRequests() {
+  try {
+    await fetchCurrentUser();
+    const [leaveRes, empRes, auditRes] = await Promise.all([
+      apiFetch('/api/leave'),
+      apiFetch('/api/employees'),
+      isLeaveManager() ? apiFetch('/api/leave/audit') : Promise.resolve(null)
+    ]);
+
+    ALL_LEAVES_DATA = leaveRes && leaveRes.ok ? await leaveRes.json() : [];
+    LEAVE_EMPLOYEES = empRes && empRes.ok ? await empRes.json() : [];
+    LEAVE_AUDIT = auditRes && auditRes.ok ? await auditRes.json() : [];
+
+    ALL_LEAVES_DATA = ALL_LEAVES_DATA.map(row => ({
+      ...row,
+      status: leaveStatusValue(row.status),
+      filing_source: row.filing_source || 'Portal',
+      pay_type: row.pay_type || leavePayType(row.wage_type),
+      parsedDate: new Date(row.created_at || row.date_from)
+    }));
+
+    setupLeaveUi();
+    renderLeaveSummary();
+    renderLeaveTable();
+    window.renderLeaveCalendar();
+    renderLeaveAudit();
+    loadLeaveBalancesForSelection();
+  } catch (error) {
+    console.error('Error loading leave management:', error);
+  }
+}
+
+function setupLeaveUi() {
+  const manualCard = document.getElementById('manual-encoding-card');
+  if (manualCard) manualCard.style.display = isLeaveManager() ? 'block' : 'none';
+
+  const employeeSelect = document.getElementById('manual-employee');
+  if (employeeSelect) {
+    employeeSelect.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
+      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
+      .join('');
+  }
+
+  const departments = [...new Set(LEAVE_EMPLOYEES.map(emp => emp.department).filter(Boolean))].sort();
+  ['leave-filter-dept', 'calendar-dept-filter'].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">All Departments</option>' + departments.map(dept => `<option>${dept}</option>`).join('');
+    select.value = current;
+  });
+}
+
+function renderLeaveSummary() {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthPrefix = today.slice(0, 7);
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+
+  set('sum-pending', ALL_LEAVES_DATA.filter(l => l.status === 'Pending').length);
+  set('sum-approved', ALL_LEAVES_DATA.filter(l => l.status === 'Approved').length);
+  set('sum-rejected', ALL_LEAVES_DATA.filter(l => l.status === 'Rejected').length);
+  set('sum-today', new Set(ALL_LEAVES_DATA.filter(l => l.status === 'Approved' && l.date_from <= today && l.date_to >= today).map(l => l.employee_id)).size);
+  set('sum-month', ALL_LEAVES_DATA.filter(l => String(l.created_at || '').startsWith(monthPrefix)).length);
+}
+
+function getFilteredLeaves() {
+  const search = (document.getElementById('leave-filter-search')?.value || '').toLowerCase();
+  const dept = document.getElementById('leave-filter-dept')?.value || '';
+  const payType = document.getElementById('leave-filter-pay-type')?.value || '';
+  const type = document.getElementById('leave-filter-type')?.value || '';
+  const status = document.getElementById('leave-filter-status')?.value || '';
+  const source = document.getElementById('leave-filter-source')?.value || '';
+  const from = document.getElementById('leave-filter-from')?.value || '';
+  const to = document.getElementById('leave-filter-to')?.value || '';
+
+  return ALL_LEAVES_DATA.filter(leave => {
+    const name = String(leave.employee_name || '').toLowerCase();
+    return (!search || name.includes(search))
+      && (!dept || leave.department === dept)
+      && (!payType || leave.pay_type === payType)
+      && (!type || leave.type === type)
+      && (!status || leave.status === status)
+      && (!source || leave.filing_source === source)
+      && (!from || leave.date_from >= from)
+      && (!to || leave.date_to <= to);
+  });
+}
+
+window.renderLeaveTable = function() {
+  const tbody = document.getElementById('leave-tbody');
+  const empty = document.getElementById('leave-empty-state');
+  if (!tbody) return;
+
+  const filtered = getFilteredLeaves();
+  const totalItems = filtered.length;
+  const maxPage = Math.max(Math.ceil(totalItems / LEAVE_PAGE_SIZE), 1);
+  LEAVE_PAGE = Math.min(Math.max(LEAVE_PAGE, 1), maxPage);
+  const startIndex = (LEAVE_PAGE - 1) * LEAVE_PAGE_SIZE;
+  const pageData = filtered.slice(startIndex, startIndex + LEAVE_PAGE_SIZE);
+
+  const info = document.getElementById('leave-page-info');
+  if (info) info.textContent = totalItems ? `Showing ${startIndex + 1}-${startIndex + pageData.length} of ${totalItems} results` : 'Showing 0 results';
+  if (empty) empty.style.display = totalItems ? 'none' : 'block';
+
+  tbody.innerHTML = pageData.map(leave => `
+    <tr data-leave-id="${leave.id}">
+      <td><strong>${leave.employee_name || '-'}</strong><div style="color:var(--muted);font-size:11px;">${leave.created_at ? new Date(leave.created_at).toLocaleString() : ''}</div></td>
+      <td>${leave.department || '-'}</td>
+      <td>${leave.pay_type || '-'}</td>
+      <td>${leave.type || '-'}</td>
+      <td>${leave.date_from || '-'} to ${leave.date_to || '-'}<div style="color:var(--muted);font-size:11px;">${leave.days || 1} day(s)</div></td>
+      <td>${leaveBadge(leave.filing_source, leave.filing_source)}</td>
+      <td>${leaveBadge(leave.status, leave.status)}</td>
+      <td><div class="leave-actions">
+        <button class="btn btn-outline" onclick="viewLeaveDetails(${leave.id})">View</button>
+        ${isLeaveManager() && leave.status === 'Pending' ? `<button class="btn btn-primary" onclick="approveLeaveById(${leave.id})">Approve</button><button class="btn btn-outline" onclick="rejectLeaveById(${leave.id})">Reject</button>` : ''}
+      </div></td>
+    </tr>
+  `).join('');
+};
+
+async function approveLeaveById(id) {
+  if (!confirm('Approve this leave request?')) return;
+  const res = await apiFetch(`/api/leave/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'Approved', remarks: 'Approved' })
+  });
+  if (!res || !res.ok) return alert('Failed to approve leave.');
+  await loadLeaveRequests();
+}
+
+async function rejectLeaveById(id) {
+  const remarks = prompt('Enter rejection remarks:');
+  if (!remarks) return alert('Remarks are required when rejecting.');
+  const res = await apiFetch(`/api/leave/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'Rejected', remarks })
+  });
+  if (!res || !res.ok) return alert('Failed to reject leave.');
+  await loadLeaveRequests();
+}
+
+function viewLeaveDetails(id) {
+  const leave = ALL_LEAVES_DATA.find(item => Number(item.id) === Number(id));
+  const modal = document.getElementById('leave-detail-modal');
+  const body = document.getElementById('leave-detail-body');
+  if (!leave || !modal || !body) return;
+  body.innerHTML = `
+    <div class="leave-grid" style="grid-template-columns:1fr 1fr;">
+      <div><strong>Employee</strong><br>${leave.employee_name || '-'}</div>
+      <div><strong>Department</strong><br>${leave.department || '-'}</div>
+      <div><strong>Pay Type</strong><br>${leave.pay_type || '-'}</div>
+      <div><strong>Leave Type</strong><br>${leave.type || '-'}</div>
+      <div><strong>Dates</strong><br>${leave.date_from} to ${leave.date_to}</div>
+      <div><strong>Duration</strong><br>${leave.days || 1} day(s)</div>
+      <div><strong>Source</strong><br>${leave.filing_source || 'Portal'}</div>
+      <div><strong>Status</strong><br>${leave.status}</div>
+      <div><strong>Reason</strong><br>${leave.reason || '-'}</div>
+      <div><strong>Remarks</strong><br>${leave.remarks || leave.rejection_remarks || '-'}</div>
+      ${leave.file_path ? `<div><a href="${leave.file_path}" target="_blank">View Attachment</a></div>` : ''}
+    </div>`;
+  modal.style.display = 'flex';
+}
+
+function closeLeaveDetails() {
+  const modal = document.getElementById('leave-detail-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function toggleLeaveForm() {
+  const form = document.getElementById('manual-leave-form');
+  const btn = document.getElementById('toggle-form-btn');
+  if (!form) return;
+  const open = form.style.display !== 'none';
+  form.style.display = open ? 'none' : 'block';
+  if (btn) btn.textContent = open ? 'Expand Form' : 'Collapse Form';
+}
+
+function syncManualEmployeeInfo() {
+  const emp = LEAVE_EMPLOYEES.find(item => String(item.id) === document.getElementById('manual-employee')?.value);
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+  set('manual-pay-type', emp ? leavePayType(emp.wage_type) : '');
+  set('manual-department', emp?.department || '');
+  if (emp) loadLeaveBalancesForSelection(emp.id);
+}
+
+function calculateManualDuration() {
+  const from = document.getElementById('manual-start-date')?.value;
+  const to = document.getElementById('manual-end-date')?.value;
+  const duration = document.getElementById('manual-duration');
+  if (!from || !to || !duration) return;
+  duration.value = Math.max(Math.floor((new Date(to) - new Date(from)) / 86400000) + 1, 1);
+}
+
+async function submitManualLeave(event) {
+  event.preventDefault();
+  const formData = new FormData();
+  formData.append('filing_source', 'Manual');
+  formData.append('employee_id', document.getElementById('manual-employee').value);
+  formData.append('type', document.getElementById('manual-leave-type').value);
+  formData.append('date_from', document.getElementById('manual-start-date').value);
+  formData.append('date_to', document.getElementById('manual-end-date').value);
+  formData.append('days', document.getElementById('manual-duration').value);
+  formData.append('reason', document.getElementById('manual-reason').value);
+  formData.append('remarks', document.getElementById('manual-remarks').value);
+  const file = document.getElementById('manual-attachment')?.files?.[0];
+  if (file) formData.append('attachment', file);
+  const res = await apiFetch('/api/leave', { method: 'POST', body: formData });
+  if (!res || !res.ok) {
+    const error = await res.json().catch(() => ({}));
+    return alert(error.error || 'Failed to save manual leave.');
+  }
+  clearLeaveForm();
+  await loadLeaveRequests();
+}
+
+function clearLeaveForm() {
+  const form = document.getElementById('manual-leave-form');
+  if (form) form.reset();
+  ['manual-pay-type', 'manual-department'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+async function loadLeaveBalancesForSelection(employeeId = null) {
+  const id = employeeId || document.getElementById('manual-employee')?.value || CURRENT_USER?.employeeId;
+  if (!id) return;
+  const res = await apiFetch(`/api/leave/balances?employee_id=${id}`);
+  if (!res || !res.ok) return;
+  const balances = await res.json();
+  const byType = Object.fromEntries(balances.map(b => [String(b.leave_type).toLowerCase(), b]));
+  ['vacation', 'sick', 'emergency'].forEach(type => {
+    const el = document.getElementById(`balance-${type}`);
+    const row = byType[type];
+    if (el) el.textContent = row ? `${Number(row.remaining).toFixed(1)} / ${Number(row.balance).toFixed(1)}` : '-';
+  });
+}
+
+function renderLeaveAudit() {
+  const tbody = document.getElementById('leave-audit-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = LEAVE_AUDIT.slice(0, 25).map(item => `
+    <tr><td>${item.created_at ? new Date(item.created_at).toLocaleString() : '-'}</td><td>${item.employee_name || '-'}</td><td>${item.action || '-'}</td><td>${item.actor_name || '-'}</td><td>${item.remarks || '-'}</td></tr>
+  `).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">No audit records.</td></tr>';
+}
+
+function renderLeaveCalendar() {
+  const calendar = document.getElementById('leave-calendar');
+  if (!calendar) return;
+  const year = CALENDAR_DATE.getFullYear();
+  const month = CALENDAR_DATE.getMonth();
+  const label = document.getElementById('calendar-month-year');
+  if (label) label.textContent = CALENDAR_DATE.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const dept = document.getElementById('calendar-dept-filter')?.value || '';
+  const status = document.getElementById('calendar-status-filter')?.value || '';
+  const leaves = ALL_LEAVES_DATA.filter(l => (!dept || l.department === dept) && (!status || l.status === status));
+  const heads = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => `<div class="leave-calendar-head">${day}</div>`).join('');
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  let cells = '';
+  for (let i = 0; i < firstDay; i++) cells += '<div class="leave-calendar-day"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const entries = leaves.filter(l => l.date_from <= date && l.date_to >= date).slice(0, 3);
+    cells += `<div class="leave-calendar-day"><strong>${day}</strong>${entries.map(l => `<div class="leave-calendar-entry">${l.employee_name} (${l.status})</div>`).join('')}</div>`;
+  }
+  calendar.innerHTML = heads + cells;
+}
+
+function previousMonth() { CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() - 1); renderLeaveCalendar(); }
+function nextMonth() { CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() + 1); renderLeaveCalendar(); }
+function exportLeaveReport(reportType, format) {
+  const type = reportType === 'balances' ? 'balances' : reportType === 'monthly' ? 'monthly' : 'summary';
+  window.open(`/api/leave/reports/${type}?format=${format || 'csv'}`, '_blank');
+}
+
+function switchLeaveModuleTab(tabName) {
+  document.querySelectorAll('.leave-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.leaveTab === tabName);
+  });
+  document.querySelectorAll('.leave-tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `leave-panel-${tabName}`);
+  });
+  if (tabName === 'calendar') window.renderLeaveCalendar();
+}
+
 // ── Watch for page activation (partials load async) ───────────
 function watchPageActivation() {
   const observer = new MutationObserver(() => {
@@ -1250,3 +1558,44 @@ window.loadGeneralRequests  = loadGeneralRequests;
 window.approveGenRequest    = approveGenRequest;
 window.denyGenRequest       = denyGenRequest;
 window.switchGenTab         = switchGenTab;
+
+window.viewLeaveDetails = viewLeaveDetails;
+window.closeLeaveDetails = closeLeaveDetails;
+window.syncManualEmployeeInfo = syncManualEmployeeInfo;
+window.calculateManualDuration = calculateManualDuration;
+window.approveLeaveById = approveLeaveById;
+window.rejectLeaveById = rejectLeaveById;
+window.exportLeaveReport = exportLeaveReport;
+window.switchLeaveModuleTab = switchLeaveModuleTab;
+
+window.renderLeaveCalendar = function() {
+  const calendar = document.getElementById('leave-calendar');
+  if (!calendar) return;
+  const year = CALENDAR_DATE.getFullYear();
+  const month = CALENDAR_DATE.getMonth();
+  const label = document.getElementById('calendar-month-year');
+  if (label) label.textContent = CALENDAR_DATE.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const dept = document.getElementById('calendar-dept-filter')?.value || '';
+  const status = document.getElementById('calendar-status-filter')?.value || '';
+  const leaves = ALL_LEAVES_DATA.filter(l => (!dept || l.department === dept) && (!status || l.status === status));
+  let html = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => `<div class="leave-calendar-head">${day}</div>`).join('');
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  for (let i = 0; i < firstDay; i++) html += '<div class="leave-calendar-day"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const entries = leaves.filter(l => l.date_from <= date && l.date_to >= date).slice(0, 3);
+    html += `<div class="leave-calendar-day"><strong>${day}</strong>${entries.map(l => `<div class="leave-calendar-entry">${l.employee_name} (${l.status})</div>`).join('')}</div>`;
+  }
+  calendar.innerHTML = html;
+};
+
+window.previousMonth = function() {
+  CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() - 1);
+  window.renderLeaveCalendar();
+};
+
+window.nextMonth = function() {
+  CALENDAR_DATE.setMonth(CALENDAR_DATE.getMonth() + 1);
+  window.renderLeaveCalendar();
+};

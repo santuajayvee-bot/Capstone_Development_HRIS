@@ -82,6 +82,14 @@
           <div data-include="pages/employees.html"></div>
         </div>
 
+        <div class="page" id="page-register">
+          <div data-include="pages/register.html"></div>
+        </div>
+
+        <div class="page" id="page-employee-profile">
+          <div data-include="pages/employee-profile.html"></div>
+        </div>
+
         <!-- 201-File Management — HR Admin only -->
         <div class="page" id="page-201file">
           <div data-include="pages/201file.html"></div>
@@ -151,14 +159,107 @@
 </div>
 
 <!-- Universal Modal for Alerts and Confirms -->
-<div id="universal-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:white;border-radius:12px;max-width:450px;width:90%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div id="modal-icon" style="font-size:48px;margin-bottom:16px;">ℹ️</div>
-    <h3 id="modal-title" style="margin:0 0 12px 0;font-size:18px;font-weight:600;color:#333;">Alert</h3>
-    <p id="modal-message" style="margin:0 0 24px 0;font-size:14px;color:#666;line-height:1.5;">Message</p>
-    <div id="modal-buttons" style="display:flex;gap:12px;justify-content:flex-end;">
-      <button id="modal-cancel" style="flex:1;padding:10px;background:#f0f0f0;color:#333;border:none;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Cancel</button>
-      <button id="modal-confirm" style="flex:1;padding:10px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;">OK</button>
+<style>
+  .modal-backdrop-custom {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, .66);
+    backdrop-filter: blur(3px);
+  }
+
+  .modal-dialog-custom {
+    width: min(440px, 100%);
+    background: #fff;
+    color: #111827;
+    border-radius: 8px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .32);
+    overflow: hidden;
+  }
+
+  .modal-header-custom {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 18px 20px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .modal-icon-custom {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    font-size: 16px;
+    font-weight: 800;
+  }
+
+  .modal-title-custom {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #111827;
+  }
+
+  .modal-body-custom {
+    padding: 18px 20px 6px;
+  }
+
+  .modal-body-custom p {
+    margin: 0;
+    color: #4b5563;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .modal-footer-custom {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 20px 20px;
+  }
+
+  .btn-modal {
+    min-width: 88px;
+    min-height: 36px;
+    padding: 8px 14px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .btn-modal-primary { background: #2563eb; color: #fff; }
+  .btn-modal-secondary { background: #fff; color: #374151; border-color: #d1d5db; }
+  .btn-modal-danger { background: #dc3545; color: #fff; }
+  .btn-modal-success { background: #198754; color: #fff; }
+  .btn-modal-warning { background: #f59e0b; color: #111827; }
+
+  .modal-icon-info { background: #dbeafe; color: #1d4ed8; }
+  .modal-icon-success { background: #dcfce7; color: #15803d; }
+  .modal-icon-warning { background: #fef3c7; color: #b45309; }
+  .modal-icon-error { background: #fee2e2; color: #b91c1c; }
+</style>
+<div id="universal-modal" class="modal-backdrop-custom" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-dialog-custom">
+    <div class="modal-header-custom">
+      <div id="modal-icon" class="modal-icon-custom modal-icon-info">i</div>
+      <h3 id="modal-title" class="modal-title-custom">Alert</h3>
+    </div>
+    <div class="modal-body-custom">
+      <p id="modal-message">Message</p>
+    </div>
+    <div id="modal-buttons" class="modal-footer-custom">
+      <button id="modal-cancel" class="btn-modal btn-modal-secondary" style="display:none;">Cancel</button>
+      <button id="modal-confirm" class="btn-modal btn-modal-primary">OK</button>
     </div>
   </div>
 </div>
@@ -169,6 +270,7 @@
 <script src="js/app.js"></script>
 <script src="js/login.js"></script>
 <script src="js/dashboard.js"></script>
+<script src="js/register.js"></script>
 <script src="js/employees.js"></script>
 <script src="js/leave.js"></script>
 <script src="js/201file.js"></script>
@@ -193,6 +295,8 @@
         console.warn('Could not load partial:', el.getAttribute('data-include'));
       }
     }));
+
+    document.dispatchEvent(new CustomEvent('partialsLoaded'));
   });
 </script>
 

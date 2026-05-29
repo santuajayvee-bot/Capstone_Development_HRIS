@@ -206,6 +206,112 @@
     font-size: 12px;
     color: #6c757d;
   }
+
+  .emp-action-menu {
+    position: relative;
+    display: inline-flex;
+    justify-content: center;
+  }
+
+  .emp-action-trigger {
+    width: 34px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .emp-action-trigger .dot {
+    width: 3px;
+    height: 3px;
+    display: block;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .emp-action-trigger .dot + .dot {
+    margin-top: 3px;
+  }
+
+  .emp-action-trigger:hover,
+  .emp-action-trigger.active {
+    border-color: #4f7cff;
+    background: rgba(79,124,255,0.14);
+    color: #9bb7ff;
+  }
+
+  .emp-action-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 170px;
+    display: none;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #151a2a;
+    box-shadow: 0 14px 35px rgba(0,0,0,0.35);
+    z-index: 500;
+  }
+
+  .emp-action-dropdown::before {
+    content: "Status Action";
+    display: block;
+    padding: 4px 8px 8px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .emp-action-dropdown.open {
+    display: grid;
+    gap: 4px;
+  }
+
+  .emp-menu-item {
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .emp-menu-item:hover {
+    background: rgba(79,124,255,0.14);
+  }
+
+  .emp-menu-item.activate {
+    color: #9ee6b0;
+  }
+
+  .emp-menu-item.deactivate {
+    color: #ffb4b4;
+  }
+
+  .emp-menu-item:disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .emp-menu-item:disabled:hover {
+    background: transparent;
+  }
 </style>
 <div class="page-header">
   <div>
@@ -213,7 +319,6 @@
     <div class="section-sub">Manage organization's workforce</div>
   </div>
   <div class="page-header-right">
-    <button class="btn btn-outline" onclick="switchView('manage')">⚙ Manage Employee</button>
     <button class="btn btn-primary" onclick="openAddEmployeeModal()">+ Add Employee</button>
   </div>
 </div>
@@ -339,266 +444,12 @@
           </div>
 
           <div style="padding: 12px; background: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; color: #004085; font-size: 13px;">
-            <strong>📝 Note:</strong> To configure or update payroll and compensation, please use the Manage Employee section.
+            <strong>Note:</strong> To configure or update payroll and compensation, open the employee profile and use the Compensation tab.
           </div>
         </div>
       </div>
     </div>
   </div>
-</div>
-
-<!-- Employee Management View (Admin Only) -->
-<div id="emp-manage-view" style="display:none;">
-  <style>
-    .manage-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 24px;
-    }
-    
-    .manage-header h3 {
-      font-size: 18px;
-      font-weight: 700;
-      color: #212529;
-    }
-    
-    .manage-header button {
-      background: #4f7cff;
-      color: white;
-      border: none;
-      padding: 10px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-      transition: all 0.2s ease;
-    }
-    
-    .manage-header button:hover {
-      background: #3a5ec7;
-    }
-    
-    .manage-filters {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-
-    .manage-filters input,
-    .manage-filters select {
-      padding: 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--card);
-      color: var(--text);
-      font-size: 14px;
-    }
-    
-    .emp-table-container {
-      background: var(--card);
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      overflow: hidden;
-    }
-    
-    .manage-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-    }
-    
-    .manage-table thead {
-      background: #f8f9fa;
-      border-bottom: 2px solid var(--border);
-    }
-    
-    .manage-table th {
-      padding: 12px 14px;
-      text-align: left;
-      font-weight: 700;
-      font-size: 12px;
-      text-transform: uppercase;
-      color: #6c757d;
-      letter-spacing: 0.5px;
-    }
-    
-    .manage-table td {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--border);
-      color: var(--text);
-    }
-    
-    .manage-table tbody tr:hover {
-      background: #f8f9fa;
-    }
-    
-    .manage-table tbody tr:last-child td {
-      border-bottom: none;
-    }
-
-    .emp-actions {
-      display: flex;
-      gap: 6px;
-      justify-content: center;
-    }
-    
-    .emp-actions button {
-      padding: 6px 12px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-      transition: all 0.2s ease;
-    }
-    
-    .emp-edit-btn {
-      background: #4f7cff;
-      color: white;
-    }
-    
-    .emp-edit-btn:hover {
-      background: #3a5ec7;
-    }
-
-    .emp-status-toggle-btn {
-      background: #ffc107;
-      color: #212529;
-    }
-
-    .emp-status-toggle-btn:hover {
-      background: #e0a800;
-    }
-    
-    .emp-delete-btn {
-      background: #dc3545;
-      color: white;
-    }
-    
-    .emp-delete-btn:hover {
-      background: #c82333;
-    }
-
-    .emp-status-badge {
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 12px;
-      text-align: center;
-    }
-    
-    .emp-status-badge.active {
-      background: #d4edda;
-      color: #155724;
-    }
-    
-    .emp-status-badge.inactive {
-      background: #f8d7da;
-      color: #721c24;
-    }
-  </style>
-  
-  <div class="manage-header">
-    <h3>Manage Employees</h3>
-    <button onclick="switchView('list')">← Back to List</button>
-  </div>
-
-  <div class="manage-filters">
-    <input id="manage-search" type="text" class="search-input" placeholder="🔍 Search by name or email" />
-    <select id="manage-dept" class="filter-select">
-      <option>All Departments</option>
-      <option>HR</option>
-      <option>Accounting</option>
-      <option>Production</option>
-      <option>Logistics</option>
-      <option>Personnel</option>
-    </select>
-    <select id="manage-status" class="filter-select">
-      <option>All Status</option>
-      <option>Active</option>
-      <option>Inactive</option>
-    </select>
-  </div>
-  
-  <div class="emp-table-container">
-    <table class="manage-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Email</th>
-          <th>Department</th>
-          <th>Position</th>
-          <th>Status</th>
-          <th style="text-align:center;">Actions</th>
-        </tr>
-      </thead>
-      <tbody id="manage-emp-grid">
-        <!-- Rendered by employees.js -->
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- Payroll Configuration Modal -->
-<div id="payroll-config-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1001;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:var(--card);border-radius:12px;width:90%;max-width:600px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
-    <div style="position:sticky;top:0;background:linear-gradient(135deg,#f8f9fa 0%,#f1f3f5 100%);padding:24px 28px;border-bottom:1px solid var(--border);border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;">
-      <h2 style="margin:0;font-size:18px;color:var(--text);">Configure Payroll & Compensation</h2>
-      <button onclick="closePayrollConfigModal()" style="background:rgba(0,0,0,0.05);border:none;border-radius:50%;width:36px;height:36px;font-size:20px;cursor:pointer;color:#6c757d;display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">✕</button>
-    </div>
-
-    <div style="padding:24px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">Employee ID</label>
-          <div id="payroll-modal-emp-id" style="padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-weight:600;">—</div>
-        </div>
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;">Employee Name</label>
-          <div id="payroll-modal-emp-name" style="padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-weight:600;">—</div>
-        </div>
-      </div>
-
-      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Wage Type</label>
-      <select id="payroll-config-wage-select" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:16px;">
-        <option value="">— Select wage type —</option>
-        <option value="1">Base Salary</option>
-        <option value="2">Hourly</option>
-        <option value="3">Per-Piece (Sewing)</option>
-        <option value="4">Per-Trip (Logistics)</option>
-      </select>
-
-      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Base Rate (₱)</label>
-      <input type="number" id="payroll-config-primary-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:16px;" />
-
-      <div id="payroll-config-hourly-section" style="display:none;margin-bottom:16px;">
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Hourly Rate (₱)</label>
-        <input type="number" id="payroll-config-hourly-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-bottom:12px;" />
-        
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;">Overtime Rate (₱)</label>
-        <input type="number" id="payroll-config-overtime-rate" min="0" step="0.01" placeholder="0.00" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);" />
-      </div>
-
-      <div id="payroll-config-sewing-section" style="display:none;margin-bottom:16px;">
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:12px;font-weight:600;">Sewing Type Rates</label>
-        <div id="payroll-config-sewing-items"></div>
-      </div>
-
-      <div id="payroll-config-logistics-section" style="display:none;margin-bottom:16px;">
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:12px;font-weight:600;">Logistics Region Rates</label>
-        <div id="payroll-config-logistics-items"></div>
-      </div>
-
-      <div style="display:flex;gap:12px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
-        <button onclick="closePayrollConfigModal()" style="flex:1;padding:12px;background:var(--border);color:var(--text);border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">Cancel</button>
-        <button id="payroll-config-save-btn" onclick="savePayrollConfigFromManage()" style="flex:1;padding:12px;background:#4f7cff;color:white;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:all 0.2s ease;">✓ Save Configuration</button>
-      </div>
-    </div>
-  </div>
-</div>
 </div>
 
 <!-- Edit Employee Modal with Tabs -->
