@@ -1,73 +1,323 @@
 <!-- ============================================================
-     pages/payroll.html — Payroll page content
+     pages/payroll.html - Payroll module
      ============================================================ -->
 <div class="page-header">
   <div>
-    <div class="section-title">Payroll Records</div>
-    <div class="section-sub">Manage employee compensation and payroll processing</div>
+    <div class="section-title">Payroll</div>
+    <div class="section-sub">Weekly payroll processing, salary calculation, payslips, settings, and reports.</div>
   </div>
   <div class="page-header-right">
-    <button class="btn btn-outline">⬆ Export</button>
+    <button class="btn btn-outline" onclick="exportPayrollReport('summary','csv')">Export CSV</button>
     <button class="btn btn-primary" onclick="openRunPayrollModal()">Process Payroll</button>
   </div>
 </div>
 
-<div class="stat-grid" style="margin-bottom:24px;">
-  <div class="stat-card">
-    <div class="stat-label">Total Payroll</div>
-    <div class="stat-val">₱0</div>
-    <div class="stat-sub">N/A</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Employees Paid</div>
-    <div class="stat-val">0</div>
-    <div class="stat-sub">0 employees processed</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Average Salary</div>
-    <div class="stat-val">₱0</div>
-    <div class="stat-sub">Per Employee</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Total Deductions</div>
-    <div class="stat-val">₱0</div>
-    <div class="stat-sub">SSS, PhilHealth, etc.</div>
-  </div>
+<div class="payroll-tabs" role="tablist">
+  <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Payroll Dashboard</button>
+  <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Salary Calculation</button>
+  <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
+  <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslip Management</button>
+  <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deduction Settings</button>
+  <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowance Settings</button>
+  <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
 </div>
 
-<div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
-  <div id="payroll-grid">
-    <!-- Rendered by payroll.js -->
+<section class="payroll-panel active" id="payroll-tab-dashboard">
+  <div class="payroll-filter-bar">
+    <input class="form-control" id="payroll-filter-month" type="month" />
+    <select class="form-control" id="payroll-filter-status">
+      <option value="">All Status</option>
+      <option value="Draft">Draft</option>
+      <option value="Submitted">Submitted</option>
+      <option value="Approved">Approved</option>
+      <option value="Released">Released</option>
+      <option value="Paid">Paid</option>
+    </select>
+    <button class="btn btn-outline" onclick="refreshPayrollDashboard()">Apply Filters</button>
   </div>
-</div>
 
-<!-- Salary Calculation Records Section -->
-<div style="margin-top: 40px;">
-  <div class="page-header" style="margin-bottom: 20px;">
+  <div class="stat-grid payroll-stat-grid">
+    <div class="stat-card">
+      <div class="stat-label">Total Payroll</div>
+      <div class="stat-val" id="payroll-total-payroll">PHP 0</div>
+      <div class="stat-sub" id="payroll-period-label">Current period</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Employees Paid</div>
+      <div class="stat-val" id="payroll-employees-paid">0</div>
+      <div class="stat-sub" id="payroll-employees-label">0 employees processed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Average Salary</div>
+      <div class="stat-val" id="payroll-average-salary">PHP 0</div>
+      <div class="stat-sub">Per employee</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Deductions</div>
+      <div class="stat-val" id="payroll-total-deductions">PHP 0</div>
+      <div class="stat-sub">Configured deductions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Pending Payroll</div>
+      <div class="stat-val" id="payroll-pending-count">0</div>
+      <div class="stat-sub">Draft or submitted</div>
+    </div>
+  </div>
+
+  <div class="table-wrap payroll-dashboard-table">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>Recent Payroll Records</h3>
+        <p>Submitted and processed payroll entries.</p>
+      </div>
+    </div>
+    <div id="payroll-grid"></div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-salary">
+  <div class="page-header compact">
     <div>
-      <div class="section-title">Salary Calculation Records</div>
-      <div class="section-sub">Audit trail of all salary calculations • For record keeping and compliance</div>
+      <div class="section-title small">Salary Calculation</div>
+      <div class="section-sub">Select a payroll period, choose an employee, then calculate based on wage type.</div>
     </div>
     <div class="page-header-right">
-      <input type="date" id="salary-calc-filter-date" placeholder="Filter by date" style="
-        padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-        border-radius: 8px; color: var(--text); font-size: 13px; margin-right: 8px;
-      " />
-      <select id="salary-calc-filter-status" style="
-        padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-        border-radius: 8px; color: var(--text); font-size: 13px;
-      ">
-        <option value="">All Status</option>
-        <option value="Draft">Draft</option>
-        <option value="Submitted">Submitted</option>
-        <option value="Approved">Approved</option>
-      </select>
+      <button class="btn btn-outline" onclick="saveSalaryAsDraft()">Save Draft</button>
+      <button class="btn btn-primary" onclick="saveCalculation()">Submit Calculation</button>
     </div>
   </div>
 
-  <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto;">
-    <div id="salary-calculations-grid">
-      <!-- Rendered by payroll.js -->
+  <div class="payroll-form-grid">
+    <div class="payroll-card">
+      <h4>Employee Information</h4>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Payroll Period</label>
+          <input id="salary-payroll-period" type="month" />
+        </div>
+        <div class="form-group">
+          <label>Search & Select Employee</label>
+          <div class="payroll-search-box">
+            <input id="salary-employee-search" type="text" placeholder="Search by name, code, or department..." autocomplete="off" />
+            <div id="salary-employee-dropdown" class="payroll-search-dropdown"></div>
+          </div>
+          <select id="salary-employee" hidden>
+            <option value="">Choose an employee</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="salary-employee-info" class="payroll-info-strip" style="display:none;">
+        <div>
+          <span>Selected Employee</span>
+          <strong id="salary-employee-name">-</strong>
+        </div>
+        <div>
+          <span>Department</span>
+          <strong id="salary-employee-dept-info">-</strong>
+        </div>
+        <div>
+          <span>Position</span>
+          <strong id="salary-employee-pos-info">-</strong>
+        </div>
+        <div>
+          <span>Wage Structure</span>
+          <strong id="salary-employee-wage-info">-</strong>
+        </div>
+      </div>
+
+      <div class="payroll-info-strip subtle">
+        <div>
+          <span>Department</span>
+          <strong id="salary-dept">-</strong>
+        </div>
+        <div>
+          <span>Position</span>
+          <strong id="salary-pos">-</strong>
+        </div>
+        <div>
+          <span>Wage Type</span>
+          <strong id="salary-wage-type">-</strong>
+        </div>
+        <div>
+          <span>Rate</span>
+          <strong id="salary-rate">PHP 0.00</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="payroll-card">
+      <h4>Work Output</h4>
+      <div class="form-grid">
+        <div class="form-group" id="daily-section" style="display:none;">
+          <label>Days Worked</label>
+          <input id="salary-days-worked" type="number" min="0" step="0.5" placeholder="Enter days worked" />
+        </div>
+        <div class="form-group" id="hourly-section" style="display:none;">
+          <label>Hours Worked</label>
+          <input id="salary-hours-worked" type="number" min="0" step="0.5" placeholder="Enter hours worked" />
+        </div>
+        <div class="form-group" id="per-piece-section" style="display:none;">
+          <label>Pieces Completed</label>
+          <input id="salary-pieces" type="number" min="0" step="1" placeholder="Enter pieces completed" />
+          <div id="salary-other-sewing" class="payroll-inline-list"></div>
+        </div>
+        <div class="form-group" id="per-trip-section" style="display:none;">
+          <label>Trips Completed</label>
+          <input id="salary-trips" type="number" min="0" step="1" placeholder="Enter trips completed" />
+          <label style="margin-top:12px;">Delivery Region</label>
+          <select id="salary-region"></select>
+        </div>
+        <div class="form-group">
+          <label>Overtime Hours</label>
+          <input id="salary-ot-hours" type="number" min="0" step="0.5" value="0" />
+        </div>
+      </div>
+      <input id="salary-quantity" type="number" hidden />
+    </div>
+
+    <div class="payroll-card">
+      <h4>Allowances</h4>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Housing</label>
+          <input id="salary-housing" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Meal</label>
+          <input id="salary-meal" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Transport</label>
+          <input id="salary-transport" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Bonus / Other</label>
+          <input id="salary-bonus" type="number" min="0" step="0.01" value="0" />
+        </div>
+      </div>
+    </div>
+
+    <div class="payroll-card payroll-summary-card">
+      <h4>Salary Summary</h4>
+      <div class="summary-employee">
+        <span>Employee</span>
+        <strong id="summary-employee">-</strong>
+      </div>
+      <div class="summary-grid">
+        <div><span>Wage Type</span><strong id="summary-wage-type">-</strong></div>
+        <div><span>Rate</span><strong id="summary-rate">PHP 0.00</strong></div>
+        <div><span>Output</span><strong id="summary-qty">0</strong></div>
+      </div>
+      <div class="summary-lines">
+        <div><span>Base Pay</span><strong id="summary-base">PHP 0.00</strong></div>
+        <div><span>Allowances</span><strong id="summary-allowances">PHP 0.00</strong></div>
+        <div><span>Gross Pay</span><strong id="summary-gross">PHP 0.00</strong></div>
+      </div>
+      <div class="summary-deductions" id="summary-deductions"></div>
+      <div class="summary-lines">
+        <div><span>Total Deductions</span><strong id="summary-total-deductions">PHP 0.00</strong></div>
+      </div>
+      <div class="summary-net">
+        <span>Net Pay</span>
+        <strong id="summary-net">PHP 0.00</strong>
+      </div>
     </div>
   </div>
-</div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-records">
+  <div class="table-wrap">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>Payroll Records</h3>
+        <p>Submitted calculations and payroll entries by period.</p>
+      </div>
+      <button class="btn btn-outline" onclick="loadSalaryCalculations()">Refresh</button>
+    </div>
+    <div id="salary-calculations-grid"></div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-payslips">
+  <div class="table-wrap">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>Payslip Management</h3>
+        <p>Generate and export payslips after payroll is approved or released.</p>
+      </div>
+      <button class="btn btn-outline" onclick="exportPayrollReport('employee','pdf')">Export PDF</button>
+    </div>
+    <div id="payroll-payslips-grid"></div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-deductions">
+  <details class="payroll-collapsible" open>
+    <summary>Configure Deduction</summary>
+    <form id="deduction-setting-form" class="form-grid" onsubmit="savePayrollSetting(event, 'deduction')">
+      <input type="hidden" name="id" />
+      <div class="form-group"><label>Deduction Name</label><input name="name" required placeholder="SSS, PhilHealth, Loan" /></div>
+      <div class="form-group"><label>Category</label><select name="category"><option>Government</option><option>Company</option><option>Other</option></select></div>
+      <div class="form-group"><label>Computation Type</label><select name="computation_type"><option>Fixed Amount</option><option>Percentage</option><option>Manual Amount</option></select></div>
+      <div class="form-group"><label>Rate or Amount</label><input name="rate_or_amount" type="number" min="0" step="0.01" required /></div>
+      <div class="form-group"><label>Apply Schedule</label><select name="apply_schedule"><option>Every Payroll</option><option>1st Week</option><option>2nd Week</option><option>3rd Week</option><option>4th Week</option><option>5th Week</option></select></div>
+      <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
+      <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
+      <div class="form-group"><label>Remarks</label><input name="remarks" placeholder="Optional" /></div>
+      <div class="form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Deduction</button></div>
+    </form>
+  </details>
+  <div class="table-wrap"><div id="deduction-settings-grid"></div></div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-allowances">
+  <details class="payroll-collapsible" open>
+    <summary>Configure Allowance</summary>
+    <form id="allowance-setting-form" class="form-grid" onsubmit="savePayrollSetting(event, 'allowance')">
+      <input type="hidden" name="id" />
+      <div class="form-group"><label>Allowance Name</label><input name="name" required placeholder="Meal Allowance" /></div>
+      <div class="form-group"><label>Type</label><select name="allowance_type"><option>Fixed</option><option>Percentage</option><option>Manual</option></select></div>
+      <div class="form-group"><label>Amount or Rate</label><input name="amount_or_rate" type="number" min="0" step="0.01" required /></div>
+      <div class="form-group"><label>Taxable</label><select name="is_taxable"><option value="0">No</option><option value="1">Yes</option></select></div>
+      <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
+      <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
+      <div class="form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Allowance</button></div>
+    </form>
+  </details>
+  <div class="table-wrap"><div id="allowance-settings-grid"></div></div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-reports">
+  <div class="payroll-report-grid">
+    <div class="payroll-card">
+      <h4>Payroll Summary Report</h4>
+      <p>Totals by period, employee count, deductions, and net pay.</p>
+      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('summary','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('summary','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('summary','pdf')">PDF</button></div>
+    </div>
+    <div class="payroll-card">
+      <h4>Deduction Report</h4>
+      <p>Configured deductions and deduction totals.</p>
+      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('deductions','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('deductions','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('deductions','pdf')">PDF</button></div>
+    </div>
+    <div class="payroll-card">
+      <h4>Government Contribution Report</h4>
+      <p>SSS, PhilHealth, Pag-IBIG, and withholding tax summary.</p>
+      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('government','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('government','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('government','pdf')">PDF</button></div>
+    </div>
+    <div class="payroll-card">
+      <h4>Employee Payroll Report</h4>
+      <p>Employee-level wage type, gross pay, deductions, and net pay.</p>
+      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('employee','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('employee','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('employee','pdf')">PDF</button></div>
+    </div>
+    <div class="payroll-card">
+      <h4>Monthly Payroll Report</h4>
+      <p>Monthly payroll records based on the selected period filter.</p>
+      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('monthly','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('monthly','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('monthly','pdf')">PDF</button></div>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-top:18px;">
+    <div class="payroll-card-header-row"><div><h3>Audit Trail</h3><p>Salary calculations, approvals, releases, settings updates, and payslip generation.</p></div></div>
+    <div id="payroll-audit-grid"></div>
+  </div>
+</section>

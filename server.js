@@ -1415,7 +1415,7 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
 });
 
 // Blockchain — admin only
-app.get('/api/blockchain', requireAuth, requireRole(ROLES.admin), async (req, res) => {
+app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin, ...ROLES.payroll_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(

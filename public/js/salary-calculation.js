@@ -4,6 +4,7 @@ let currentSalaryEmployee = null;
 let salaryEmpList = [];
 let sewingTypes = [];
 let logisticsRegions = [];
+let payrollDeductionSettings = [];
 let salaryPageInitialized = false;
 let salarySearchListenerAttached = false;
 let salaryInputListenersAttached = false;
@@ -33,6 +34,7 @@ async function loadSalaryCalculationPage() {
     salaryPageInitialized = true;
     try {
       await fetchWageTypes();
+      await fetchPayrollDeductionSettings();
     } catch (err) {
       console.error('Failed to load wage types:', err);
     }
@@ -40,6 +42,23 @@ async function loadSalaryCalculationPage() {
   }
 
   await fetchSalaryEmpList();
+
+  const periodInput = document.getElementById('salary-payroll-period');
+  if (periodInput && !periodInput.value) {
+    const today = new Date();
+    periodInput.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  }
+}
+
+async function fetchPayrollDeductionSettings() {
+  try {
+    const res = await apiFetch('/api/payroll/deduction-settings');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    payrollDeductionSettings = await res.json();
+  } catch (err) {
+    console.warn('Failed to load payroll deduction settings:', err.message);
+    payrollDeductionSettings = [];
+  }
 }
 
 document.addEventListener('partialsLoaded', loadSalaryCalculationPage);
@@ -290,6 +309,10 @@ function showWageStructureForm(wageType) {
     console.log('✅ Showing Per-Piece form...');
     perPieceSection.style.display = 'block';
     perTripSection.style.display = 'none';
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'none';
+    if (dailySection) dailySection.style.display = 'none';
     
     // Populate other sewing types
     const container = document.getElementById('salary-other-sewing');
@@ -320,6 +343,10 @@ function showWageStructureForm(wageType) {
     console.log('✅ Showing Per-Trip form...');
     perPieceSection.style.display = 'none';
     perTripSection.style.display = 'block';
+    const hourlySection = document.getElementById('hourly-section');
+    const dailySection = document.getElementById('daily-section');
+    if (hourlySection) hourlySection.style.display = 'none';
+    if (dailySection) dailySection.style.display = 'none';
     
     // Populate regions dropdown
     const regionSelect = document.getElementById('salary-region');
@@ -462,10 +489,8 @@ function calculateSalaryNow() {
   const allowances = housing + meal + transport + bonus;
   const gross = base + allowances;
   
-  const sss = gross * 0.045;
-  const pagibig = gross * 0.02;
-  const philhealth = gross * 0.0275;
-  const deductions = sss + pagibig + philhealth;
+  const appliedDeductions = calculateConfiguredDeductions(gross);
+  const deductions = appliedDeductions.reduce((sum, item) => sum + item.amount, 0);
   
   const net = gross - deductions;
   
@@ -475,23 +500,41 @@ function calculateSalaryNow() {
   document.getElementById('summary-allowances').textContent = `₱${allowances.toFixed(2)}`;
   document.getElementById('summary-gross').textContent = `₱${gross.toFixed(2)}`;
   
-  document.getElementById('summary-deductions').innerHTML = `
-    <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-      <span style="color:var(--muted);">SSS (4.5%)</span>
-      <span>₱${sss.toFixed(2)}</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-      <span style="color:var(--muted);">Pag-IBIG (2%)</span>
-      <span>₱${pagibig.toFixed(2)}</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; font-size:11px;">
-      <span style="color:var(--muted);">PhilHealth (2.75%)</span>
-      <span>₱${philhealth.toFixed(2)}</span>
-    </div>
-  `;
+  document.getElementById('summary-deductions').innerHTML = appliedDeductions.length
+    ? appliedDeductions.map(item => `
+      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
+        <span style="color:var(--muted);">${item.name}</span>
+        <span>₱${item.amount.toFixed(2)}</span>
+      </div>
+    `).join('')
+    : '<div style="color:var(--muted); font-size:11px;">No configured deductions for this payroll week.</div>';
   
   document.getElementById('summary-total-deductions').textContent = `₱${deductions.toFixed(2)}`;
   document.getElementById('summary-net').textContent = `₱${net.toFixed(2)}`;
+}
+
+function currentPayrollWeek() {
+  return Math.min(5, Math.max(1, Math.ceil(new Date().getDate() / 7)));
+}
+
+function scheduleApplies(schedule, week) {
+  const label = `${week}${week === 1 ? 'st' : week === 2 ? 'nd' : week === 3 ? 'rd' : 'th'} Week`;
+  return schedule === 'Every Payroll' || schedule === label;
+}
+
+function calculateConfiguredDeductions(gross) {
+  const week = currentPayrollWeek();
+  return payrollDeductionSettings
+    .filter(setting => Number(setting.is_active) === 1 && scheduleApplies(setting.apply_schedule, week))
+    .map(setting => {
+      const amount = setting.computation_type === 'Percentage'
+        ? gross * ((parseFloat(setting.rate_or_amount) || 0) / 100)
+        : setting.computation_type === 'Fixed Amount'
+          ? parseFloat(setting.rate_or_amount) || 0
+          : 0;
+      return { name: setting.name, amount };
+    })
+    .filter(item => item.amount > 0);
 }
 
 // Attach input listeners for calculation
@@ -518,6 +561,8 @@ async function saveSalaryAsDraft() {
     alert('❌ Select an employee first');
     return;
   }
+  await saveSalaryRecord('Draft');
+  return;
   
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('💾 SAVING SALARY CALCULATION AS DRAFT');
@@ -596,16 +641,8 @@ async function saveCalculation() {
   console.log('Employee:', currentSalaryEmployee.code, '-', currentSalaryEmployee.first);
   console.log('Wage Type:', currentSalaryEmployee.wageType);
   
-  const wageType = currentSalaryEmployee.wageType;
-  
   try {
-    if (wageType === 'Per-Piece') {
-      await saveProductionTransaction();
-    } else if (wageType === 'Per-Trip') {
-      await saveLogisticsTransaction();
-    } else if (wageType === 'Base Salary' || wageType === 'Hourly') {
-      await saveSalaryRecord();
-    }
+    await saveSalaryRecord('Submitted');
   } catch (e) {
     console.error('❌ Error during save:', e);
     alert('Error: ' + e.message);
@@ -697,8 +734,8 @@ async function saveLogisticsTransaction() {
   }
 }
 
-// Save salary record for Base Salary / Hourly / Daily
-async function saveSalaryRecord() {
+// Save salary record for all wage types
+async function saveSalaryRecord(status = 'Submitted') {
   console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
   
   // Collect all calculation data
@@ -710,6 +747,7 @@ async function saveSalaryRecord() {
   
   let hoursWorked = 0;
   let daysWorked = 0;
+  let quantity = 1;
   let basePayAmount = currentSalaryEmployee.rate;
   
   // Handle different wage types
@@ -729,16 +767,36 @@ async function saveSalaryRecord() {
       await showAlert('Please enter days worked', 'Warning', 'warning');
       return;
     }
+  } else if (currentSalaryEmployee.wageType === 'Per-Piece') {
+    quantity = parseFloat(document.getElementById('salary-pieces').value) || 0;
+    basePayAmount = quantity * currentSalaryEmployee.rate;
+
+    if (quantity === 0) {
+      await showAlert('Please enter pieces completed', 'Warning', 'warning');
+      return;
+    }
+  } else if (currentSalaryEmployee.wageType === 'Per-Trip') {
+    quantity = parseFloat(document.getElementById('salary-trips').value) || 0;
+    const regionId = document.getElementById('salary-region').value;
+    const region = logisticsRegions.find(r => r.id == regionId);
+    const tripRate = region ? (parseFloat(region.default_rate) || currentSalaryEmployee.rate) : currentSalaryEmployee.rate;
+    basePayAmount = quantity * tripRate;
+
+    if (quantity === 0) {
+      await showAlert('Please enter trips completed', 'Warning', 'warning');
+      return;
+    }
   }
   
   const totalAllowances = housing + meal + transport + bonus;
   const grossPay = basePayAmount + totalAllowances;
   
-  // Calculate deductions (4.5% SSS, 2% Pag-IBIG, 2.75% PhilHealth)
-  const sssDeduction = grossPay * 0.045;
-  const pagibigDeduction = grossPay * 0.02;
-  const philhealthDeduction = grossPay * 0.0275;
-  const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
+  const appliedDeductions = calculateConfiguredDeductions(grossPay);
+  const totalDeductions = appliedDeductions.reduce((sum, item) => sum + item.amount, 0);
+  const deductionByName = appliedDeductions.reduce((acc, item) => {
+    acc[item.name.toLowerCase()] = item.amount;
+    return acc;
+  }, {});
   
   // Calculate net pay
   const netPay = grossPay - totalDeductions;
@@ -755,7 +813,7 @@ async function saveSalaryRecord() {
     employee_id: currentSalaryEmployee.id,
     wage_type_id: currentSalaryEmployee.wageTypeId || 1,
     base_rate: currentSalaryEmployee.rate,
-    quantity: 1,
+    quantity,
     hours_worked: hoursWorked,
     days_worked: daysWorked,
     housing_allowance: housing,
@@ -766,12 +824,14 @@ async function saveSalaryRecord() {
     overtime_hours: otHours,
     overtime_amount: 0,
     gross_pay: grossPay,
-    sss_deduction: sssDeduction,
-    pagibig_deduction: pagibigDeduction,
-    philhealth_deduction: philhealthDeduction,
+    sss_deduction: deductionByName.sss || 0,
+    pagibig_deduction: deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
+    philhealth_deduction: deductionByName.philhealth || 0,
     total_deductions: totalDeductions,
     net_pay: netPay,
-    calculation_date: today.toISOString().split('T')[0]
+    calculation_date: today.toISOString().split('T')[0],
+    payroll_period: document.getElementById('salary-payroll-period')?.value || today.toISOString().slice(0, 7),
+    status
   };
   
   console.log('📤 Sending payload to API:', payload);
@@ -793,8 +853,9 @@ async function saveSalaryRecord() {
       wageDetails = `Days Worked: ${daysWorked}\n`;
     }
     
-    await showAlert(`✅ Salary calculation saved!\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\n${wageDetails}Gross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 'Success', 'success');
+    await showAlert(`Salary calculation ${status === 'Draft' ? 'saved as draft' : 'submitted'}.\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\n${wageDetails}Gross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 'Success', 'success');
     resetCalculationForm();
+    if (typeof loadSalaryCalculations === 'function') loadSalaryCalculations();
   } else {
     const errText = await res.text();
     throw new Error(errText || 'Failed to save salary calculation');

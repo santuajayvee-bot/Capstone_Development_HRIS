@@ -11,7 +11,6 @@ const PAGE_TITLES = {
   attendance: 'Attendance Tracking',
   '201file':  '201-File Management',
   payroll:    'Payroll',
-  'salary-calculation': 'Salary Calculation',
   onboarding: 'HR Officer – Recruitment Management',
   blockchain: 'Blockchain',
   'system-admin': 'System Administration',
@@ -64,13 +63,19 @@ function navigate(pageId, navEl, params = null) {
     loadAllRequests();
   }
 
-  // When navigating to payroll, load payroll and salary calculation records
+  // When navigating to payroll, load payroll module data
   if (pageId === 'payroll') {
     if (typeof loadPayrollRecords === 'function') {
       loadPayrollRecords();
     }
     if (typeof loadSalaryCalculations === 'function') {
       loadSalaryCalculations();
+    }
+    if (typeof initializePayrollModule === 'function') {
+      initializePayrollModule();
+    }
+    if (typeof loadSalaryCalculationPage === 'function') {
+      loadSalaryCalculationPage();
     }
   }
 
@@ -82,10 +87,6 @@ function navigate(pageId, navEl, params = null) {
   // When navigating to employee-dashboard, initialize the module
   if (pageId === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
     initEmployeeDashboard();
-  }
-
-  if (pageId === 'salary-calculation' && typeof loadSalaryCalculationPage === 'function') {
-    loadSalaryCalculationPage();
   }
 
   if (pageId === 'employee-profile' && typeof loadEmployeeProfilePage === 'function') {

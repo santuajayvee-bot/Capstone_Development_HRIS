@@ -375,6 +375,83 @@ function renderPayroll() {
   `;
 
   grid.innerHTML = table;
+  renderPayrollRecords(records);
+  renderPayslipManagement(records);
+}
+
+function renderPayrollRecords(records) {
+  const grid = document.getElementById('payroll-records-grid');
+  if (!grid) return;
+
+  if (!records.length) {
+    grid.innerHTML = '<div style="padding:30px; color:var(--muted); text-align:center;">No payroll records yet.</div>';
+    return;
+  }
+
+  grid.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Payroll ID</th>
+          <th>Employee</th>
+          <th>Period</th>
+          <th>Wage Type</th>
+          <th>Gross Pay</th>
+          <th>Allowances</th>
+          <th>Deductions</th>
+          <th>Net Pay</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${records.map(r => `
+          <tr>
+            <td>CALC-${String(r.id).padStart(5, '0')}</td>
+            <td>${r.employee_name}<br><span style="color:var(--muted); font-size:12px;">${r.employee_code}</span></td>
+            <td>${(r.calculation_date || '').slice(0, 10)}</td>
+            <td>${r.wage_type || '-'}</td>
+            <td>PHP ${parseFloat(r.gross_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td>PHP ${parseFloat(r.total_allowances || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td>PHP ${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td><strong style="color:var(--accent);">PHP ${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></td>
+            <td>${payrollBadge(r.status || 'Draft')}</td>
+            <td><button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">View</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderPayslipManagement(records) {
+  const grid = document.getElementById('payroll-payslips-grid');
+  if (!grid) return;
+  const ready = records.filter(r => ['Approved', 'Released', 'Paid'].includes(r.status));
+
+  if (!ready.length) {
+    grid.innerHTML = '<div style="padding:30px; color:var(--muted); text-align:center;">Payslips become available after payroll is approved or released.</div>';
+    return;
+  }
+
+  grid.innerHTML = `
+    <table>
+      <thead><tr><th>Employee</th><th>Period</th><th>Earnings</th><th>Deductions</th><th>Net Pay</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${ready.map(r => `
+          <tr>
+            <td>${r.employee_name}</td>
+            <td>${(r.calculation_date || '').slice(0, 7)}</td>
+            <td>PHP ${parseFloat(r.gross_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td>PHP ${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td><strong style="color:var(--accent);">PHP ${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></td>
+            <td>${payrollBadge(r.status)}</td>
+            <td><button class="btn btn-outline btn-sm" onclick="exportPayrollReport('employee','pdf')">PDF</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 // Load payroll records for current month
@@ -411,19 +488,19 @@ async function loadPayrollRecords(monthYear = null) {
 
 // Update stats cards at the top
 function updatePayrollStats(summary) {
-  const statsCards = document.querySelectorAll('.stat-val');
-  if (statsCards.length >= 4) {
-    statsCards[0].textContent = summary.totalPayroll ? `₱${(summary.totalPayroll / 1000).toFixed(0)}K` : '₱0';
-    statsCards[1].textContent = summary.employeesPaid || '0';
-    statsCards[2].textContent = summary.avgSalary ? `₱${(summary.avgSalary / 1000).toFixed(0)}K` : '₱0';
-    statsCards[3].textContent = summary.totalDeductions ? `₱${(summary.totalDeductions / 1000).toFixed(0)}K` : '₱0';
-  }
+  const money = value => `PHP ${parseFloat(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
 
-  const subCards = document.querySelectorAll('.stat-sub');
-  if (subCards.length >= 2) {
-    subCards[0].textContent = summary.monthYear || 'N/A';
-    subCards[1].textContent = `${summary.totalEmployees || 0} employees processed`;
-  }
+  setText('payroll-total-payroll', money(summary.totalPayroll));
+  setText('payroll-employees-paid', summary.employeesPaid || '0');
+  setText('payroll-average-salary', money(summary.avgSalary));
+  setText('payroll-total-deductions', money(summary.totalDeductions));
+  setText('payroll-pending-count', summary.pendingCount || '0');
+  setText('payroll-period-label', summary.monthYear || 'Current period');
+  setText('payroll-employees-label', `${summary.totalEmployees || 0} employees processed`);
 }
 
 // Load and display salary calculation records
@@ -464,6 +541,8 @@ function renderSalaryCalculations(records) {
   if (!grid) return;
 
   if (records.length === 0) {
+    renderPayrollRecords([]);
+    renderPayslipManagement([]);
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
         <div style="font-size: 14px; color: var(--muted);">
@@ -745,6 +824,181 @@ function showCalculationBreakdown(record) {
   });
 }
 
+function payrollBadge(status) {
+  const normalized = status || 'Draft';
+  const color = normalized === 'Paid' || normalized === 'Released' || normalized === 'Approved'
+    ? 'green'
+    : normalized === 'Rejected'
+      ? 'red'
+      : normalized === 'Submitted'
+        ? 'yellow'
+        : 'blue';
+  return `<span class="badge badge-${color}">${normalized}</span>`;
+}
+
+function switchPayrollTab(tab) {
+  document.querySelectorAll('.payroll-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.payrollTab === tab);
+  });
+  document.querySelectorAll('.payroll-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `payroll-tab-${tab}`);
+  });
+
+  if (tab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
+  if (tab === 'deductions') loadPayrollSettings('deduction');
+  if (tab === 'allowances') loadPayrollSettings('allowance');
+  if (tab === 'reports') loadPayrollAudit();
+  if (tab === 'records' || tab === 'payslips') loadSalaryCalculations();
+}
+
+function refreshPayrollDashboard() {
+  const month = document.getElementById('payroll-filter-month')?.value;
+  loadPayrollRecords(month || null);
+  loadSalaryCalculations();
+}
+
+async function loadPayrollSettings(type) {
+  const gridId = type === 'deduction' ? 'deduction-settings-grid' : 'allowance-settings-grid';
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+
+  try {
+    const res = await apiFetch(`/api/payroll/${type}-settings`);
+    if (!res.ok) throw new Error(`Failed to load ${type} settings`);
+    const rows = await res.json();
+
+    if (!rows.length) {
+      grid.innerHTML = `<div style="padding:30px; color:var(--muted); text-align:center;">No ${type} settings configured.</div>`;
+      return;
+    }
+
+    grid.innerHTML = type === 'deduction' ? renderDeductionSettings(rows) : renderAllowanceSettings(rows);
+  } catch (err) {
+    grid.innerHTML = `<div style="padding:30px; color:var(--red); text-align:center;">${err.message}</div>`;
+  }
+}
+
+function renderDeductionSettings(rows) {
+  return `
+    <table>
+      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Rate/Amount</th><th>Schedule</th><th>Status</th><th>Effective</th></tr></thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr>
+            <td>${row.name}</td>
+            <td>${row.category}</td>
+            <td>${row.computation_type}</td>
+            <td>${row.rate_or_amount}</td>
+            <td>${row.apply_schedule}</td>
+            <td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td>
+            <td>${(row.effective_date || '').slice(0, 10)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderAllowanceSettings(rows) {
+  return `
+    <table>
+      <thead><tr><th>Name</th><th>Type</th><th>Amount/Rate</th><th>Taxable</th><th>Status</th><th>Effective</th></tr></thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr>
+            <td>${row.name}</td>
+            <td>${row.allowance_type}</td>
+            <td>${row.amount_or_rate}</td>
+            <td>${row.is_taxable ? 'Yes' : 'No'}</td>
+            <td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td>
+            <td>${(row.effective_date || '').slice(0, 10)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+async function savePayrollSetting(event, type) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  const endpoint = type === 'deduction' ? '/api/payroll/deduction-settings' : '/api/payroll/allowance-settings';
+
+  try {
+    const res = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to save ${type} setting`);
+    }
+    form.reset();
+    loadPayrollSettings(type);
+    loadPayrollAudit();
+    if (typeof showAlert === 'function') {
+      await showAlert(`${type === 'deduction' ? 'Deduction' : 'Allowance'} setting saved.`, 'Saved', 'success');
+    }
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+async function loadPayrollAudit() {
+  const grid = document.getElementById('payroll-audit-grid');
+  if (!grid) return;
+  try {
+    const res = await apiFetch('/api/payroll/audit');
+    if (!res.ok) throw new Error('Failed to load payroll audit trail');
+    const rows = await res.json();
+    if (!rows.length) {
+      grid.innerHTML = '<div style="padding:30px; color:var(--muted); text-align:center;">No payroll audit activity yet.</div>';
+      return;
+    }
+    grid.innerHTML = `
+      <table>
+        <thead><tr><th>Date/Time</th><th>User</th><th>Action</th><th>Employee</th><th>Remarks</th></tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${new Date(row.created_at).toLocaleString()}</td>
+              <td>${row.username || '-'}</td>
+              <td>${row.action}</td>
+              <td>${row.employee_name || '-'}</td>
+              <td>${row.remarks || '-'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (err) {
+    grid.innerHTML = `<div style="padding:30px; color:var(--red); text-align:center;">${err.message}</div>`;
+  }
+}
+
+function exportPayrollReport(type, format) {
+  const month = document.getElementById('payroll-filter-month')?.value || '';
+  const url = `/api/payroll/reports/${encodeURIComponent(type)}.${encodeURIComponent(format)}${month ? `?month_year=${encodeURIComponent(month)}` : ''}`;
+  window.open(url, '_blank');
+}
+
+function initializePayrollModule() {
+  const monthInput = document.getElementById('payroll-filter-month');
+  if (monthInput && !monthInput.value) {
+    const today = new Date();
+    monthInput.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
+  const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
+  const today = new Date().toISOString().split('T')[0];
+  if (deductionDate && !deductionDate.value) deductionDate.value = today;
+  if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
+}
+
 // Export functions to global scope FIRST
 window.loadPayrollRecords = loadPayrollRecords;
 window.renderPayroll = renderPayroll;
@@ -754,9 +1008,17 @@ window.runPayroll = runPayroll;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
+window.switchPayrollTab = switchPayrollTab;
+window.refreshPayrollDashboard = refreshPayrollDashboard;
+window.loadPayrollSettings = loadPayrollSettings;
+window.savePayrollSetting = savePayrollSetting;
+window.loadPayrollAudit = loadPayrollAudit;
+window.exportPayrollReport = exportPayrollReport;
+window.initializePayrollModule = initializePayrollModule;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {
+  initializePayrollModule();
   loadPayrollRecords();
   loadSalaryCalculations();
 

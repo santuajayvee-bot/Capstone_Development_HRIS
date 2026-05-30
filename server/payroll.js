@@ -6,6 +6,75 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 
+const PAYROLL_PERMISSIONS = {
+  view: ROLES.payroll_any,
+  calculate: ROLES.payroll_any,
+  approve: ['payroll_manager', 'hr_admin', 'admin'],
+  release: ['payroll_manager', 'hr_admin', 'admin'],
+  settings: ['payroll_manager', 'hr_admin', 'admin'],
+  reports: ['payroll_manager', 'hr_admin', 'admin']
+};
+
+function currentUserId(req) {
+  return req.user?.id || req.user?.userId || req.user?.sub || null;
+}
+
+async function logPayrollAudit(pool, req, action, options = {}) {
+  try {
+    await pool.execute(`
+      INSERT INTO payroll_audit_trail
+        (user_id, employee_id, payroll_run_id, salary_calculation_id, action, remarks, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      currentUserId(req),
+      options.employee_id || null,
+      options.payroll_run_id || null,
+      options.salary_calculation_id || null,
+      action,
+      options.remarks || null,
+      options.metadata ? JSON.stringify(options.metadata) : null
+    ]);
+  } catch (err) {
+    console.warn('Payroll audit logging skipped:', err.message);
+  }
+}
+
+function payrollWeekFromDate(dateValue) {
+  const date = dateValue ? new Date(dateValue) : new Date();
+  return Math.min(5, Math.max(1, Math.ceil(date.getDate() / 7)));
+}
+
+function settingAppliesThisWeek(setting, weekNumber) {
+  return setting.apply_schedule === 'Every Payroll' || setting.apply_schedule === `${weekNumber}${weekNumber === 1 ? 'st' : weekNumber === 2 ? 'nd' : weekNumber === 3 ? 'rd' : 'th'} Week`;
+}
+
+async function computeConfiguredDeductions(pool, grossPay, calculationDate) {
+  const weekNumber = payrollWeekFromDate(calculationDate);
+  const [settings] = await pool.execute(`
+    SELECT name, category, computation_type, rate_or_amount, apply_schedule
+    FROM payroll_deduction_settings
+    WHERE is_active = 1 AND effective_date <= ?
+    ORDER BY category, name
+  `, [calculationDate || new Date().toISOString().split('T')[0]]);
+
+  const applied = [];
+  let total = 0;
+
+  for (const setting of settings) {
+    if (!settingAppliesThisWeek(setting, weekNumber)) continue;
+    let amount = 0;
+    if (setting.computation_type === 'Percentage') {
+      amount = parseFloat(grossPay || 0) * (parseFloat(setting.rate_or_amount || 0) / 100);
+    } else if (setting.computation_type === 'Fixed Amount') {
+      amount = parseFloat(setting.rate_or_amount || 0);
+    }
+    total += amount;
+    applied.push({ ...setting, amount });
+  }
+
+  return { total, applied, weekNumber };
+}
+
 // Get all wage types
 router.get('/wage-types', requireAuth, async (req, res) => {
   try {
@@ -337,7 +406,9 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       philhealth_deduction,
       total_deductions,
       net_pay,
-      calculation_date
+      calculation_date,
+      payroll_period,
+      status
     } = req.body;
 
     console.log('\n=== POST /api/payroll/salary-calculation ===');
@@ -352,6 +423,17 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         error: 'Required fields: employee_id, wage_type_id, base_rate, gross_pay, net_pay' 
       });
     }
+
+    const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
+    const submittedAt = calculationStatus === 'Submitted' ? new Date() : null;
+    const calcDate = calculation_date || new Date().toISOString().split('T')[0];
+    const configuredDeductions = await computeConfiguredDeductions(pool, gross_pay, calcDate);
+    const computedTotalDeductions = configuredDeductions.total;
+    const computedNetPay = parseFloat(gross_pay || 0) - computedTotalDeductions;
+    const deductionByName = configuredDeductions.applied.reduce((acc, item) => {
+      acc[item.name.toLowerCase()] = item.amount;
+      return acc;
+    }, {});
 
     // Insert into salary_calculations table
     const [result] = await pool.execute(`
@@ -376,8 +458,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         total_deductions,
         net_pay,
         calculation_date,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        payroll_period,
+        status,
+        calculated_by,
+        submitted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       employee_id,
       wage_type_id,
@@ -393,23 +478,32 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       overtime_hours || 0,
       overtime_amount || 0,
       gross_pay,
-      sss_deduction || 0,
-      pagibig_deduction || 0,
-      philhealth_deduction || 0,
-      total_deductions || 0,
-      net_pay,
-      calculation_date || new Date().toISOString().split('T')[0],
-      'Submitted'
+      deductionByName.sss || 0,
+      deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
+      deductionByName.philhealth || 0,
+      computedTotalDeductions,
+      computedNetPay,
+      calcDate,
+      payroll_period || calcDate.slice(0, 7),
+      calculationStatus,
+      currentUserId(req),
+      submittedAt
     ]);
 
     console.log('✅ Salary calculation saved with ID:', result.insertId);
+    await logPayrollAudit(pool, req, calculationStatus === 'Draft' ? 'salary_calculation_draft' : 'salary_calculation_submitted', {
+      employee_id,
+      salary_calculation_id: result.insertId,
+      remarks: `${calculationStatus} salary calculation`,
+      metadata: { gross_pay, net_pay: computedNetPay, payroll_period, deductions: configuredDeductions.applied }
+    });
     
     res.json({ 
       success: true, 
       id: result.insertId,
       message: `Salary calculation saved for employee ID ${employee_id}`,
       gross_pay,
-      net_pay,
+      net_pay: computedNetPay,
       calculation_id: result.insertId
     });
   } catch (err) {
@@ -1032,5 +1126,202 @@ router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.
     });
   }
 });
+
+router.get('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [rows] = await pool.execute('SELECT * FROM payroll_deduction_settings ORDER BY is_active DESC, category, name');
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching deduction settings:', err);
+    res.status(500).json({ error: 'Failed to fetch deduction settings' });
+  }
+});
+
+router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date, remarks } = req.body;
+    if (!name || !effective_date) return res.status(400).json({ error: 'Deduction name and effective date are required.' });
+
+    const [result] = await pool.execute(`
+      INSERT INTO payroll_deduction_settings
+        (name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date, remarks, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      name,
+      category || 'Other',
+      computation_type || 'Manual Amount',
+      rate_or_amount || 0,
+      apply_schedule || 'Every Payroll',
+      is_active === '0' || is_active === 0 ? 0 : 1,
+      effective_date,
+      remarks || null,
+      currentUserId(req),
+      currentUserId(req)
+    ]);
+
+    await logPayrollAudit(pool, req, 'deduction_setting_updated', {
+      remarks: `Saved deduction setting: ${name}`,
+      metadata: req.body
+    });
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error('Error saving deduction setting:', err);
+    res.status(500).json({ error: 'Failed to save deduction setting' });
+  }
+});
+
+router.get('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [rows] = await pool.execute('SELECT * FROM payroll_allowance_settings ORDER BY is_active DESC, name');
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching allowance settings:', err);
+    res.status(500).json({ error: 'Failed to fetch allowance settings' });
+  }
+});
+
+router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { name, allowance_type, amount_or_rate, is_taxable, is_active, effective_date } = req.body;
+    if (!name || !effective_date) return res.status(400).json({ error: 'Allowance name and effective date are required.' });
+
+    const [result] = await pool.execute(`
+      INSERT INTO payroll_allowance_settings
+        (name, allowance_type, amount_or_rate, is_taxable, is_active, effective_date, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      name,
+      allowance_type || 'Fixed',
+      amount_or_rate || 0,
+      is_taxable === '1' || is_taxable === 1 ? 1 : 0,
+      is_active === '0' || is_active === 0 ? 0 : 1,
+      effective_date,
+      currentUserId(req),
+      currentUserId(req)
+    ]);
+
+    await logPayrollAudit(pool, req, 'allowance_setting_updated', {
+      remarks: `Saved allowance setting: ${name}`,
+      metadata: req.body
+    });
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error('Error saving allowance setting:', err);
+    res.status(500).json({ error: 'Failed to save allowance setting' });
+  }
+});
+
+router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.approve), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { id } = req.params;
+    const { status, remarks } = req.body;
+    const allowed = ['Submitted', 'Approved', 'Released', 'Paid'];
+    if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid payroll status.' });
+
+    const userId = currentUserId(req);
+    const fields = ['status = ?'];
+    const params = [status];
+
+    if (status === 'Approved') {
+      fields.push('approved_by = ?', 'approved_at = NOW()');
+      params.push(userId);
+    }
+    if (status === 'Released') {
+      fields.push('released_by = ?', 'released_at = NOW()');
+      params.push(userId);
+    }
+
+    params.push(id);
+    await pool.execute(`UPDATE salary_calculations SET ${fields.join(', ')} WHERE id = ?`, params);
+    await logPayrollAudit(pool, req, `payroll_${status.toLowerCase()}`, {
+      salary_calculation_id: id,
+      remarks: remarks || `Marked payroll as ${status}`
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating payroll status:', err);
+    res.status(500).json({ error: 'Failed to update payroll status' });
+  }
+});
+
+router.get('/audit', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [rows] = await pool.execute(`
+      SELECT pat.*, u.username, CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+      FROM payroll_audit_trail pat
+      LEFT JOIN users u ON u.id = pat.user_id
+      LEFT JOIN employees e ON e.id = pat.employee_id
+      ORDER BY pat.created_at DESC
+      LIMIT 100
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching payroll audit:', err);
+    res.status(500).json({ error: 'Failed to fetch payroll audit trail' });
+  }
+});
+
+router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSIONS.reports), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const { report, format } = req.params;
+    const { month_year } = req.query;
+
+    const params = [];
+    let where = 'WHERE 1=1';
+    if (month_year) {
+      where += ' AND COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, "%Y-%m")) = ?';
+      params.push(month_year);
+    }
+
+    let rows = [];
+    if (report === 'deductions' || report === 'government') {
+      const [settings] = await pool.execute(`
+        SELECT name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date
+        FROM payroll_deduction_settings
+        ${report === 'government' ? 'WHERE category = "Government"' : ''}
+        ORDER BY category, name
+      `);
+      rows = settings;
+    } else {
+      const [records] = await pool.execute(`
+        SELECT sc.id AS payroll_id, CONCAT(e.first_name, ' ', e.last_name) AS employee,
+               COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, "%Y-%m")) AS period,
+               w.name AS wage_type, sc.gross_pay, sc.total_allowances, sc.total_deductions, sc.net_pay, sc.status
+        FROM salary_calculations sc
+        JOIN employees e ON e.id = sc.employee_id
+        LEFT JOIN wage_types w ON w.id = sc.wage_type_id
+        ${where}
+        ORDER BY sc.created_at DESC
+      `, params);
+      rows = records;
+    }
+
+    const csv = toCsv(rows);
+    const extension = format === 'excel' ? 'xls' : format;
+    res.setHeader('Content-Disposition', `attachment; filename="${report}-report.${extension}"`);
+    res.setHeader('Content-Type', format === 'pdf' ? 'application/pdf' : 'text/csv');
+    res.send(csv);
+  } catch (err) {
+    console.error('Error exporting payroll report:', err);
+    res.status(500).json({ error: 'Failed to export payroll report' });
+  }
+});
+
+function toCsv(rows) {
+  if (!rows.length) return 'No data\n';
+  const headers = Object.keys(rows[0]);
+  const escape = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  return [
+    headers.map(escape).join(','),
+    ...rows.map(row => headers.map(header => escape(row[header])).join(','))
+  ].join('\n');
+}
 
 module.exports = router;
