@@ -17,6 +17,9 @@
   }
   .leave-field textarea { min-height: 76px; resize: vertical; }
   .leave-filter-bar { display: grid; grid-template-columns: 1.4fr repeat(6, minmax(130px, 1fr)); gap: 10px; }
+  .leave-check-grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px 14px; margin-top: 12px; }
+  .leave-check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
+  .leave-check input { width: 16px; height: 16px; }
   .leave-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
   .leave-table { width: 100%; border-collapse: collapse; min-width: 1040px; }
   .leave-table th, .leave-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; }
@@ -87,6 +90,7 @@
   <button class="leave-tab active" type="button" data-leave-tab="overview" onclick="switchLeaveModuleTab('overview')">Overview</button>
   <button class="leave-tab" type="button" data-leave-tab="manual" onclick="switchLeaveModuleTab('manual')">Manual Encoding</button>
   <button class="leave-tab" type="button" data-leave-tab="requests" onclick="switchLeaveModuleTab('requests')">Requests</button>
+  <button class="leave-tab" type="button" data-leave-tab="policies" onclick="switchLeaveModuleTab('policies')">Leave Types</button>
   <button class="leave-tab" type="button" data-leave-tab="calendar" onclick="switchLeaveModuleTab('calendar')">Calendar</button>
   <button class="leave-tab" type="button" data-leave-tab="audit" onclick="switchLeaveModuleTab('audit')">Audit & Reports</button>
 </div>
@@ -102,11 +106,7 @@
 
   <div class="leave-card" id="leave-balances-card" style="margin-top:16px;">
     <h3 class="leave-section-title">Leave Balances</h3>
-    <div class="leave-grid" style="grid-template-columns:repeat(3,minmax(160px,1fr));margin-top:12px;">
-      <div><div class="leave-card-label">Vacation Leave</div><div id="balance-vacation" class="leave-card-value">-</div></div>
-      <div><div class="leave-card-label">Sick Leave</div><div id="balance-sick" class="leave-card-value">-</div></div>
-      <div><div class="leave-card-label">Emergency Leave</div><div id="balance-emergency" class="leave-card-value">-</div></div>
-    </div>
+    <div id="leave-balances-list" class="leave-grid" style="grid-template-columns:repeat(4,minmax(150px,1fr));margin-top:12px;"></div>
   </div>
 </div>
 
@@ -124,7 +124,7 @@
         <div class="leave-field"><label>Employee</label><select id="manual-employee" required onchange="syncManualEmployeeInfo()"></select></div>
         <div class="leave-field"><label>Pay Type</label><input id="manual-pay-type" readonly></div>
         <div class="leave-field"><label>Department</label><input id="manual-department" readonly></div>
-        <div class="leave-field"><label>Leave Type</label><select id="manual-leave-type" required><option>Vacation</option><option>Sick</option><option>Emergency</option></select></div>
+        <div class="leave-field"><label>Leave Type</label><select id="manual-leave-type" required></select></div>
         <div class="leave-field"><label>Start Date</label><input id="manual-start-date" type="date" required onchange="calculateManualDuration()"></div>
         <div class="leave-field"><label>End Date</label><input id="manual-end-date" type="date" required onchange="calculateManualDuration()"></div>
         <div class="leave-field"><label>Duration</label><input id="manual-duration" type="number" min="0.5" step="0.5" required></div>
@@ -147,7 +147,7 @@
     <div class="leave-field"><input id="leave-filter-search" placeholder="Search employee" oninput="renderLeaveTable()"></div>
     <div class="leave-field"><select id="leave-filter-dept" onchange="renderLeaveTable()"><option value="">All Departments</option></select></div>
     <div class="leave-field"><select id="leave-filter-pay-type" onchange="renderLeaveTable()"><option value="">All Pay Types</option><option>Per Day</option><option>Per Hour</option><option>Per Trip</option><option>Per Piece</option></select></div>
-    <div class="leave-field"><select id="leave-filter-type" onchange="renderLeaveTable()"><option value="">All Leave Types</option><option>Vacation</option><option>Sick</option><option>Emergency</option></select></div>
+    <div class="leave-field"><select id="leave-filter-type" onchange="renderLeaveTable()"><option value="">All Leave Types</option></select></div>
     <div class="leave-field"><select id="leave-filter-status" onchange="renderLeaveTable()"><option value="">All Status</option><option>Pending</option><option>Approved</option><option>Rejected</option></select></div>
     <div class="leave-field"><select id="leave-filter-source" onchange="renderLeaveTable()"><option value="">All Sources</option><option>Portal</option><option>Manual</option></select></div>
     <div class="leave-field"><input id="leave-filter-from" type="date" onchange="renderLeaveTable()"></div>
@@ -181,6 +181,67 @@
     <button class="btn btn-outline" onclick="nextLeavePage()">Next</button>
   </div>
 </div>
+</div>
+
+<div id="leave-panel-policies" class="leave-tab-panel">
+  <div class="leave-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h3 class="leave-section-title">Leave Type Management</h3>
+        <div style="margin-top:4px;color:var(--muted);font-size:12px;">Configure company and statutory leave policies without changing source code.</div>
+      </div>
+      <button class="btn btn-outline" type="button" onclick="resetLeaveTypeForm()">New Leave Type</button>
+    </div>
+    <form id="leave-type-form" onsubmit="saveLeaveTypePolicy(event)" style="margin-top:14px;">
+      <input type="hidden" id="leave-type-id">
+      <div class="leave-form-grid">
+        <div class="leave-field">
+          <label>Leave Name</label>
+          <select id="leave-type-name" required>
+            <option value="">Select leave name</option>
+            <option>Vacation Leave</option>
+            <option>Sick Leave</option>
+            <option>Emergency Leave</option>
+            <option>Other Company Leave</option>
+            <option>Maternity Leave</option>
+            <option>Paternity Leave</option>
+            <option>Solo Parent Leave</option>
+            <option>Magna Carta for Women Leave</option>
+            <option>VAWC Leave</option>
+          </select>
+        </div>
+        <div class="leave-field"><label>Category</label><select id="leave-type-category"><option>Company</option><option>Statutory</option></select></div>
+        <div class="leave-field"><label>Maximum Allowed Days</label><input id="leave-type-max-days" type="number" min="0" step="0.5" required></div>
+        <div class="leave-field"><label>Paid Status</label><select id="leave-type-paid"><option value="1">Paid</option><option value="0">Unpaid</option></select></div>
+        <div class="leave-field"><label>Status</label><select id="leave-type-active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
+        <div class="leave-field"><label>Requires Attachment</label><select id="leave-type-attachment"><option value="0">No</option><option value="1">Yes</option></select></div>
+        <div class="leave-field"><label>Allow Unpaid Extension</label><select id="leave-type-extension"><option value="0">No</option><option value="1">Yes</option></select></div>
+        <div class="leave-field"><label>Maximum Extension Days</label><input id="leave-type-extension-days" type="number" min="0" step="0.5" value="0"></div>
+        <div class="leave-field full"><label>Description</label><textarea id="leave-type-description"></textarea></div>
+      </div>
+      <div class="leave-check-grid">
+        <label class="leave-check"><input id="leave-elig-female" type="checkbox"> Female only</label>
+        <label class="leave-check"><input id="leave-elig-male" type="checkbox"> Male only</label>
+        <label class="leave-check"><input id="leave-elig-married" type="checkbox"> Married only</label>
+        <label class="leave-check"><input id="leave-elig-solo" type="checkbox"> Solo parent required</label>
+        <label class="leave-check"><input id="leave-elig-medical" type="checkbox"> Medical certificate required</label>
+        <label class="leave-check"><input id="leave-elig-legal" type="checkbox"> Legal document required</label>
+        <div class="leave-field"><label>Minimum Service Months</label><input id="leave-elig-service" type="number" min="0" step="1" value="0"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+        <span id="leave-type-save-status" style="align-self:center;color:var(--muted);font-size:12px;"></span>
+        <button type="button" class="btn btn-outline" onclick="resetLeaveTypeForm()">Clear</button>
+        <button type="submit" class="btn btn-primary">Save Leave Type</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="leave-table-wrap" style="margin-top:16px;">
+    <table class="leave-table">
+      <thead><tr><th>Leave Name</th><th>Category</th><th>Max Days</th><th>Paid</th><th>Attachment</th><th>Eligibility</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="leave-types-tbody"></tbody>
+    </table>
+  </div>
 </div>
 
 <div id="leave-panel-calendar" class="leave-tab-panel">

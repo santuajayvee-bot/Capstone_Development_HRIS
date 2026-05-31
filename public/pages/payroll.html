@@ -218,6 +218,7 @@
       <div class="summary-lines">
         <div><span>Total Deductions</span><strong id="summary-total-deductions">PHP 0.00</strong></div>
       </div>
+      <div class="payroll-deduction-note" id="summary-deduction-note">No deduction applied yet.</div>
       <div class="summary-net">
         <span>Net Pay</span>
         <strong id="summary-net">PHP 0.00</strong>
@@ -257,15 +258,31 @@
     <summary>Configure Deduction</summary>
     <form id="deduction-setting-form" class="form-grid" onsubmit="savePayrollSetting(event, 'deduction')">
       <input type="hidden" name="id" />
-      <div class="form-group"><label>Deduction Name</label><input name="name" required placeholder="SSS, PhilHealth, Loan" /></div>
-      <div class="form-group"><label>Category</label><select name="category"><option>Government</option><option>Company</option><option>Other</option></select></div>
+      <div class="form-group" id="deduction-government-name-group">
+        <label>Deduction Name</label>
+        <select name="government_name" id="deduction-government-name">
+          <option value="SSS">SSS</option>
+          <option value="PhilHealth">PhilHealth</option>
+          <option value="Pag-IBIG">Pag-IBIG</option>
+          <option value="Withholding Tax">Withholding Tax</option>
+        </select>
+      </div>
+      <div class="form-group" id="deduction-custom-name-group" style="display:none;">
+        <label>Deduction Name</label>
+        <input name="custom_name" id="deduction-custom-name" placeholder="Loan, Cash Advance, Other deduction" />
+      </div>
+      <div class="form-group"><label>Category</label><select name="category" id="deduction-category" onchange="toggleDeductionNameField()"><option>Government</option><option>Company</option><option>Other</option></select></div>
       <div class="form-group"><label>Computation Type</label><select name="computation_type"><option>Fixed Amount</option><option>Percentage</option><option>Manual Amount</option></select></div>
       <div class="form-group"><label>Rate or Amount</label><input name="rate_or_amount" type="number" min="0" step="0.01" required /></div>
       <div class="form-group"><label>Apply Schedule</label><select name="apply_schedule"><option>Every Payroll</option><option>1st Week</option><option>2nd Week</option><option>3rd Week</option><option>4th Week</option><option>5th Week</option></select></div>
       <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
       <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
       <div class="form-group"><label>Remarks</label><input name="remarks" placeholder="Optional" /></div>
-      <div class="form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Deduction</button></div>
+      <div class="form-actions">
+        <span class="payroll-form-status" id="deduction-save-status" aria-live="polite"></span>
+        <button class="btn btn-outline" type="reset">Clear</button>
+        <button class="btn btn-primary" type="submit">Save Deduction</button>
+      </div>
     </form>
   </details>
   <div class="table-wrap"><div id="deduction-settings-grid"></div></div>
@@ -282,7 +299,11 @@
       <div class="form-group"><label>Taxable</label><select name="is_taxable"><option value="0">No</option><option value="1">Yes</option></select></div>
       <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
       <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
-      <div class="form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Allowance</button></div>
+      <div class="form-actions">
+        <span class="payroll-form-status" id="allowance-save-status" aria-live="polite"></span>
+        <button class="btn btn-outline" type="reset">Clear</button>
+        <button class="btn btn-primary" type="submit">Save Allowance</button>
+      </div>
     </form>
   </details>
   <div class="table-wrap"><div id="allowance-settings-grid"></div></div>

@@ -26,6 +26,193 @@ const DOC_TYPES = {
   other: 'Other'
 };
 
+const ADDRESS_FORM_CONFIGS = {
+  emp: {
+    home: { input: 'emp-address' },
+    current: { input: 'emp-current-address', same: 'emp-current-same-home' },
+    mailing: { input: 'emp-mailing-address', same: 'emp-mailing-same-home' }
+  },
+  profile: {
+    home: { input: 'profile-edit-address' },
+    current: { input: 'profile-edit-current-address', same: 'profile-current-same-home' },
+    mailing: { input: 'profile-edit-mailing-address', same: 'profile-mailing-same-home' }
+  }
+};
+
+function addressEscapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  }[char]));
+}
+
+function clearAddressSelection(input) {
+  if (!input) return;
+  delete input.dataset.addressSelected;
+  delete input.dataset.latitude;
+  delete input.dataset.longitude;
+}
+
+function setAddressSelection(input, address, latitude, longitude) {
+  if (!input) return;
+  input.value = address || '';
+  input.dataset.addressSelected = address && latitude !== undefined && longitude !== undefined ? '1' : '';
+  input.dataset.latitude = latitude ?? '';
+  input.dataset.longitude = longitude ?? '';
+}
+
+function copyHomeAddress(config) {
+  const home = document.getElementById(config.home.input);
+  ['current', 'mailing'].forEach(key => {
+    const item = config[key];
+    const same = document.getElementById(item.same);
+    const input = document.getElementById(item.input);
+    if (!same || !input || !same.checked) return;
+    setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude);
+    input.disabled = true;
+  });
+}
+
+function renderAddressSuggestions(input, results) {
+  const box = document.getElementById(`${input.id}-suggestions`);
+  if (!box) return;
+  if (!results.length) {
+    box.innerHTML = '<div class="address-suggestion">No address found.</div>';
+    box.style.display = 'block';
+    return;
+  }
+  box.innerHTML = results.map((item, index) => `
+    <button class="address-suggestion" type="button" data-index="${index}">
+      ${addressEscapeHtml(item.full_address)}
+      <span class="address-suggestion-meta">${
+        item.latitude !== null && item.latitude !== undefined && item.longitude !== null && item.longitude !== undefined
+          ? `${Number(item.latitude).toFixed(5)}, ${Number(item.longitude).toFixed(5)}`
+          : 'Google Places'
+      }</span>
+    </button>
+  `).join('');
+  box.querySelectorAll('button').forEach(button => {
+    button.addEventListener('click', async () => {
+      let item = results[Number(button.dataset.index)];
+      if (item.provider === 'google_places' && item.place_id) {
+        const detailsResponse = await apiFetch(`/api/address/details?place_id=${encodeURIComponent(item.place_id)}`);
+        if (detailsResponse && detailsResponse.ok) {
+          item = await detailsResponse.json();
+        }
+      }
+      if (item.latitude === null || item.latitude === undefined || item.longitude === null || item.longitude === undefined) {
+        alert('Could not get coordinates for the selected address. Please choose another suggestion.');
+        return;
+      }
+      setAddressSelection(input, item.full_address, item.latitude, item.longitude);
+      box.style.display = 'none';
+      Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
+    });
+  });
+  box.style.display = 'block';
+}
+
+function setupAddressInput(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input || input.dataset.addressReady === '1') return;
+  input.dataset.addressReady = '1';
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearAddressSelection(input);
+    Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
+    clearTimeout(timer);
+    const query = input.value.trim();
+    const box = document.getElementById(`${input.id}-suggestions`);
+    if (query.length < 3) {
+      if (box) box.style.display = 'none';
+      return;
+    }
+    timer = setTimeout(async () => {
+      try {
+        const response = await apiFetch(`/api/address/search?q=${encodeURIComponent(query)}`);
+        const results = response && response.ok ? await response.json() : [];
+        renderAddressSuggestions(input, Array.isArray(results) ? results : []);
+      } catch (error) {
+        console.error('Address search failed:', error);
+      }
+    }, 300);
+  });
+}
+
+function initializeEmployeeAddressAutocomplete(scope = document) {
+  Object.values(ADDRESS_FORM_CONFIGS).forEach(config => {
+    if (!scope.querySelector?.(`#${config.home.input}`) && !document.getElementById(config.home.input)) return;
+    setupAddressInput(config.home.input);
+    setupAddressInput(config.current.input);
+    setupAddressInput(config.mailing.input);
+
+    ['current', 'mailing'].forEach(key => {
+      const item = config[key];
+      const same = document.getElementById(item.same);
+      const input = document.getElementById(item.input);
+      if (!same || !input || same.dataset.addressSameReady === '1') return;
+      same.dataset.addressSameReady = '1';
+      same.addEventListener('change', () => {
+        if (same.checked) {
+          copyHomeAddress(config);
+          input.disabled = true;
+        } else {
+          input.disabled = false;
+          input.value = '';
+          clearAddressSelection(input);
+        }
+      });
+    });
+  });
+  document.addEventListener('click', event => {
+    if (event.target.closest('.address-autocomplete')) return;
+    document.querySelectorAll('.address-suggestions').forEach(box => { box.style.display = 'none'; });
+  }, { once: true });
+}
+
+function collectEmployeeAddressPayload(mode = 'emp') {
+  const config = ADDRESS_FORM_CONFIGS[mode];
+  const get = key => document.getElementById(config[key].input);
+  const home = get('home');
+  const current = get('current');
+  const mailing = get('mailing');
+  const currentSame = config.current.same ? document.getElementById(config.current.same)?.checked : false;
+  const mailingSame = config.mailing.same ? document.getElementById(config.mailing.same)?.checked : false;
+  const errors = [];
+  const selected = input => input?.dataset.addressSelected === '1';
+
+  if (!home?.value.trim()) errors.push('Home Address is required.');
+  if (!currentSame && !current?.value.trim()) errors.push('Current Address is required unless Same as Home Address is checked.');
+  if (!mailingSame && !mailing?.value.trim()) errors.push('Mailing Address is required unless Same as Home Address is checked.');
+  if (home?.value.trim() && !selected(home)) errors.push('Home Address must be selected from address suggestions.');
+  if (current?.value.trim() && !selected(current)) errors.push('Current Address must be selected from address suggestions.');
+  if (mailing?.value.trim() && !selected(mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+
+  return {
+    errors,
+    payload: {
+      residential_address: home?.value || null,
+      residential_address_lat: home?.dataset.latitude || null,
+      residential_address_lng: home?.dataset.longitude || null,
+      current_address: currentSame ? home?.value || null : current?.value || null,
+      current_address_lat: currentSame ? home?.dataset.latitude || null : current?.dataset.latitude || null,
+      current_address_lng: currentSame ? home?.dataset.longitude || null : current?.dataset.longitude || null,
+      current_address_same_as_home: currentSame ? 1 : 0,
+      mailing_address: mailingSame ? home?.value || null : mailing?.value || null,
+      mailing_address_lat: mailingSame ? home?.dataset.latitude || null : mailing?.dataset.latitude || null,
+      mailing_address_lng: mailingSame ? home?.dataset.longitude || null : mailing?.dataset.longitude || null,
+      mailing_address_same_as_home: mailingSame ? 1 : 0
+    }
+  };
+}
+
+window.initializeEmployeeAddressAutocomplete = initializeEmployeeAddressAutocomplete;
+window.collectEmployeeAddressPayload = collectEmployeeAddressPayload;
+window.setAddressSelection = setAddressSelection;
+
 // Wage Configuration Data
 let WAGE_CONFIG = {
   sawingTypes: [],
@@ -279,13 +466,23 @@ function loadEmployeeData() {
   if (dobInput) dobInput.value = emp.date_of_birth || '';
   
   const addressInput = document.getElementById('emp-address');
-  if (addressInput) addressInput.value = emp.residential_address || '';
+  if (addressInput) setAddressSelection(addressInput, emp.residential_address || '', emp.residential_address_lat, emp.residential_address_lng);
 
   const currentAddressInput = document.getElementById('emp-current-address');
-  if (currentAddressInput) currentAddressInput.value = emp.current_address || '';
+  if (currentAddressInput) setAddressSelection(currentAddressInput, emp.current_address || '', emp.current_address_lat, emp.current_address_lng);
 
   const mailingAddressInput = document.getElementById('emp-mailing-address');
-  if (mailingAddressInput) mailingAddressInput.value = emp.mailing_address || '';
+  if (mailingAddressInput) setAddressSelection(mailingAddressInput, emp.mailing_address || '', emp.mailing_address_lat, emp.mailing_address_lng);
+
+  const currentSameInput = document.getElementById('emp-current-same-home');
+  if (currentSameInput) currentSameInput.checked = Number(emp.current_address_same_as_home) === 1;
+
+  const mailingSameInput = document.getElementById('emp-mailing-same-home');
+  if (mailingSameInput) mailingSameInput.checked = Number(emp.mailing_address_same_as_home) === 1;
+
+  initializeEmployeeAddressAutocomplete();
+  currentSameInput?.dispatchEvent(new Event('change'));
+  mailingSameInput?.dispatchEvent(new Event('change'));
   
   const emergNameInput = document.getElementById('emp-emerg-name');
   if (emergNameInput) emergNameInput.value = emp.emergency_contact_name || '';
@@ -502,6 +699,9 @@ function switchFormTab(tabOrEl) {
       initializeFileUploads();
     }, 100);
   }
+  if (sectionId === 'contact') {
+    setTimeout(() => initializeEmployeeAddressAutocomplete(), 50);
+  }
 }
 
 function saveEmployee() {
@@ -556,6 +756,13 @@ function saveEmployee() {
   console.log('emp-location value:', document.querySelector('#form-employment input#emp-location')?.value);
   console.log('Department name:', departmentName, '-> ID:', departmentId);
 
+  const addressResult = collectEmployeeAddressPayload('emp');
+  if (addressResult.errors.length) {
+    IS_SAVING = false;
+    alert(addressResult.errors.join('\n'));
+    switchFormTab('contact');
+    return;
+  }
   
   const formData = {
     // Personal Info
@@ -574,9 +781,7 @@ function saveEmployee() {
     gender: document.getElementById('emp-gender')?.value || null,
     blood_type: document.getElementById('emp-blood-type')?.value || null,
     religion: document.getElementById('emp-religion')?.value || null,
-    residential_address: document.getElementById('emp-address')?.value || null,
-    current_address: document.getElementById('emp-current-address')?.value || null,
-    mailing_address: document.getElementById('emp-mailing-address')?.value || null,
+    ...addressResult.payload,
     emergency_contact_name: document.getElementById('emp-emerg-name')?.value || null,
     emergency_contact_num: document.getElementById('emp-emerg-phone')?.value || null,
     emergency_contact_relationship: document.getElementById('emp-emerg-relationship')?.value || null,
@@ -1460,6 +1665,7 @@ function initializeRegisterPage() {
   generateEmployeeID();
   initializeFileUploads();
   initializeWageConfig();
+  initializeEmployeeAddressAutocomplete();
   
   // Apply role-based access after a short delay to ensure DOM is ready
   setTimeout(() => {

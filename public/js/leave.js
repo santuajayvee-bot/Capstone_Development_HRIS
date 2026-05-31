@@ -3,6 +3,7 @@
    ============================================================ */
 
 let CURRENT_USER = null;
+let LEAVE_TYPES = [];
 
 // ── Load current user (works on both leave and requests pages) ──
 async function fetchCurrentUser(callback) {
@@ -21,6 +22,40 @@ async function fetchCurrentUser(callback) {
     console.error('Error fetching current user:', error);
   }
   if (callback) callback();
+}
+
+async function loadLeaveTypes(includeInactive = false) {
+  try {
+    const res = await apiFetch(`/api/leave/types${includeInactive ? '?include_inactive=1' : ''}`);
+    if (!res || !res.ok) return [];
+    LEAVE_TYPES = await res.json();
+    populateLeaveTypeSelects();
+    renderLeaveTypes();
+    return LEAVE_TYPES;
+  } catch (error) {
+    console.error('Error loading leave types:', error);
+    return [];
+  }
+}
+
+function populateLeaveTypeSelects() {
+  const activeTypes = LEAVE_TYPES.filter(type => Number(type.is_active) === 1);
+  const options = activeTypes.map(type => `<option value="${type.id}" data-name="${type.name}" data-category="${type.category}">${type.name}</option>`).join('');
+
+  ['manual-leave-type', 'req-leave-type'].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = options || '<option value="">No active leave types</option>';
+    if ([...select.options].some(option => option.value === current)) select.value = current;
+  });
+
+  const filter = document.getElementById('leave-filter-type');
+  if (filter) {
+    const current = filter.value;
+    filter.innerHTML = '<option value="">All Leave Types</option>' + activeTypes.map(type => `<option>${type.name}</option>`).join('');
+    filter.value = current;
+  }
 }
 
 // Check if employee is eligible to file leave requests based on wage type
@@ -468,7 +503,11 @@ async function saveRequest() {
   if (!reason) { alert('Please enter a reason.'); return; }
 
   if (type === 'Leave Request') {
-    const leaveType = document.getElementById('req-leave-type')?.value || 'Casual';
+    if (!LEAVE_TYPES.length) await loadLeaveTypes();
+    const leaveSelect = document.getElementById('req-leave-type');
+    const selectedType = leaveSelect?.selectedOptions?.[0];
+    const leaveTypeId = leaveSelect?.value || '';
+    const leaveType = selectedType?.dataset?.name || selectedType?.textContent || '';
     const startDate = document.getElementById('req-start')?.value;
     const endDate   = document.getElementById('req-end')?.value;
     const attachment = document.getElementById('req-attachment')?.files[0];
@@ -491,7 +530,7 @@ async function saveRequest() {
     console.log('Filing leave request:', { leaveType, startDate, endDate, days, reason });
     
     try {
-      const payload = { type: leaveType, date_from: startDate, date_to: endDate || startDate, days, reason, employee_id: CURRENT_USER.employeeId };
+      const payload = { leave_type_id: leaveTypeId, type: leaveType, date_from: startDate, date_to: endDate || startDate, days, reason, employee_id: CURRENT_USER.employeeId };
       console.log('Payload:', JSON.stringify(payload, null, 2));
       
       let res;
@@ -940,14 +979,16 @@ function isLeaveManager() {
 async function loadLeaveRequests() {
   try {
     await fetchCurrentUser();
-    const [leaveRes, empRes, auditRes] = await Promise.all([
+    const [leaveRes, empRes, typeRes, auditRes] = await Promise.all([
       apiFetch('/api/leave'),
       apiFetch('/api/employees'),
+      apiFetch(`/api/leave/types${isLeaveManager() ? '?include_inactive=1' : ''}`),
       isLeaveManager() ? apiFetch('/api/leave/audit') : Promise.resolve(null)
     ]);
 
     ALL_LEAVES_DATA = leaveRes && leaveRes.ok ? await leaveRes.json() : [];
     LEAVE_EMPLOYEES = empRes && empRes.ok ? await empRes.json() : [];
+    LEAVE_TYPES = typeRes && typeRes.ok ? await typeRes.json() : [];
     LEAVE_AUDIT = auditRes && auditRes.ok ? await auditRes.json() : [];
 
     ALL_LEAVES_DATA = ALL_LEAVES_DATA.map(row => ({
@@ -959,10 +1000,12 @@ async function loadLeaveRequests() {
     }));
 
     setupLeaveUi();
+    populateLeaveTypeSelects();
     renderLeaveSummary();
     renderLeaveTable();
     window.renderLeaveCalendar();
     renderLeaveAudit();
+    renderLeaveTypes();
     loadLeaveBalancesForSelection();
   } catch (error) {
     console.error('Error loading leave management:', error);
@@ -1133,10 +1176,13 @@ function calculateManualDuration() {
 
 async function submitManualLeave(event) {
   event.preventDefault();
+  const leaveSelect = document.getElementById('manual-leave-type');
+  const selectedType = leaveSelect?.selectedOptions?.[0];
   const formData = new FormData();
   formData.append('filing_source', 'Manual');
   formData.append('employee_id', document.getElementById('manual-employee').value);
-  formData.append('type', document.getElementById('manual-leave-type').value);
+  formData.append('leave_type_id', leaveSelect?.value || '');
+  formData.append('type', selectedType?.dataset?.name || selectedType?.textContent || '');
   formData.append('date_from', document.getElementById('manual-start-date').value);
   formData.append('date_to', document.getElementById('manual-end-date').value);
   formData.append('days', document.getElementById('manual-duration').value);
@@ -1165,12 +1211,126 @@ async function loadLeaveBalancesForSelection(employeeId = null) {
   const res = await apiFetch(`/api/leave/balances?employee_id=${id}`);
   if (!res || !res.ok) return;
   const balances = await res.json();
-  const byType = Object.fromEntries(balances.map(b => [String(b.leave_type).toLowerCase(), b]));
-  ['vacation', 'sick', 'emergency'].forEach(type => {
-    const el = document.getElementById(`balance-${type}`);
-    const row = byType[type];
-    if (el) el.textContent = row ? `${Number(row.remaining).toFixed(1)} / ${Number(row.balance).toFixed(1)}` : '-';
+  const list = document.getElementById('leave-balances-list');
+  if (list) {
+    list.innerHTML = balances.map(row => `
+      <div>
+        <div class="leave-card-label">${row.leave_type}</div>
+        <div class="leave-card-value">${Number(row.remaining || 0).toFixed(1)} / ${Number(row.balance || 0).toFixed(1)}</div>
+        <div style="color:var(--muted);font-size:11px;">${row.category || 'Company'} · used ${Number(row.used || 0).toFixed(1)}</div>
+      </div>
+    `).join('') || '<div style="color:var(--muted);font-size:13px;">No leave balances available.</div>';
+  }
+}
+
+function eligibilityText(type) {
+  const rules = [];
+  if (Number(type.female_only)) rules.push('Female');
+  if (Number(type.male_only)) rules.push('Male');
+  if (Number(type.married_only)) rules.push('Married');
+  if (Number(type.solo_parent_required)) rules.push('Solo parent');
+  if (Number(type.medical_certificate_required)) rules.push('Medical cert');
+  if (Number(type.legal_document_required)) rules.push('Legal doc');
+  if (Number(type.minimum_service_months)) rules.push(`${type.minimum_service_months} mo. service`);
+  return rules.join(', ') || 'None';
+}
+
+function renderLeaveTypes() {
+  const tbody = document.getElementById('leave-types-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = LEAVE_TYPES.map(type => `
+    <tr>
+      <td><strong>${type.name}</strong><div style="color:var(--muted);font-size:11px;">${type.description || ''}</div></td>
+      <td>${leaveBadge(type.category, type.category)}</td>
+      <td>${Number(type.max_allowed_days || 0).toFixed(1)}${Number(type.allow_unpaid_extension) ? ` + ${Number(type.max_extension_days || 0).toFixed(1)} unpaid` : ''}</td>
+      <td>${Number(type.is_paid) ? 'Paid' : 'Unpaid'}</td>
+      <td>${Number(type.requires_attachment) ? 'Required' : 'Optional'}</td>
+      <td>${eligibilityText(type)}</td>
+      <td>${leaveBadge(Number(type.is_active) ? 'Active' : 'Inactive', Number(type.is_active) ? 'Approved' : 'Rejected')}</td>
+      <td><button class="btn btn-outline" type="button" onclick="editLeaveTypePolicy(${type.id})">Edit</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted);">No leave types configured.</td></tr>';
+}
+
+function resetLeaveTypeForm() {
+  const form = document.getElementById('leave-type-form');
+  if (form) form.reset();
+  const id = document.getElementById('leave-type-id');
+  if (id) id.value = '';
+  const status = document.getElementById('leave-type-save-status');
+  if (status) status.textContent = '';
+}
+
+function editLeaveTypePolicy(id) {
+  const type = LEAVE_TYPES.find(item => Number(item.id) === Number(id));
+  if (!type) return;
+  const set = (fieldId, value) => {
+    const el = document.getElementById(fieldId);
+    if (!el) return;
+    if (el.tagName === 'SELECT' && value && ![...el.options].some(option => option.value === String(value))) {
+      el.add(new Option(value, value));
+    }
+    el.value = value ?? '';
+  };
+  const check = (fieldId, value) => { const el = document.getElementById(fieldId); if (el) el.checked = Number(value) === 1; };
+  set('leave-type-id', type.id);
+  set('leave-type-name', type.name);
+  set('leave-type-category', type.category);
+  set('leave-type-max-days', type.max_allowed_days);
+  set('leave-type-paid', Number(type.is_paid) ? '1' : '0');
+  set('leave-type-active', Number(type.is_active) ? '1' : '0');
+  set('leave-type-attachment', Number(type.requires_attachment) ? '1' : '0');
+  set('leave-type-extension', Number(type.allow_unpaid_extension) ? '1' : '0');
+  set('leave-type-extension-days', type.max_extension_days || 0);
+  set('leave-type-description', type.description || '');
+  check('leave-elig-female', type.female_only);
+  check('leave-elig-male', type.male_only);
+  check('leave-elig-married', type.married_only);
+  check('leave-elig-solo', type.solo_parent_required);
+  check('leave-elig-medical', type.medical_certificate_required);
+  check('leave-elig-legal', type.legal_document_required);
+  set('leave-elig-service', type.minimum_service_months || 0);
+  switchLeaveModuleTab('policies');
+}
+
+async function saveLeaveTypePolicy(event) {
+  event.preventDefault();
+  const val = id => document.getElementById(id)?.value;
+  const checked = id => document.getElementById(id)?.checked ? 1 : 0;
+  const payload = {
+    id: val('leave-type-id') || undefined,
+    name: val('leave-type-name'),
+    category: val('leave-type-category'),
+    description: val('leave-type-description'),
+    max_allowed_days: val('leave-type-max-days'),
+    is_paid: val('leave-type-paid'),
+    is_active: val('leave-type-active'),
+    requires_attachment: val('leave-type-attachment'),
+    allow_unpaid_extension: val('leave-type-extension'),
+    max_extension_days: val('leave-type-extension-days') || 0,
+    female_only: checked('leave-elig-female'),
+    male_only: checked('leave-elig-male'),
+    married_only: checked('leave-elig-married'),
+    solo_parent_required: checked('leave-elig-solo'),
+    medical_certificate_required: checked('leave-elig-medical'),
+    legal_document_required: checked('leave-elig-legal'),
+    minimum_service_months: val('leave-elig-service') || 0
+  };
+  const status = document.getElementById('leave-type-save-status');
+  if (status) status.textContent = 'Saving...';
+  const res = await apiFetch('/api/leave/types', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   });
+  if (!res || !res.ok) {
+    const error = await res?.json().catch(() => ({}));
+    if (status) status.textContent = error.error || 'Save failed.';
+    return;
+  }
+  resetLeaveTypeForm();
+  if (status) status.textContent = 'Saved.';
+  await loadLeaveTypes(isLeaveManager());
 }
 
 function renderLeaveAudit() {
@@ -1219,6 +1379,7 @@ function switchLeaveModuleTab(tabName) {
     panel.classList.toggle('active', panel.id === `leave-panel-${tabName}`);
   });
   if (tabName === 'calendar') window.renderLeaveCalendar();
+  if (tabName === 'policies') loadLeaveTypes(isLeaveManager());
 }
 
 // ── Watch for page activation (partials load async) ───────────
@@ -1236,7 +1397,10 @@ function watchPageActivation() {
     }
     if (requestsPage && !requestsPage.dataset.loaded) {
       requestsPage.dataset.loaded = '1';
-      fetchCurrentUser(() => loadAllRequests());
+      fetchCurrentUser(async () => {
+        await loadLeaveTypes();
+        loadAllRequests();
+      });
     }
   });
   observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
@@ -1567,6 +1731,10 @@ window.approveLeaveById = approveLeaveById;
 window.rejectLeaveById = rejectLeaveById;
 window.exportLeaveReport = exportLeaveReport;
 window.switchLeaveModuleTab = switchLeaveModuleTab;
+window.loadLeaveTypes = loadLeaveTypes;
+window.saveLeaveTypePolicy = saveLeaveTypePolicy;
+window.editLeaveTypePolicy = editLeaveTypePolicy;
+window.resetLeaveTypeForm = resetLeaveTypeForm;
 
 window.renderLeaveCalendar = function() {
   const calendar = document.getElementById('leave-calendar');

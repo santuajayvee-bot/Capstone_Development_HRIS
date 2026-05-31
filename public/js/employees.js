@@ -2396,6 +2396,24 @@ function populateProfileEditForm(employee) {
     const input = document.getElementById(id);
     if (input) input.value = value || '';
   });
+
+  if (window.setAddressSelection) {
+    setAddressSelection(document.getElementById('profile-edit-address'), employee.residential_address || '', employee.residential_address_lat, employee.residential_address_lng);
+    setAddressSelection(document.getElementById('profile-edit-current-address'), employee.current_address || '', employee.current_address_lat, employee.current_address_lng);
+    setAddressSelection(document.getElementById('profile-edit-mailing-address'), employee.mailing_address || '', employee.mailing_address_lat, employee.mailing_address_lng);
+  }
+
+  const currentSame = document.getElementById('profile-current-same-home');
+  if (currentSame) currentSame.checked = Number(employee.current_address_same_as_home) === 1;
+
+  const mailingSame = document.getElementById('profile-mailing-same-home');
+  if (mailingSame) mailingSame.checked = Number(employee.mailing_address_same_as_home) === 1;
+
+  if (window.initializeEmployeeAddressAutocomplete) {
+    initializeEmployeeAddressAutocomplete();
+  }
+  currentSame?.dispatchEvent(new Event('change'));
+  mailingSame?.dispatchEvent(new Event('change'));
 }
 
 function toggleProfileEditMode(forceState = null, skipTabSync = false) {
@@ -2415,6 +2433,15 @@ function toggleProfileEditMode(forceState = null, skipTabSync = false) {
 async function saveProfilePageChanges() {
   if (!currentProfileEmployee) return;
 
+  const addressResult = window.collectEmployeeAddressPayload
+    ? collectEmployeeAddressPayload('profile')
+    : { errors: [], payload: {} };
+  if (addressResult.errors.length) {
+    await showAlert(addressResult.errors.join('<br>'), 'Address Required', 'warning');
+    switchProfileTab('contact');
+    return;
+  }
+
   const payload = {
     first_name: document.getElementById('profile-edit-first-name')?.value || '',
     middle_name: document.getElementById('profile-edit-middle-name')?.value || null,
@@ -2430,9 +2457,7 @@ async function saveProfilePageChanges() {
     gender: document.getElementById('profile-edit-gender')?.value || null,
     blood_type: document.getElementById('profile-edit-blood-type')?.value || null,
     religion: document.getElementById('profile-edit-religion')?.value || null,
-    residential_address: document.getElementById('profile-edit-address')?.value || null,
-    current_address: document.getElementById('profile-edit-current-address')?.value || null,
-    mailing_address: document.getElementById('profile-edit-mailing-address')?.value || null,
+    ...addressResult.payload,
     position: document.getElementById('profile-edit-position')?.value || null,
     employment_type: document.getElementById('profile-edit-type')?.value || 'Regular',
     date_hired: document.getElementById('profile-edit-hired')?.value || null,

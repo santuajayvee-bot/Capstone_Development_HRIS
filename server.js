@@ -77,6 +77,102 @@ app.post('/api/auth/login', login);
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);
 
+app.get('/api/address/search', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim();
+    if (query.length < 3) return res.json([]);
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY;
+    if (apiKey) {
+      const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
+      url.searchParams.set('input', query);
+      url.searchParams.set('key', apiKey);
+      url.searchParams.set('components', 'country:ph');
+      url.searchParams.set('types', 'geocode');
+
+      const response = await fetch(url);
+      const data = await response.json();
+      if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+        return res.status(502).json({ error: data.error_message || `Places autocomplete failed: ${data.status}` });
+      }
+
+      const suggestions = (data.predictions || []).slice(0, 6).map(item => ({
+        full_address: item.description,
+        latitude: null,
+        longitude: null,
+        place_id: item.place_id,
+        provider: 'google_places'
+      })).filter(item => item.full_address && item.place_id);
+
+      return res.json(suggestions);
+    }
+
+    const fallbackUrl = new URL('https://nominatim.openstreetmap.org/search');
+    fallbackUrl.searchParams.set('format', 'jsonv2');
+    fallbackUrl.searchParams.set('q', query);
+    fallbackUrl.searchParams.set('countrycodes', 'ph');
+    fallbackUrl.searchParams.set('limit', '6');
+
+    try {
+      const fallbackResponse = await fetch(fallbackUrl, {
+        headers: { 'User-Agent': 'Marulas-HRIS/1.0 address autocomplete' }
+      });
+      const fallbackData = await fallbackResponse.json();
+      const suggestions = (fallbackData || []).map(item => ({
+        full_address: item.display_name,
+        latitude: Number(item.lat),
+        longitude: Number(item.lon),
+        place_id: String(item.place_id || ''),
+        provider: 'nominatim'
+      })).filter(item => item.full_address && Number.isFinite(item.latitude) && Number.isFinite(item.longitude));
+
+      if (suggestions.length) return res.json(suggestions);
+    } catch (fallbackError) {
+      console.warn('Nominatim address fallback failed:', fallbackError.message);
+    }
+
+    res.json(localPhilippineAddressSuggestions(query));
+  } catch (err) {
+    console.error('Address search error:', err.message);
+    res.status(500).json({ error: 'Failed to search address.' });
+  }
+});
+
+app.get('/api/address/details', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const placeId = String(req.query.place_id || '').trim();
+    if (!placeId) return res.status(400).json({ error: 'place_id is required.' });
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: 'Google Places API key is not configured.' });
+    }
+
+    const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+    url.searchParams.set('place_id', placeId);
+    url.searchParams.set('fields', 'formatted_address,geometry,place_id');
+    url.searchParams.set('key', apiKey);
+
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.status !== 'OK') {
+      return res.status(502).json({ error: data.error_message || `Place details failed: ${data.status}` });
+    }
+
+    const result = data.result || {};
+    res.json({
+      full_address: result.formatted_address,
+      latitude: result.geometry?.location?.lat,
+      longitude: result.geometry?.location?.lng,
+      place_id: result.place_id || placeId,
+      provider: 'google_places'
+    });
+  } catch (err) {
+    console.error('Address details error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch address details.' });
+  }
+});
+
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
 
@@ -92,15 +188,102 @@ app.use('/api/admin', adminRbacRoutes);
 // Employee Actor Module — Employee-only dashboard, 201-file, payslips
 app.use('/api/employee', employeeDashboardRoutes);
 
+function normalizeAddressPayload(body) {
+  const sameCurrent = boolValue(body.current_address_same_as_home);
+  const sameMailing = boolValue(body.mailing_address_same_as_home);
+  const home = {
+    address: String(body.residential_address || '').trim(),
+    lat: body.residential_address_lat,
+    lng: body.residential_address_lng
+  };
+  const current = sameCurrent
+    ? { ...home }
+    : { address: String(body.current_address || '').trim(), lat: body.current_address_lat, lng: body.current_address_lng };
+  const mailing = sameMailing
+    ? { ...home }
+    : { address: String(body.mailing_address || '').trim(), lat: body.mailing_address_lat, lng: body.mailing_address_lng };
+
+  return { home, current, mailing, sameCurrent, sameMailing };
+}
+
+function hasCoordinates(address) {
+  return address.lat !== undefined && address.lat !== null && address.lat !== ''
+    && address.lng !== undefined && address.lng !== null && address.lng !== ''
+    && Number.isFinite(Number(address.lat)) && Number.isFinite(Number(address.lng));
+}
+
+function validateEmployeeAddresses(body) {
+  const addresses = normalizeAddressPayload(body);
+  const errors = [];
+
+  if (!addresses.home.address) errors.push('Home Address is required.');
+  if (!addresses.sameCurrent && !addresses.current.address) errors.push('Current Address is required unless Same as Home Address is checked.');
+  if (!addresses.sameMailing && !addresses.mailing.address) errors.push('Mailing Address is required unless Same as Home Address is checked.');
+  if (addresses.home.address && !hasCoordinates(addresses.home)) errors.push('Home Address must be selected from address suggestions.');
+  if (addresses.current.address && !hasCoordinates(addresses.current)) errors.push('Current Address must be selected from address suggestions.');
+  if (addresses.mailing.address && !hasCoordinates(addresses.mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+
+  return { errors, addresses };
+}
+
+function localPhilippineAddressSuggestions(query) {
+  const value = String(query || '').trim();
+  const needle = value.toLowerCase();
+  const places = [
+    ['Marulas, Valenzuela City, Metro Manila, Philippines', 14.6842, 120.9744, ['marulas', 'valenzuela']],
+    ['Valenzuela City, Metro Manila, Philippines', 14.7011, 120.9830, ['valenzuela']],
+    ['Meycauayan City, Bulacan, Philippines', 14.7369, 120.9603, ['meycauayan', 'bulacan']],
+    ['Caloocan City, Metro Manila, Philippines', 14.6507, 120.9676, ['caloocan']],
+    ['Malabon City, Metro Manila, Philippines', 14.6680, 120.9563, ['malabon']],
+    ['Navotas City, Metro Manila, Philippines', 14.6667, 120.9417, ['navotas']],
+    ['Quezon City, Metro Manila, Philippines', 14.6760, 121.0437, ['quezon city', 'qc']],
+    ['Manila, Metro Manila, Philippines', 14.5995, 120.9842, ['manila']],
+    ['Pasig City, Metro Manila, Philippines', 14.5764, 121.0851, ['pasig']],
+    ['Makati City, Metro Manila, Philippines', 14.5547, 121.0244, ['makati']],
+    ['Taguig City, Metro Manila, Philippines', 14.5176, 121.0509, ['taguig']],
+    ['Pasay City, Metro Manila, Philippines', 14.5378, 121.0014, ['pasay']],
+    ['Paranaque City, Metro Manila, Philippines', 14.4793, 121.0198, ['paranaque', 'parañaque']],
+    ['Las Pinas City, Metro Manila, Philippines', 14.4445, 120.9939, ['las pinas', 'las piñas']],
+    ['Muntinlupa City, Metro Manila, Philippines', 14.4081, 121.0415, ['muntinlupa']],
+    ['San Jose del Monte, Bulacan, Philippines', 14.8139, 121.0453, ['san jose del monte', 'sjdm']],
+    ['Malolos City, Bulacan, Philippines', 14.8527, 120.8160, ['malolos']],
+    ['Santa Maria, Bulacan, Philippines', 14.8188, 120.9563, ['santa maria', 'sta maria']],
+    ['Philippines', 12.8797, 121.7740, ['philippines']]
+  ];
+
+  const matches = places
+    .filter(([label, , , terms]) => label.toLowerCase().includes(needle) || terms.some(term => needle.includes(term) || term.includes(needle)))
+    .slice(0, 6)
+    .map(([label, latitude, longitude], index) => ({
+      full_address: value.toLowerCase().includes('philippines') ? `${value}` : `${value}, ${label}`,
+      latitude,
+      longitude,
+      place_id: `local-${index}`,
+      provider: 'local'
+    }));
+
+  if (matches.length) return matches;
+
+  return [{
+    full_address: value.toLowerCase().includes('philippines') ? value : `${value}, Philippines`,
+    latitude: 12.8797,
+    longitude: 121.7740,
+    place_id: 'local-ph',
+    provider: 'local'
+  }];
+}
+
 // Employees
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
-              e.work_email, e.mailing_address,
+              e.work_email, e.mailing_address, e.mailing_address_lat, e.mailing_address_lng, e.mailing_address_same_as_home,
               e.nationality, e.date_of_birth, e.place_of_birth, e.gender, e.marital_status, e.blood_type, e.religion,
-              e.residential_address, e.current_address, e.emergency_contact_name, e.emergency_contact_num,
+              e.residential_address, e.residential_address_lat, e.residential_address_lng,
+              e.current_address, e.current_address_lat, e.current_address_lng, e.current_address_same_as_home,
+              e.emergency_contact_name, e.emergency_contact_num,
               e.emergency_contact_relationship, e.emergency_contact_secondary_num, e.emergency_contact_email, e.emergency_contact_address,
               e.education_school, e.education_attainment, e.education_units, e.education_year_graduated,
               e.education_jhs_school, e.education_jhs_attainment, e.education_jhs_from, e.education_jhs_to, e.education_jhs_year_graduated,
@@ -170,15 +353,33 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       return res.status(400).json({ error: 'Employee code is required.' });
     }
 
+    const { errors: addressErrors, addresses } = validateEmployeeAddresses(req.body);
+    if (addressErrors.length) {
+      return res.status(400).json({ error: addressErrors.join(' ') });
+    }
+
     console.log('Executing INSERT for:', { employee_code, first_name, last_name, email });
     
     const [result] = await pool.execute(
       `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, mailing_address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, residential_address || null, current_address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
+      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
     );
     
     const employee_id = result.insertId;
+    await pool.execute(
+      `UPDATE employees SET
+         residential_address_lat = ?, residential_address_lng = ?,
+         current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+       WHERE id = ?`,
+      [
+        addresses.home.lat, addresses.home.lng,
+        addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        employee_id
+      ]
+    );
     console.log('✅ Employee inserted successfully!');
     console.log('Insert result:', { insertId: employee_id, affectedRows: result.affectedRows });
     console.log('Employee Code:', employee_code);
@@ -279,6 +480,11 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
       return res.status(400).json({ error: 'First name, last name, and email are required.' });
     }
 
+    const { errors: addressErrors, addresses } = validateEmployeeAddresses(req.body);
+    if (addressErrors.length) {
+      return res.status(400).json({ error: addressErrors.join(' ') });
+    }
+
     console.log('Executing UPDATE for:', { id, first_name, last_name, email, department_id, position, supervisor, work_location });
 
     const [result] = await pool.execute(
@@ -296,8 +502,8 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
         salary_grade=?, allowances=?, payroll_schedule=?,
         sss_number=?, philhealth_number=?, pagibig_number=?, tin=?, tax_status=?, bank_name=?, bank_account=?
        WHERE id=? OR employee_code=?`,
-      [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, mailing_address || null,
-       nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, residential_address || null, current_address || null,
+      [first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null,
+       nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null,
        emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null,
        education_school || null, education_attainment || null, education_units || null, education_year_graduated || null,
        education_jhs_school || null, education_jhs_attainment || null, education_jhs_year_graduated || null,
@@ -312,6 +518,20 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     );
     
     console.log('✅ UPDATE executed');
+    await pool.execute(
+      `UPDATE employees SET
+         residential_address_lat = ?, residential_address_lng = ?,
+         current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+       WHERE id = ? OR employee_code = ?`,
+      [
+        addresses.home.lat, addresses.home.lng,
+        addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        id, id
+      ]
+    );
+
     console.log('Rows affected:', result.affectedRows);
     console.log('Change count:', result.changedRows);
     
@@ -1022,11 +1242,13 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
 
 const LEAVE_PERMISSION_ROLES = {
   'leave.request.create': ['employee', 'hr_admin', 'admin', 'system_admin'],
+  'leave.request.view_own': ['employee', 'hr_admin', 'admin', 'system_admin', 'payroll_manager'],
   'leave.manual.create': ['hr_admin', 'admin', 'system_admin'],
   'leave.request.approve': ['hr_admin', 'admin', 'system_admin'],
   'leave.request.view_all': ['hr_admin', 'admin', 'system_admin', 'payroll_manager'],
   'leave.balance.manage': ['hr_admin', 'admin', 'system_admin'],
-  'leave.report.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager']
+  'leave.report.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager'],
+  'leave.audit.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager']
 };
 
 function hasLeavePermission(user, permission) {
@@ -1050,35 +1272,186 @@ function normalizePayType(wageType) {
   return 'Per Day';
 }
 
-function normalizeLeaveType(type) {
+function normalizeLegacyLeaveName(type) {
   const value = String(type || '').toLowerCase();
-  if (value.includes('sick')) return 'Sick';
-  if (value.includes('emergency')) return 'Emergency';
-  return 'Vacation';
+  if (value.includes('sick')) return 'Sick Leave';
+  if (value.includes('emergency')) return 'Emergency Leave';
+  if (value.includes('maternity')) return 'Maternity Leave';
+  if (value.includes('paternity')) return 'Paternity Leave';
+  if (value.includes('solo')) return 'Solo Parent Leave';
+  if (value.includes('magna')) return 'Magna Carta for Women Leave';
+  if (value.includes('vawc')) return 'VAWC Leave';
+  return 'Vacation Leave';
+}
+
+function boolValue(value) {
+  return value === true || value === 1 || value === '1' || value === 'true' || value === 'on';
+}
+
+function decimalValue(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function monthsBetween(startDate, endDate = new Date()) {
+  if (!startDate) return 0;
+  const start = new Date(startDate);
+  if (Number.isNaN(start.getTime())) return 0;
+  return (endDate.getFullYear() - start.getFullYear()) * 12 + (endDate.getMonth() - start.getMonth());
+}
+
+async function getLeaveType(pool, { id, name, includeInactive = false } = {}) {
+  const params = [];
+  let where = '';
+  if (id) {
+    where = 'id = ?';
+    params.push(Number(id));
+  } else {
+    where = '(LOWER(name) = LOWER(?) OR LOWER(name) = LOWER(?))';
+    params.push(name || '', normalizeLegacyLeaveName(name));
+  }
+  if (!includeInactive) where += ' AND is_active = 1';
+  const [rows] = await pool.execute(`SELECT * FROM leave_types WHERE ${where} LIMIT 1`, params);
+  return rows[0] || null;
 }
 
 async function ensureLeaveBalance(pool, employeeId, leaveType, year) {
-  const defaults = { Vacation: 15, Sick: 10, Emergency: 5 };
   await pool.execute(
-    `INSERT IGNORE INTO leave_balances (employee_id, leave_type, balance, used, year)
-     VALUES (?, ?, ?, 0, ?)`,
-    [employeeId, normalizeLeaveType(leaveType), defaults[normalizeLeaveType(leaveType)] || 0, year]
+    `INSERT INTO leave_balances (employee_id, leave_type_id, leave_type, balance, used, year)
+     VALUES (?, ?, ?, ?, 0, ?)
+     ON DUPLICATE KEY UPDATE
+       leave_type_id = COALESCE(VALUES(leave_type_id), leave_type_id),
+       leave_type = VALUES(leave_type)`,
+    [employeeId, leaveType.id, leaveType.name, decimalValue(leaveType.max_allowed_days), year]
   );
 }
 
-async function writeLeaveAudit(pool, leaveId, employeeId, actorUserId, action, remarks = null) {
+async function writeLeaveAudit(pool, leaveId, employeeId, actorUserId, action, remarks = null, oldStatus = null, newStatus = null, metadata = null) {
   await pool.execute(
-    `INSERT INTO leave_audit_trail (leave_request_id, employee_id, actor_user_id, action, remarks)
-     VALUES (?, ?, ?, ?, ?)`,
-    [leaveId || null, employeeId || null, actorUserId || null, action, remarks || null]
+    `INSERT INTO leave_audit_trail
+       (leave_request_id, employee_id, actor_user_id, action, remarks, old_status, new_status, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      leaveId || null,
+      employeeId || null,
+      actorUserId || null,
+      action,
+      remarks || null,
+      oldStatus || null,
+      newStatus || null,
+      metadata ? JSON.stringify(metadata) : null
+    ]
   );
+}
+
+function validateLeaveEligibility(employee, leaveType, hasAttachment) {
+  const errors = [];
+  const gender = String(employee.gender || '').toLowerCase();
+  const civilStatus = String(employee.marital_status || employee.civil_status || '').toLowerCase();
+
+  if (leaveType.female_only && gender !== 'female') errors.push('This leave type is for female employees only.');
+  if (leaveType.male_only && gender !== 'male') errors.push('This leave type is for male employees only.');
+  if (leaveType.married_only && !civilStatus.includes('married')) errors.push('This leave type requires married civil status.');
+  if (leaveType.solo_parent_required && !employee.solo_parent_status) errors.push('This leave type requires solo parent status.');
+  if (leaveType.minimum_service_months && monthsBetween(employee.date_hired) < leaveType.minimum_service_months) {
+    errors.push(`This leave type requires at least ${leaveType.minimum_service_months} month(s) of service.`);
+  }
+  if ((leaveType.requires_attachment || leaveType.medical_certificate_required || leaveType.legal_document_required) && !hasAttachment) {
+    errors.push('Supporting attachment is required for this leave type.');
+  }
+  return errors;
 }
 
 // Leave
+app.get('/api/leave/types', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const includeInactive = req.query.include_inactive === '1';
+    if (includeInactive && !hasLeavePermission(req.user, 'leave.balance.manage')) {
+      return res.status(403).json({ error: 'Missing permission: leave.balance.manage' });
+    }
+    const [rows] = await pool.execute(
+      `SELECT *
+       FROM leave_types
+       ${includeInactive ? '' : 'WHERE is_active = 1'}
+       ORDER BY FIELD(category, 'Company', 'Statutory'), name`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching leave types:', err.message);
+    res.status(500).json({ error: 'Failed to fetch leave types.' });
+  }
+});
+
+app.post('/api/leave/types', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const body = req.body || {};
+    const name = String(body.name || '').trim();
+    const category = body.category === 'Statutory' ? 'Statutory' : 'Company';
+    if (!name) return res.status(400).json({ error: 'Leave name is required.' });
+
+    const fields = [
+      name,
+      body.code ? String(body.code).trim() : null,
+      category,
+      body.description || null,
+      decimalValue(body.max_allowed_days),
+      boolValue(body.is_paid) ? 1 : 0,
+      boolValue(body.is_active) ? 1 : 0,
+      boolValue(body.requires_attachment) ? 1 : 0,
+      boolValue(body.allow_unpaid_extension) ? 1 : 0,
+      decimalValue(body.max_extension_days),
+      boolValue(body.female_only) ? 1 : 0,
+      boolValue(body.male_only) ? 1 : 0,
+      boolValue(body.married_only) ? 1 : 0,
+      boolValue(body.solo_parent_required) ? 1 : 0,
+      boolValue(body.medical_certificate_required) ? 1 : 0,
+      boolValue(body.legal_document_required) ? 1 : 0,
+      parseInt(body.minimum_service_months, 10) || 0,
+      req.user.id
+    ];
+
+    if (body.id) {
+      await pool.execute(
+        `UPDATE leave_types SET
+           name = ?, code = ?, category = ?, description = ?, max_allowed_days = ?,
+           is_paid = ?, is_active = ?, requires_attachment = ?,
+           allow_unpaid_extension = ?, max_extension_days = ?,
+           female_only = ?, male_only = ?, married_only = ?, solo_parent_required = ?,
+           medical_certificate_required = ?, legal_document_required = ?,
+           minimum_service_months = ?, updated_by = ?
+         WHERE id = ?`,
+        [...fields, Number(body.id)]
+      );
+      await writeLeaveAudit(pool, null, null, req.user.id, 'leave_type_updated', name);
+      return res.json({ message: 'Leave type updated.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO leave_types
+         (name, code, category, description, max_allowed_days, is_paid, is_active,
+          requires_attachment, allow_unpaid_extension, max_extension_days,
+          female_only, male_only, married_only, solo_parent_required,
+          medical_certificate_required, legal_document_required, minimum_service_months, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      fields
+    );
+    await writeLeaveAudit(pool, null, null, req.user.id, 'leave_type_created', name);
+    res.json({ message: 'Leave type saved.' });
+  } catch (err) {
+    console.error('Error saving leave type:', err.message);
+    res.status(500).json({ error: 'Failed to save leave type.' });
+  }
+});
+
 app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    let q = `SELECT lr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+    let q = `SELECT lr.*,
+                    COALESCE(lt.name, lr.type) AS type,
+                    COALESCE(lt.category, lr.leave_category, 'Company') AS leave_category,
+                    CONCAT(e.first_name,' ',e.last_name) AS employee_name,
                     d.name AS department, wt.name AS wage_type,
                     CASE
                       WHEN LOWER(COALESCE(wt.name, '')) LIKE '%hour%' THEN 'Per Hour'
@@ -1091,6 +1464,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
                     reviewer.username AS reviewed_by_name
              FROM leave_requests lr
              JOIN employees e ON e.id = lr.employee_id
+             LEFT JOIN leave_types lt ON lt.id = lr.leave_type_id
              LEFT JOIN departments d ON d.id = e.department_id
              LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
              LEFT JOIN users filed ON filed.id = lr.filed_by
@@ -1117,15 +1491,18 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
 
     if (!employeeId) return res.status(400).json({ error: 'employee_id is required.' });
 
-    for (const type of ['Vacation', 'Sick', 'Emergency']) {
+    const [types] = await pool.execute(`SELECT * FROM leave_types WHERE is_active = 1 ORDER BY category, name`);
+    for (const type of types) {
       await ensureLeaveBalance(pool, employeeId, type, year);
     }
 
     const [rows] = await pool.execute(
-      `SELECT employee_id, leave_type, balance, used, year, (balance - used) AS remaining
-       FROM leave_balances
-       WHERE employee_id = ? AND year = ?
-       ORDER BY FIELD(leave_type, 'Vacation', 'Sick', 'Emergency')`,
+      `SELECT lb.employee_id, lb.leave_type_id, lb.leave_type, lt.category,
+              lb.balance, lb.used, lb.year, (lb.balance - lb.used) AS remaining
+       FROM leave_balances lb
+       LEFT JOIN leave_types lt ON lt.id = lb.leave_type_id
+       WHERE lb.employee_id = ? AND lb.year = ?
+       ORDER BY FIELD(COALESCE(lt.category, 'Company'), 'Company', 'Statutory'), lb.leave_type`,
       [employeeId, year]
     );
     res.json(rows);
@@ -1139,21 +1516,21 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
   try {
     const pool = require('./config/db');
     const employeeId = parseInt(req.body.employee_id, 10);
-    const leaveType = normalizeLeaveType(req.body.leave_type);
+    const leaveType = await getLeaveType(pool, { id: req.body.leave_type_id, name: req.body.leave_type, includeInactive: true });
     const year = parseInt(req.body.year, 10) || new Date().getFullYear();
     const balance = Number(req.body.balance);
 
-    if (!employeeId || Number.isNaN(balance)) {
-      return res.status(400).json({ error: 'employee_id and balance are required.' });
+    if (!employeeId || !leaveType || Number.isNaN(balance)) {
+      return res.status(400).json({ error: 'employee_id, leave_type, and balance are required.' });
     }
 
     await pool.execute(
-      `INSERT INTO leave_balances (employee_id, leave_type, balance, used, year)
-       VALUES (?, ?, ?, 0, ?)
+      `INSERT INTO leave_balances (employee_id, leave_type_id, leave_type, balance, used, year)
+       VALUES (?, ?, ?, ?, 0, ?)
        ON DUPLICATE KEY UPDATE balance = VALUES(balance)`,
-      [employeeId, leaveType, balance, year]
+      [employeeId, leaveType.id, leaveType.name, balance, year]
     );
-    await writeLeaveAudit(pool, null, employeeId, req.user.id, 'balance_updated', `${leaveType} balance set to ${balance}`);
+    await writeLeaveAudit(pool, null, employeeId, req.user.id, 'leave_balance_adjusted', `${leaveType.name} balance set to ${balance}`);
     res.json({ message: 'Leave balance updated.' });
   } catch (err) {
     console.error('Error updating leave balance:', err.message);
@@ -1164,7 +1541,7 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
 app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
-    const { type, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
+    const { type, leave_type_id, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
     const source = filing_source === 'Manual' ? 'Manual' : 'Portal';
 
     if (source === 'Manual' && !hasLeavePermission(req.user, 'leave.manual.create')) {
@@ -1184,29 +1561,98 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     }
 
     const [empRows] = await pool.execute(
-      `SELECT e.wage_type_id, wt.name as wage_type 
-       FROM employees e 
-       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id 
-       WHERE e.id = ?`, 
+      `SELECT e.*, wt.name as wage_type
+       FROM employees e
+       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+       WHERE e.id = ?`,
       [empId]
     );
     if (!empRows.length) return res.status(404).json({ error: 'Employee not found.' });
+    const employee = empRows[0];
+    if (String(employee.status || '').toLowerCase() !== 'active') {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Only active employees can file leave.' });
+    }
 
-    const payType = normalizePayType(empRows[0].wage_type);
+    const leaveType = await getLeaveType(pool, { id: leave_type_id, name: type });
+    if (!leaveType) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Active leave type is required.' });
+    }
+
+    const payType = normalizePayType(employee.wage_type);
     if (source === 'Portal' && ['Per Trip', 'Per Piece'].includes(payType)) {
       if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       return res.status(403).json({ error: 'Per Trip and Per Piece employees cannot file leave through the portal. HR must manually encode their leave records.' });
     }
 
+    const fromDate = new Date(date_from);
+    const toDate = new Date(date_to || date_from);
+    const requestedDays = decimalValue(days, Math.floor((toDate - fromDate) / 86400000) + 1);
+    if (!date_from || !date_to || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || toDate < fromDate || requestedDays <= 0) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Valid leave dates and duration are required.' });
+    }
+
+    const eligibilityErrors = validateLeaveEligibility(employee, leaveType, Boolean(req.file));
+    if (eligibilityErrors.length) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: eligibilityErrors.join(' ') });
+    }
+
+    const year = fromDate.getFullYear();
+    await ensureLeaveBalance(pool, empId, leaveType, year);
+    const [overlaps] = await pool.execute(
+      `SELECT id FROM leave_requests
+       WHERE employee_id = ?
+         AND status IN ('Draft','Pending','Approved')
+         AND date_from <= ? AND date_to >= ?
+       LIMIT 1`,
+      [empId, date_to, date_from]
+    );
+    if (overlaps.length) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'This employee already has an overlapping leave request.' });
+    }
+
+    const [balanceRows] = await pool.execute(
+      `SELECT balance, used, (balance - used) AS remaining
+       FROM leave_balances
+       WHERE employee_id = ? AND leave_type = ? AND year = ?`,
+      [empId, leaveType.name, year]
+    );
+    const remaining = decimalValue(balanceRows[0]?.remaining);
+    const extensionDays = leaveType.allow_unpaid_extension ? decimalValue(leaveType.max_extension_days) : 0;
+    if (requestedDays > remaining + extensionDays) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Requested duration exceeds the available leave balance and allowed extension.' });
+    }
+
+    const [annualRows] = await pool.execute(
+      `SELECT COALESCE(SUM(days), 0) AS total_days
+       FROM leave_requests
+       WHERE employee_id = ?
+         AND COALESCE(leave_type_id, 0) = ?
+         AND YEAR(date_from) = ?
+         AND status IN ('Pending','Approved')`,
+      [empId, leaveType.id, year]
+    );
+    const annualLimit = decimalValue(leaveType.max_allowed_days) + extensionDays;
+    if (decimalValue(annualRows[0]?.total_days) + requestedDays > annualLimit) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Requested duration exceeds the configured annual limit for this leave type.' });
+    }
+
     const filePath = req.file ? `/uploads/${req.file.filename}` : null;
     const [result] = await pool.execute(
       `INSERT INTO leave_requests
-       (employee_id, type, date_from, date_to, days, reason, file_path, filing_source, remarks, filed_by, encoded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [empId, type, date_from, date_to, days || 1, reason, filePath, source, remarks || null, req.user.id, source === 'Manual' ? req.user.id : null]
+       (employee_id, leave_type_id, leave_category, type, date_from, date_to, days, reason, file_path,
+        filing_source, status, remarks, filed_by, submitted_by, encoded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?)`,
+      [empId, leaveType.id, leaveType.category, leaveType.name, date_from, date_to, requestedDays, reason, filePath, source, remarks || null, req.user.id, req.user.id, source === 'Manual' ? req.user.id : null]
     );
 
-    await writeLeaveAudit(pool, result.insertId, empId, req.user.id, source === 'Manual' ? 'encoded' : 'filed', remarks || reason || null);
+    await writeLeaveAudit(pool, result.insertId, empId, req.user.id, source === 'Manual' ? 'leave_manual_encoded' : 'leave_created', remarks || reason || null, null, 'Pending', { leave_type: leaveType.name, filing_source: source });
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
   } catch (err) { 
     console.error('Error saving leave request:', err.message);
@@ -1223,23 +1669,37 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
       return res.status(400).json({ error: 'Remarks are required when rejecting leave.' });
     }
 
-    const [rows] = await pool.execute('SELECT * FROM leave_requests WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.execute(
+      `SELECT lr.*, COALESCE(lt.name, lr.type) AS leave_type_name, lt.id AS configured_leave_type_id, lt.max_allowed_days
+       FROM leave_requests lr
+       LEFT JOIN leave_types lt ON lt.id = lr.leave_type_id
+       WHERE lr.id = ?`,
+      [req.params.id]
+    );
     if (!rows.length) return res.status(404).json({ error: 'Leave request not found.' });
     const leave = rows[0];
-    const leaveType = normalizeLeaveType(leave.type);
+    const leaveType = await getLeaveType(pool, { id: leave.configured_leave_type_id, name: leave.leave_type_name, includeInactive: true });
+    if (!leaveType) return res.status(400).json({ error: 'Leave type configuration was not found.' });
     const year = new Date(leave.date_from).getFullYear();
     await ensureLeaveBalance(pool, leave.employee_id, leaveType, year);
 
     if (status === 'Approved' && leave.status !== 'Approved') {
+      const [balanceRows] = await pool.execute(
+        `SELECT (balance - used) AS remaining FROM leave_balances WHERE employee_id = ? AND leave_type = ? AND year = ?`,
+        [leave.employee_id, leaveType.name, year]
+      );
+      if (decimalValue(balanceRows[0]?.remaining) < decimalValue(leave.days || 1)) {
+        return res.status(400).json({ error: 'Insufficient leave balance for approval.' });
+      }
       await pool.execute(
         `UPDATE leave_balances SET used = used + ? WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-        [leave.days || 1, leave.employee_id, leaveType, year]
+        [leave.days || 1, leave.employee_id, leaveType.name, year]
       );
     }
     if (leave.status === 'Approved' && ['Rejected', 'Cancelled'].includes(status)) {
       await pool.execute(
         `UPDATE leave_balances SET used = GREATEST(used - ?, 0) WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-        [leave.days || 1, leave.employee_id, leaveType, year]
+        [leave.days || 1, leave.employee_id, leaveType.name, year]
       );
     }
 
@@ -1250,14 +1710,17 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
          reviewed_at = NOW(),
          approved_by = CASE WHEN ? = 'Approved' THEN ? ELSE approved_by END,
          approved_at = CASE WHEN ? = 'Approved' THEN NOW() ELSE approved_at END,
+         approval_date = CASE WHEN ? = 'Approved' THEN NOW() ELSE approval_date END,
+         approval_remarks = CASE WHEN ? = 'Approved' THEN ? ELSE approval_remarks END,
          rejected_by = CASE WHEN ? = 'Rejected' THEN ? ELSE rejected_by END,
          rejected_at = CASE WHEN ? = 'Rejected' THEN NOW() ELSE rejected_at END,
          rejection_remarks = CASE WHEN ? = 'Rejected' THEN ? ELSE rejection_remarks END,
          remarks = COALESCE(?, remarks)
        WHERE id = ?`,
-      [status, req.user.id, status, req.user.id, status, status, req.user.id, status, status, remarks, remarks, req.params.id]
+      [status, req.user.id, status, req.user.id, status, status, status, remarks, status, req.user.id, status, status, remarks, remarks, req.params.id]
     );
-    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, status.toLowerCase(), remarks);
+    const action = status === 'Approved' ? 'leave_approved' : status === 'Rejected' ? 'leave_rejected' : status === 'Cancelled' ? 'leave_cancelled' : 'leave_updated';
+    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, action, remarks, leave.status, status);
     res.json({ message: 'Leave status updated.' });
   } catch (err) {
     console.error('Error updating leave:', err.message);
@@ -1265,7 +1728,7 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
   }
 });
 
-app.get('/api/leave/audit', requireAuth, requireLeavePermission('leave.request.view_all'), async (req, res) => {
+app.get('/api/leave/audit', requireAuth, requireLeavePermission('leave.audit.view'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(
@@ -1415,7 +1878,7 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
 });
 
 // Blockchain — admin only
-app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin, ...ROLES.payroll_any]), async (req, res) => {
+app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin_any, ...ROLES.payroll_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(

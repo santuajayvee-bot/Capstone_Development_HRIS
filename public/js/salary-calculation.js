@@ -511,6 +511,13 @@ function calculateSalaryNow() {
   
   document.getElementById('summary-total-deductions').textContent = `₱${deductions.toFixed(2)}`;
   document.getElementById('summary-net').textContent = `₱${net.toFixed(2)}`;
+  const deductionNote = document.getElementById('summary-deduction-note');
+  if (deductionNote) {
+    deductionNote.classList.toggle('applied', deductions > 0);
+    deductionNote.textContent = deductions > 0
+      ? `${appliedDeductions.length} deduction rule${appliedDeductions.length === 1 ? '' : 's'} applied. Net pay already reflects the deduction.`
+      : 'No deduction applied for this payroll week/schedule.';
+  }
 }
 
 function currentPayrollWeek() {

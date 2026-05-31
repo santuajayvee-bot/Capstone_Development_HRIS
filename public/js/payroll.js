@@ -413,7 +413,12 @@ function renderPayrollRecords(records) {
             <td>${r.wage_type || '-'}</td>
             <td>PHP ${parseFloat(r.gross_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
             <td>PHP ${parseFloat(r.total_allowances || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-            <td>PHP ${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td>
+              PHP ${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
+              <div style="color:${parseFloat(r.total_deductions || 0) > 0 ? 'var(--green)' : 'var(--muted)'}; font-size:11px; margin-top:3px;">
+                ${parseFloat(r.total_deductions || 0) > 0 ? 'Deductions applied' : 'No deduction applied'}
+              </div>
+            </td>
             <td><strong style="color:var(--accent);">PHP ${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></td>
             <td>${payrollBadge(r.status || 'Draft')}</td>
             <td><button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">View</button></td>
@@ -635,6 +640,26 @@ function renderSalaryCalculations(records) {
 
 // Show calculation breakdown in modal
 function showCalculationBreakdown(record) {
+  const totalDeductions = parseFloat(record.total_deductions || 0);
+  const deductionRows = [
+    { label: 'SSS', amount: parseFloat(record.sss_deduction || 0) },
+    { label: 'Pag-IBIG', amount: parseFloat(record.pagibig_deduction || 0) },
+    { label: 'PhilHealth', amount: parseFloat(record.philhealth_deduction || 0) }
+  ].filter(item => item.amount > 0);
+  const savedDeductionHtml = deductionRows.length
+    ? deductionRows.map(item => `
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
+        <span style="color: var(--muted);">${item.label}</span>
+        <span style="color: var(--red);">- ₱${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+      </div>
+    `).join('')
+    : totalDeductions > 0
+      ? `<div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
+          <span style="color: var(--muted);">Configured deductions</span>
+          <span style="color: var(--red);">- ₱${totalDeductions.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+        </div>`
+      : '<div style="color: var(--muted); padding: 8px 0;">No deductions were applied to this calculation.</div>';
+
   const modalHTML = `
     <div id="calc-breakdown-modal" style="
       position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -755,23 +780,12 @@ function showCalculationBreakdown(record) {
           <h3 style="margin: 0 0 12px 0; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;">Deductions</h3>
           
           <div style="display: grid; gap: 8px; font-size: 13px;">
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
-              <span style="color: var(--muted);">SSS (4.5%)</span>
-              <span style="color: var(--red);">- ₱${parseFloat(record.sss_deduction || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
-              <span style="color: var(--muted);">Pag-IBIG (2%)</span>
-              <span style="color: var(--red);">- ₱${parseFloat(record.pagibig_deduction || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
-              <span style="color: var(--muted);">PhilHealth (2.75%)</span>
-              <span style="color: var(--red);">- ₱${parseFloat(record.philhealth_deduction || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-            </div>
+            ${savedDeductionHtml}
 
             <!-- Total Deductions -->
             <div style="display: flex; justify-content: space-between; padding: 12px 0; background: rgba(239, 68, 68, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 3px solid var(--red);">
               <span style="font-weight: 600; color: var(--text);">Total Deductions</span>
-              <span style="font-weight: 700; color: var(--red); font-size: 14px;">₱${parseFloat(record.total_deductions).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+              <span style="font-weight: 700; color: var(--red); font-size: 14px;">₱${totalDeductions.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
             </div>
           </div>
         </div>
@@ -923,6 +937,18 @@ async function savePayrollSetting(event, type) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
+  const statusEl = document.getElementById(type === 'deduction' ? 'deduction-save-status' : 'allowance-save-status');
+  if (statusEl) {
+    statusEl.className = 'payroll-form-status';
+    statusEl.textContent = 'Saving...';
+  }
+  if (type === 'deduction') {
+    data.name = data.category === 'Government'
+      ? data.government_name
+      : data.custom_name;
+    delete data.government_name;
+    delete data.custom_name;
+  }
   const endpoint = type === 'deduction' ? '/api/payroll/deduction-settings' : '/api/payroll/allowance-settings';
 
   try {
@@ -936,15 +962,37 @@ async function savePayrollSetting(event, type) {
       throw new Error(err.error || `Failed to save ${type} setting`);
     }
     form.reset();
+    if (statusEl) {
+      statusEl.className = 'payroll-form-status success';
+      statusEl.textContent = `${type === 'deduction' ? 'Deduction' : 'Allowance'} saved successfully.`;
+    }
     loadPayrollSettings(type);
     loadPayrollAudit();
     if (typeof showAlert === 'function') {
       await showAlert(`${type === 'deduction' ? 'Deduction' : 'Allowance'} setting saved.`, 'Saved', 'success');
     }
   } catch (err) {
+    if (statusEl) {
+      statusEl.className = 'payroll-form-status error';
+      statusEl.textContent = err.message;
+    }
     if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
     else alert(err.message);
   }
+}
+
+function toggleDeductionNameField() {
+  const category = document.getElementById('deduction-category')?.value || 'Government';
+  const governmentGroup = document.getElementById('deduction-government-name-group');
+  const customGroup = document.getElementById('deduction-custom-name-group');
+  const governmentName = document.getElementById('deduction-government-name');
+  const customName = document.getElementById('deduction-custom-name');
+  const isGovernment = category === 'Government';
+
+  if (governmentGroup) governmentGroup.style.display = isGovernment ? 'block' : 'none';
+  if (customGroup) customGroup.style.display = isGovernment ? 'none' : 'block';
+  if (governmentName) governmentName.required = isGovernment;
+  if (customName) customName.required = !isGovernment;
 }
 
 async function loadPayrollAudit() {
@@ -997,6 +1045,7 @@ function initializePayrollModule() {
   const today = new Date().toISOString().split('T')[0];
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
   if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
+  toggleDeductionNameField();
 }
 
 // Export functions to global scope FIRST
@@ -1012,6 +1061,7 @@ window.switchPayrollTab = switchPayrollTab;
 window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;
+window.toggleDeductionNameField = toggleDeductionNameField;
 window.loadPayrollAudit = loadPayrollAudit;
 window.exportPayrollReport = exportPayrollReport;
 window.initializePayrollModule = initializePayrollModule;

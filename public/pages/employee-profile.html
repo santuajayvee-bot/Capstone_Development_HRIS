@@ -171,9 +171,26 @@
             <label>Email<input id="profile-edit-email" type="email"></label>
             <label>Work Email<input id="profile-edit-work-email" type="email"></label>
             <label>Contact No<input id="profile-edit-phone" type="text"></label>
-            <label>Home Address<input id="profile-edit-address" type="text"></label>
-            <label>Current Address<input id="profile-edit-current-address" type="text"></label>
-            <label>Mailing Address<input id="profile-edit-mailing-address" type="text"></label>
+            <label>Home Address
+              <div class="address-autocomplete" data-address-field="profile-home">
+                <input id="profile-edit-address" type="text" autocomplete="off">
+                <div class="address-suggestions" id="profile-edit-address-suggestions"></div>
+              </div>
+            </label>
+            <label>Current Address
+              <span class="address-same-check"><input id="profile-current-same-home" type="checkbox"> Same as Home Address</span>
+              <div class="address-autocomplete" data-address-field="profile-current">
+                <input id="profile-edit-current-address" type="text" autocomplete="off">
+                <div class="address-suggestions" id="profile-edit-current-address-suggestions"></div>
+              </div>
+            </label>
+            <label>Mailing Address
+              <span class="address-same-check"><input id="profile-mailing-same-home" type="checkbox"> Same as Home Address</span>
+              <div class="address-autocomplete" data-address-field="profile-mailing">
+                <input id="profile-edit-mailing-address" type="text" autocomplete="off">
+                <div class="address-suggestions" id="profile-edit-mailing-address-suggestions"></div>
+              </div>
+            </label>
           </div>
           <h3 class="profile-section-title" style="margin-top:22px;">Emergency Contacts</h3>
           <div class="profile-form-grid">
