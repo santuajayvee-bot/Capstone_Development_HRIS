@@ -9,6 +9,7 @@
     "seed": "node database/seed-users.js",
     "migrate:attendance-biometric": "node database/migrate-biometric-attendance.js",
     "migrate:onboarding": "node database/migrate-onboarding-lifecycle.js",
+    "migrate:lifecycle": "node database/migrate-employee-lifecycle-routing.js",
     "test:attendance-biometric": "node test-biometric-attendance.js",
     "test:onboarding": "node test-onboarding.js"
   },

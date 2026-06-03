@@ -15,6 +15,7 @@ const baseUrl = `http://localhost:${process.env.PORT || 3000}`;
 const nonce = String(Date.now()).slice(-8);
 const applicantIds = [];
 const employeeIds = [];
+const employeeCodes = [];
 const documentPaths = [];
 let deviceId;
 
@@ -61,6 +62,182 @@ async function run() {
   result = await api('/api/onboarding/lookups', { headers: jsonHeaders(hrToken) });
   check('HR admin can load onboarding lookups', result.status === 200 && result.data.wage_types.length > 0);
   const wageTypeId = result.data.wage_types[0].id;
+
+  const routedEmployeeCode = `TST-R-${nonce}`;
+  const routedEmail = `routed.${nonce}@example.test`;
+  result = await api('/api/employees', {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({
+      employee_code: routedEmployeeCode,
+      first_name: 'Routed',
+      last_name: `Worker${nonce}`,
+      email: routedEmail,
+      contact_number: '09175550001',
+      residential_address: 'Routed worker address, Philippines',
+      residential_address_lat: '14.6842',
+      residential_address_lng: '120.9744',
+      current_address: 'Routed worker address, Philippines',
+      current_address_lat: '14.6842',
+      current_address_lng: '120.9744',
+      current_address_same_as_home: 1,
+      mailing_address: 'Routed worker address, Philippines',
+      mailing_address_lat: '14.6842',
+      mailing_address_lng: '120.9744',
+      mailing_address_same_as_home: 1,
+      hiring_type: 'Direct Hire',
+      department_id: 3,
+      position: 'Logistics Helper',
+      employment_type: 'Full-time',
+      work_location: 'Marulas Plant',
+      wage_type_id: wageTypeId,
+      wage_type: 'Base Salary',
+      base_rate: 500,
+    }),
+  });
+  check('Employee Management routes training positions to onboarding', result.status === 201 && result.data.routed_to === 'onboarding' && result.data.workflow_status === 'Under Screening');
+  applicantIds.push(result.data.applicant_id);
+  employeeCodes.push(routedEmployeeCode);
+  let [routedDirectoryRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [routedEmployeeCode]);
+  check('Routed training position is not active in Employee Directory yet', routedDirectoryRows.length === 0);
+  let [[routedApplicant]] = await pool.execute('SELECT intended_employee_code, source_module FROM onboarding_applicant WHERE applicant_id = ?', [result.data.applicant_id]);
+  check('Routed onboarding record preserves intended employee code and source module', routedApplicant.intended_employee_code === routedEmployeeCode && routedApplicant.source_module === 'EMPLOYEE_MANAGEMENT');
+
+  const directDirectoryCode = `TST-M-${nonce}`;
+  const directDirectoryEmail = `manager.${nonce}@example.test`;
+  result = await api('/api/employees', {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({
+      employee_code: directDirectoryCode,
+      first_name: 'Directory',
+      last_name: `Manager${nonce}`,
+      email: directDirectoryEmail,
+      contact_number: '09175550002',
+      residential_address: 'Direct manager address, Philippines',
+      residential_address_lat: '14.6842',
+      residential_address_lng: '120.9744',
+      current_address: 'Direct manager address, Philippines',
+      current_address_lat: '14.6842',
+      current_address_lng: '120.9744',
+      current_address_same_as_home: 1,
+      mailing_address: 'Direct manager address, Philippines',
+      mailing_address_lat: '14.6842',
+      mailing_address_lng: '120.9744',
+      mailing_address_same_as_home: 1,
+      hiring_type: 'Direct Hire',
+      department_id: 1,
+      position: 'Manager',
+      employment_type: 'Full-time',
+      work_location: 'Marulas Plant',
+    }),
+  });
+  check('Employee Management sends direct-route positions to Employee Directory', result.status === 201 && result.data.id && result.data.routed_to !== 'onboarding');
+  employeeIds.push(result.data.id);
+  employeeCodes.push(directDirectoryCode);
+  let [[directDirectoryEmployee]] = await pool.execute('SELECT lifecycle_status, encrypted_pii FROM employees WHERE id = ?', [result.data.id]);
+  check('Direct-route employee is active with encrypted PII metadata', directDirectoryEmployee.lifecycle_status === 'Active' && !!directDirectoryEmployee.encrypted_pii);
+
+  const directOverrideCode = `TST-O-${nonce}`;
+  result = await api('/api/employees', {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({
+      employee_code: directOverrideCode,
+      first_name: 'Override',
+      last_name: `Operator${nonce}`,
+      email: `override.${nonce}@example.test`,
+      contact_number: '09175550003',
+      residential_address: 'Override operator address, Philippines',
+      residential_address_lat: '14.6842',
+      residential_address_lng: '120.9744',
+      current_address: 'Override operator address, Philippines',
+      current_address_lat: '14.6842',
+      current_address_lng: '120.9744',
+      current_address_same_as_home: 1,
+      mailing_address: 'Override operator address, Philippines',
+      mailing_address_lat: '14.6842',
+      mailing_address_lng: '120.9744',
+      mailing_address_same_as_home: 1,
+      hiring_type: 'Direct Hire',
+      department_id: 3,
+      position: 'Operator',
+      employment_type: 'Full-time',
+      work_location: 'Marulas Plant',
+      lifecycle_action: 'DIRECT_ACTIVE',
+    }),
+  });
+  check('HR can mark a normally routed role as no training needed', result.status === 201 && result.data.id && result.data.routed_to !== 'onboarding');
+  employeeIds.push(result.data.id);
+  employeeCodes.push(directOverrideCode);
+
+  const trainingDecisionCode = `TST-T-${nonce}`;
+  result = await api('/api/employees', {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({
+      employee_code: trainingDecisionCode,
+      first_name: 'Training',
+      last_name: `Needed${nonce}`,
+      email: `training.${nonce}@example.test`,
+      contact_number: '09175550004',
+      residential_address: 'Training decision address, Philippines',
+      residential_address_lat: '14.6842',
+      residential_address_lng: '120.9744',
+      current_address: 'Training decision address, Philippines',
+      current_address_lat: '14.6842',
+      current_address_lng: '120.9744',
+      current_address_same_as_home: 1,
+      mailing_address: 'Training decision address, Philippines',
+      mailing_address_lat: '14.6842',
+      mailing_address_lng: '120.9744',
+      mailing_address_same_as_home: 1,
+      hiring_type: 'Direct Hire',
+      department_id: 1,
+      position: 'Manager',
+      employment_type: 'Full-time',
+      work_location: 'Marulas Plant',
+      lifecycle_action: 'TRAINING_REQUIRED',
+      lifecycle_note: 'Needs orientation and safety training.',
+    }),
+  });
+  check('HR can route a direct position to required training', result.status === 201 && result.data.routed_to === 'onboarding' && result.data.requires_training === 1);
+  applicantIds.push(result.data.applicant_id);
+  employeeCodes.push(trainingDecisionCode);
+
+  const holdDecisionCode = `TST-H-${nonce}`;
+  result = await api('/api/employees', {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({
+      employee_code: holdDecisionCode,
+      first_name: 'Hold',
+      last_name: `Review${nonce}`,
+      email: `hold.${nonce}@example.test`,
+      contact_number: '09175550005',
+      residential_address: 'Hold decision address, Philippines',
+      residential_address_lat: '14.6842',
+      residential_address_lng: '120.9744',
+      current_address: 'Hold decision address, Philippines',
+      current_address_lat: '14.6842',
+      current_address_lng: '120.9744',
+      current_address_same_as_home: 1,
+      mailing_address: 'Hold decision address, Philippines',
+      mailing_address_lat: '14.6842',
+      mailing_address_lng: '120.9744',
+      mailing_address_same_as_home: 1,
+      hiring_type: 'Direct Hire',
+      department_id: 1,
+      position: 'Office Staff',
+      employment_type: 'Full-time',
+      work_location: 'Marulas Plant',
+      lifecycle_action: 'ON_HOLD',
+      lifecycle_note: 'Pending final HR review.',
+    }),
+  });
+  check('HR can place an intake record on hold in onboarding', result.status === 201 && result.data.routed_to === 'onboarding' && result.data.workflow_status === 'On Hold');
+  applicantIds.push(result.data.applicant_id);
+  employeeCodes.push(holdDecisionCode);
 
   const [device] = await pool.execute(
     `INSERT INTO biometric_device (device_reference, device_name, vendor, auth_type)
@@ -167,18 +344,12 @@ async function run() {
   result = await api(`/api/onboarding/applicants/${directApplicantId}/decision`, {
     method: 'PATCH',
     headers: jsonHeaders(hrToken),
-    body: JSON.stringify({ approval_status: 'Approved', reason: 'Direct hire requirements verified.' }),
+    body: JSON.stringify({ approval_status: 'Approved', employee_code: `TST-D-${nonce}`, reason: 'Direct hire requirements verified.' }),
   });
-  check('Direct hire can be approved after HR review', result.status === 200);
-
-  result = await api(`/api/onboarding/applicants/${directApplicantId}/transfer`, {
-    method: 'POST',
-    headers: jsonHeaders(hrToken),
-    body: JSON.stringify({ employee_code: `TST-D-${nonce}`, reason: 'Approved direct hire transferred.' }),
-  });
-  check('Approved direct hire transfers into Employee Directory', result.status === 201);
+  check('Direct hire approval transfers into Employee Directory', result.status === 200 && result.data.routed_to === 'Employee Directory');
   const directEmployeeId = result.data.employee_id;
   employeeIds.push(directEmployeeId);
+  employeeCodes.push(result.data.employee_code);
 
   let [[directEmployee]] = await pool.execute('SELECT * FROM employees WHERE id = ?', [directEmployeeId]);
   check('Official employee receives encrypted PII and payroll identity', directEmployee.encrypted_pii && directEmployee.wage_type_id === wageTypeId);
@@ -300,7 +471,7 @@ async function run() {
       biometric_reference: biometricReference,
     }),
   });
-  check('Agency operator enters screening route', result.status === 201 && result.data.workflow_status === 'Pending Screening');
+  check('Agency operator enters screening route', result.status === 201 && result.data.workflow_status === 'Under Screening');
   const agencyApplicantId = result.data.applicant_id;
   applicantIds.push(agencyApplicantId);
 
@@ -328,18 +499,12 @@ async function run() {
   result = await api(`/api/onboarding/applicants/${agencyApplicantId}/decision`, {
     method: 'PATCH',
     headers: jsonHeaders(hrToken),
-    body: JSON.stringify({ approval_status: 'Approved', reason: 'Agency operator requirements verified.' }),
+    body: JSON.stringify({ approval_status: 'Approved', employee_code: `TST-A-${nonce}`, reason: 'Agency operator requirements verified.' }),
   });
-  check('Qualified agency operator can be approved', result.status === 200);
-
-  result = await api(`/api/onboarding/applicants/${agencyApplicantId}/transfer`, {
-    method: 'POST',
-    headers: jsonHeaders(hrToken),
-    body: JSON.stringify({ employee_code: `TST-A-${nonce}`, reason: 'Approved agency operator transferred.' }),
-  });
-  check('Approved agency operator transfers into Employee Directory', result.status === 201);
+  check('Qualified agency operator approval transfers into Employee Directory', result.status === 200 && result.data.routed_to === 'Employee Directory');
   const agencyEmployeeId = result.data.employee_id;
   employeeIds.push(agencyEmployeeId);
+  employeeCodes.push(result.data.employee_code);
 
   const [mappings] = await pool.execute('SELECT * FROM biometric_employee_mapping WHERE employee_id = ?', [agencyEmployeeId]);
   check('Transfer activates encrypted biometric reference mapping', mappings.length === 1 && !mappings[0].biometric_user_id_encrypted.includes(biometricReference));
@@ -365,7 +530,11 @@ async function cleanup() {
   for (const applicantId of applicantIds) {
     await pool.execute(`DELETE FROM system_audit_log WHERE module = 'ONBOARDING' AND action_performed LIKE ?`, [`%[APPLICANT:${applicantId}]%`]);
   }
+  for (const employeeCode of employeeCodes) {
+    await pool.execute(`DELETE FROM system_audit_log WHERE module = 'EMPLOYEE_LIFECYCLE' AND action_performed LIKE ?`, [`%[${employeeCode}]%`]);
+  }
   for (const employeeId of employeeIds) {
+    await pool.execute('DELETE FROM system_audit_log WHERE module = ? AND target_employee_id = ?', ['EMPLOYEE_LIFECYCLE', employeeId]);
     await pool.execute('DELETE FROM biometric_employee_mapping WHERE employee_id = ?', [employeeId]);
     await pool.execute('DELETE FROM employee_wage_rates WHERE employee_id = ?', [employeeId]);
   }

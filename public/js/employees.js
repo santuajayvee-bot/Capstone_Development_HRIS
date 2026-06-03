@@ -255,11 +255,15 @@ function prefillEmployeeForm(employee) {
   const empDept = document.querySelector('#form-employment select#emp-dept');
   if (empDept) empDept.value = employee.department || 'HR';
   
-  const empPosition = document.querySelector('#form-employment input#emp-position');
+  const empPosition = document.querySelector('#form-employment #emp-position');
   if (empPosition) empPosition.value = employee.position || '';
   
   const empType = document.querySelector('#form-employment select#emp-type');
-  if (empType) empType.value = employee.employment_type || 'Regular';
+  if (empType) empType.value = employee.employment_type || 'Full-time';
+
+  const empHiringType = document.querySelector('#form-employment select#emp-hiring-type');
+  if (empHiringType) empHiringType.value = employee.hiring_type || 'Direct Hire';
+  if (typeof toggleEmployeeAgencyFields === 'function') toggleEmployeeAgencyFields();
   
   const empHiredDate = document.querySelector('#form-employment input#emp-hired-date');
   if (empHiredDate) empHiredDate.value = employee.date_hired || '';
@@ -452,8 +456,31 @@ function clearEmployeeForm() {
   const emergAddress = document.getElementById('emp-emerg-address');
   if (emergAddress) emergAddress.value = '';
   document.querySelector('#form-employment select#emp-dept').value = 'HR';
-  document.querySelector('#form-employment input#emp-position').value = '';
-  document.querySelector('#form-employment select#emp-type').value = 'Regular';
+  document.querySelector('#form-employment #emp-position').value = '';
+  document.querySelector('#form-employment select#emp-type').value = 'Full-time';
+  const hiringType = document.querySelector('#form-employment select#emp-hiring-type');
+  if (hiringType) hiringType.value = 'Direct Hire';
+  const lifecycleAction = document.getElementById('emp-lifecycle-action');
+  if (lifecycleAction) lifecycleAction.value = 'AUTO';
+  const lifecycleNote = document.getElementById('emp-lifecycle-note');
+  if (lifecycleNote) {
+    lifecycleNote.value = '';
+    lifecycleNote.style.display = 'none';
+    lifecycleNote.required = false;
+  }
+  const agencyFields = document.getElementById('emp-agency-fields');
+  if (agencyFields) agencyFields.hidden = true;
+  ['emp-agency-name', 'emp-agency-contact-person', 'emp-agency-contact-number', 'emp-contract-start-date', 'emp-contract-end-date'].forEach(id => {
+    const field = document.getElementById(id);
+    if (field) {
+      field.value = '';
+      field.required = false;
+    }
+  });
+  const deploymentStatus = document.getElementById('emp-deployment-status');
+  if (deploymentStatus) deploymentStatus.value = 'Pending Deployment';
+  if (typeof toggleEmployeeAgencyFields === 'function') toggleEmployeeAgencyFields();
+  if (typeof toggleEmployeeLifecycleDecisionFields === 'function') toggleEmployeeLifecycleDecisionFields();
   const empStatusField = document.querySelector('#form-employment select#emp-status-field');
   if (empStatusField) empStatusField.value = 'Active';
   document.querySelector('#form-employment input#emp-hired-date').value = '';
@@ -2342,7 +2369,7 @@ function populateProfileEditForm(employee) {
     'profile-edit-mailing-address': employee.mailing_address,
     'profile-edit-department': employee.department,
     'profile-edit-position': employee.position,
-    'profile-edit-type': employee.employment_type || 'Regular',
+    'profile-edit-type': employee.employment_type || 'Full-time',
     'profile-edit-hired': formatValue(employee.date_hired) === '-' ? '' : formatValue(employee.date_hired),
     'profile-edit-end-contract': formatValue(employee.end_of_contract) === '-' ? '' : formatValue(employee.end_of_contract),
     'profile-edit-supervisor': employee.supervisor,
@@ -2459,7 +2486,7 @@ async function saveProfilePageChanges() {
     religion: document.getElementById('profile-edit-religion')?.value || null,
     ...addressResult.payload,
     position: document.getElementById('profile-edit-position')?.value || null,
-    employment_type: document.getElementById('profile-edit-type')?.value || 'Regular',
+    employment_type: document.getElementById('profile-edit-type')?.value || 'Full-time',
     date_hired: document.getElementById('profile-edit-hired')?.value || null,
     end_of_contract: document.getElementById('profile-edit-end-contract')?.value || null,
     supervisor: document.getElementById('profile-edit-supervisor')?.value || null,

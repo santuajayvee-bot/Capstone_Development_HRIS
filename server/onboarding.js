@@ -45,6 +45,11 @@ const SHIFT_SCHEDULES = [
 ];
 const EMPLOYEE_LEVELS = ['Rank and File', 'Supervisor', 'Manager', 'Executive'];
 const PAYROLL_SCHEDULES = ['Monthly', 'Semi-monthly', 'Bi-weekly', 'Weekly'];
+const DIRECT_ROUTE_KEYWORDS = ['manager', 'supervisor', 'office staff', 'admin staff', 'hr staff', 'hr officer', 'hr manager'];
+const ONBOARDING_ROUTE_KEYWORDS = [
+  'operator', 'production worker', 'production staff', 'piece-rate worker',
+  'piece rate worker', 'factory worker', 'logistics helper', 'machine operator',
+];
 
 const vaultDirectory = path.join(__dirname, '..', 'secure_uploads', 'onboarding');
 if (!fs.existsSync(vaultDirectory)) fs.mkdirSync(vaultDirectory, { recursive: true });
@@ -350,7 +355,16 @@ async function getPositionRoute(connection, position) {
       LIMIT 1`,
     [position]
   );
-  return rows[0] || { requires_onboarding: 1, requires_training: 1 };
+  if (rows[0]) return rows[0];
+
+  const normalized = String(position || '').trim().toLowerCase();
+  if (ONBOARDING_ROUTE_KEYWORDS.some(keyword => normalized.includes(keyword))) {
+    return { requires_onboarding: 1, requires_training: 1, source: 'keyword_default' };
+  }
+  if (DIRECT_ROUTE_KEYWORDS.some(keyword => normalized.includes(keyword))) {
+    return { requires_onboarding: 0, requires_training: 0, source: 'keyword_default' };
+  }
+  return { requires_onboarding: 1, requires_training: 1, source: 'secure_default' };
 }
 
 async function generateApplicantCode(connection) {
@@ -373,6 +387,199 @@ async function generateEmployeeCode(connection) {
 
 function decryptApplicantPii(applicant) {
   return JSON.parse(decryptAES256(applicant.pii_encrypted));
+}
+
+function truthy(value) {
+  return value === true || value === 1 || value === '1' || value === 'true' || value === 'on' || value === 'yes';
+}
+
+function normalizeDesiredEmploymentType(value, hiringType) {
+  if (hiringType === 'Agency-Hired') return 'Contractual';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized.includes('part')) return 'Part-time';
+  if (normalized.includes('contract')) return 'Contractual';
+  return 'Full-time';
+}
+
+function normalizeLifecycleApplicantBody(body) {
+  return {
+    ...body,
+    applied_position: body.applied_position || body.position,
+    branch: body.branch || body.work_location || 'Marulas Industrial Corporation',
+    hiring_type: body.hiring_type || body.hiring_classification || 'Direct Hire',
+    expected_wage_type_id: body.expected_wage_type_id || body.wage_type_id,
+    expected_base_rate: body.expected_base_rate ?? body.base_rate,
+    civil_status: body.civil_status || body.marital_status,
+    emergency_contact_number: body.emergency_contact_number || body.emergency_contact_num,
+    emergency_contact_secondary_number: body.emergency_contact_secondary_number || body.emergency_contact_secondary_num,
+    desired_employment_type: normalizeDesiredEmploymentType(body.desired_employment_type || body.employment_type, body.hiring_type || body.hiring_classification || 'Direct Hire'),
+  };
+}
+
+async function createOnboardingApplicantRecord(connection, req, rawBody, options = {}) {
+  const body = normalizeLifecycleApplicantBody(rawBody || {});
+  const firstName = requiredText(body.first_name, 'First name', 100);
+  const middleName = cleanText(body.middle_name, 100) || null;
+  const lastName = requiredText(body.last_name, 'Last name', 100);
+  const suffix = cleanText(body.suffix, 20) || null;
+  const email = validEmail(body.email);
+  const contactNumber = requiredText(body.contact_number, 'Contact number', 50);
+  const address = requiredText(body.residential_address, 'Residential address', 500);
+  const hiringType = cleanText(body.hiring_type, 20);
+  const position = requiredText(body.applied_position, 'Applied position', 120);
+  const departmentId = optionalPositiveInteger(body.department_id, 'department_id');
+  const branch = requiredText(body.branch, 'Branch', 120);
+  const wageTypeId = optionalPositiveInteger(body.expected_wage_type_id, 'expected_wage_type_id');
+  const baseRate = optionalNonNegativeNumber(body.expected_base_rate, 'Initial payroll rate');
+  if (!['Agency-Hired', 'Direct Hire'].includes(hiringType)) throw new Error('Hiring type must be Agency-Hired or Direct Hire.');
+
+  const agencyName = hiringType === 'Agency-Hired' ? requiredText(body.agency_name, 'Agency name', 180) : null;
+  const agencyContactPerson = hiringType === 'Agency-Hired' ? requiredText(body.agency_contact_person, 'Agency contact person', 180) : '';
+  const agencyContactNumber = hiringType === 'Agency-Hired' ? requiredText(body.agency_contact_number, 'Agency contact number', 80) : '';
+  const deploymentStatus = hiringType === 'Agency-Hired' ? cleanText(body.deployment_status, 40) || 'Pending Deployment' : null;
+  const contractStart = hiringType === 'Agency-Hired' ? optionalDate(body.contract_start_date, 'Contract start date') : null;
+  const contractEnd = hiringType === 'Agency-Hired' ? optionalDate(body.contract_end_date, 'Contract end date') : null;
+  if (hiringType === 'Agency-Hired' && !['Pending Deployment', 'Deployed', 'On Hold', 'Ended'].includes(deploymentStatus)) {
+    throw new Error('Invalid agency deployment status.');
+  }
+  if (contractStart && contractEnd && contractEnd < contractStart) throw new Error('Contract end date cannot be earlier than contract start date.');
+
+  const biometricReference = cleanText(body.biometric_reference, 190);
+  const biometricDeviceId = biometricReference ? optionalPositiveInteger(body.biometric_device_id, 'biometric_device_id') : null;
+  const desiredEmploymentType = normalizeDesiredEmploymentType(body.desired_employment_type, hiringType);
+  const pii = {
+    contact_number: contactNumber,
+    residential_address: address,
+    residential_address_lat: cleanText(body.residential_address_lat, 40),
+    residential_address_lng: cleanText(body.residential_address_lng, 40),
+    current_address: cleanText(body.current_address, 500),
+    current_address_lat: cleanText(body.current_address_lat, 40),
+    current_address_lng: cleanText(body.current_address_lng, 40),
+    current_address_same_as_home: Number(body.current_address_same_as_home) === 1 || truthy(body.current_address_same_as_home),
+    mailing_address: cleanText(body.mailing_address, 500),
+    mailing_address_lat: cleanText(body.mailing_address_lat, 40),
+    mailing_address_lng: cleanText(body.mailing_address_lng, 40),
+    mailing_address_same_as_home: Number(body.mailing_address_same_as_home) === 1 || truthy(body.mailing_address_same_as_home),
+    work_email: optionalEmail(body.work_email, 'Work email'),
+    nationality: cleanText(body.nationality, 50) || 'Filipino',
+    date_of_birth: optionalDate(body.date_of_birth, 'Date of birth'),
+    place_of_birth: cleanText(body.place_of_birth, 180),
+    place_of_birth_lat: cleanText(body.place_of_birth_lat, 40),
+    place_of_birth_lng: cleanText(body.place_of_birth_lng, 40),
+    gender: optionalChoice(body.gender, 'gender', GENDERS),
+    civil_status: optionalChoice(body.civil_status, 'civil status', CIVIL_STATUSES),
+    blood_type: optionalChoice(body.blood_type, 'blood type', BLOOD_TYPES),
+    religion: cleanText(body.religion, 100),
+    emergency_contact_name: cleanText(body.emergency_contact_name, 180),
+    emergency_contact_relationship: cleanText(body.emergency_contact_relationship, 80),
+    emergency_contact_number: cleanText(body.emergency_contact_number, 50),
+    emergency_contact_secondary_number: cleanText(body.emergency_contact_secondary_number, 50),
+    emergency_contact_email: optionalEmail(body.emergency_contact_email, 'Emergency contact email'),
+    emergency_contact_address: cleanText(body.emergency_contact_address, 500),
+    education_school: cleanText(body.education_school, 255),
+    education_attainment: cleanText(body.education_attainment, 150),
+    education_units: cleanText(body.education_units, 150),
+    education_year_graduated: cleanText(body.education_year_graduated, 20),
+    education_jhs_school: cleanText(body.education_jhs_school, 255),
+    education_jhs_attainment: cleanText(body.education_jhs_attainment, 150),
+    education_jhs_from: cleanText(body.education_jhs_from, 20),
+    education_jhs_to: cleanText(body.education_jhs_to, 20),
+    education_jhs_year_graduated: cleanText(body.education_jhs_year_graduated, 20),
+    education_shs_school: cleanText(body.education_shs_school, 255),
+    education_shs_attainment: cleanText(body.education_shs_attainment, 150),
+    education_shs_from: cleanText(body.education_shs_from, 20),
+    education_shs_to: cleanText(body.education_shs_to, 20),
+    education_shs_year_graduated: cleanText(body.education_shs_year_graduated, 20),
+    education_vocational_school: cleanText(body.education_vocational_school, 255),
+    education_vocational_attainment: cleanText(body.education_vocational_attainment, 150),
+    education_vocational_units: cleanText(body.education_vocational_units, 150),
+    education_vocational_from: cleanText(body.education_vocational_from, 20),
+    education_vocational_to: cleanText(body.education_vocational_to, 20),
+    education_vocational_year_graduated: cleanText(body.education_vocational_year_graduated, 20),
+    education_college_school: cleanText(body.education_college_school, 255),
+    education_college_attainment: cleanText(body.education_college_attainment, 150),
+    education_college_units: cleanText(body.education_college_units, 150),
+    education_college_from: cleanText(body.education_college_from, 20),
+    education_college_to: cleanText(body.education_college_to, 20),
+    education_college_year_graduated: cleanText(body.education_college_year_graduated, 20),
+    desired_employment_type: desiredEmploymentType,
+    supervisor: cleanText(body.supervisor, 180),
+    shift_schedule: optionalChoice(body.shift_schedule, 'shift schedule', SHIFT_SCHEDULES),
+    employee_level: optionalChoice(body.employee_level, 'employee level', EMPLOYEE_LEVELS),
+    payroll_schedule: optionalChoice(body.payroll_schedule, 'payroll schedule', PAYROLL_SCHEDULES),
+    allowances: optionalNonNegativeNumber(body.allowances, 'Allowances'),
+    employment_history: cleanText(body.employment_history, 1000),
+    salary_grade: cleanText(body.salary_grade, 100),
+    sss_number: cleanText(body.sss_number, 30),
+    philhealth_number: cleanText(body.philhealth_number, 30),
+    pagibig_number: cleanText(body.pagibig_number, 30),
+    tin: cleanText(body.tin, 30),
+    tax_status: cleanText(body.tax_status, 100),
+    bank_name: cleanText(body.bank_name, 120),
+    bank_account: cleanText(body.bank_account, 80),
+    agency_contact_person: agencyContactPerson,
+    agency_contact_number: agencyContactNumber,
+  };
+
+  const route = await getPositionRoute(connection, position);
+  const manualOnboardingRequired = truthy(body.requires_onboarding) || truthy(body.force_onboarding);
+  const applicantCode = await generateApplicantCode(connection);
+  const intendedEmployeeCode = cleanText(options.intendedEmployeeCode || body.intended_employee_code || body.employee_code, 20) || null;
+  const sourceModule = cleanText(options.sourceModule || body.source_module || 'ONBOARDING', 60) || 'ONBOARDING';
+  const requiresOnboarding = manualOnboardingRequired || Number(route.requires_onboarding) ? 1 : 0;
+  const requiresTraining = requiresOnboarding && (truthy(body.requires_training) || (!manualOnboardingRequired && Number(route.requires_training))) ? 1 : 0;
+  const requestedInitialStatus = cleanText(body.initial_workflow_status || body.workflow_status, 40);
+  const allowedInitialStatuses = new Set(['Under Screening', 'For Approval', 'On Hold']);
+  const workflowStatus = allowedInitialStatuses.has(requestedInitialStatus)
+    ? requestedInitialStatus
+    : requiresOnboarding ? 'Under Screening' : 'For Approval';
+  const screeningStatus = requiresOnboarding ? 'Pending Screening' : 'Not Required';
+  const trainingStatus = requiresTraining ? 'Not Yet Started' : 'Not Required';
+  const lifecycleNote = cleanText(body.lifecycle_note, 500);
+
+  const [result] = await connection.execute(
+    `INSERT INTO onboarding_applicant
+       (applicant_code, intended_employee_code, source_module, first_name, middle_name, last_name, suffix, email_hash,
+        email_encrypted, pii_encrypted, hiring_type, agency_name, deployment_status,
+        contract_start_date, contract_end_date, applied_position, department_id, branch,
+        expected_wage_type_id, expected_base_rate, requires_onboarding, requires_training,
+        workflow_status, screening_status, training_status, biometric_device_id,
+        biometric_reference_hash, biometric_reference_encrypted, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      applicantCode, intendedEmployeeCode, sourceModule, firstName, middleName, lastName, suffix, sha256(email), encryptAES256(email),
+      encryptAES256(JSON.stringify(pii)), hiringType, agencyName, deploymentStatus,
+      contractStart, contractEnd, position, departmentId, branch, wageTypeId, baseRate,
+      requiresOnboarding, requiresTraining, workflowStatus, screeningStatus, trainingStatus,
+      biometricDeviceId, biometricReference ? sha256(biometricReference) : null,
+      biometricReference ? encryptAES256(biometricReference) : null, req.user.id, req.user.id,
+    ]
+  );
+  await writeActivity(connection, req, result.insertId, 'APPLICANT_CREATED', null, null, {
+    applicant_code: applicantCode,
+    intended_employee_code: intendedEmployeeCode,
+    source_module: sourceModule,
+    hiring_type: hiringType,
+    applied_position: position,
+    workflow_status: workflowStatus,
+    route_source: route.source || 'position_route',
+    lifecycle_action: cleanText(body.lifecycle_action, 40),
+    lifecycle_note: lifecycleNote || null,
+  });
+
+  return {
+    message: sourceModule === 'EMPLOYEE_MANAGEMENT'
+      ? 'Employee Management record routed to onboarding.'
+      : 'Applicant onboarding record created.',
+    applicant_id: result.insertId,
+    applicant_code: applicantCode,
+    intended_employee_code: intendedEmployeeCode,
+    workflow_status: workflowStatus,
+    screening_status: screeningStatus,
+    training_status: trainingStatus,
+    requires_onboarding: requiresOnboarding,
+    requires_training: requiresTraining,
+  };
 }
 
 router.get('/lookups', async (_req, res) => {
@@ -610,117 +817,10 @@ router.delete('/applicants/:applicantId', async (req, res) => {
 router.post('/applicants', async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const firstName = requiredText(req.body.first_name, 'First name', 100);
-    const middleName = cleanText(req.body.middle_name, 100) || null;
-    const lastName = requiredText(req.body.last_name, 'Last name', 100);
-    const suffix = cleanText(req.body.suffix, 20) || null;
-    const email = validEmail(req.body.email);
-    const contactNumber = requiredText(req.body.contact_number, 'Contact number', 50);
-    const address = requiredText(req.body.residential_address, 'Residential address', 500);
-    const hiringType = cleanText(req.body.hiring_type, 20);
-    const position = requiredText(req.body.applied_position, 'Applied position', 120);
-    const departmentId = optionalPositiveInteger(req.body.department_id, 'department_id');
-    const branch = requiredText(req.body.branch, 'Branch', 120);
-    const wageTypeId = optionalPositiveInteger(req.body.expected_wage_type_id, 'expected_wage_type_id');
-    const baseRate = optionalNonNegativeNumber(req.body.expected_base_rate, 'Initial payroll rate');
-    if (!['Agency-Hired', 'Direct Hire'].includes(hiringType)) throw new Error('Hiring type must be Agency-Hired or Direct Hire.');
-
-    const agencyName = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_name, 'Agency name', 180) : null;
-    const agencyContactPerson = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_contact_person, 'Agency contact person', 180) : '';
-    const agencyContactNumber = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_contact_number, 'Agency contact number', 80) : '';
-    const deploymentStatus = hiringType === 'Agency-Hired' ? cleanText(req.body.deployment_status, 40) || 'Pending Deployment' : null;
-    const contractStart = hiringType === 'Agency-Hired' ? optionalDate(req.body.contract_start_date, 'Contract start date') : null;
-    const contractEnd = hiringType === 'Agency-Hired' ? optionalDate(req.body.contract_end_date, 'Contract end date') : null;
-    if (hiringType === 'Agency-Hired' && !['Pending Deployment', 'Deployed', 'On Hold', 'Ended'].includes(deploymentStatus)) {
-      throw new Error('Invalid agency deployment status.');
-    }
-    if (contractStart && contractEnd && contractEnd < contractStart) throw new Error('Contract end date cannot be earlier than contract start date.');
-
-    const biometricReference = cleanText(req.body.biometric_reference, 190);
-    const biometricDeviceId = biometricReference ? optionalPositiveInteger(req.body.biometric_device_id, 'biometric_device_id') : null;
-    const desiredEmploymentType = hiringType === 'Agency-Hired'
-      ? 'Contractual'
-      : optionalChoice(req.body.desired_employment_type, 'employment type', EMPLOYMENT_TYPES) || 'Full-time';
-    const pii = {
-      contact_number: contactNumber,
-      residential_address: address,
-      residential_address_lat: cleanText(req.body.residential_address_lat, 40),
-      residential_address_lng: cleanText(req.body.residential_address_lng, 40),
-      current_address: cleanText(req.body.current_address, 500),
-      current_address_lat: cleanText(req.body.current_address_lat, 40),
-      current_address_lng: cleanText(req.body.current_address_lng, 40),
-      current_address_same_as_home: Number(req.body.current_address_same_as_home) === 1,
-      mailing_address: cleanText(req.body.mailing_address, 500),
-      mailing_address_lat: cleanText(req.body.mailing_address_lat, 40),
-      mailing_address_lng: cleanText(req.body.mailing_address_lng, 40),
-      mailing_address_same_as_home: Number(req.body.mailing_address_same_as_home) === 1,
-      work_email: optionalEmail(req.body.work_email, 'Work email'),
-      nationality: cleanText(req.body.nationality, 50) || 'Filipino',
-      date_of_birth: optionalDate(req.body.date_of_birth, 'Date of birth'),
-      place_of_birth: cleanText(req.body.place_of_birth, 180),
-      place_of_birth_lat: cleanText(req.body.place_of_birth_lat, 40),
-      place_of_birth_lng: cleanText(req.body.place_of_birth_lng, 40),
-      gender: optionalChoice(req.body.gender, 'gender', GENDERS),
-      civil_status: optionalChoice(req.body.civil_status, 'civil status', CIVIL_STATUSES),
-      blood_type: optionalChoice(req.body.blood_type, 'blood type', BLOOD_TYPES),
-      religion: cleanText(req.body.religion, 100),
-      emergency_contact_name: cleanText(req.body.emergency_contact_name, 180),
-      emergency_contact_relationship: cleanText(req.body.emergency_contact_relationship, 80),
-      emergency_contact_number: cleanText(req.body.emergency_contact_number, 50),
-      emergency_contact_secondary_number: cleanText(req.body.emergency_contact_secondary_number, 50),
-      emergency_contact_email: optionalEmail(req.body.emergency_contact_email, 'Emergency contact email'),
-      emergency_contact_address: cleanText(req.body.emergency_contact_address, 500),
-      desired_employment_type: desiredEmploymentType,
-      supervisor: cleanText(req.body.supervisor, 180),
-      shift_schedule: optionalChoice(req.body.shift_schedule, 'shift schedule', SHIFT_SCHEDULES),
-      employee_level: optionalChoice(req.body.employee_level, 'employee level', EMPLOYEE_LEVELS),
-      payroll_schedule: optionalChoice(req.body.payroll_schedule, 'payroll schedule', PAYROLL_SCHEDULES),
-      allowances: optionalNonNegativeNumber(req.body.allowances, 'Allowances'),
-      sss_number: cleanText(req.body.sss_number, 30),
-      philhealth_number: cleanText(req.body.philhealth_number, 30),
-      pagibig_number: cleanText(req.body.pagibig_number, 30),
-      tin: cleanText(req.body.tin, 30),
-      bank_name: cleanText(req.body.bank_name, 120),
-      bank_account: cleanText(req.body.bank_account, 80),
-      agency_contact_person: agencyContactPerson,
-      agency_contact_number: agencyContactNumber,
-    };
-
     await connection.beginTransaction();
-    const route = await getPositionRoute(connection, position);
-    const applicantCode = await generateApplicantCode(connection);
-    const requiresOnboarding = Number(route.requires_onboarding) ? 1 : 0;
-    const requiresTraining = requiresOnboarding && Number(route.requires_training) ? 1 : 0;
-    const workflowStatus = requiresOnboarding ? 'Pending Screening' : 'For Approval';
-    const screeningStatus = requiresOnboarding ? 'Pending Screening' : 'Not Required';
-    const trainingStatus = requiresTraining ? 'Not Yet Started' : 'Not Required';
-
-    const [result] = await connection.execute(
-      `INSERT INTO onboarding_applicant
-         (applicant_code, first_name, middle_name, last_name, suffix, email_hash,
-          email_encrypted, pii_encrypted, hiring_type, agency_name, deployment_status,
-          contract_start_date, contract_end_date, applied_position, department_id, branch,
-          expected_wage_type_id, expected_base_rate, requires_onboarding, requires_training,
-          workflow_status, screening_status, training_status, biometric_device_id,
-          biometric_reference_hash, biometric_reference_encrypted, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        applicantCode, firstName, middleName, lastName, suffix, sha256(email), encryptAES256(email),
-        encryptAES256(JSON.stringify(pii)), hiringType, agencyName, deploymentStatus,
-        contractStart, contractEnd, position, departmentId, branch, wageTypeId, baseRate,
-        requiresOnboarding, requiresTraining, workflowStatus, screeningStatus, trainingStatus,
-        biometricDeviceId, biometricReference ? sha256(biometricReference) : null,
-        biometricReference ? encryptAES256(biometricReference) : null, req.user.id, req.user.id,
-      ]
-    );
-    await writeActivity(connection, req, result.insertId, 'APPLICANT_CREATED', null, null, {
-      applicant_code: applicantCode,
-      hiring_type: hiringType,
-      applied_position: position,
-      workflow_status: workflowStatus,
-    });
+    const result = await createOnboardingApplicantRecord(connection, req, req.body);
     await connection.commit();
-    res.status(201).json({ message: 'Applicant onboarding record created.', applicant_id: result.insertId, applicant_code: applicantCode, workflow_status: workflowStatus });
+    res.status(201).json(result);
   } catch (error) {
     await connection.rollback();
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Applicant code already exists. Please retry.' });
@@ -760,7 +860,7 @@ router.patch('/applicants/:applicantId/progress', async (req, res) => {
       : trainingStatus === 'In Training' || trainingStatus === 'For Final Evaluation'
         ? 'Training'
         : applicant.requires_training && trainingStatus !== 'Completed Training'
-          ? 'Screening'
+          ? 'Under Screening'
           : 'For Approval';
     const oldValue = { workflow_status: applicant.workflow_status, screening_status: applicant.screening_status, training_status: applicant.training_status };
     const newValue = { workflow_status: workflowStatus, screening_status: screeningStatus, training_status: trainingStatus };
@@ -780,6 +880,125 @@ router.patch('/applicants/:applicantId/progress', async (req, res) => {
     connection.release();
   }
 });
+
+function nullable(value) {
+  return value === undefined || value === null || value === '' ? null : value;
+}
+
+async function transferApprovedApplicant(connection, req, applicant, reason, employeeCodeOverride = '') {
+  if (applicant.approval_status !== 'Approved' || applicant.workflow_status !== 'Approved') {
+    throw new Error('Only approved applicants can be transferred.');
+  }
+  if (applicant.converted_employee_id) throw new Error('Applicant has already been transferred.');
+
+  const employeeCode = cleanText(employeeCodeOverride, 20)
+    || cleanText(applicant.intended_employee_code, 20)
+    || await generateEmployeeCode(connection);
+  const email = decryptAES256(applicant.email_encrypted);
+  const pii = decryptApplicantPii(applicant);
+  const employeePii = encryptPII({
+    ...pii,
+    hiring_type: applicant.hiring_type || 'Direct Hire',
+    agency_name: applicant.agency_name || '',
+    deployment_status: applicant.deployment_status || '',
+    contract_start_date: applicant.contract_start_date || '',
+    contract_end_date: applicant.contract_end_date || '',
+  });
+  const employmentType = applicant.hiring_type === 'Agency-Hired'
+    ? 'Contractual'
+    : EMPLOYMENT_TYPES.includes(pii.desired_employment_type) ? pii.desired_employment_type : 'Full-time';
+
+  const [employee] = await connection.execute(
+    `INSERT INTO employees
+       (employee_code, first_name, middle_name, last_name, suffix, email, contact_number,
+        work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth,
+        gender, blood_type, religion, residential_address, current_address,
+        emergency_contact_name, emergency_contact_num, emergency_contact_relationship,
+        emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address,
+        education_school, education_attainment, education_units, education_year_graduated,
+        education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated,
+        education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated,
+        education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated,
+        education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated,
+        department_id, position, employment_type, date_hired, end_of_contract, supervisor,
+        work_location, shift_schedule, employee_level, employment_history, status,
+        salary_grade, allowances, payroll_schedule, sss_number, philhealth_number,
+        pagibig_number, tin, tax_status, bank_name, bank_account,
+        residential_address_lat, residential_address_lng, current_address_lat, current_address_lng,
+        current_address_same_as_home, mailing_address_lat, mailing_address_lng, mailing_address_same_as_home,
+        wage_type_id, encrypted_pii, hiring_type, agency_name, agency_contact_person,
+        agency_contact_number, deployment_status, contract_start_date, contract_end_date, lifecycle_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')`,
+    [
+      employeeCode, applicant.first_name, applicant.middle_name, applicant.last_name, applicant.suffix, email, nullable(pii.contact_number),
+      nullable(pii.work_email), nullable(pii.mailing_address), nullable(pii.nationality) || 'Filipino', nullable(pii.civil_status), nullable(pii.date_of_birth), nullable(pii.place_of_birth),
+      nullable(pii.gender), nullable(pii.blood_type), nullable(pii.religion), nullable(pii.residential_address), nullable(pii.current_address),
+      nullable(pii.emergency_contact_name), nullable(pii.emergency_contact_number), nullable(pii.emergency_contact_relationship),
+      nullable(pii.emergency_contact_secondary_number), nullable(pii.emergency_contact_email), nullable(pii.emergency_contact_address),
+      nullable(pii.education_school), nullable(pii.education_attainment), nullable(pii.education_units), nullable(pii.education_year_graduated),
+      nullable(pii.education_jhs_school), nullable(pii.education_jhs_attainment), nullable(pii.education_jhs_from), nullable(pii.education_jhs_to), nullable(pii.education_jhs_year_graduated),
+      nullable(pii.education_shs_school), nullable(pii.education_shs_attainment), nullable(pii.education_shs_from), nullable(pii.education_shs_to), nullable(pii.education_shs_year_graduated),
+      nullable(pii.education_vocational_school), nullable(pii.education_vocational_attainment), nullable(pii.education_vocational_units), nullable(pii.education_vocational_from), nullable(pii.education_vocational_to), nullable(pii.education_vocational_year_graduated),
+      nullable(pii.education_college_school), nullable(pii.education_college_attainment), nullable(pii.education_college_units), nullable(pii.education_college_from), nullable(pii.education_college_to), nullable(pii.education_college_year_graduated),
+      applicant.department_id, applicant.applied_position, employmentType, applicant.contract_end_date || null, nullable(pii.supervisor),
+      applicant.branch, nullable(pii.shift_schedule), nullable(pii.employee_level), nullable(pii.employment_history),
+      nullable(pii.salary_grade), pii.allowances == null ? null : pii.allowances, nullable(pii.payroll_schedule), nullable(pii.sss_number), nullable(pii.philhealth_number),
+      nullable(pii.pagibig_number), nullable(pii.tin), nullable(pii.tax_status), nullable(pii.bank_name), nullable(pii.bank_account),
+      nullable(pii.residential_address_lat), nullable(pii.residential_address_lng), nullable(pii.current_address_lat), nullable(pii.current_address_lng),
+      pii.current_address_same_as_home ? 1 : 0, nullable(pii.mailing_address_lat), nullable(pii.mailing_address_lng), pii.mailing_address_same_as_home ? 1 : 0,
+      applicant.expected_wage_type_id, employeePii, applicant.hiring_type || 'Direct Hire', applicant.agency_name || null, nullable(pii.agency_contact_person),
+      nullable(pii.agency_contact_number), applicant.deployment_status || null, applicant.contract_start_date || null, applicant.contract_end_date || null,
+    ]
+  );
+  const employeeId = employee.insertId;
+
+  if (applicant.expected_wage_type_id && applicant.expected_base_rate != null) {
+    await connection.execute(
+      `INSERT INTO employee_wage_rates
+         (employee_id, wage_type_id, rate, effective_date)
+       VALUES (?, ?, ?, CURDATE())`,
+      [employeeId, applicant.expected_wage_type_id, applicant.expected_base_rate]
+    );
+  }
+
+  if (applicant.biometric_device_id && applicant.biometric_reference_hash && applicant.biometric_reference_encrypted) {
+    await connection.execute(
+      `INSERT INTO biometric_employee_mapping
+         (device_id, employee_id, biometric_user_hash, biometric_user_id_encrypted,
+          is_active, created_by, updated_by)
+       VALUES (?, ?, ?, ?, 1, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         employee_id = VALUES(employee_id),
+         biometric_user_id_encrypted = VALUES(biometric_user_id_encrypted),
+         is_active = 1,
+         updated_by = VALUES(updated_by)`,
+      [
+        applicant.biometric_device_id, employeeId, applicant.biometric_reference_hash,
+        applicant.biometric_reference_encrypted, req.user.id, req.user.id,
+      ]
+    );
+  }
+
+  await connection.execute(
+    `UPDATE onboarding_applicant_document
+        SET transferred_employee_id = ?
+      WHERE applicant_id = ?`,
+    [employeeId, applicant.applicant_id]
+  );
+  await connection.execute(
+    `UPDATE onboarding_applicant
+        SET workflow_status = 'Transferred', converted_employee_id = ?,
+            transferred_by = ?, transferred_at = NOW(), updated_by = ?
+      WHERE applicant_id = ?`,
+    [employeeId, req.user.id, req.user.id, applicant.applicant_id]
+  );
+  await writeActivity(connection, req, applicant.applicant_id, 'TRANSFERRED_TO_EMPLOYEE_DIRECTORY', reason, null, {
+    employee_id: employeeId,
+    employee_code: employeeCode,
+    source_module: applicant.source_module || 'ONBOARDING',
+  });
+  return { employee_id: employeeId, employee_code: employeeCode };
+}
 
 router.patch('/applicants/:applicantId/decision', async (req, res) => {
   const connection = await pool.getConnection();
@@ -810,8 +1029,22 @@ router.patch('/applicants/:applicantId/decision', async (req, res) => {
       [workflowStatus, decision, req.user.id, req.user.id, applicantId]
     );
     await writeActivity(connection, req, applicantId, `DECISION_${decision.toUpperCase().replace(/ /g, '_')}`, reason, oldValue, newValue);
+    let transferResult = null;
+    if (decision === 'Approved') {
+      transferResult = await transferApprovedApplicant(connection, req, {
+        ...applicant,
+        workflow_status: 'Approved',
+        approval_status: 'Approved',
+      }, reason, req.body.employee_code);
+    }
     await connection.commit();
-    res.json({ message: `Applicant marked ${decision}.`, ...newValue });
+    res.json({
+      message: transferResult
+        ? `Applicant approved and transferred to Employee Directory as ${transferResult.employee_code}.`
+        : `Applicant marked ${decision}.`,
+      ...newValue,
+      ...(transferResult ? { workflow_status: 'Transferred', routed_to: 'Employee Directory', ...transferResult } : {}),
+    });
   } catch (error) {
     await connection.rollback();
     res.status(400).json({ error: error.message });
@@ -831,78 +1064,9 @@ router.post('/applicants/:applicantId/transfer', async (req, res) => {
       await connection.rollback();
       return res.status(404).json({ error: 'Applicant not found.' });
     }
-    if (applicant.approval_status !== 'Approved' || applicant.workflow_status !== 'Approved') throw new Error('Only approved applicants can be transferred.');
-    if (applicant.converted_employee_id) throw new Error('Applicant has already been transferred.');
-
-    const employeeCode = cleanText(req.body.employee_code, 20) || await generateEmployeeCode(connection);
-    const email = decryptAES256(applicant.email_encrypted);
-    const pii = decryptApplicantPii(applicant);
-    const employeePii = encryptPII({
-      ...pii,
-      agency_name: applicant.agency_name || '',
-    });
-    const employmentType = applicant.hiring_type === 'Agency-Hired'
-      ? 'Contractual'
-      : EMPLOYMENT_TYPES.includes(pii.desired_employment_type) ? pii.desired_employment_type : 'Full-time';
-
-    const [employee] = await connection.execute(
-      `INSERT INTO employees
-         (employee_code, first_name, middle_name, last_name, suffix, email,
-          department_id, position, employment_type, date_hired, supervisor,
-          work_location, status, wage_type_id, encrypted_pii)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, 'Active', ?, ?)`,
-      [
-        employeeCode, applicant.first_name, applicant.middle_name, applicant.last_name,
-        applicant.suffix, email, applicant.department_id, applicant.applied_position,
-        employmentType, pii.supervisor || null, applicant.branch,
-        applicant.expected_wage_type_id, employeePii,
-      ]
-    );
-    const employeeId = employee.insertId;
-
-    if (applicant.expected_wage_type_id && applicant.expected_base_rate != null) {
-      await connection.execute(
-        `INSERT INTO employee_wage_rates
-           (employee_id, wage_type_id, rate, effective_date)
-         VALUES (?, ?, ?, CURDATE())`,
-        [employeeId, applicant.expected_wage_type_id, applicant.expected_base_rate]
-      );
-    }
-
-    if (applicant.biometric_device_id && applicant.biometric_reference_hash && applicant.biometric_reference_encrypted) {
-      await connection.execute(
-        `INSERT INTO biometric_employee_mapping
-           (device_id, employee_id, biometric_user_hash, biometric_user_id_encrypted,
-            is_active, created_by, updated_by)
-         VALUES (?, ?, ?, ?, 1, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           employee_id = VALUES(employee_id),
-           biometric_user_id_encrypted = VALUES(biometric_user_id_encrypted),
-           is_active = 1,
-           updated_by = VALUES(updated_by)`,
-        [
-          applicant.biometric_device_id, employeeId, applicant.biometric_reference_hash,
-          applicant.biometric_reference_encrypted, req.user.id, req.user.id,
-        ]
-      );
-    }
-
-    await connection.execute(
-      `UPDATE onboarding_applicant_document
-          SET transferred_employee_id = ?
-        WHERE applicant_id = ?`,
-      [employeeId, applicantId]
-    );
-    await connection.execute(
-      `UPDATE onboarding_applicant
-          SET workflow_status = 'Transferred', converted_employee_id = ?,
-              transferred_by = ?, transferred_at = NOW(), updated_by = ?
-        WHERE applicant_id = ?`,
-      [employeeId, req.user.id, req.user.id, applicantId]
-    );
-    await writeActivity(connection, req, applicantId, 'TRANSFERRED_TO_EMPLOYEE_DIRECTORY', reason, null, { employee_id: employeeId, employee_code: employeeCode });
+    const transferResult = await transferApprovedApplicant(connection, req, applicant, reason, req.body.employee_code);
     await connection.commit();
-    res.status(201).json({ message: 'Approved applicant transferred to Employee Directory.', employee_id: employeeId, employee_code: employeeCode });
+    res.status(201).json({ message: 'Approved applicant transferred to Employee Directory.', ...transferResult });
   } catch (error) {
     await connection.rollback();
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Employee code or email already exists in the Employee Directory.' });
@@ -1080,5 +1244,8 @@ router.get('/applicants/:applicantId/audit', async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
+
+router.createOnboardingApplicantRecord = createOnboardingApplicantRecord;
+router.getPositionRoute = getPositionRoute;
 
 module.exports = router;

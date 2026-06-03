@@ -17,6 +17,7 @@ const attendanceRoutes                       = require('./server/attendance');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
+const { encryptPII }                         = require('./server/crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -247,6 +248,173 @@ function validateEmployeeAddresses(body) {
   return { errors, addresses };
 }
 
+function lifecycleTruthy(value) {
+  return value === true || value === 1 || value === '1' || value === 'true' || value === 'on' || value === 'yes';
+}
+
+function normalizeHiringType(value) {
+  return String(value || '').trim() === 'Agency-Hired' ? 'Agency-Hired' : 'Direct Hire';
+}
+
+function normalizeEmployeeEmploymentType(value, hiringType) {
+  if (hiringType === 'Agency-Hired') return 'Contractual';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized.includes('part')) return 'Part-time';
+  if (normalized.includes('contract')) return 'Contractual';
+  return 'Full-time';
+}
+
+function optionalLifecycleDate(value, field) {
+  if (value == null || value === '') return null;
+  const date = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${field} must use YYYY-MM-DD format.`);
+  return date;
+}
+
+function normalizeLifecycleAction(value) {
+  const action = String(value || 'AUTO').trim().toUpperCase();
+  const allowed = new Set(['AUTO', 'DIRECT_ACTIVE', 'SCREENING_REQUIRED', 'TRAINING_REQUIRED', 'ON_HOLD']);
+  return allowed.has(action) ? action : 'AUTO';
+}
+
+function lifecycleNote(value) {
+  return String(value || '').trim().replace(/[\x00<>]/g, '').slice(0, 500);
+}
+
+function employeeCodeNumber(code) {
+  const match = String(code || '').trim().match(/^EMP0*(\d+)$/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function formatEmployeeCode(number) {
+  return `EMP${String(Number(number || 0)).padStart(5, '0')}`;
+}
+
+function personLabel(row) {
+  const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
+  return name ? `${name} (${row.employee_code || row.applicant_code || 'no code'})` : (row.employee_code || row.applicant_code || 'existing record');
+}
+
+async function generateNextEmployeeCode(executor) {
+  const [rows] = await executor.execute(
+    `SELECT employee_code AS code FROM employees WHERE employee_code LIKE 'EMP%'
+     UNION ALL
+     SELECT intended_employee_code AS code
+       FROM onboarding_applicant
+      WHERE deleted_at IS NULL
+        AND intended_employee_code IS NOT NULL
+        AND intended_employee_code LIKE 'EMP%'`
+  );
+  const maxCode = rows.reduce((max, row) => Math.max(max, employeeCodeNumber(row.code)), 0);
+  return formatEmployeeCode(maxCode + 1);
+}
+
+async function findEmployeeIntakeDuplicate(executor, employeeCode, email) {
+  const [employeeCodeRows] = await executor.execute(
+    `SELECT id, employee_code, email, first_name, last_name
+       FROM employees
+      WHERE employee_code = ?
+      LIMIT 1`,
+    [employeeCode]
+  );
+  if (employeeCodeRows.length) {
+    return {
+      source: 'Employee Directory',
+      field: 'employee_code',
+      message: `Employee code ${employeeCode} already exists in the Employee Directory for ${personLabel(employeeCodeRows[0])}.`,
+      record: employeeCodeRows[0],
+    };
+  }
+
+  const [employeeEmailRows] = await executor.execute(
+    `SELECT id, employee_code, email, first_name, last_name
+       FROM employees
+      WHERE LOWER(email) = LOWER(?)
+      LIMIT 1`,
+    [email]
+  );
+  if (employeeEmailRows.length) {
+    return {
+      source: 'Employee Directory',
+      field: 'email',
+      message: `Email ${email} is already used in the Employee Directory by ${personLabel(employeeEmailRows[0])}. Use a different email, or edit the existing employee record instead.`,
+      record: employeeEmailRows[0],
+    };
+  }
+
+  const [onboardingCodeRows] = await executor.execute(
+    `SELECT applicant_id, applicant_code, intended_employee_code, first_name, last_name, workflow_status
+       FROM onboarding_applicant
+      WHERE deleted_at IS NULL
+        AND intended_employee_code = ?
+      LIMIT 1`,
+    [employeeCode]
+  );
+  if (onboardingCodeRows.length) {
+    return {
+      source: 'Onboarding',
+      field: 'employee_code',
+      message: `Employee code ${employeeCode} is already reserved by onboarding record ${personLabel(onboardingCodeRows[0])}.`,
+      record: onboardingCodeRows[0],
+    };
+  }
+
+  const [onboardingEmailRows] = await executor.execute(
+    `SELECT applicant_id, applicant_code, intended_employee_code AS employee_code, first_name, last_name, workflow_status
+       FROM onboarding_applicant
+      WHERE deleted_at IS NULL
+        AND email_hash = SHA2(LOWER(?), 256)
+      LIMIT 1`,
+    [email]
+  );
+  if (onboardingEmailRows.length) {
+    return {
+      source: 'Onboarding',
+      field: 'email',
+      message: `Email ${email} is already active in onboarding as ${personLabel(onboardingEmailRows[0])}. Continue that onboarding record instead of creating a duplicate.`,
+      record: onboardingEmailRows[0],
+    };
+  }
+
+  return null;
+}
+
+async function employeeIntakeDuplicatePayload(executor, duplicate) {
+  const payload = {
+    error: duplicate.message,
+    duplicate: {
+      source: duplicate.source,
+      field: duplicate.field,
+      record_code: duplicate.record.employee_code || duplicate.record.intended_employee_code || duplicate.record.applicant_code || null,
+      record_id: duplicate.record.id || duplicate.record.applicant_id || null,
+      workflow_status: duplicate.record.workflow_status || null,
+    },
+  };
+  if (duplicate.field === 'employee_code') {
+    payload.next_employee_code = await generateNextEmployeeCode(executor);
+  }
+  return payload;
+}
+
+async function writeEmployeeLifecycleAudit(executor, req, action, targetEmployeeId, oldValue = null, newValue = null) {
+  await executor.execute(
+    `INSERT INTO system_audit_log
+       (user_id, employee_id, target_employee_id, action_performed, module,
+        old_value, new_value, ip_address, user_agent)
+     VALUES (?, ?, ?, ?, 'EMPLOYEE_LIFECYCLE', ?, ?, ?, ?)`,
+    [
+      req.user.id,
+      req.user.employeeId || null,
+      targetEmployeeId || null,
+      action,
+      oldValue == null ? null : JSON.stringify(oldValue),
+      newValue == null ? null : JSON.stringify(newValue),
+      String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim().slice(0, 45),
+      String(req.headers['user-agent'] || 'unknown').slice(0, 500),
+    ]
+  );
+}
+
 function localPhilippineAddressSuggestions(query) {
   const value = String(query || '').trim();
   const needle = value.toLowerCase();
@@ -295,6 +463,17 @@ function localPhilippineAddressSuggestions(query) {
 }
 
 // Employees
+app.get('/api/employees/next-code', requireAuth, requireRole(ROLES.staff_management), async (_req, res) => {
+  try {
+    const pool = require('./config/db');
+    const employeeCode = await generateNextEmployeeCode(pool);
+    res.json({ employee_code: employeeCode });
+  } catch (err) {
+    console.error('Error generating next employee code:', err);
+    res.status(500).json({ error: 'Failed to generate employee code.' });
+  }
+});
+
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
@@ -315,6 +494,8 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
               e.shift_schedule, e.employee_level, e.employment_history, e.status, e.wage_type_id,
               e.salary_grade, e.allowances, e.payroll_schedule,
               e.sss_number, e.philhealth_number, e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account,
+              e.hiring_type, e.agency_name, e.agency_contact_person, e.agency_contact_number,
+              e.deployment_status, e.contract_start_date, e.contract_end_date, e.lifecycle_status,
               d.name AS department, wt.name AS wage_type,
               (
                 SELECT ewr.rate
@@ -357,7 +538,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     
     console.log('\n=== POST /api/employees ===');
     console.log('User role:', req.user.role);
@@ -379,12 +560,136 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       return res.status(400).json({ error: addressErrors.join(' ') });
     }
 
+    if (!position) {
+      return res.status(400).json({ error: 'Position / Job Title is required for lifecycle routing.' });
+    }
+
+    const normalizedHiringType = normalizeHiringType(hiring_type);
+    const normalizedEmploymentType = normalizeEmployeeEmploymentType(employment_type, normalizedHiringType);
+    let normalizedContractStartDate = null;
+    let normalizedContractEndDate = null;
+    try {
+      normalizedContractStartDate = normalizedHiringType === 'Agency-Hired'
+        ? optionalLifecycleDate(contract_start_date, 'Contract start date')
+        : null;
+      normalizedContractEndDate = normalizedHiringType === 'Agency-Hired'
+        ? optionalLifecycleDate(contract_end_date || end_of_contract, 'Contract end date')
+        : null;
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    const normalizedDeploymentStatus = normalizedHiringType === 'Agency-Hired'
+      ? (['Pending Deployment', 'Deployed', 'On Hold', 'Ended'].includes(deployment_status) ? deployment_status : 'Pending Deployment')
+      : null;
+    if (normalizedHiringType === 'Agency-Hired') {
+      if (!agency_name || !agency_contact_person || !agency_contact_number) {
+        return res.status(400).json({ error: 'Agency name, contact person, and contact number are required for Agency-Hired workers.' });
+      }
+      if (normalizedContractStartDate && normalizedContractEndDate && normalizedContractEndDate < normalizedContractStartDate) {
+        return res.status(400).json({ error: 'Contract end date cannot be earlier than contract start date.' });
+      }
+    }
+    const directoryEndOfContract = normalizedContractEndDate || end_of_contract || null;
+    const route = await onboardingRoutes.getPositionRoute(pool, position);
+    const normalizedLifecycleAction = normalizeLifecycleAction(lifecycle_action);
+    const normalizedLifecycleNote = lifecycleNote(lifecycle_note);
+    if (normalizedLifecycleAction === 'ON_HOLD' && normalizedLifecycleNote.length < 8) {
+      return res.status(400).json({ error: 'An HR note of at least 8 characters is required when placing a record on hold.' });
+    }
+    const explicitOnboardingAction = ['SCREENING_REQUIRED', 'TRAINING_REQUIRED', 'ON_HOLD'].includes(normalizedLifecycleAction);
+    const explicitDirectAction = normalizedLifecycleAction === 'DIRECT_ACTIVE';
+    const shouldRouteToOnboarding = !explicitDirectAction
+      && (explicitOnboardingAction || lifecycleTruthy(requires_onboarding) || Number(route.requires_onboarding) === 1);
+    const onboardingRequiresTraining = normalizedLifecycleAction === 'TRAINING_REQUIRED'
+      || (!explicitDirectAction
+        && normalizedLifecycleAction === 'AUTO'
+        && (lifecycleTruthy(requires_training) || Number(route.requires_training) === 1));
+
+    if (shouldRouteToOnboarding) {
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const duplicate = await findEmployeeIntakeDuplicate(connection, employee_code, email);
+        if (duplicate) {
+          await connection.rollback();
+          return res.status(409).json(await employeeIntakeDuplicatePayload(connection, duplicate));
+        }
+
+        const onboardingResult = await onboardingRoutes.createOnboardingApplicantRecord(connection, req, {
+          ...req.body,
+          employee_code,
+          hiring_type: normalizedHiringType,
+          employment_type: normalizedEmploymentType,
+          applied_position: position,
+          branch: work_location || 'Marulas Industrial Corporation',
+          expected_wage_type_id: req.body.wage_type_id,
+          expected_base_rate: base_rate,
+          civil_status: marital_status,
+          agency_name,
+          agency_contact_person,
+          agency_contact_number,
+          deployment_status: normalizedDeploymentStatus,
+          contract_start_date: normalizedContractStartDate,
+          contract_end_date: normalizedContractEndDate,
+          current_address_same_as_home: addresses.sameCurrent ? 1 : 0,
+          mailing_address_same_as_home: addresses.sameMailing ? 1 : 0,
+          residential_address: addresses.home.address,
+          residential_address_lat: addresses.home.lat,
+          residential_address_lng: addresses.home.lng,
+          current_address: addresses.current.address,
+          current_address_lat: addresses.current.lat,
+          current_address_lng: addresses.current.lng,
+          mailing_address: addresses.mailing.address,
+          mailing_address_lat: addresses.mailing.lat,
+          mailing_address_lng: addresses.mailing.lng,
+          requires_onboarding: true,
+          requires_training: onboardingRequiresTraining,
+          initial_workflow_status: normalizedLifecycleAction === 'ON_HOLD' ? 'On Hold' : undefined,
+          lifecycle_action: normalizedLifecycleAction,
+          lifecycle_note: normalizedLifecycleNote,
+        }, {
+          sourceModule: 'EMPLOYEE_MANAGEMENT',
+          intendedEmployeeCode: employee_code,
+        });
+        await writeEmployeeLifecycleAudit(connection, req, `EMPLOYEE_RECORD_ROUTED_TO_ONBOARDING [${employee_code}]`, null, null, {
+          employee_code,
+          applicant_id: onboardingResult.applicant_id,
+          position,
+          lifecycle_action: normalizedLifecycleAction,
+          lifecycle_note: normalizedLifecycleNote || null,
+          requires_training: onboardingRequiresTraining,
+          route_source: route.source || 'position_route',
+          workflow_status: onboardingResult.workflow_status,
+        });
+        await connection.commit();
+        return res.status(201).json({
+          ...onboardingResult,
+          id: null,
+          employee_code,
+          routed_to: 'onboarding',
+          message: normalizedLifecycleAction === 'ON_HOLD'
+            ? `${employee_code} placed on hold in onboarding for HR review.`
+            : `${employee_code} routed to onboarding for ${position}.`,
+        });
+      } catch (error) {
+        await connection.rollback();
+        return res.status(400).json({ error: error.message });
+      } finally {
+        connection.release();
+      }
+    }
+
+    const duplicate = await findEmployeeIntakeDuplicate(pool, employee_code, email);
+    if (duplicate) {
+      return res.status(409).json(await employeeIntakeDuplicatePayload(pool, duplicate));
+    }
+
     console.log('Executing INSERT for:', { employee_code, first_name, last_name, email });
     
     const [result] = await pool.execute(
       `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
+      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
     );
     
     const employee_id = result.insertId;
@@ -401,6 +706,76 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
         employee_id
       ]
     );
+
+    await pool.execute(
+      `UPDATE employees SET
+         encrypted_pii = ?, hiring_type = ?, agency_name = ?,
+         agency_contact_person = ?, agency_contact_number = ?,
+         deployment_status = ?, contract_start_date = ?, contract_end_date = ?,
+         lifecycle_status = 'Active'
+       WHERE id = ?`,
+      [
+        encryptPII({
+          contact_number: contact_number || '',
+          work_email: work_email || '',
+          residential_address: addresses.home.address || '',
+          residential_address_lat: addresses.home.lat == null ? '' : String(addresses.home.lat),
+          residential_address_lng: addresses.home.lng == null ? '' : String(addresses.home.lng),
+          current_address: addresses.current.address || '',
+          current_address_lat: addresses.current.lat == null ? '' : String(addresses.current.lat),
+          current_address_lng: addresses.current.lng == null ? '' : String(addresses.current.lng),
+          current_address_same_as_home: !!addresses.sameCurrent,
+          mailing_address: addresses.mailing.address || '',
+          mailing_address_lat: addresses.mailing.lat == null ? '' : String(addresses.mailing.lat),
+          mailing_address_lng: addresses.mailing.lng == null ? '' : String(addresses.mailing.lng),
+          mailing_address_same_as_home: !!addresses.sameMailing,
+          nationality: nationality || 'Filipino',
+          date_of_birth: date_of_birth || '',
+          place_of_birth: place_of_birth || '',
+          gender: gender || '',
+          civil_status: marital_status || '',
+          blood_type: blood_type || '',
+          religion: religion || '',
+          emergency_contact_name: emergency_contact_name || '',
+          emergency_contact_relationship: emergency_contact_relationship || '',
+          emergency_contact_number: emergency_contact_num || '',
+          emergency_contact_secondary_number: emergency_contact_secondary_num || '',
+          emergency_contact_email: emergency_contact_email || '',
+          emergency_contact_address: emergency_contact_address || '',
+          sss_number: sss_number || '',
+          philhealth_number: philhealth_number || '',
+          pagibig_number: pagibig_number || '',
+          tin: tin || '',
+          tax_status: tax_status || '',
+          bank_name: bank_name || '',
+          bank_account: bank_account || '',
+          hiring_type: normalizedHiringType,
+          agency_name: normalizedHiringType === 'Agency-Hired' ? agency_name || '' : '',
+          agency_contact_person: normalizedHiringType === 'Agency-Hired' ? agency_contact_person || '' : '',
+          agency_contact_number: normalizedHiringType === 'Agency-Hired' ? agency_contact_number || '' : '',
+          deployment_status: normalizedDeploymentStatus || '',
+          contract_start_date: normalizedContractStartDate || '',
+          contract_end_date: normalizedContractEndDate || '',
+        }),
+        normalizedHiringType,
+        normalizedHiringType === 'Agency-Hired' ? agency_name || null : null,
+        normalizedHiringType === 'Agency-Hired' ? agency_contact_person || null : null,
+        normalizedHiringType === 'Agency-Hired' ? agency_contact_number || null : null,
+        normalizedDeploymentStatus,
+        normalizedContractStartDate,
+        normalizedContractEndDate,
+        employee_id
+      ]
+    );
+    await writeEmployeeLifecycleAudit(pool, req, `EMPLOYEE_RECORD_CREATED_DIRECT [${employee_code}]`, employee_id, null, {
+      employee_code,
+      position,
+      route_source: route.source || 'position_route',
+      lifecycle_action: normalizedLifecycleAction,
+      lifecycle_note: normalizedLifecycleNote || null,
+      hiring_type: normalizedHiringType,
+      lifecycle_status: 'Active',
+    });
     console.log('✅ Employee inserted successfully!');
     console.log('Insert result:', { insertId: employee_id, affectedRows: result.affectedRows });
     console.log('Employee Code:', employee_code);
@@ -477,6 +852,12 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     console.error('SQL State:', err.sqlState);
     console.error('Full error:', err);
     res.setHeader('Content-Type', 'application/json');
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({
+        error: 'Employee code or email was just used by another record. Please refresh the Employee ID and check the email address.',
+        next_employee_code: await generateNextEmployeeCode(require('./config/db')),
+      });
+    }
     return res.status(500).json({ error: 'Failed to add employee: ' + err.message }); 
   }
 });

@@ -199,6 +199,38 @@
     font-size: 13px;
   }
 
+  .employee-lifecycle-card {
+    border: 1px solid var(--form-line);
+    border-radius: 12px;
+    background: rgba(79, 124, 255, .08);
+    padding: 14px;
+  }
+
+  .employee-inline-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: #e8ecff;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .employee-inline-check input {
+    margin-top: 2px;
+    width: auto;
+  }
+
+  .employee-agency-block {
+    border: 1px solid var(--form-line);
+    border-radius: 12px;
+    padding: 14px;
+    background: rgba(19, 25, 43, .78);
+  }
+
+  .employee-agency-block[hidden] {
+    display: none;
+  }
+
   .employee-wage-panel {
     display: none;
     margin-top: 18px;
@@ -363,8 +395,26 @@
         <h3 class="employee-form-block-title">Employment Information</h3>
         <div class="employee-form-grid">
           <div class="form-group"><label>Department</label><select id="emp-dept"><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></div>
-          <div class="form-group"><label>Position / Job Title</label><input id="emp-position" placeholder="e.g. HR Officer" /></div>
-          <div class="form-group"><label>Employee Type</label><select id="emp-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></div>
+          <div class="form-group">
+            <label>Position / Job Title</label>
+            <select id="emp-position">
+              <option value="">Select position</option>
+              <option>Manager</option>
+              <option>HR Staff</option>
+              <option>Admin Staff</option>
+              <option>Office Staff</option>
+              <option>Supervisor</option>
+              <option>Operator</option>
+              <option>Production Worker</option>
+              <option>Production Staff</option>
+              <option>Piece-Rate Worker</option>
+              <option>Factory Worker</option>
+              <option>Logistics Helper</option>
+              <option>Machine Operator</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Employment Type</label><select id="emp-type"><option>Full-time</option><option>Part-time</option><option>Contractual</option></select></div>
+          <div class="form-group"><label>Hiring Classification</label><select id="emp-hiring-type"><option>Direct Hire</option><option>Agency-Hired</option></select></div>
           <div class="form-group"><label>Employment Status</label><select id="emp-status-field"><option>Active</option><option>Inactive</option></select></div>
           <div class="form-group"><label>Date Hired</label><input id="emp-hired-date" type="date" /></div>
           <div class="form-group"><label>End of Contract</label><input id="emp-end-contract" type="date" /></div>
@@ -372,6 +422,29 @@
           <div class="form-group"><label>Work Location</label><input id="emp-location" placeholder="Branch / Site" /></div>
           <div class="form-group"><label>Shift Schedule</label><select id="emp-shift-schedule"><option value="">Select shift</option><option>Day Shift (8:00 AM - 5:00 PM)</option><option>Morning Shift (6:00 AM - 2:00 PM)</option><option>Afternoon Shift (2:00 PM - 10:00 PM)</option><option>Night Shift (10:00 PM - 6:00 AM)</option><option>Rotating Shift</option><option>Flexible</option></select></div>
           <div class="form-group"><label>Employee Level</label><select id="emp-level"><option value="">Select level</option><option>Rank and File</option><option>Supervisor</option><option>Manager</option><option>Executive</option></select></div>
+          <div class="form-group full employee-lifecycle-card">
+            <label for="emp-lifecycle-action">Onboarding / Training Decision</label>
+            <select id="emp-lifecycle-action">
+              <option value="AUTO">Use position default</option>
+              <option value="DIRECT_ACTIVE">No onboarding or training needed</option>
+              <option value="SCREENING_REQUIRED">Needs screening / requirements check</option>
+              <option value="TRAINING_REQUIRED">Needs training</option>
+              <option value="ON_HOLD">On hold / HR review</option>
+            </select>
+            <p class="employee-form-note" id="emp-lifecycle-help" style="margin:8px 0 0;">Position defaults route production, operator, piece-rate, factory, and logistics helper roles to onboarding unless HR selects another action.</p>
+            <textarea id="emp-lifecycle-note" placeholder="Reason or HR note. Required when placing a record on hold." style="display:none;margin-top:10px;width:100%;min-height:72px;"></textarea>
+          </div>
+          <div class="form-group full employee-agency-block" id="emp-agency-fields" hidden>
+            <label>Agency Deployment</label>
+            <div class="employee-form-grid">
+              <div class="form-group"><label>Agency Name</label><input id="emp-agency-name" placeholder="Agency name" /></div>
+              <div class="form-group"><label>Agency Contact Person</label><input id="emp-agency-contact-person" placeholder="Contact person" /></div>
+              <div class="form-group"><label>Agency Contact Number</label><input id="emp-agency-contact-number" placeholder="+63 9XX XXX XXXX" /></div>
+              <div class="form-group"><label>Deployment Status</label><select id="emp-deployment-status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></div>
+              <div class="form-group"><label>Contract Start Date</label><input id="emp-contract-start-date" type="date" /></div>
+              <div class="form-group"><label>Contract End Date</label><input id="emp-contract-end-date" type="date" /></div>
+            </div>
+          </div>
           <div class="form-group full"><label>Employment History</label><textarea id="emp-employment-history" placeholder="Internal movement, promotions, transfers, or notes"></textarea></div>
         </div>
       </div>

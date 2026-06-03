@@ -535,11 +535,40 @@ function loadEmployeeData() {
   if (maritalInput) maritalInput.value = emp.marital_status || 'Single';
   
   // Populate Employment Details using specific selectors
-  const positionInput = document.querySelector('#form-employment input#emp-position');
+  const positionInput = document.querySelector('#form-employment #emp-position');
   if (positionInput) positionInput.value = emp.position || '';
   
   const typeInput = document.querySelector('#form-employment select#emp-type');
-  if (typeInput) typeInput.value = emp.employment_type || 'Regular';
+  if (typeInput) typeInput.value = emp.employment_type || 'Full-time';
+
+  const hiringTypeInput = document.querySelector('#form-employment select#emp-hiring-type');
+  if (hiringTypeInput) hiringTypeInput.value = emp.hiring_type || 'Direct Hire';
+
+  const lifecycleActionInput = document.getElementById('emp-lifecycle-action');
+  if (lifecycleActionInput) lifecycleActionInput.value = 'AUTO';
+
+  const lifecycleNoteInput = document.getElementById('emp-lifecycle-note');
+  if (lifecycleNoteInput) lifecycleNoteInput.value = '';
+
+  const agencyNameInput = document.getElementById('emp-agency-name');
+  if (agencyNameInput) agencyNameInput.value = emp.agency_name || '';
+
+  const agencyContactPersonInput = document.getElementById('emp-agency-contact-person');
+  if (agencyContactPersonInput) agencyContactPersonInput.value = emp.agency_contact_person || '';
+
+  const agencyContactNumberInput = document.getElementById('emp-agency-contact-number');
+  if (agencyContactNumberInput) agencyContactNumberInput.value = emp.agency_contact_number || '';
+
+  const deploymentStatusInput = document.getElementById('emp-deployment-status');
+  if (deploymentStatusInput) deploymentStatusInput.value = emp.deployment_status || 'Pending Deployment';
+
+  const contractStartInput = document.getElementById('emp-contract-start-date');
+  if (contractStartInput) contractStartInput.value = emp.contract_start_date || '';
+
+  const contractEndInput = document.getElementById('emp-contract-end-date');
+  if (contractEndInput) contractEndInput.value = emp.contract_end_date || '';
+
+  toggleEmployeeAgencyFields();
 
   const statusInput = document.querySelector('#form-employment select#emp-status-field');
   if (statusInput) statusInput.value = emp.status || 'Active';
@@ -638,7 +667,20 @@ async function generateEmployeeID() {
     empCodeInput.value = 'Generating...';
     empCodeInput.disabled = true;
     
-    console.log('Fetching employees to generate next ID...');
+    console.log('Requesting next employee ID from server...');
+    const nextCodeResponse = await apiFetch('/api/employees/next-code');
+    if (nextCodeResponse?.ok) {
+      const data = await nextCodeResponse.json();
+      if (data.employee_code) {
+        empCodeInput.value = data.employee_code;
+        empCodeInput.readOnly = true;
+        empCodeInput.disabled = false;
+        console.log('Generated employee ID from server:', data.employee_code);
+        return data.employee_code;
+      }
+    }
+
+    console.warn('Server next-code endpoint unavailable; falling back to employee list scan.');
     const response = await apiFetch('/api/employees');
     if (!response || !response.ok) {
       console.error('Failed to fetch employees for ID generation');
@@ -733,6 +775,63 @@ function switchFormTab(tabOrEl) {
   }
 }
 
+function toggleEmployeeAgencyFields() {
+  const hiringType = document.getElementById('emp-hiring-type')?.value || 'Direct Hire';
+  const agencyFields = document.getElementById('emp-agency-fields');
+  if (!agencyFields) return;
+
+  const isAgencyHired = hiringType === 'Agency-Hired';
+  agencyFields.hidden = !isAgencyHired;
+  agencyFields.querySelectorAll('input, select').forEach(field => {
+    if (field.id === 'emp-deployment-status') return;
+    field.required = isAgencyHired;
+  });
+
+  const typeInput = document.getElementById('emp-type');
+  if (isAgencyHired && typeInput) typeInput.value = 'Contractual';
+}
+
+function getLifecycleDecision() {
+  return document.getElementById('emp-lifecycle-action')?.value || 'AUTO';
+}
+
+function toggleEmployeeLifecycleDecisionFields() {
+  const decision = getLifecycleDecision();
+  const note = document.getElementById('emp-lifecycle-note');
+  const help = document.getElementById('emp-lifecycle-help');
+  const messages = {
+    AUTO: 'Position defaults route production, operator, piece-rate, factory, and logistics helper roles to onboarding unless HR selects another action.',
+    DIRECT_ACTIVE: 'This record will be created directly as an active employee in the Employee Directory.',
+    SCREENING_REQUIRED: 'This record will go to Onboarding for screening and requirements checking before activation.',
+    TRAINING_REQUIRED: 'This record will go to Onboarding and must complete training before HR approval.',
+    ON_HOLD: 'This record will stay in Onboarding with an On Hold status until HR resumes the process.',
+  };
+
+  if (help) help.textContent = messages[decision] || messages.AUTO;
+  if (note) {
+    const showNote = decision === 'ON_HOLD' || decision === 'SCREENING_REQUIRED' || decision === 'TRAINING_REQUIRED';
+    note.style.display = showNote ? 'block' : 'none';
+    note.required = decision === 'ON_HOLD';
+  }
+}
+
+function initializeEmployeeLifecycleControls() {
+  const hiringType = document.getElementById('emp-hiring-type');
+  if (hiringType) {
+    hiringType.removeEventListener('change', toggleEmployeeAgencyFields);
+    hiringType.addEventListener('change', toggleEmployeeAgencyFields);
+  }
+
+  const lifecycleAction = document.getElementById('emp-lifecycle-action');
+  if (lifecycleAction) {
+    lifecycleAction.removeEventListener('change', toggleEmployeeLifecycleDecisionFields);
+    lifecycleAction.addEventListener('change', toggleEmployeeLifecycleDecisionFields);
+  }
+
+  toggleEmployeeAgencyFields();
+  toggleEmployeeLifecycleDecisionFields();
+}
+
 function saveEmployee() {
   // Prevent double submission
   if (IS_SAVING) {
@@ -751,6 +850,7 @@ function saveEmployee() {
   // window.IS_EDITING is set in loadEmployeeData()
   const isEditing = EDIT_MODE || window.PENDING_EDIT_MODE || window.IS_EDITING || false;
   let savedEmployeeNumericId = EDIT_EMPLOYEE_NUMERIC_ID;
+  let routedToOnboarding = false;
   
   // Debug log - VERY DETAILED
   console.log('====== saveEmployee DEBUG ======');
@@ -776,7 +876,8 @@ function saveEmployee() {
   // DEBUG: Log what we're reading from the employment fields
   console.log('=== EMPLOYMENT FIELDS DEBUG ===');
   console.log('emp-dept value:', document.querySelector('#form-employment select#emp-dept')?.value);
-  console.log('emp-position value:', document.querySelector('#form-employment input#emp-position')?.value);
+  console.log('emp-position value:', document.querySelector('#form-employment #emp-position')?.value);
+  console.log('emp-hiring-type value:', document.querySelector('#form-employment select#emp-hiring-type')?.value);
   console.log('emp-type value:', document.querySelector('#form-employment select#emp-type')?.value);
   console.log('emp-status-field value:', document.querySelector('#form-employment select#emp-status-field')?.value);
   console.log('emp-hired-date value:', document.querySelector('#form-employment input#emp-hired-date')?.value);
@@ -820,8 +921,19 @@ function saveEmployee() {
     
     // Employment Details
     department_id: departmentId,
-    position: document.querySelector('#form-employment input#emp-position')?.value || null,
-    employment_type: document.querySelector('#form-employment select#emp-type')?.value || 'Regular',
+    position: document.querySelector('#form-employment #emp-position')?.value || null,
+    employment_type: document.querySelector('#form-employment select#emp-type')?.value || 'Full-time',
+    hiring_type: document.querySelector('#form-employment select#emp-hiring-type')?.value || 'Direct Hire',
+    lifecycle_action: getLifecycleDecision(),
+    lifecycle_note: document.getElementById('emp-lifecycle-note')?.value || null,
+    requires_onboarding: ['SCREENING_REQUIRED', 'TRAINING_REQUIRED', 'ON_HOLD'].includes(getLifecycleDecision()) ? 1 : 0,
+    requires_training: getLifecycleDecision() === 'TRAINING_REQUIRED' ? 1 : 0,
+    agency_name: document.getElementById('emp-agency-name')?.value || null,
+    agency_contact_person: document.getElementById('emp-agency-contact-person')?.value || null,
+    agency_contact_number: document.getElementById('emp-agency-contact-number')?.value || null,
+    deployment_status: document.getElementById('emp-deployment-status')?.value || null,
+    contract_start_date: document.getElementById('emp-contract-start-date')?.value || null,
+    contract_end_date: document.getElementById('emp-contract-end-date')?.value || null,
     date_hired: document.querySelector('#form-employment input#emp-hired-date')?.value || null,
     end_of_contract: document.querySelector('#form-employment input#emp-end-contract')?.value || null,
     supervisor: document.querySelector('#form-employment input#emp-supervisor')?.value || null,
@@ -857,6 +969,20 @@ function saveEmployee() {
     return;
   }
 
+  if (!formData.position) {
+    IS_SAVING = false;
+    alert('Please select a position / job title so the system can route the employee lifecycle correctly.');
+    switchFormTab('employment');
+    return;
+  }
+
+  if (formData.lifecycle_action === 'ON_HOLD' && String(formData.lifecycle_note || '').trim().length < 8) {
+    IS_SAVING = false;
+    alert('Please enter an HR note or reason of at least 8 characters when placing the record on hold.');
+    switchFormTab('employment');
+    return;
+  }
+
   console.log('Saving employee:', formData);
   console.log('Is editing:', isEditing);
   console.log('Sending employment data to server:', {
@@ -885,15 +1011,20 @@ function saveEmployee() {
     if (!res.ok) {
       console.error('HTTP error:', res.status);
       return res.json().then(data => {
-        throw new Error(data.error || `HTTP ${res.status}: ${res.statusText}`);
+        const error = new Error(data.error || `HTTP ${res.status}: ${res.statusText}`);
+        error.payload = data;
+        throw error;
       });
     }
     return res.json();
   })
   .then(data => {
     console.log('Response data:', data);
-    savedEmployeeNumericId = data.id || savedEmployeeNumericId;
-    const message = isEditing ? 'Employee updated successfully!' : 'Employee added successfully!';
+    routedToOnboarding = data.routed_to === 'onboarding';
+    savedEmployeeNumericId = routedToOnboarding ? null : (data.id || savedEmployeeNumericId);
+    const message = routedToOnboarding
+      ? (data.message || 'Employee/applicant routed to onboarding.')
+      : (isEditing ? 'Employee updated successfully!' : 'Employee added successfully!');
     alert(message);
     IS_SAVING = false;  // Reset double-submit flag
     
@@ -904,6 +1035,8 @@ function saveEmployee() {
     window.IS_EDITING = false;
     window.PENDING_EDIT_MODE = false;
     
+    if (routedToOnboarding) return { routedToOnboarding: true };
+
     // Save wage configuration if set
     const wageTypeId = getWageTypeId(document.getElementById('emp-wage-type')?.value);
     if (wageTypeId) {
@@ -914,6 +1047,7 @@ function saveEmployee() {
     return null;
   })
   .then((wageResult) => {
+    if (routedToOnboarding) return null;
     if (SELECTED_EMPLOYEE_PHOTO) {
       console.log('Uploading employee photo...');
       return uploadEmployeePhoto(savedEmployeeNumericId || EDIT_EMPLOYEE_NUMERIC_ID);
@@ -921,6 +1055,7 @@ function saveEmployee() {
     return null;
   })
   .then(() => {
+    if (routedToOnboarding) return null;
     // Upload documents if any files were selected
     const hasFiles = Object.values(UPLOADED_FILES).some(f => f !== null);
     if (hasFiles) {
@@ -930,6 +1065,14 @@ function saveEmployee() {
     return null;
   })
   .then(() => {
+    if (routedToOnboarding) {
+      clearUploadedFiles();
+      setTimeout(() => {
+        if (typeof navigate === 'function') navigate('onboarding', document.querySelector('[data-page="onboarding"]'));
+      }, 500);
+      return;
+    }
+
     // Reload documents list after upload
     if (EDIT_EMPLOYEE_ID) {
       loadEmployeeDocuments(EDIT_EMPLOYEE_ID);
@@ -988,6 +1131,15 @@ function saveEmployee() {
   .catch(err => {
     IS_SAVING = false;  // Reset double-submit flag on error
     console.error('Save error:', err);
+    if (err.payload?.duplicate?.field === 'employee_code' && err.payload?.next_employee_code) {
+      const empIdInput = document.getElementById('emp-id');
+      if (empIdInput) {
+        empIdInput.value = err.payload.next_employee_code;
+        empIdInput.readOnly = true;
+      }
+      alert(`${err.message}\n\nI generated a new available Employee ID: ${err.payload.next_employee_code}. Please review and save again.`);
+      return;
+    }
     alert('Failed to save employee: ' + err.message);
   });
 }
@@ -1695,6 +1847,7 @@ function initializeRegisterPage() {
   initializeFileUploads();
   initializeWageConfig();
   initializeEmployeeAddressAutocomplete();
+  initializeEmployeeLifecycleControls();
   
   // Apply role-based access after a short delay to ensure DOM is ready
   setTimeout(() => {
