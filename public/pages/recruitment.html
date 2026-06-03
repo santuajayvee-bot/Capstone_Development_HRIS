@@ -1,81 +1,221 @@
-<!-- ============================================================
-     pages/recruitment.html — Recruitment / On-Boarding page content
-     ============================================================ -->
-<div class="page-header">
-  <div>
-    <div class="section-title">Recruitment Management</div>
-    <div class="section-sub">Manage job openings and candidate pipeline</div>
-  </div>
-  <div class="page-header-right">
-    <div class="tabs" style="margin-bottom:0;">
-      <div class="tab active"  onclick="switchOnbTab('candidates', this)">Candidates</div>
-      <div class="tab"         onclick="switchOnbTab('jobs',       this)">Jobs</div>
+<div class="onb-shell">
+  <div class="page-header onb-page-header">
+    <div>
+      <div class="section-title">Pre-Employment Onboarding</div>
+      <div class="section-sub">Review applicants, prepare secure records, and transfer approved hires to the Employee Directory.</div>
+    </div>
+    <div class="onb-header-actions">
+      <span class="onb-security-note">HR Admin access only</span>
+      <button class="btn btn-primary" id="onb-add-applicant">+ Add Applicant</button>
     </div>
   </div>
+
+  <div class="onb-stats" id="onb-stats">
+    <div class="onb-stat"><span>Total applicants</span><strong>-</strong></div>
+    <div class="onb-stat"><span>Active workflow</span><strong>-</strong></div>
+    <div class="onb-stat"><span>In screening</span><strong>-</strong></div>
+    <div class="onb-stat"><span>In training</span><strong>-</strong></div>
+    <div class="onb-stat onb-stat-ready"><span>Ready to transfer</span><strong>-</strong></div>
+    <div class="onb-stat"><span>Transferred</span><strong>-</strong></div>
+  </div>
+
+  <div class="onb-tabs">
+    <button class="onb-tab active" data-onb-tab="applicants">Applicants</button>
+    <button class="onb-tab" data-onb-tab="positions">Position Routing</button>
+  </div>
+
+  <section class="onb-panel active" id="onb-panel-applicants">
+    <div class="onb-toolbar">
+      <input class="search-input" id="onb-search" type="search" placeholder="Search applicant, code, or position" />
+      <select class="filter-select" id="onb-status-filter">
+        <option value="">All workflow statuses</option>
+        <option>Pending Screening</option>
+        <option>Screening</option>
+        <option>Training</option>
+        <option>For Approval</option>
+        <option>Approved</option>
+        <option>Rejected</option>
+        <option>For Re-evaluation</option>
+        <option>On Hold</option>
+        <option>Transferred</option>
+      </select>
+      <button class="btn btn-secondary" id="onb-refresh">Refresh</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Applicant</th>
+            <th>Hiring Source</th>
+            <th>Position</th>
+            <th>Route</th>
+            <th>Workflow</th>
+            <th>Screening</th>
+            <th>Training</th>
+            <th>Documents</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="onb-applicant-rows">
+          <tr><td colspan="9" class="onb-empty">Loading onboarding applicants...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="onb-panel" id="onb-panel-positions">
+    <div class="onb-card">
+      <div>
+        <h3>Position-Based Routing</h3>
+        <p>Configure whether a position enters screening and training or proceeds directly to HR approval.</p>
+      </div>
+      <form class="onb-route-form" id="onb-route-form">
+        <label>Position<input required name="position_name" placeholder="e.g. Quality Inspector" /></label>
+        <label>Department<select name="department_id" id="onb-route-department"><option value="">Any department</option></select></label>
+        <label class="onb-check"><input type="checkbox" name="requires_onboarding" checked /> Screening required</label>
+        <label class="onb-check"><input type="checkbox" name="requires_training" checked /> Training required</label>
+        <button class="btn btn-primary" type="submit">Save Rule</button>
+      </form>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Position</th><th>Department</th><th>Screening</th><th>Training</th><th>Employee Directory path</th></tr></thead>
+        <tbody id="onb-position-rows"><tr><td colspan="5" class="onb-empty">Loading position routes...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
-<!-- ---- CANDIDATES ---- -->
-<div id="onb-candidates">
-  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;">Pipeline Overview</div>
-  <div class="pipeline">
-    <div class="pipe-card applied">   <div class="pipe-num" style="color:var(--blue)">1</div>  <div class="pipe-label">Applied</div></div>
-    <div class="pipe-card screening"> <div class="pipe-num" style="color:var(--green)">1</div> <div class="pipe-label">Screening</div></div>
-    <div class="pipe-card interview"> <div class="pipe-num" style="color:var(--yellow)">1</div><div class="pipe-label">Interview</div></div>
-    <div class="pipe-card offer">     <div class="pipe-num" style="color:#7c5cfc">1</div>      <div class="pipe-label">Offer Sent</div></div>
-    <div class="pipe-card hired">     <div class="pipe-num" style="color:var(--green)">1</div> <div class="pipe-label">Hired</div></div>
-    <div class="pipe-card rejected">  <div class="pipe-num" style="color:var(--red)">1</div>   <div class="pipe-label">Rejected</div></div>
-  </div>
-
-  <div style="font-size:13px;font-weight:600;margin:16px 0 12px;">Active Job Openings</div>
-  <div style="font-size:13px;font-weight:600;margin:16px 0 12px;">All Candidates</div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>Candidate</th><th>Role</th><th>Department</th><th>Applied</th><th>Experience</th><th>Stage</th><th>Actions</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Screening</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Screening</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-blue">Interview</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-yellow">Offer Sent</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-green">Hired</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-        <tr><td>Jayene Dantica</td><td>Assembly Worker</td><td>Production</td><td>Feb 12</td><td>3yrs</td><td><span class="badge badge-red">Rejected</span></td><td><span style="color:var(--accent);cursor:pointer;">View</span></td></tr>
-      </tbody>
-    </table>
+<div class="onb-modal" id="onb-create-modal" aria-hidden="true">
+  <div class="onb-modal-card onb-modal-wide">
+    <div class="onb-modal-header">
+      <div><h3>Add Applicant</h3><p>Create a pre-employment record. It remains outside the Employee Directory until approved and transferred.</p></div>
+      <button class="onb-close" type="button" data-onb-close>&times;</button>
+    </div>
+    <form id="onb-create-form">
+      <h4>Personal Information</h4>
+      <div class="onb-form-grid">
+        <label>First name<input required name="first_name" /></label>
+        <label>Middle name<input name="middle_name" /></label>
+        <label>Last name<input required name="last_name" /></label>
+        <label>Suffix<select name="suffix"><option value="">None</option><option>Jr.</option><option>Sr.</option><option>III</option><option>IV</option></select></label>
+        <label>Date of birth<input type="date" name="date_of_birth" /></label>
+        <label>Place of birth<input name="place_of_birth" id="onb-place-of-birth" placeholder="City / Municipality, Province" autocomplete="address-level2" /></label>
+        <label>Gender<select name="gender" id="onb-gender"><option value="">Select gender</option></select></label>
+        <label>Nationality<select name="nationality"><option>Filipino</option><option>Other</option></select></label>
+        <label>Civil status<select name="civil_status" id="onb-civil-status"><option value="">Select civil status</option></select></label>
+        <label>Blood type<select name="blood_type" id="onb-blood-type"><option value="">Select blood type</option></select></label>
+        <label>Religion<input name="religion" placeholder="Optional" /></label>
+      </div>
+      <h4>Contact Information</h4>
+      <div class="onb-form-grid">
+        <label>Personal email<input required type="email" name="email" placeholder="personal@email.com" /></label>
+        <label>Mobile number<input required type="tel" name="contact_number" placeholder="+63 9XX XXX XXXX" /></label>
+        <label>Work email <small>Optional</small><input type="email" name="work_email" placeholder="Prepare later when unavailable" /></label>
+        <fieldset class="onb-address-card onb-span-2" data-onb-address="home">
+          <legend>Residential address</legend>
+          <input type="hidden" name="residential_address" id="onb-home-address" />
+          <div class="onb-address-grid">
+            <label>House no. / street<input required data-onb-address-part="street" placeholder="House no., street, subdivision" autocomplete="address-line1" /></label>
+            <label>Barangay<input required data-onb-address-part="barangay" placeholder="Barangay" autocomplete="address-level4" /></label>
+            <label>City / municipality<input required data-onb-address-part="city" placeholder="City or municipality" autocomplete="address-level2" /></label>
+            <label>Province<input required data-onb-address-part="province" placeholder="Province" autocomplete="address-level1" /></label>
+            <label>Postal code<input data-onb-address-part="postal" inputmode="numeric" placeholder="Postal code" autocomplete="postal-code" /></label>
+            <label>Country<select data-onb-address-part="country" autocomplete="country-name"><option>Philippines</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset class="onb-address-card onb-span-2" data-onb-address="current">
+          <legend>Current address <span class="onb-inline-check"><input id="onb-current-same-home" type="checkbox" /> Same as residential</span></legend>
+          <input type="hidden" name="current_address" id="onb-current-address" />
+          <div class="onb-address-grid">
+            <label>House no. / street<input data-onb-address-part="street" placeholder="House no., street, subdivision" autocomplete="address-line1" /></label>
+            <label>Barangay<input data-onb-address-part="barangay" placeholder="Barangay" autocomplete="address-level4" /></label>
+            <label>City / municipality<input data-onb-address-part="city" placeholder="City or municipality" autocomplete="address-level2" /></label>
+            <label>Province<input data-onb-address-part="province" placeholder="Province" autocomplete="address-level1" /></label>
+            <label>Postal code<input data-onb-address-part="postal" inputmode="numeric" placeholder="Postal code" autocomplete="postal-code" /></label>
+            <label>Country<select data-onb-address-part="country" autocomplete="country-name"><option>Philippines</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset class="onb-address-card onb-span-2" data-onb-address="mailing">
+          <legend>Mailing address <span class="onb-inline-check"><input id="onb-mailing-same-home" type="checkbox" /> Same as residential</span></legend>
+          <input type="hidden" name="mailing_address" id="onb-mailing-address" />
+          <div class="onb-address-grid">
+            <label>House no. / street<input data-onb-address-part="street" placeholder="House no., street, subdivision" autocomplete="address-line1" /></label>
+            <label>Barangay<input data-onb-address-part="barangay" placeholder="Barangay" autocomplete="address-level4" /></label>
+            <label>City / municipality<input data-onb-address-part="city" placeholder="City or municipality" autocomplete="address-level2" /></label>
+            <label>Province<input data-onb-address-part="province" placeholder="Province" autocomplete="address-level1" /></label>
+            <label>Postal code<input data-onb-address-part="postal" inputmode="numeric" placeholder="Postal code" autocomplete="postal-code" /></label>
+            <label>Country<select data-onb-address-part="country" autocomplete="country-name"><option>Philippines</option></select></label>
+          </div>
+        </fieldset>
+      </div>
+      <h4>Emergency Contact</h4>
+      <div class="onb-form-grid">
+        <label>Contact name<input name="emergency_contact_name" /></label>
+        <label>Relationship<select name="emergency_contact_relationship"><option value="">Select relationship</option><option>Parent</option><option>Spouse</option><option>Sibling</option><option>Child</option><option>Guardian</option><option>Relative</option><option>Friend</option><option>Other</option></select></label>
+        <label>Primary phone<input type="tel" name="emergency_contact_number" /></label>
+        <label>Secondary phone<input type="tel" name="emergency_contact_secondary_number" /></label>
+        <label>Alternative email<input type="email" name="emergency_contact_email" /></label>
+        <label class="onb-span-2">Residential address<textarea name="emergency_contact_address" rows="2"></textarea></label>
+      </div>
+      <h4>Hiring and Employment Preparation</h4>
+      <div class="onb-form-grid">
+        <label>Hiring source<select required name="hiring_type" id="onb-hiring-type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
+        <label>Applied position<select required name="applied_position" id="onb-applied-position"><option value="">Select applied position</option></select></label>
+        <label>Department<select name="department_id" id="onb-department"><option value="">Unassigned</option></select></label>
+        <label>Branch / work location<input required name="branch" value="Marulas Industrial Corporation" /></label>
+        <label>Employment type<select name="desired_employment_type" id="onb-employment-type"><option value="">Select employment type</option></select></label>
+        <label>Immediate supervisor<input name="supervisor" placeholder="Optional during applicant stage" /></label>
+        <label>Shift schedule<select name="shift_schedule" id="onb-shift-schedule"><option value="">Select shift</option></select></label>
+        <label>Employee level<select name="employee_level" id="onb-employee-level"><option value="">Select level</option></select></label>
+        <label>Payroll schedule<select name="payroll_schedule" id="onb-payroll-schedule"><option value="">Configure after transfer</option></select></label>
+        <label>Allowances<input min="0" step="0.01" type="number" name="allowances" placeholder="Optional" /></label>
+      </div>
+      <h4>Initial Compensation <small>Optional during applicant stage</small></h4>
+      <div class="onb-form-grid">
+        <label>Wage type<select name="expected_wage_type_id" id="onb-wage-type"><option value="">Configure after transfer</option></select></label>
+        <label><span id="onb-rate-label">Initial payroll rate</span><input min="0" step="0.01" type="number" name="expected_base_rate" placeholder="0.00" /></label>
+        <p class="onb-help onb-span-2" id="onb-rate-help">Choose a wage type to see how this starting rate will be used. Detailed payroll rates can still be completed after transfer.</p>
+      </div>
+      <div id="onb-agency-fields" hidden>
+        <h4>Agency Deployment</h4>
+        <div class="onb-form-grid">
+          <label>Agency name<input name="agency_name" /></label>
+          <label>Contact person<input name="agency_contact_person" /></label>
+          <label>Agency contact<input name="agency_contact_number" /></label>
+          <label>Deployment status<select name="deployment_status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></label>
+          <label>Contract start<input type="date" name="contract_start_date" /></label>
+          <label>Contract end<input type="date" name="contract_end_date" /></label>
+        </div>
+      </div>
+      <h4>Government, Tax, and Bank Details <small>Optional until requirements are available</small></h4>
+      <div class="onb-form-grid">
+        <label>TIN<input name="tin" placeholder="XXX-XXX-XXX" /></label>
+        <label>SSS number<input name="sss_number" placeholder="XX-XXXXXXX-X" /></label>
+        <label>PhilHealth number<input name="philhealth_number" placeholder="XXXX-XXXX-XXXX" /></label>
+        <label>Pag-IBIG number<input name="pagibig_number" placeholder="XXXX-XXXX-XXXX" /></label>
+        <label>Bank name<input name="bank_name" list="onb-bank-list" placeholder="Select or type bank name" /></label>
+        <label>Bank account number<input name="bank_account" autocomplete="off" /></label>
+      </div>
+      <h4>Biometric Attendance Preparation <small>Optional</small></h4>
+      <div class="onb-form-grid">
+        <label>Fingerprint device<select name="biometric_device_id" id="onb-device"><option value="">Prepare later</option></select></label>
+        <label>Biometric reference ID<input name="biometric_reference" placeholder="Reference ID only - no fingerprint template" /></label>
+      </div>
+      <datalist id="onb-bank-list"><option>BDO</option><option>BPI</option><option>Metrobank</option><option>LandBank</option><option>PNB</option><option>Security Bank</option><option>UnionBank</option><option>RCBC</option></datalist>
+      <div class="onb-modal-actions"><button class="btn btn-secondary" type="button" data-onb-close>Cancel</button><button class="btn btn-primary" type="submit">Create Applicant</button></div>
+    </form>
   </div>
 </div>
 
-<!-- ---- JOBS ---- -->
-<div id="onb-jobs" style="display:none;">
-  <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px;">Pipeline Overview</div>
-  <div class="pipeline" style="opacity:.4;">
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-    <div class="pipe-card"><div class="pipe-num">—</div></div>
-  </div>
-
-  <div class="page-header" style="margin-top:16px;">
-    <div style="font-size:15px;font-weight:700;">Job Openings</div>
-    <button class="btn btn-primary btn-sm">+ Post Job</button>
-  </div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>Job Title</th><th>Department</th><th>Location</th><th>Type</th><th>Posted</th><th>Deadline</th><th>Applicants</th><th>Status</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Assembly Worker</td><td>Production</td><td>Valenzuela</td><td><span style="color:var(--yellow)">Fulltime</span></td><td>Feb 10, 2026</td><td>Mar 10, 2026</td><td>22</td><td><span class="badge badge-red">Closed</span></td></tr>
-      </tbody>
-    </table>
+<div class="onb-modal" id="onb-review-modal" aria-hidden="true">
+  <div class="onb-modal-card onb-review-card">
+    <div class="onb-modal-header">
+      <div><h3 id="onb-review-title">Applicant Review</h3><p id="onb-review-subtitle"></p></div>
+      <button class="onb-close" type="button" data-onb-close>&times;</button>
+    </div>
+    <div id="onb-review-body"><div class="onb-empty">Loading applicant record...</div></div>
   </div>
 </div>
+
+<div class="onb-toast" id="onb-toast" role="status"></div>

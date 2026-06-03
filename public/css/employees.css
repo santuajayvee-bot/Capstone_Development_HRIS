@@ -31,11 +31,27 @@
 
 .emp-table tbody tr {
   border-bottom: 1px solid var(--border);
-  transition: background-color 0.2s;
+  transition: background-color 0.2s, box-shadow 0.2s;
 }
 
 .emp-table tbody tr:hover {
-  background: #f8f9fa;
+  background: rgba(79, 124, 255, 0.10);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.emp-table tbody tr:hover td {
+  background: transparent;
+  color: var(--text);
+}
+
+.emp-table tbody tr:hover .emp-email,
+.emp-table tbody tr:hover td[title] {
+  color: #b8c4d8;
+}
+
+.emp-table tbody tr:hover .emp-name,
+.emp-table tbody tr:hover .emp-id {
+  color: #ffffff;
 }
 
 .emp-table tbody tr:last-child {

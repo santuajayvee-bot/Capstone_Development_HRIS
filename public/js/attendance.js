@@ -1,125 +1,577 @@
 /* ============================================================
-   ATTENDANCE.JS — Attendance Module Controller
-   QR Scan · Geofence · Device Binding · Admin Override · OT
+   Attendance Management Module UI
    ============================================================ */
 
 let ATT_USER = null;
 let ATT_RECORDS = [];
-let QR_SCAN_MODE = null; // 'clock-in' or 'clock-out'
+let ATT_EMPLOYEES = [];
+let ATT_DEVICES = [];
+let QR_SCAN_MODE = null;
 let DEVICE_FP = null;
+let html5QrScanner = null;
 
-// ── Device fingerprint (simple hash of browser properties) ──
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function isHr() { return ['hr_admin', 'admin'].includes(ATT_USER?.role); }
+function isSystemAdmin() { return ['system_admin', 'admin'].includes(ATT_USER?.role); }
+function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
+function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }
+function isEmployee() { return ATT_USER?.role === 'employee'; }
+
+function setVisible(id, visible) {
+  const element = document.getElementById(id);
+  if (element) element.style.display = visible ? '' : 'none';
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString('en-PH');
+}
+
+function badge(value) {
+  const text = String(value || '-');
+  const normalized = text.toLowerCase();
+  const color = normalized.includes('validated') || normalized.includes('success') || normalized === 'present' || normalized === 'anchored'
+    ? 'green'
+    : normalized.includes('reject') || normalized.includes('fail') || normalized === 'absent'
+      ? 'red'
+      : normalized.includes('incomplete') || normalized.includes('review') || normalized.includes('late') || normalized.includes('partial')
+        ? 'yellow'
+        : 'blue';
+  return `<span class="badge badge-${color}">${esc(text)}</span>`;
+}
+
+function calculateHours(timeIn, timeOut) {
+  if (!timeIn || !timeOut) return '-';
+  const milliseconds = new Date(`1970-01-01T${timeOut}`) - new Date(`1970-01-01T${timeIn}`);
+  return `${Math.max(0, milliseconds / 3600000).toFixed(1)}h`;
+}
+
 function getDeviceFingerprint() {
   if (DEVICE_FP) return DEVICE_FP;
   const raw = [
     navigator.userAgent,
-    screen.width + 'x' + screen.height,
+    `${screen.width}x${screen.height}`,
     screen.colorDepth,
     navigator.language,
     navigator.hardwareConcurrency,
     new Date().getTimezoneOffset()
   ].join('|');
-  // Simple hash
   let hash = 0;
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw.charCodeAt(i);
-    hash = ((hash << 5) - hash) + c;
+  for (let index = 0; index < raw.length; index += 1) {
+    hash = ((hash << 5) - hash) + raw.charCodeAt(index);
     hash |= 0;
   }
-  DEVICE_FP = 'DFP-' + Math.abs(hash).toString(36);
+  DEVICE_FP = `DFP-${Math.abs(hash).toString(36)}`;
   return DEVICE_FP;
 }
 
-// ── Tab switching ──
-function switchAttTab(tab, el) {
-  const tabs = ['overview', 'records', 'overtime', 'audit'];
-  tabs.forEach(t => {
-    const panel = document.getElementById('att-' + t);
-    if (panel) panel.style.display = 'none';
+function switchAttTab(tab, element) {
+  ['overview', 'records', 'overtime', 'exceptions', 'biometric', 'audit'].forEach(name => {
+    const panel = document.getElementById(`att-${name}`);
+    if (panel) panel.style.display = name === tab ? 'block' : 'none';
   });
-  const target = document.getElementById('att-' + tab);
-  if (target) target.style.display = 'block';
+  document.querySelectorAll('#page-attendance .attendance-tabs .tab').forEach(item => item.classList.remove('active'));
+  if (element) element.classList.add('active');
 
-  document.querySelectorAll('#page-attendance .tabs .tab')
-    .forEach(t => t.classList.remove('active'));
-  if (el) el.classList.add('active');
-
-  // Load data for tab
   if (tab === 'records') loadAttRecords();
-  if (tab === 'overtime') loadOvertimeTab();
+  if (tab === 'overtime') loadEmployees();
+  if (tab === 'exceptions') loadBiometricExceptions();
+  if (tab === 'biometric') loadBiometricWorkspace();
   if (tab === 'audit') loadAuditLog();
 }
 
-// ── Initialize attendance module ──
 async function initAttendance() {
-  try {
-    const res = await apiFetch('/api/auth/me');
-    if (res && res.ok) {
-      const data = await res.json();
-      ATT_USER = data.user;
-    }
-  } catch (e) { console.error('Attendance init error:', e); }
-
+  ATT_USER = getUser();
   if (!ATT_USER) return;
 
-  const isAdmin = ATT_USER.role !== 'employee';
+  setVisible('qr-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
+  setVisible('qr-generate-card', isHr());
+  setVisible('emp-summary-card', isEmployee() && !!ATT_USER.employeeId);
+  setVisible('att-tab-overtime', isHr());
+  setVisible('att-tab-exceptions', isHr());
+  setVisible('att-tab-biometric', isSystemAdmin());
+  setVisible('att-tab-audit', isHr() || isSystemAdmin());
+  setVisible('btn-manual-attendance', isHr());
 
-  // Show/hide admin-only elements
-  const genCard = document.getElementById('qr-generate-card');
-  if (genCard) genCard.style.display = isAdmin ? 'block' : 'none';
+  const controls = document.querySelector('.att-toolbar');
+  if (controls) controls.style.display = isEmployee() ? 'none' : 'flex';
 
-  const recordsControls = document.getElementById('att-records-controls');
-  if (recordsControls) recordsControls.style.display = isAdmin ? 'block' : 'none';
+  if (isSystemAdmin() && !isHr()) {
+    const biometricTab = document.getElementById('att-tab-biometric');
+    switchAttTab('biometric', biometricTab);
+    return;
+  }
 
-  const actionCol = document.getElementById('att-action-col');
-  if (actionCol) actionCol.style.display = isAdmin ? '' : 'none';
-
-  // Hide admin-only tabs for employees
-  const otTab = document.getElementById('att-tab-overtime');
-  const auditTab = document.getElementById('att-tab-audit');
-  if (otTab) otTab.style.display = isAdmin ? '' : 'none';
-  if (auditTab) auditTab.style.display = isAdmin ? '' : 'none';
-
-  // Show employee summary card
-  const empSummary = document.getElementById('emp-summary-card');
-  if (empSummary) empSummary.style.display = ATT_USER.employeeId ? 'block' : 'none';
-
-  // Load data
-  loadClockStatus();
+  if (ATT_USER.employeeId) {
+    loadClockStatus();
+    loadMySummary();
+  }
   loadOverviewStats();
-  if (ATT_USER.employeeId) loadMySummary();
 }
 
-// ── Check clock-in status for today ──
 async function loadClockStatus() {
   try {
     const res = await apiFetch('/api/attendance/status');
-    if (!res || !res.ok) return;
+    if (!res?.ok) return;
     const data = await res.json();
-
-    const statusEl = document.getElementById('att-clock-status');
-    const btnIn = document.getElementById('btn-clock-in');
-    const btnOut = document.getElementById('btn-clock-out');
+    const label = document.getElementById('att-clock-status');
+    const clockIn = document.getElementById('btn-clock-in');
+    const clockOut = document.getElementById('btn-clock-out');
+    if (!label || !clockIn || !clockOut) return;
 
     if (!data.clocked_in) {
-      statusEl.innerHTML = '⚪ Not clocked in yet today';
-      btnIn.disabled = false;
-      btnIn.style.display = '';
-      btnOut.style.display = 'none';
+      label.textContent = 'No attendance recorded yet today.';
+      clockIn.disabled = false;
+      clockIn.style.display = '';
+      clockOut.style.display = 'none';
     } else if (!data.clocked_out) {
-      statusEl.innerHTML = `🟢 Clocked in at <strong>${data.record.time_in}</strong> — Session active`;
-      btnIn.style.display = 'none';
-      btnOut.style.display = '';
-      btnOut.disabled = false;
+      label.innerHTML = `Time-in recorded at <strong>${esc(data.record.time_in)}</strong>. Waiting for time-out.`;
+      clockIn.style.display = 'none';
+      clockOut.style.display = '';
+      clockOut.disabled = false;
     } else {
-      statusEl.innerHTML = `✅ Completed — In: <strong>${data.record.time_in}</strong> · Out: <strong>${data.record.time_out}</strong>`;
-      btnIn.style.display = 'none';
-      btnOut.style.display = 'none';
+      label.innerHTML = `Completed: <strong>${esc(data.record.time_in)}</strong> to <strong>${esc(data.record.time_out)}</strong> via ${esc(data.record.source)}.`;
+      clockIn.style.display = 'none';
+      clockOut.style.display = 'none';
     }
-  } catch (e) { console.error('Clock status error:', e); }
+  } catch (err) {
+    console.error('Attendance status error:', err);
+  }
 }
 
-// ── QR Scan flow ──
+async function loadOverviewStats() {
+  try {
+    const res = await apiFetch('/api/attendance/overview');
+    if (!res?.ok) return;
+    const data = await res.json();
+    document.getElementById('att-date-label').textContent = formatDate(data.date);
+    document.getElementById('stat-present').textContent = data.present || 0;
+    document.getElementById('stat-late').textContent = data.late || 0;
+    document.getElementById('stat-leave').textContent = data.on_leave || 0;
+    document.getElementById('stat-absent').textContent = data.absent || 0;
+    document.getElementById('stat-total-hours').textContent = `${Number(data.total_hours || 0).toFixed(1)}h`;
+    document.getElementById('stat-overtime').textContent = `${Number(data.total_overtime || 0).toFixed(1)}h`;
+  } catch (err) {
+    console.error('Attendance overview error:', err);
+  }
+}
+
+async function loadMySummary() {
+  try {
+    const res = await apiFetch('/api/attendance/my-summary');
+    if (!res?.ok) return;
+    const data = await res.json();
+    document.getElementById('my-present').textContent = data.present_days || 0;
+    document.getElementById('my-overtime').textContent = `${Number(data.total_overtime || 0).toFixed(1)}h`;
+    document.getElementById('my-absences').textContent = data.absent_days || 0;
+  } catch (err) {
+    console.error('Personal attendance summary error:', err);
+  }
+}
+
+async function loadAttRecords() {
+  try {
+    const params = new URLSearchParams();
+    const date = document.getElementById('att-date-filter')?.value;
+    const search = document.getElementById('att-search')?.value;
+    if (date) params.set('date', date);
+    if (search && !isPayrollManager()) params.set('search', search);
+
+    const endpoint = isEmployee()
+      ? '/api/attendance/my-records'
+      : isPayrollManager()
+        ? '/api/attendance/summaries'
+        : '/api/attendance/all';
+    const res = await apiFetch(`${endpoint}${params.toString() ? `?${params}` : ''}`);
+    if (!res?.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to load attendance records.');
+    }
+    ATT_RECORDS = await res.json();
+    renderAttRecords();
+  } catch (err) {
+    console.error(err);
+    const tbody = document.getElementById('att-records-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
+  }
+}
+
+function renderAttRecords() {
+  const tbody = document.getElementById('att-records-tbody');
+  if (!tbody) return;
+  if (!ATT_RECORDS.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = ATT_RECORDS.map(record => {
+    const isSummary = Object.prototype.hasOwnProperty.call(record, 'regular_minutes');
+    const attendanceId = record.attendance_id || '';
+    const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out);
+    const overtime = isSummary ? `${(Number(record.overtime_minutes || 0) / 60).toFixed(1)}h` : `${Number(record.overtime_hours || 0).toFixed(1)}h`;
+    const status = record.attendance_status || record.status;
+    const verification = record.verification_status || '-';
+    const actions = isHr() && attendanceId
+      ? `<div class="att-actions">
+           <button class="btn btn-outline btn-sm" onclick="openOverrideModal(${Number(attendanceId)})">Correct</button>
+           <button class="btn btn-outline btn-sm" onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')">Verify</button>
+         </div>`
+      : attendanceId
+        ? `<button class="btn btn-outline btn-sm" onclick="verifyIntegrity(${Number(attendanceId)})">Integrity</button>`
+        : '-';
+
+    return `<tr>
+      <td><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<br><small>${esc(record.employee_code)}</small>` : ''}</td>
+      <td>${esc(formatDate(record.attendance_date || record.date))}</td>
+      <td>${esc(record.time_in || '-')}</td>
+      <td>${esc(record.time_out || '-')}</td>
+      <td>${esc(hours)}</td>
+      <td>${esc(overtime)}</td>
+      <td>${badge(status)}</td>
+      <td>${badge(verification)}</td>
+      <td>${esc(record.source || (isSummary ? 'Validated Summary' : '-'))}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+function clearAttFilters() {
+  const search = document.getElementById('att-search');
+  const date = document.getElementById('att-date-filter');
+  if (search) search.value = '';
+  if (date) date.value = '';
+  loadAttRecords();
+}
+
+function openOverrideModal(attendanceId) {
+  const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(attendanceId));
+  if (!record) return;
+  document.getElementById('override-att-id').value = attendanceId;
+  document.getElementById('override-emp-info').textContent = `${record.employee_name || 'Employee'} - ${formatDate(record.date)}`;
+  document.getElementById('override-time-in').value = record.time_in || '';
+  document.getElementById('override-time-out').value = record.time_out || '';
+  document.getElementById('override-reason').value = '';
+  document.getElementById('override-modal').style.display = 'flex';
+}
+
+function closeOverrideModal() {
+  document.getElementById('override-modal').style.display = 'none';
+}
+
+async function submitOverride() {
+  const attendanceId = document.getElementById('override-att-id').value;
+  const body = {
+    time_in: document.getElementById('override-time-in').value,
+    time_out: document.getElementById('override-time-out').value,
+    reason: document.getElementById('override-reason').value,
+  };
+  if (body.reason.trim().length < 8) return alert('Provide a clear correction reason of at least 8 characters.');
+  try {
+    const res = await apiFetch(`/api/attendance/${attendanceId}/override`, { method: 'PATCH', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    closeOverrideModal();
+    loadAttRecords();
+    loadOverviewStats();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function verifyAttendance(attendanceId, verificationStatus) {
+  const reason = prompt(`Reason for marking this record ${verificationStatus}:`);
+  if (!reason) return;
+  try {
+    const res = await apiFetch(`/api/attendance/${attendanceId}/verify`, {
+      method: 'PATCH',
+      body: JSON.stringify({ verification_status: verificationStatus, reason })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    loadAttRecords();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function verifyIntegrity(attendanceId) {
+  try {
+    const res = await apiFetch(`/api/attendance/integrity/${attendanceId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(`Integrity chain: ${data.chain_valid ? 'VALID' : 'INVALID'}\nVersions: ${data.versions}\nAnchor: ${data.latest_anchor_status || 'Not queued'}`);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function loadEmployees() {
+  if (ATT_EMPLOYEES.length) {
+    populateEmployeeSelects();
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/employees');
+    if (!res?.ok) return;
+    ATT_EMPLOYEES = await res.json();
+    populateEmployeeSelects();
+  } catch (err) {
+    console.error('Employee list error:', err);
+  }
+}
+
+function populateEmployeeSelects() {
+  const options = '<option value="">Select employee</option>' + ATT_EMPLOYEES
+    .map(employee => `<option value="${Number(employee.id)}">${esc(employee.first_name)} ${esc(employee.last_name)} (${esc(employee.employee_code)})</option>`)
+    .join('');
+  ['ot-employee', 'manual-employee', 'bio-map-employee'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = options;
+  });
+}
+
+async function encodeOvertime() {
+  const employeeId = document.getElementById('ot-employee').value;
+  const date = document.getElementById('ot-date').value;
+  const overtimeHours = Number(document.getElementById('ot-hours').value);
+  const reason = document.getElementById('ot-reason').value;
+  if (!employeeId || !date || !Number.isFinite(overtimeHours) || reason.trim().length < 8) {
+    return alert('Select an employee, date, hours, and a reason of at least 8 characters.');
+  }
+  try {
+    const search = await apiFetch(`/api/attendance/all?date=${encodeURIComponent(date)}`);
+    const records = await search.json();
+    const record = records.find(item => String(item.employee_id) === String(employeeId));
+    if (!record) throw new Error('No attendance record exists for this employee and date.');
+    const res = await apiFetch(`/api/attendance/${record.attendance_id}/overtime`, {
+      method: 'PATCH',
+      body: JSON.stringify({ overtime_hours: overtimeHours, reason })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    document.getElementById('ot-hours').value = '';
+    document.getElementById('ot-reason').value = '';
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function openManualModal() {
+  loadEmployees();
+  document.getElementById('manual-modal').style.display = 'flex';
+}
+
+function closeManualModal() {
+  document.getElementById('manual-modal').style.display = 'none';
+}
+
+async function submitManualAttendance() {
+  const body = {
+    employee_id: document.getElementById('manual-employee').value,
+    date: document.getElementById('manual-date').value,
+    time_in: document.getElementById('manual-time-in').value,
+    time_out: document.getElementById('manual-time-out').value,
+    reason: document.getElementById('manual-reason').value,
+  };
+  if (!body.employee_id || !body.date || body.reason.trim().length < 8) {
+    return alert('Select an employee, date, and clear reason.');
+  }
+  try {
+    const res = await apiFetch('/api/attendance/manual', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    closeManualModal();
+    loadAttRecords();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function loadBiometricExceptions() {
+  try {
+    const res = await apiFetch('/api/attendance/biometric/exceptions');
+    if (!res?.ok) return;
+    const rows = await res.json();
+    const tbody = document.getElementById('att-exceptions-tbody');
+    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
+      <td>${esc(formatDateTime(row.scan_timestamp))}</td>
+      <td>${esc(row.device_name)}</td>
+      <td>${esc(row.employee_name || 'Unmapped')}</td>
+      <td>${esc(row.attendance_type)}</td>
+      <td>${badge(row.verification_status)}</td>
+      <td>${esc(row.error_message || '-')}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No biometric exceptions.</td></tr>';
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadBiometricWorkspace() {
+  await Promise.all([loadEmployees(), loadBiometricHealth(), loadBiometricMappings()]);
+}
+
+async function loadBiometricHealth() {
+  try {
+    const res = await apiFetch('/api/attendance/biometric/health');
+    if (!res?.ok) return;
+    const data = await res.json();
+    ATT_DEVICES = data.devices || [];
+    const tbody = document.getElementById('bio-health-tbody');
+    tbody.innerHTML = ATT_DEVICES.length ? ATT_DEVICES.map(device => `<tr>
+      <td><strong>${esc(device.device_name)}</strong><br><small>${esc(device.device_reference)}</small></td>
+      <td>${esc(device.vendor || '-')}</td>
+      <td>${Number(device.mapped_employees || 0)}</td>
+      <td>${Number(device.exceptions || 0)}</td>
+      <td>${esc(formatDateTime(device.last_success_at))}</td>
+      <td>${esc(device.last_error_message || '-')}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="syncBiometricDevice(${Number(device.device_id)})">Sync Now</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="att-empty">No biometric devices configured.</td></tr>';
+    populateDeviceSelect();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function populateDeviceSelect() {
+  const select = document.getElementById('bio-map-device');
+  if (!select) return;
+  select.innerHTML = '<option value="">Select device</option>' + ATT_DEVICES
+    .map(device => `<option value="${Number(device.device_id)}">${esc(device.device_name)}</option>`)
+    .join('');
+}
+
+async function saveBiometricDevice() {
+  const body = {
+    device_reference: document.getElementById('bio-device-reference').value,
+    device_name: document.getElementById('bio-device-name').value,
+    vendor: document.getElementById('bio-device-vendor').value,
+    api_base_url: document.getElementById('bio-device-url').value,
+    logs_endpoint: document.getElementById('bio-device-endpoint').value,
+    auth_type: document.getElementById('bio-device-auth').value,
+    auth_secret: document.getElementById('bio-device-secret').value,
+  };
+  try {
+    const res = await apiFetch('/api/attendance/biometric/devices', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    ['bio-device-reference', 'bio-device-name', 'bio-device-vendor', 'bio-device-url', 'bio-device-secret'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    loadBiometricHealth();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function loadBiometricMappings() {
+  try {
+    const res = await apiFetch('/api/attendance/biometric/mappings');
+    if (!res?.ok) return;
+    const rows = await res.json();
+    const tbody = document.getElementById('bio-mapping-tbody');
+    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
+      <td>${esc(row.device_name)}</td>
+      <td>${esc(row.employee_name)}<br><small>${esc(row.employee_code)}</small></td>
+      <td>${esc(row.biometric_user_reference)}</td>
+      <td>${badge(row.is_active ? 'Active' : 'Disabled')}</td>
+      <td>${row.is_active ? `<button class="btn btn-outline btn-sm" onclick="disableBiometricMapping(${Number(row.mapping_id)})">Disable</button>` : '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="att-empty">No encrypted mappings configured.</td></tr>';
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function saveBiometricMapping() {
+  const body = {
+    device_id: document.getElementById('bio-map-device').value,
+    employee_id: document.getElementById('bio-map-employee').value,
+    biometric_user_id: document.getElementById('bio-map-user-id').value,
+  };
+  try {
+    const res = await apiFetch('/api/attendance/biometric/mappings', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    document.getElementById('bio-map-user-id').value = '';
+    loadBiometricMappings();
+    loadBiometricHealth();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function disableBiometricMapping(mappingId) {
+  if (!confirm('Disable this biometric employee mapping?')) return;
+  try {
+    const res = await apiFetch(`/api/attendance/biometric/mappings/${mappingId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(data.message);
+    loadBiometricMappings();
+    loadBiometricHealth();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function syncBiometricDevice(deviceId) {
+  try {
+    const res = await apiFetch(`/api/attendance/biometric/sync/${deviceId}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(`${data.message}\nAccepted: ${data.accepted}\nDuplicates: ${data.duplicates}\nRejected: ${data.rejected}`);
+    loadBiometricHealth();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function anchorPendingIntegrity() {
+  try {
+    const res = await apiFetch('/api/attendance/integrity/anchor-pending', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    alert(`${data.message}\nAnchored: ${data.anchored}\nFailed: ${data.failed}`);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function loadAuditLog() {
+  try {
+    const res = await apiFetch('/api/attendance/audit-log');
+    if (!res?.ok) return;
+    const rows = await res.json();
+    const tbody = document.getElementById('audit-tbody');
+    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
+      <td>${esc(formatDateTime(row.timestamp))}</td>
+      <td>${esc(row.performed_by)}</td>
+      <td>${esc(row.employee_name || '-')}</td>
+      <td>${esc(row.action_performed)}</td>
+      <td>${esc(row.old_value || '-')}</td>
+      <td>${esc(row.new_value || '-')}</td>
+      <td>${esc(row.ip_address || '-')}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="att-empty">No attendance audit entries.</td></tr>';
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 function startClockIn() {
   QR_SCAN_MODE = 'clock-in';
   openQrScanner();
@@ -131,363 +583,118 @@ function startClockOut() {
 }
 
 function openQrScanner() {
-  const container = document.getElementById('qr-scanner-container');
-  container.style.display = 'block';
-  document.getElementById('qr-scan-status').textContent = 'Point camera at the site QR code...';
-
-  // Use html5-qrcode if available, otherwise fallback to manual input
-  if (typeof Html5Qrcode !== 'undefined') {
-    startHtml5QrScanner();
-  } else {
-    // Fallback: load the library dynamically
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-    script.onload = () => startHtml5QrScanner();
-    script.onerror = () => showManualQrInput();
-    document.head.appendChild(script);
-  }
+  document.getElementById('qr-scanner-container').style.display = 'block';
+  document.getElementById('qr-scan-status').textContent = 'Point the camera at the HR fallback QR code.';
+  if (typeof Html5Qrcode !== 'undefined') return startHtml5QrScanner();
+  const script = document.createElement('script');
+  script.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  script.onload = startHtml5QrScanner;
+  script.onerror = showManualQrInput;
+  document.head.appendChild(script);
 }
 
-let html5QrScanner = null;
-
 function startHtml5QrScanner() {
-  const reader = document.getElementById('qr-reader');
-  reader.innerHTML = '';
-
+  document.getElementById('qr-reader').innerHTML = '';
   html5QrScanner = new Html5Qrcode('qr-reader');
   html5QrScanner.start(
     { facingMode: 'environment' },
     { fps: 10, qrbox: { width: 250, height: 250 } },
-    (decodedText) => {
-      html5QrScanner.stop().then(() => {
-        processQrScan(decodedText);
-      });
-    },
+    decoded => html5QrScanner.stop().then(() => processQrScan(decoded)),
     () => {}
-  ).catch(err => {
-    console.warn('Camera error:', err);
-    showManualQrInput();
-  });
+  ).catch(showManualQrInput);
 }
 
 function showManualQrInput() {
-  const reader = document.getElementById('qr-reader');
-  reader.innerHTML = `
-    <div style="padding:20px;text-align:center;">
-      <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Camera unavailable. Enter QR code manually:</div>
-      <input type="text" id="manual-qr-input" placeholder="LGSV_ATT:..." style="width:100%;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--bg);color:var(--text);margin-bottom:12px;" />
-      <button class="btn btn-primary" onclick="processQrScan(document.getElementById('manual-qr-input').value)">Submit</button>
-    </div>
-  `;
+  document.getElementById('qr-reader').innerHTML = `
+    <div class="att-note">
+      <p>Camera unavailable. Enter the HR-issued fallback QR token.</p>
+      <input type="text" id="manual-qr-input" placeholder="LGSV_ATT:..." />
+      <button class="btn btn-primary btn-sm" onclick="processQrScan(document.getElementById('manual-qr-input').value)">Submit</button>
+    </div>`;
 }
 
 function cancelQrScan() {
-  if (html5QrScanner) {
-    html5QrScanner.stop().catch(() => {});
-    html5QrScanner = null;
-  }
-  document.getElementById('qr-scanner-container').style.display = 'none';
+  if (html5QrScanner) html5QrScanner.stop().catch(() => {});
+  html5QrScanner = null;
   QR_SCAN_MODE = null;
-}
-
-async function processQrScan(qrData) {
-  document.getElementById('qr-scan-status').innerHTML = '⏳ Validating location...';
   document.getElementById('qr-scanner-container').style.display = 'none';
-
-  // Get GPS
-  if (!navigator.geolocation) {
-    alert('Geolocation not supported by your browser.');
-    return;
-  }
-
-  navigator.geolocation.getCurrentPosition(
-    async (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      const fp = getDeviceFingerprint();
-
-      const gpsEl = document.getElementById('gps-status');
-      gpsEl.style.display = 'block';
-      gpsEl.textContent = `📍 GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-
-      const endpoint = QR_SCAN_MODE === 'clock-in' ? '/api/attendance/clock-in' : '/api/attendance/clock-out';
-
-      try {
-        const res = await apiFetch(endpoint, {
-          method: 'POST',
-          body: JSON.stringify({
-            qr_token: qrData,
-            latitude: lat,
-            longitude: lng,
-            device_fingerprint: fp
-          })
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          alert('❌ ' + (data.error || 'Failed'));
-        } else {
-          alert('✅ ' + data.message);
-          loadClockStatus();
-          loadOverviewStats();
-        }
-      } catch (err) {
-        alert('Error: ' + err.message);
-      }
-
-      QR_SCAN_MODE = null;
-      setTimeout(() => { gpsEl.style.display = 'none'; }, 5000);
-    },
-    (err) => {
-      alert('📍 GPS Error: ' + err.message + '\nPlease enable location services.');
-      QR_SCAN_MODE = null;
-    },
-    { enableHighAccuracy: true, timeout: 15000 }
-  );
 }
 
-// ── Generate Site QR (Admin) ──
+function processQrScan(qrToken) {
+  if (!navigator.geolocation) return alert('Geolocation is unavailable in this browser.');
+  navigator.geolocation.getCurrentPosition(async position => {
+    const body = {
+      qr_token: qrToken,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      device_fingerprint: getDeviceFingerprint(),
+    };
+    try {
+      const endpoint = QR_SCAN_MODE === 'clock-in' ? '/api/attendance/clock-in' : '/api/attendance/clock-out';
+      const res = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      alert(data.message);
+      cancelQrScan();
+      loadClockStatus();
+      loadOverviewStats();
+    } catch (err) {
+      alert(err.message);
+    }
+  }, error => alert(`GPS error: ${error.message}`), { enableHighAccuracy: true, timeout: 15000 });
+}
+
 async function generateSiteQR() {
   try {
     const res = await apiFetch('/api/attendance/qr/generate');
-    if (!res || !res.ok) { const e = await res?.json(); alert(e?.error || 'Failed'); return; }
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
     document.getElementById('site-qr-img').src = data.qr;
     document.getElementById('site-qr-name').textContent = data.site_name;
     document.getElementById('site-qr-display').style.display = 'block';
-  } catch (err) { alert('Error: ' + err.message); }
-}
-
-// ── Overview Stats ──
-async function loadOverviewStats() {
-  try {
-    const res = await apiFetch('/api/attendance/overview');
-    if (!res || !res.ok) return;
-    const d = await res.json();
-
-    const today = new Date(d.date);
-    document.getElementById('att-date-label').textContent =
-      `📅 ${today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
-
-    document.getElementById('stat-present').textContent = d.present || 0;
-    document.getElementById('stat-late').textContent = d.late || 0;
-    document.getElementById('stat-leave').textContent = d.on_leave || 0;
-    document.getElementById('stat-absent').textContent = d.absent || 0;
-    document.getElementById('stat-total-hours').textContent = (d.total_hours || 0) + 'h';
-    document.getElementById('stat-overtime').textContent = (d.total_overtime || 0) + 'h';
-  } catch (e) { console.error('Overview error:', e); }
-}
-
-// ── Employee Personal Summary ──
-async function loadMySummary() {
-  try {
-    const res = await apiFetch('/api/attendance/my-summary');
-    if (!res || !res.ok) return;
-    const d = await res.json();
-    document.getElementById('my-present').textContent = d.present_days || 0;
-    document.getElementById('my-overtime').textContent = (d.total_overtime || 0) + 'h';
-    document.getElementById('my-absences').textContent = d.absent_days || 0;
-  } catch (e) { console.error('Summary error:', e); }
-}
-
-// ── Records Tab ──
-async function loadAttRecords() {
-  const isAdmin = ATT_USER && ATT_USER.role !== 'employee';
-  const endpoint = isAdmin ? '/api/attendance/all' : '/api/attendance/my-records';
-  const params = new URLSearchParams();
-
-  if (isAdmin) {
-    const search = document.getElementById('att-search')?.value;
-    const date = document.getElementById('att-date-filter')?.value;
-    if (search) params.set('search', search);
-    if (date) params.set('date', date);
+  } catch (err) {
+    alert(err.message);
   }
-
-  try {
-    const url = endpoint + (params.toString() ? '?' + params.toString() : '');
-    const res = await apiFetch(url);
-    if (!res || !res.ok) return;
-    ATT_RECORDS = await res.json();
-    renderAttRecords();
-  } catch (e) { console.error('Records error:', e); }
 }
 
-function renderAttRecords() {
-  const tbody = document.getElementById('att-records-tbody');
-  if (!tbody) return;
-  const isAdmin = ATT_USER && ATT_USER.role !== 'employee';
-
-  if (ATT_RECORDS.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No attendance records found.</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = ATT_RECORDS.map(r => {
-    const hours = r.time_in && r.time_out
-      ? Math.max(0, (new Date('1970-01-01T' + r.time_out) - new Date('1970-01-01T' + r.time_in)) / 3600000).toFixed(1)
-      : '-';
-    const statusColor = r.status === 'Present' ? 'green' : r.status === 'Late' ? 'yellow' : r.status === 'Absent' ? 'red' : 'blue';
-    const name = r.employee_name || 'You';
-    const dateStr = new Date(r.date).toLocaleDateString();
-
-    return `<tr data-att-id="${r.attendance_id}">
-      <td><div style="font-weight:600;">${name}</div>${r.employee_code ? `<div style="font-size:11px;color:var(--muted);">${r.employee_code}</div>` : ''}</td>
-      <td>${dateStr}</td>
-      <td>${r.time_in || '-'}</td>
-      <td>${r.time_out || '<span style="color:var(--yellow);">Active</span>'}</td>
-      <td>${hours}h</td>
-      <td>${r.overtime_hours || 0}h</td>
-      <td><span class="badge badge-${statusColor}">${r.status}</span></td>
-      ${isAdmin ? `<td><button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="openOverrideModal(${r.attendance_id})">✏️ Edit</button></td>` : ''}
-    </tr>`;
-  }).join('');
-}
-
-function clearAttFilters() {
-  const s = document.getElementById('att-search');
-  const d = document.getElementById('att-date-filter');
-  if (s) s.value = '';
-  if (d) d.value = '';
-  loadAttRecords();
-}
-
-// ── Override Modal ──
-function openOverrideModal(attId) {
-  const record = ATT_RECORDS.find(r => r.attendance_id === attId);
-  if (!record) return;
-  document.getElementById('override-att-id').value = attId;
-  document.getElementById('override-emp-info').innerHTML =
-    `<strong>${record.employee_name}</strong> · ${new Date(record.date).toLocaleDateString()}<br>Current: In ${record.time_in || '-'} · Out ${record.time_out || '-'}`;
-  document.getElementById('override-time-in').value = record.time_in || '';
-  document.getElementById('override-time-out').value = record.time_out || '';
-  const modal = document.getElementById('override-modal');
-  modal.style.display = 'flex';
-}
-
-function closeOverrideModal() {
-  document.getElementById('override-modal').style.display = 'none';
-}
-
-async function submitOverride() {
-  const attId = document.getElementById('override-att-id').value;
-  const timeIn = document.getElementById('override-time-in').value;
-  const timeOut = document.getElementById('override-time-out').value;
-
-  if (!timeIn && !timeOut) { alert('Enter at least one time value.'); return; }
-  if (!confirm('⚠️ This override will be permanently recorded in the audit log.\n\nContinue?')) return;
-
-  try {
-    const body = {};
-    if (timeIn) body.time_in = timeIn;
-    if (timeOut) body.time_out = timeOut;
-    const res = await apiFetch(`/api/attendance/${attId}/override`, {
-      method: 'PATCH', body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Override failed.'); return; }
-    alert('✅ ' + data.message);
-    closeOverrideModal();
-    loadAttRecords();
-  } catch (err) { alert('Error: ' + err.message); }
-}
-
-// ── Overtime Tab ──
-async function loadOvertimeTab() {
-  // Populate employee dropdown
-  try {
-    const res = await apiFetch('/api/employees');
-    if (!res || !res.ok) return;
-    const employees = (await res.json()).sort((a, b) => a.id - b.id);
-    const sel = document.getElementById('ot-employee');
-    if (sel) {
-      sel.innerHTML = '<option value="">-- Select Employee --</option>' +
-        employees.map(e => `<option value="${e.id}">${e.first_name} ${e.last_name} (${e.employee_code})</option>`).join('');
-    }
-  } catch (e) { console.error(e); }
-}
-
-async function encodeOvertime() {
-  const empId = document.getElementById('ot-employee').value;
-  const date = document.getElementById('ot-date').value;
-  const hours = parseFloat(document.getElementById('ot-hours').value);
-
-  if (!empId || !date || isNaN(hours)) { alert('Please fill all fields.'); return; }
-
-  // Find the attendance record for this employee + date
-  try {
-    const searchRes = await apiFetch(`/api/attendance/all?date=${date}&search=`);
-    if (!searchRes || !searchRes.ok) { alert('Failed to search records.'); return; }
-    const records = await searchRes.json();
-    const record = records.find(r => r.employee_id == empId);
-
-    if (!record) {
-      alert('No attendance record found for this employee on the selected date.');
-      return;
-    }
-
-    if (!confirm(`Encode ${hours}h overtime for ${record.employee_name} on ${new Date(date).toLocaleDateString()}?`)) return;
-
-    const res = await apiFetch(`/api/attendance/${record.attendance_id}/overtime`, {
-      method: 'PATCH', body: JSON.stringify({ overtime_hours: hours })
-    });
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed'); return; }
-    alert('✅ ' + data.message);
-    document.getElementById('ot-hours').value = '';
-  } catch (err) { alert('Error: ' + err.message); }
-}
-
-// ── Audit Log Tab ──
-async function loadAuditLog() {
-  try {
-    const res = await apiFetch('/api/attendance/audit-log');
-    if (!res || !res.ok) return;
-    const logs = await res.json();
-    const tbody = document.getElementById('audit-tbody');
-    if (!tbody) return;
-
-    if (logs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px;">No audit records yet.</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = logs.map(l => `
-      <tr>
-        <td style="font-size:12px;white-space:nowrap;">${new Date(l.timestamp).toLocaleString()}</td>
-        <td><span style="font-weight:600;">${l.performed_by}</span></td>
-        <td>${l.employee_name || '-'}</td>
-        <td style="font-size:12px;">${l.action_performed}</td>
-        <td style="font-size:11px;color:var(--red);max-width:150px;overflow:hidden;text-overflow:ellipsis;" title="${l.old_value || ''}">${l.old_value || '-'}</td>
-        <td style="font-size:11px;color:var(--green);max-width:150px;overflow:hidden;text-overflow:ellipsis;" title="${l.new_value || ''}">${l.new_value || '-'}</td>
-        <td style="font-size:11px;color:var(--muted);">${l.ip_address || '-'}</td>
-      </tr>
-    `).join('');
-  } catch (e) { console.error('Audit log error:', e); }
-}
-
-// ── Page activation watcher ──
 function watchAttendanceActivation() {
-  const observer = new MutationObserver(() => {
-    const page = document.querySelector('#page-attendance.active');
-    if (page && !page.dataset.attLoaded) {
+  const page = document.getElementById('page-attendance');
+  if (!page) return;
+  const initializeIfActive = () => {
+    if (page.classList.contains('active') && !page.dataset.attLoaded && document.getElementById('att-overview')) {
       page.dataset.attLoaded = '1';
       initAttendance();
     }
-  });
-  observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
+  };
+  new MutationObserver(initializeIfActive).observe(page, { attributes: true, attributeFilter: ['class'] });
+  document.addEventListener('partialsLoaded', initializeIfActive);
+  initializeIfActive();
 }
 
 window.addEventListener('DOMContentLoaded', watchAttendanceActivation);
-
-// Expose globally
+window.initAttendance = initAttendance;
 window.switchAttTab = switchAttTab;
 window.startClockIn = startClockIn;
 window.startClockOut = startClockOut;
 window.cancelQrScan = cancelQrScan;
+window.processQrScan = processQrScan;
 window.generateSiteQR = generateSiteQR;
 window.loadAttRecords = loadAttRecords;
 window.clearAttFilters = clearAttFilters;
 window.openOverrideModal = openOverrideModal;
 window.closeOverrideModal = closeOverrideModal;
 window.submitOverride = submitOverride;
+window.verifyAttendance = verifyAttendance;
+window.verifyIntegrity = verifyIntegrity;
 window.encodeOvertime = encodeOvertime;
+window.openManualModal = openManualModal;
+window.closeManualModal = closeManualModal;
+window.submitManualAttendance = submitManualAttendance;
+window.loadBiometricExceptions = loadBiometricExceptions;
+window.loadBiometricHealth = loadBiometricHealth;
+window.saveBiometricDevice = saveBiometricDevice;
+window.saveBiometricMapping = saveBiometricMapping;
+window.disableBiometricMapping = disableBiometricMapping;
+window.syncBiometricDevice = syncBiometricDevice;
+window.anchorPendingIntegrity = anchorPendingIntegrity;
+window.loadAuditLog = loadAuditLog;

@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node database/seed-users.js"
+    "seed": "node database/seed-users.js",
+    "migrate:attendance-biometric": "node database/migrate-biometric-attendance.js",
+    "migrate:onboarding": "node database/migrate-onboarding-lifecycle.js",
+    "test:attendance-biometric": "node test-biometric-attendance.js",
+    "test:onboarding": "node test-onboarding.js"
   },
   "dependencies": {
     "argon2": "^0.44.0",

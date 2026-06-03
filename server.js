@@ -4,6 +4,7 @@
 
 require('dotenv').config();
 const express    = require('express');
+const https      = require('https');
 const path       = require('path');
 const multer     = require('multer');
 const fs         = require('fs');
@@ -13,11 +14,14 @@ const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
+const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
+app.set('trust proxy', 1);
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
@@ -67,8 +71,22 @@ function uploadSingle(fieldName) {
   };
 }
 
-app.use(express.json());
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, _res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── PUBLIC ───────────────────────────────────────────────────
@@ -181,6 +199,9 @@ app.use('/api/201-files', requireAuth, fileManagementRoutes);
 
 // Attendance Module (QR, Geofence, Device Binding, Audit)
 app.use('/api/attendance', attendanceRoutes);
+
+// Onboarding Module (pre-employment lifecycle, secure document vault, transfer)
+app.use('/api/onboarding', onboardingRoutes);
 
 // Admin RBAC Module — Account Registration & Role Management (Level 4 only)
 app.use('/api/admin', adminRbacRoutes);
@@ -1904,8 +1925,23 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`✅  LGSV_HR running → http://localhost:${PORT}`);
-});
+if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
+  const tlsOptions = {
+    cert: fs.readFileSync(process.env.TLS_CERT_PATH),
+    key: fs.readFileSync(process.env.TLS_KEY_PATH),
+    ca: process.env.TLS_CA_PATH ? fs.readFileSync(process.env.TLS_CA_PATH) : undefined,
+    minVersion: 'TLSv1.3',
+  };
+  https.createServer(tlsOptions, app).listen(PORT, () => {
+    console.log(`LGSV_HR running with TLS 1.3 -> https://localhost:${PORT}`);
+  });
+} else {
+  app.listen(PORT, () => {
+    console.log(`LGSV_HR local development server -> http://localhost:${PORT}`);
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('TLS certificate paths are not configured. Terminate TLS 1.3 at the trusted reverse proxy.');
+    }
+  });
+}
 
 

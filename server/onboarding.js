@@ -1,0 +1,1084 @@
+/* ============================================================
+   Secure pre-employment onboarding workflow
+
+   Applicants are not official employees until HR approves and
+   transfers them to the Employee Directory.
+   ============================================================ */
+
+const crypto = require('crypto');
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
+const pool = require('../config/db');
+const { encryptAES256, decryptAES256, encryptPII } = require('./crypto');
+const { requireAuth, requireRole } = require('./middleware');
+const { requestJson } = require('./secure-http');
+
+const router = express.Router();
+const HR_ROLES = ['hr_admin', 'admin'];
+const SYSTEM_ADMIN_ROLES = ['system_admin', 'admin'];
+const SCREENING_STATUSES = [
+  'Pending Screening', 'For Interview', 'For Requirements Checking',
+  'Passed Screening', 'Failed Screening', 'Not Required',
+];
+const TRAINING_STATUSES = [
+  'Not Yet Started', 'In Training', 'Completed Training',
+  'Failed Training', 'For Final Evaluation', 'Not Required',
+];
+const DECISIONS = ['Approved', 'Rejected', 'For Re-evaluation', 'On Hold'];
+const DOCUMENT_TYPES = [
+  'Valid ID', 'Application Form', 'Contract', 'Medical Requirement',
+  'Certificate', 'Training Record', 'Other',
+];
+const GENDERS = ['Male', 'Female', 'Prefer not to say'];
+const CIVIL_STATUSES = ['Single', 'Married', 'Separated', 'Widowed'];
+const BLOOD_TYPES = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
+const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contractual'];
+const SHIFT_SCHEDULES = [
+  'Day Shift (8:00 AM - 5:00 PM)',
+  'Morning Shift (6:00 AM - 2:00 PM)',
+  'Afternoon Shift (2:00 PM - 10:00 PM)',
+  'Night Shift (10:00 PM - 6:00 AM)',
+  'Rotating Shift',
+  'Flexible',
+];
+const EMPLOYEE_LEVELS = ['Rank and File', 'Supervisor', 'Manager', 'Executive'];
+const PAYROLL_SCHEDULES = ['Monthly', 'Semi-monthly', 'Bi-weekly', 'Weekly'];
+
+const vaultDirectory = path.join(__dirname, '..', 'secure_uploads', 'onboarding');
+if (!fs.existsSync(vaultDirectory)) fs.mkdirSync(vaultDirectory, { recursive: true });
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const allowedMimeTypes = new Set([
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'image/jpeg',
+      'image/png',
+    ]);
+    if (!allowedMimeTypes.has(file.mimetype)) {
+      return callback(new Error('Only PDF, DOC, DOCX, JPG, and PNG files are allowed.'));
+    }
+    callback(null, true);
+  },
+});
+
+router.use(requireAuth);
+
+router.post('/integrity/anchor-pending', requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
+  try {
+    const [entries] = await pool.execute(
+      `SELECT * FROM onboarding_integrity_chain
+        WHERE anchor_status IN ('PENDING','FAILED')
+        ORDER BY chain_id
+        LIMIT 100`
+    );
+    if (!process.env.BLOCKCHAIN_API_URL) {
+      return res.status(503).json({ error: 'BLOCKCHAIN_API_URL is not configured. Onboarding integrity entries remain queued locally.' });
+    }
+
+    let anchored = 0;
+    let failed = 0;
+    for (const entry of entries) {
+      try {
+        const result = await anchorIntegrityEntry(entry);
+        await pool.execute(
+          `UPDATE onboarding_integrity_chain
+              SET anchor_status = 'ANCHORED', blockchain_reference = ?,
+                  anchor_error = NULL, anchored_at = NOW()
+            WHERE chain_id = ?`,
+          [result.reference || null, entry.chain_id]
+        );
+        anchored += 1;
+      } catch (error) {
+        await pool.execute(
+          `UPDATE onboarding_integrity_chain
+              SET anchor_status = 'FAILED', anchor_error = ?
+            WHERE chain_id = ?`,
+          [cleanText(error.message, 500), entry.chain_id]
+        );
+        failed += 1;
+      }
+    }
+    await writeModuleAudit(pool, req, 'ONBOARDING INTEGRITY ANCHOR RUN', null, { queued: entries.length, anchored, failed });
+    res.json({ message: 'Onboarding integrity anchor run completed.', queued: entries.length, anchored, failed });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+router.use(requireRole(HR_ROLES));
+
+function cleanText(value, maxLength = 255) {
+  return String(value ?? '').trim().replace(/[\x00<>]/g, '').slice(0, maxLength);
+}
+
+function requiredText(value, field, maxLength = 255) {
+  const cleaned = cleanText(value, maxLength);
+  if (!cleaned) throw new Error(`${field} is required.`);
+  return cleaned;
+}
+
+function positiveInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new Error(`${field} must be a positive integer.`);
+  return number;
+}
+
+function optionalPositiveInteger(value, field) {
+  if (value == null || value === '') return null;
+  return positiveInteger(value, field);
+}
+
+function optionalDate(value, field) {
+  if (value == null || value === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) throw new Error(`${field} must use YYYY-MM-DD format.`);
+  return String(value);
+}
+
+function validEmail(value) {
+  const email = requiredText(value, 'Email', 150).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('A valid email address is required.');
+  return email;
+}
+
+function optionalEmail(value, field = 'Email') {
+  const email = cleanText(value, 150).toLowerCase();
+  if (!email) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error(`${field} must be a valid email address.`);
+  return email;
+}
+
+function optionalChoice(value, field, choices) {
+  const cleaned = cleanText(value, 100);
+  if (!cleaned) return '';
+  if (!choices.includes(cleaned)) throw new Error(`Invalid ${field}.`);
+  return cleaned;
+}
+
+function optionalNonNegativeNumber(value, field) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) throw new Error(`${field} must be a valid non-negative number.`);
+  return number;
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+async function anchorIntegrityEntry(entry) {
+  const baseUrl = String(process.env.BLOCKCHAIN_API_URL || '').replace(/\/+$/, '');
+  const headers = process.env.BLOCKCHAIN_API_TOKEN
+    ? { Authorization: `Bearer ${process.env.BLOCKCHAIN_API_TOKEN}` }
+    : {};
+  const response = await requestJson(`${baseUrl}/api/onboarding/anchors`, {
+    method: 'POST',
+    headers,
+    body: {
+      module: 'ONBOARDING',
+      chain_id: entry.chain_id,
+      applicant_id: entry.applicant_id,
+      activity_id: entry.activity_id,
+      chain_hash: entry.chain_hash,
+      previous_hash: entry.previous_hash,
+    },
+    clientCertPath: process.env.BLOCKCHAIN_MTLS_CERT_PATH,
+    clientKeyPath: process.env.BLOCKCHAIN_MTLS_KEY_PATH,
+    caPath: process.env.BLOCKCHAIN_CA_PATH,
+  });
+  return {
+    reference: response.data.transaction_id || response.data.reference || response.data.id || null,
+  };
+}
+
+function clientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim().slice(0, 45);
+}
+
+function requireReason(value) {
+  const reason = cleanText(value, 500);
+  if (reason.length < 8) throw new Error('A reason of at least 8 characters is required.');
+  return reason;
+}
+
+function publicApplicant(row) {
+  return {
+    applicant_id: row.applicant_id,
+    applicant_code: row.applicant_code,
+    first_name: row.first_name,
+    middle_name: row.middle_name,
+    last_name: row.last_name,
+    suffix: row.suffix,
+    hiring_type: row.hiring_type,
+    agency_name: row.agency_name,
+    deployment_status: row.deployment_status,
+    contract_start_date: row.contract_start_date,
+    contract_end_date: row.contract_end_date,
+    applied_position: row.applied_position,
+    department_id: row.department_id,
+    department: row.department,
+    branch: row.branch,
+    expected_wage_type_id: row.expected_wage_type_id,
+    expected_wage_type: row.expected_wage_type,
+    expected_base_rate: row.expected_base_rate,
+    requires_onboarding: !!row.requires_onboarding,
+    requires_training: !!row.requires_training,
+    workflow_status: row.workflow_status,
+    screening_status: row.screening_status,
+    training_status: row.training_status,
+    approval_status: row.approval_status,
+    biometric_prepared: !!row.biometric_reference_hash,
+    biometric_device_id: row.biometric_device_id,
+    biometric_device_name: row.biometric_device_name,
+    converted_employee_id: row.converted_employee_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    approved_at: row.approved_at,
+    transferred_at: row.transferred_at,
+    document_count: Number(row.document_count || 0),
+  };
+}
+
+async function writeModuleAudit(connection, req, action, oldValue = null, newValue = null, targetEmployeeId = null) {
+  await connection.execute(
+    `INSERT INTO system_audit_log
+       (user_id, employee_id, target_employee_id, action_performed, module,
+        old_value, new_value, ip_address, user_agent)
+     VALUES (?, ?, ?, ?, 'ONBOARDING', ?, ?, ?, ?)`,
+    [
+      req.user.id,
+      req.user.employeeId || null,
+      targetEmployeeId,
+      action,
+      oldValue == null ? null : JSON.stringify(oldValue),
+      newValue == null ? null : JSON.stringify(newValue),
+      clientIp(req),
+      cleanText(req.headers['user-agent'], 500),
+    ]
+  );
+}
+
+async function writeSystemAudit(connection, req, applicantId, action, oldValue = null, newValue = null) {
+  await writeModuleAudit(connection, req, `${action} [APPLICANT:${applicantId}]`, oldValue, newValue);
+}
+
+function normalizeJsonValue(value) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function hashActivity(activityId, applicantId, action, reason, oldValue, newValue, previousHash) {
+  return sha256(JSON.stringify({
+    activityId: Number(activityId),
+    applicantId: Number(applicantId),
+    action,
+    reason: reason || null,
+    oldValue: normalizeJsonValue(oldValue) || null,
+    newValue: normalizeJsonValue(newValue) || null,
+    previousHash: previousHash || null,
+  }));
+}
+
+async function appendIntegrityHash(connection, activityId, applicantId, action, reason, oldValue, newValue) {
+  const [[lock]] = await connection.execute("SELECT GET_LOCK('onboarding_integrity_chain', 5) AS acquired");
+  if (Number(lock?.acquired) !== 1) throw new Error('Onboarding integrity ledger is busy. Please retry.');
+  try {
+    const [[previous]] = await connection.execute(
+      'SELECT chain_hash FROM onboarding_integrity_chain ORDER BY chain_id DESC LIMIT 1'
+    );
+    const previousHash = previous?.chain_hash || null;
+    const chainHash = hashActivity(activityId, applicantId, action, reason, oldValue, newValue, previousHash);
+    await connection.execute(
+      `INSERT INTO onboarding_integrity_chain
+         (activity_id, applicant_id, previous_hash, chain_hash)
+       VALUES (?, ?, ?, ?)`,
+      [activityId, applicantId, previousHash, chainHash]
+    );
+  } finally {
+    await connection.execute("SELECT RELEASE_LOCK('onboarding_integrity_chain')");
+  }
+}
+
+async function writeActivity(connection, req, applicantId, action, reason = null, oldValue = null, newValue = null) {
+  const [activity] = await connection.execute(
+    `INSERT INTO onboarding_applicant_activity
+       (applicant_id, actor_user_id, action, reason, old_value, new_value)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      applicantId,
+      req.user.id,
+      action,
+      reason,
+      oldValue == null ? null : JSON.stringify(oldValue),
+      newValue == null ? null : JSON.stringify(newValue),
+    ]
+  );
+  await appendIntegrityHash(connection, activity.insertId, applicantId, action, reason, oldValue, newValue);
+  await writeSystemAudit(connection, req, applicantId, action, oldValue, newValue);
+}
+
+async function getApplicant(connection, applicantId, forUpdate = false) {
+  const [rows] = await connection.execute(
+    `SELECT oa.*, d.name AS department, wt.name AS expected_wage_type,
+            bd.device_name AS biometric_device_name,
+            (SELECT COUNT(*) FROM onboarding_applicant_document oad WHERE oad.applicant_id = oa.applicant_id) AS document_count
+       FROM onboarding_applicant oa
+       LEFT JOIN departments d ON d.id = oa.department_id
+       LEFT JOIN wage_types wt ON wt.id = oa.expected_wage_type_id
+      LEFT JOIN biometric_device bd ON bd.device_id = oa.biometric_device_id
+      WHERE oa.applicant_id = ?
+        AND oa.deleted_at IS NULL
+      ${forUpdate ? 'FOR UPDATE' : ''}`,
+    [applicantId]
+  );
+  return rows[0] || null;
+}
+
+async function getPositionRoute(connection, position) {
+  const [rows] = await connection.execute(
+    `SELECT * FROM onboarding_position_route
+      WHERE position_name = ? AND is_active = 1
+      LIMIT 1`,
+    [position]
+  );
+  return rows[0] || { requires_onboarding: 1, requires_training: 1 };
+}
+
+async function generateApplicantCode(connection) {
+  const year = new Date().getFullYear();
+  const [rows] = await connection.execute(
+    'SELECT COUNT(*) AS total FROM onboarding_applicant WHERE YEAR(created_at) = ?',
+    [year]
+  );
+  return `APP-${year}-${String(Number(rows[0].total || 0) + 1).padStart(4, '0')}`;
+}
+
+async function generateEmployeeCode(connection) {
+  const year = new Date().getFullYear();
+  const [rows] = await connection.execute(
+    "SELECT COUNT(*) AS total FROM employees WHERE employee_code LIKE ?",
+    [`MIC-${year}-%`]
+  );
+  return `MIC-${year}-${String(Number(rows[0].total || 0) + 1).padStart(4, '0')}`;
+}
+
+function decryptApplicantPii(applicant) {
+  return JSON.parse(decryptAES256(applicant.pii_encrypted));
+}
+
+router.get('/lookups', async (_req, res) => {
+  try {
+    const [departments] = await pool.execute('SELECT id, name FROM departments ORDER BY name');
+    const [wageTypes] = await pool.execute('SELECT id, name FROM wage_types ORDER BY id');
+    const [devices] = await pool.execute('SELECT device_id, device_name FROM biometric_device WHERE is_active = 1 ORDER BY device_name');
+    res.json({
+      departments,
+      wage_types: wageTypes,
+      biometric_devices: devices,
+      document_types: DOCUMENT_TYPES,
+      genders: GENDERS,
+      civil_statuses: CIVIL_STATUSES,
+      blood_types: BLOOD_TYPES,
+      employment_types: EMPLOYMENT_TYPES,
+      shift_schedules: SHIFT_SCHEDULES,
+      employee_levels: EMPLOYEE_LEVELS,
+      payroll_schedules: PAYROLL_SCHEDULES,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load onboarding lookups.' });
+  }
+});
+
+router.get('/dashboard', async (_req, res) => {
+  try {
+    const [[stats]] = await pool.execute(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(workflow_status NOT IN ('Transferred','Rejected')) AS active,
+        SUM(hiring_type = 'Agency-Hired') AS agency_hired,
+        SUM(hiring_type = 'Direct Hire') AS direct_hire,
+        SUM(screening_status IN ('Pending Screening','For Interview','For Requirements Checking')) AS screening,
+        SUM(training_status IN ('Not Yet Started','In Training','For Final Evaluation')) AS training,
+        SUM(approval_status = 'Approved' AND workflow_status <> 'Transferred') AS ready_for_transfer,
+        SUM(workflow_status = 'Transferred') AS transferred
+      FROM onboarding_applicant
+      WHERE deleted_at IS NULL
+    `);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load onboarding dashboard.' });
+  }
+});
+
+router.get('/positions', async (_req, res) => {
+  try {
+    const [rows] = await pool.execute(`
+      SELECT opr.*, d.name AS department
+        FROM onboarding_position_route opr
+        LEFT JOIN departments d ON d.id = opr.department_id
+       ORDER BY opr.position_name
+    `);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load position routing rules.' });
+  }
+});
+
+router.post('/positions', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const positionName = requiredText(req.body.position_name, 'Position name', 120);
+    const departmentId = optionalPositiveInteger(req.body.department_id, 'department_id');
+    const requiresOnboarding = req.body.requires_onboarding === false || req.body.requires_onboarding === 0 ? 0 : 1;
+    const requiresTraining = requiresOnboarding && !(req.body.requires_training === false || req.body.requires_training === 0) ? 1 : 0;
+    await connection.beginTransaction();
+    const [existing] = await connection.execute(
+      'SELECT * FROM onboarding_position_route WHERE position_name = ? LIMIT 1',
+      [positionName]
+    );
+    await connection.execute(
+      `INSERT INTO onboarding_position_route
+         (position_name, department_id, requires_onboarding, requires_training, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         department_id = VALUES(department_id),
+         requires_onboarding = VALUES(requires_onboarding),
+         requires_training = VALUES(requires_training),
+         is_active = 1,
+         updated_by = VALUES(updated_by)`,
+      [positionName, departmentId, requiresOnboarding, requiresTraining, req.user.id, req.user.id]
+    );
+    await writeModuleAudit(connection, req, `POSITION_ROUTE_SAVED [POSITION:${positionName}]`, existing[0] || null, {
+      position_name: positionName,
+      department_id: departmentId,
+      requires_onboarding: requiresOnboarding,
+      requires_training: requiresTraining,
+    });
+    await connection.commit();
+    res.json({ message: 'Position routing rule saved.' });
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/applicants', async (req, res) => {
+  try {
+    const search = cleanText(req.query.search, 80);
+    const values = [];
+    const conditions = ['oa.deleted_at IS NULL'];
+    if (search) {
+      conditions.push("(oa.applicant_code LIKE ? OR CONCAT(oa.first_name, ' ', oa.last_name) LIKE ? OR oa.applied_position LIKE ?)");
+      values.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    if (req.query.workflow_status) {
+      conditions.push('oa.workflow_status = ?');
+      values.push(cleanText(req.query.workflow_status, 40));
+    }
+    const [rows] = await pool.execute(
+      `SELECT oa.*, d.name AS department, wt.name AS expected_wage_type,
+              bd.device_name AS biometric_device_name,
+              (SELECT COUNT(*) FROM onboarding_applicant_document oad WHERE oad.applicant_id = oa.applicant_id) AS document_count
+         FROM onboarding_applicant oa
+         LEFT JOIN departments d ON d.id = oa.department_id
+         LEFT JOIN wage_types wt ON wt.id = oa.expected_wage_type_id
+         LEFT JOIN biometric_device bd ON bd.device_id = oa.biometric_device_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY oa.updated_at DESC, oa.applicant_id DESC
+        LIMIT 500`,
+      values
+    );
+    res.json(rows.map(publicApplicant));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load onboarding applicants.' });
+  }
+});
+
+router.get('/applicants/:applicantId', async (req, res) => {
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const applicant = await getApplicant(pool, applicantId);
+    if (!applicant) return res.status(404).json({ error: 'Applicant not found.' });
+    const pii = decryptApplicantPii(applicant);
+    res.json({
+      ...publicApplicant(applicant),
+      email: decryptAES256(applicant.email_encrypted),
+      contact_number: pii.contact_number || '',
+      residential_address: pii.residential_address || '',
+      current_address: pii.current_address || '',
+      mailing_address: pii.mailing_address || '',
+      work_email: pii.work_email || '',
+      nationality: pii.nationality || '',
+      date_of_birth: pii.date_of_birth || '',
+      place_of_birth: pii.place_of_birth || '',
+      gender: pii.gender || '',
+      civil_status: pii.civil_status || '',
+      blood_type: pii.blood_type || '',
+      religion: pii.religion || '',
+      emergency_contact_name: pii.emergency_contact_name || '',
+      emergency_contact_relationship: pii.emergency_contact_relationship || '',
+      emergency_contact_number: pii.emergency_contact_number || '',
+      emergency_contact_secondary_number: pii.emergency_contact_secondary_number || '',
+      emergency_contact_email: pii.emergency_contact_email || '',
+      emergency_contact_address: pii.emergency_contact_address || '',
+      desired_employment_type: pii.desired_employment_type || '',
+      supervisor: pii.supervisor || '',
+      shift_schedule: pii.shift_schedule || '',
+      employee_level: pii.employee_level || '',
+      payroll_schedule: pii.payroll_schedule || '',
+      allowances: pii.allowances ?? null,
+      sss_number: pii.sss_number || '',
+      philhealth_number: pii.philhealth_number || '',
+      pagibig_number: pii.pagibig_number || '',
+      tin: pii.tin || '',
+      bank_name: pii.bank_name || '',
+      bank_account: pii.bank_account || '',
+      agency_contact_person: pii.agency_contact_person || '',
+      agency_contact_number: pii.agency_contact_number || '',
+      biometric_reference: applicant.biometric_reference_encrypted ? decryptAES256(applicant.biometric_reference_encrypted) : '',
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.delete('/applicants/:applicantId', async (req, res) => {
+  const connection = await pool.getConnection();
+  let documentPaths = [];
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const reason = requireReason(req.body.reason);
+    await connection.beginTransaction();
+    const applicant = await getApplicant(connection, applicantId, true);
+    if (!applicant) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Applicant not found or already removed from onboarding.' });
+    }
+    if (applicant.converted_employee_id || applicant.workflow_status === 'Transferred') {
+      throw new Error('Transferred hires cannot be deleted from onboarding. Manage the official employee record instead.');
+    }
+    const [documents] = await connection.execute(
+      'SELECT encrypted_file_path FROM onboarding_applicant_document WHERE applicant_id = ?',
+      [applicantId]
+    );
+    documentPaths = documents.map(document => document.encrypted_file_path);
+    await writeActivity(connection, req, applicantId, 'APPLICANT_ARCHIVED', reason, {
+      workflow_status: applicant.workflow_status,
+      document_count: Number(applicant.document_count || 0),
+    }, {
+      removed_from_active_onboarding: true,
+    });
+    await connection.execute(
+      `UPDATE onboarding_applicant
+          SET deleted_at = NOW(), deleted_by = ?, deletion_reason = ?, updated_by = ?
+        WHERE applicant_id = ?`,
+      [req.user.id, reason, req.user.id, applicantId]
+    );
+    await connection.execute(
+      'DELETE FROM onboarding_applicant_document WHERE applicant_id = ?',
+      [applicantId]
+    );
+    await connection.commit();
+
+    const cleanup = await Promise.allSettled(documentPaths.map(filePath => fs.promises.unlink(filePath)));
+    const cleanupPending = cleanup.filter(result => result.status === 'rejected' && result.reason?.code !== 'ENOENT').length;
+    if (cleanupPending) console.warn(`Onboarding vault cleanup pending for applicant ${applicantId}: ${cleanupPending} file(s).`);
+    res.json({
+      message: 'Applicant removed from active onboarding with an audit trail.',
+      vault_files_removed: documentPaths.length - cleanupPending,
+      vault_cleanup_pending: cleanupPending,
+    });
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.post('/applicants', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const firstName = requiredText(req.body.first_name, 'First name', 100);
+    const middleName = cleanText(req.body.middle_name, 100) || null;
+    const lastName = requiredText(req.body.last_name, 'Last name', 100);
+    const suffix = cleanText(req.body.suffix, 20) || null;
+    const email = validEmail(req.body.email);
+    const contactNumber = requiredText(req.body.contact_number, 'Contact number', 50);
+    const address = requiredText(req.body.residential_address, 'Residential address', 500);
+    const hiringType = cleanText(req.body.hiring_type, 20);
+    const position = requiredText(req.body.applied_position, 'Applied position', 120);
+    const departmentId = optionalPositiveInteger(req.body.department_id, 'department_id');
+    const branch = requiredText(req.body.branch, 'Branch', 120);
+    const wageTypeId = optionalPositiveInteger(req.body.expected_wage_type_id, 'expected_wage_type_id');
+    const baseRate = optionalNonNegativeNumber(req.body.expected_base_rate, 'Initial payroll rate');
+    if (!['Agency-Hired', 'Direct Hire'].includes(hiringType)) throw new Error('Hiring type must be Agency-Hired or Direct Hire.');
+
+    const agencyName = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_name, 'Agency name', 180) : null;
+    const agencyContactPerson = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_contact_person, 'Agency contact person', 180) : '';
+    const agencyContactNumber = hiringType === 'Agency-Hired' ? requiredText(req.body.agency_contact_number, 'Agency contact number', 80) : '';
+    const deploymentStatus = hiringType === 'Agency-Hired' ? cleanText(req.body.deployment_status, 40) || 'Pending Deployment' : null;
+    const contractStart = hiringType === 'Agency-Hired' ? optionalDate(req.body.contract_start_date, 'Contract start date') : null;
+    const contractEnd = hiringType === 'Agency-Hired' ? optionalDate(req.body.contract_end_date, 'Contract end date') : null;
+    if (hiringType === 'Agency-Hired' && !['Pending Deployment', 'Deployed', 'On Hold', 'Ended'].includes(deploymentStatus)) {
+      throw new Error('Invalid agency deployment status.');
+    }
+    if (contractStart && contractEnd && contractEnd < contractStart) throw new Error('Contract end date cannot be earlier than contract start date.');
+
+    const biometricReference = cleanText(req.body.biometric_reference, 190);
+    const biometricDeviceId = biometricReference ? optionalPositiveInteger(req.body.biometric_device_id, 'biometric_device_id') : null;
+    const desiredEmploymentType = hiringType === 'Agency-Hired'
+      ? 'Contractual'
+      : optionalChoice(req.body.desired_employment_type, 'employment type', EMPLOYMENT_TYPES) || 'Full-time';
+    const pii = {
+      contact_number: contactNumber,
+      residential_address: address,
+      residential_address_lat: cleanText(req.body.residential_address_lat, 40),
+      residential_address_lng: cleanText(req.body.residential_address_lng, 40),
+      current_address: cleanText(req.body.current_address, 500),
+      current_address_lat: cleanText(req.body.current_address_lat, 40),
+      current_address_lng: cleanText(req.body.current_address_lng, 40),
+      current_address_same_as_home: Number(req.body.current_address_same_as_home) === 1,
+      mailing_address: cleanText(req.body.mailing_address, 500),
+      mailing_address_lat: cleanText(req.body.mailing_address_lat, 40),
+      mailing_address_lng: cleanText(req.body.mailing_address_lng, 40),
+      mailing_address_same_as_home: Number(req.body.mailing_address_same_as_home) === 1,
+      work_email: optionalEmail(req.body.work_email, 'Work email'),
+      nationality: cleanText(req.body.nationality, 50) || 'Filipino',
+      date_of_birth: optionalDate(req.body.date_of_birth, 'Date of birth'),
+      place_of_birth: cleanText(req.body.place_of_birth, 180),
+      place_of_birth_lat: cleanText(req.body.place_of_birth_lat, 40),
+      place_of_birth_lng: cleanText(req.body.place_of_birth_lng, 40),
+      gender: optionalChoice(req.body.gender, 'gender', GENDERS),
+      civil_status: optionalChoice(req.body.civil_status, 'civil status', CIVIL_STATUSES),
+      blood_type: optionalChoice(req.body.blood_type, 'blood type', BLOOD_TYPES),
+      religion: cleanText(req.body.religion, 100),
+      emergency_contact_name: cleanText(req.body.emergency_contact_name, 180),
+      emergency_contact_relationship: cleanText(req.body.emergency_contact_relationship, 80),
+      emergency_contact_number: cleanText(req.body.emergency_contact_number, 50),
+      emergency_contact_secondary_number: cleanText(req.body.emergency_contact_secondary_number, 50),
+      emergency_contact_email: optionalEmail(req.body.emergency_contact_email, 'Emergency contact email'),
+      emergency_contact_address: cleanText(req.body.emergency_contact_address, 500),
+      desired_employment_type: desiredEmploymentType,
+      supervisor: cleanText(req.body.supervisor, 180),
+      shift_schedule: optionalChoice(req.body.shift_schedule, 'shift schedule', SHIFT_SCHEDULES),
+      employee_level: optionalChoice(req.body.employee_level, 'employee level', EMPLOYEE_LEVELS),
+      payroll_schedule: optionalChoice(req.body.payroll_schedule, 'payroll schedule', PAYROLL_SCHEDULES),
+      allowances: optionalNonNegativeNumber(req.body.allowances, 'Allowances'),
+      sss_number: cleanText(req.body.sss_number, 30),
+      philhealth_number: cleanText(req.body.philhealth_number, 30),
+      pagibig_number: cleanText(req.body.pagibig_number, 30),
+      tin: cleanText(req.body.tin, 30),
+      bank_name: cleanText(req.body.bank_name, 120),
+      bank_account: cleanText(req.body.bank_account, 80),
+      agency_contact_person: agencyContactPerson,
+      agency_contact_number: agencyContactNumber,
+    };
+
+    await connection.beginTransaction();
+    const route = await getPositionRoute(connection, position);
+    const applicantCode = await generateApplicantCode(connection);
+    const requiresOnboarding = Number(route.requires_onboarding) ? 1 : 0;
+    const requiresTraining = requiresOnboarding && Number(route.requires_training) ? 1 : 0;
+    const workflowStatus = requiresOnboarding ? 'Pending Screening' : 'For Approval';
+    const screeningStatus = requiresOnboarding ? 'Pending Screening' : 'Not Required';
+    const trainingStatus = requiresTraining ? 'Not Yet Started' : 'Not Required';
+
+    const [result] = await connection.execute(
+      `INSERT INTO onboarding_applicant
+         (applicant_code, first_name, middle_name, last_name, suffix, email_hash,
+          email_encrypted, pii_encrypted, hiring_type, agency_name, deployment_status,
+          contract_start_date, contract_end_date, applied_position, department_id, branch,
+          expected_wage_type_id, expected_base_rate, requires_onboarding, requires_training,
+          workflow_status, screening_status, training_status, biometric_device_id,
+          biometric_reference_hash, biometric_reference_encrypted, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        applicantCode, firstName, middleName, lastName, suffix, sha256(email), encryptAES256(email),
+        encryptAES256(JSON.stringify(pii)), hiringType, agencyName, deploymentStatus,
+        contractStart, contractEnd, position, departmentId, branch, wageTypeId, baseRate,
+        requiresOnboarding, requiresTraining, workflowStatus, screeningStatus, trainingStatus,
+        biometricDeviceId, biometricReference ? sha256(biometricReference) : null,
+        biometricReference ? encryptAES256(biometricReference) : null, req.user.id, req.user.id,
+      ]
+    );
+    await writeActivity(connection, req, result.insertId, 'APPLICANT_CREATED', null, null, {
+      applicant_code: applicantCode,
+      hiring_type: hiringType,
+      applied_position: position,
+      workflow_status: workflowStatus,
+    });
+    await connection.commit();
+    res.status(201).json({ message: 'Applicant onboarding record created.', applicant_id: result.insertId, applicant_code: applicantCode, workflow_status: workflowStatus });
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Applicant code already exists. Please retry.' });
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.patch('/applicants/:applicantId/progress', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const reason = requireReason(req.body.reason);
+    await connection.beginTransaction();
+    const applicant = await getApplicant(connection, applicantId, true);
+    if (!applicant) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Applicant not found.' });
+    }
+    if (['Approved', 'Rejected', 'Transferred'].includes(applicant.workflow_status)) {
+      throw new Error('Completed applicants cannot be moved back into screening or training.');
+    }
+
+    const screeningStatus = req.body.screening_status ? cleanText(req.body.screening_status, 60) : applicant.screening_status;
+    const trainingStatus = req.body.training_status ? cleanText(req.body.training_status, 60) : applicant.training_status;
+    if (!SCREENING_STATUSES.includes(screeningStatus)) throw new Error('Invalid screening status.');
+    if (!TRAINING_STATUSES.includes(trainingStatus)) throw new Error('Invalid training status.');
+    if (!applicant.requires_onboarding && screeningStatus !== 'Not Required') throw new Error('Screening is not required for this position.');
+    if (!applicant.requires_training && trainingStatus !== 'Not Required') throw new Error('Training is not required for this position.');
+    if (applicant.requires_training && screeningStatus !== 'Passed Screening' && trainingStatus !== 'Not Yet Started') {
+      throw new Error('Training cannot start until screening is passed.');
+    }
+
+    const workflowStatus = screeningStatus === 'Failed Screening' || trainingStatus === 'Failed Training'
+      ? 'For Re-evaluation'
+      : trainingStatus === 'In Training' || trainingStatus === 'For Final Evaluation'
+        ? 'Training'
+        : applicant.requires_training && trainingStatus !== 'Completed Training'
+          ? 'Screening'
+          : 'For Approval';
+    const oldValue = { workflow_status: applicant.workflow_status, screening_status: applicant.screening_status, training_status: applicant.training_status };
+    const newValue = { workflow_status: workflowStatus, screening_status: screeningStatus, training_status: trainingStatus };
+    await connection.execute(
+      `UPDATE onboarding_applicant
+          SET workflow_status = ?, screening_status = ?, training_status = ?, updated_by = ?
+        WHERE applicant_id = ?`,
+      [workflowStatus, screeningStatus, trainingStatus, req.user.id, applicantId]
+    );
+    await writeActivity(connection, req, applicantId, 'PROGRESS_UPDATED', reason, oldValue, newValue);
+    await connection.commit();
+    res.json({ message: 'Screening and training progress updated.', ...newValue });
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.patch('/applicants/:applicantId/decision', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const reason = requireReason(req.body.reason);
+    const decision = cleanText(req.body.approval_status, 40);
+    if (!DECISIONS.includes(decision)) throw new Error('Invalid approval decision.');
+    await connection.beginTransaction();
+    const applicant = await getApplicant(connection, applicantId, true);
+    if (!applicant) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Applicant not found.' });
+    }
+    if (applicant.workflow_status === 'Transferred') throw new Error('Transferred applicants cannot be changed.');
+    if (decision === 'Approved') {
+      if (applicant.requires_onboarding && applicant.screening_status !== 'Passed Screening') throw new Error('Applicant must pass screening before approval.');
+      if (applicant.requires_training && applicant.training_status !== 'Completed Training') throw new Error('Applicant must complete training before approval.');
+    }
+    const workflowStatus = decision;
+    const oldValue = { workflow_status: applicant.workflow_status, approval_status: applicant.approval_status };
+    const newValue = { workflow_status: workflowStatus, approval_status: decision };
+    await connection.execute(
+      `UPDATE onboarding_applicant
+          SET workflow_status = ?, approval_status = ?, approved_by = ?,
+              approved_at = NOW(), updated_by = ?
+        WHERE applicant_id = ?`,
+      [workflowStatus, decision, req.user.id, req.user.id, applicantId]
+    );
+    await writeActivity(connection, req, applicantId, `DECISION_${decision.toUpperCase().replace(/ /g, '_')}`, reason, oldValue, newValue);
+    await connection.commit();
+    res.json({ message: `Applicant marked ${decision}.`, ...newValue });
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.post('/applicants/:applicantId/transfer', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const reason = requireReason(req.body.reason);
+    await connection.beginTransaction();
+    const applicant = await getApplicant(connection, applicantId, true);
+    if (!applicant) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Applicant not found.' });
+    }
+    if (applicant.approval_status !== 'Approved' || applicant.workflow_status !== 'Approved') throw new Error('Only approved applicants can be transferred.');
+    if (applicant.converted_employee_id) throw new Error('Applicant has already been transferred.');
+
+    const employeeCode = cleanText(req.body.employee_code, 20) || await generateEmployeeCode(connection);
+    const email = decryptAES256(applicant.email_encrypted);
+    const pii = decryptApplicantPii(applicant);
+    const employeePii = encryptPII({
+      ...pii,
+      agency_name: applicant.agency_name || '',
+    });
+    const employmentType = applicant.hiring_type === 'Agency-Hired'
+      ? 'Contractual'
+      : EMPLOYMENT_TYPES.includes(pii.desired_employment_type) ? pii.desired_employment_type : 'Full-time';
+
+    const [employee] = await connection.execute(
+      `INSERT INTO employees
+         (employee_code, first_name, middle_name, last_name, suffix, email,
+          department_id, position, employment_type, date_hired, supervisor,
+          work_location, status, wage_type_id, encrypted_pii)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, 'Active', ?, ?)`,
+      [
+        employeeCode, applicant.first_name, applicant.middle_name, applicant.last_name,
+        applicant.suffix, email, applicant.department_id, applicant.applied_position,
+        employmentType, pii.supervisor || null, applicant.branch,
+        applicant.expected_wage_type_id, employeePii,
+      ]
+    );
+    const employeeId = employee.insertId;
+
+    if (applicant.expected_wage_type_id && applicant.expected_base_rate != null) {
+      await connection.execute(
+        `INSERT INTO employee_wage_rates
+           (employee_id, wage_type_id, rate, effective_date)
+         VALUES (?, ?, ?, CURDATE())`,
+        [employeeId, applicant.expected_wage_type_id, applicant.expected_base_rate]
+      );
+    }
+
+    if (applicant.biometric_device_id && applicant.biometric_reference_hash && applicant.biometric_reference_encrypted) {
+      await connection.execute(
+        `INSERT INTO biometric_employee_mapping
+           (device_id, employee_id, biometric_user_hash, biometric_user_id_encrypted,
+            is_active, created_by, updated_by)
+         VALUES (?, ?, ?, ?, 1, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           employee_id = VALUES(employee_id),
+           biometric_user_id_encrypted = VALUES(biometric_user_id_encrypted),
+           is_active = 1,
+           updated_by = VALUES(updated_by)`,
+        [
+          applicant.biometric_device_id, employeeId, applicant.biometric_reference_hash,
+          applicant.biometric_reference_encrypted, req.user.id, req.user.id,
+        ]
+      );
+    }
+
+    await connection.execute(
+      `UPDATE onboarding_applicant_document
+          SET transferred_employee_id = ?
+        WHERE applicant_id = ?`,
+      [employeeId, applicantId]
+    );
+    await connection.execute(
+      `UPDATE onboarding_applicant
+          SET workflow_status = 'Transferred', converted_employee_id = ?,
+              transferred_by = ?, transferred_at = NOW(), updated_by = ?
+        WHERE applicant_id = ?`,
+      [employeeId, req.user.id, req.user.id, applicantId]
+    );
+    await writeActivity(connection, req, applicantId, 'TRANSFERRED_TO_EMPLOYEE_DIRECTORY', reason, null, { employee_id: employeeId, employee_code: employeeCode });
+    await connection.commit();
+    res.status(201).json({ message: 'Approved applicant transferred to Employee Directory.', employee_id: employeeId, employee_code: employeeCode });
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Employee code or email already exists in the Employee Directory.' });
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/applicants/:applicantId/documents', async (req, res) => {
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const [rows] = await pool.execute(
+      `SELECT document_id, applicant_id, transferred_employee_id, document_type,
+              original_file_name, mime_type, file_size_bytes, verification_status,
+              rejection_reason, uploaded_at, verified_at
+         FROM onboarding_applicant_document
+        WHERE applicant_id = ?
+        ORDER BY uploaded_at DESC`,
+      [applicantId]
+    );
+    res.json(rows);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/applicants/:applicantId/documents', (req, res, next) => {
+  upload.single('file')(req, res, error => {
+    if (!error) return next();
+    res.status(400).json({ error: error.message || 'Document upload failed.' });
+  });
+}, async (req, res) => {
+  const connection = await pool.getConnection();
+  let filePath;
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    if (!req.file) return res.status(400).json({ error: 'A document file is required.' });
+    const documentType = cleanText(req.body.document_type, 80);
+    if (!DOCUMENT_TYPES.includes(documentType)) return res.status(400).json({ error: 'Invalid document type.' });
+    const applicant = await getApplicant(connection, applicantId);
+    if (!applicant) return res.status(404).json({ error: 'Applicant not found.' });
+
+    const fileName = `${Date.now()}-${crypto.randomBytes(10).toString('hex')}.enc`;
+    filePath = path.join(vaultDirectory, fileName);
+    await fs.promises.writeFile(filePath, encryptAES256(req.file.buffer.toString('base64')), 'utf8');
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      `INSERT INTO onboarding_applicant_document
+         (applicant_id, document_type, original_file_name, encrypted_file_path,
+          mime_type, file_size_bytes, uploaded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [applicantId, documentType, cleanText(req.file.originalname, 255), filePath, req.file.mimetype, req.file.size, req.user.id]
+    );
+    await writeActivity(connection, req, applicantId, 'DOCUMENT_UPLOADED', null, null, { document_id: result.insertId, document_type: documentType });
+    await connection.commit();
+    res.status(201).json({ message: 'Document encrypted and stored in the onboarding vault.', document_id: result.insertId });
+  } catch (error) {
+    await connection.rollback();
+    if (filePath) await fs.promises.unlink(filePath).catch(() => {});
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/applicants/:applicantId/documents/:documentId/download', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const documentId = positiveInteger(req.params.documentId, 'documentId');
+    const [rows] = await connection.execute(
+      `SELECT * FROM onboarding_applicant_document
+        WHERE document_id = ? AND applicant_id = ?`,
+      [documentId, applicantId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const document = rows[0];
+    const encrypted = await fs.promises.readFile(document.encrypted_file_path, 'utf8');
+    const buffer = Buffer.from(decryptAES256(encrypted), 'base64');
+    await connection.beginTransaction();
+    await writeActivity(connection, req, applicantId, 'DOCUMENT_DOWNLOADED', null, null, { document_id: documentId });
+    await connection.commit();
+    res.setHeader('Content-Type', document.mime_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${document.original_file_name.replace(/["\r\n]/g, '')}"`);
+    res.send(buffer);
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.patch('/applicants/:applicantId/documents/:documentId/verify', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const documentId = positiveInteger(req.params.documentId, 'documentId');
+    const status = cleanText(req.body.verification_status, 20);
+    const reason = status === 'Rejected' ? requireReason(req.body.reason) : cleanText(req.body.reason, 500) || null;
+    if (!['Verified', 'Rejected'].includes(status)) return res.status(400).json({ error: 'Document status must be Verified or Rejected.' });
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      `UPDATE onboarding_applicant_document
+          SET verification_status = ?, rejection_reason = ?, verified_by = ?, verified_at = NOW()
+        WHERE document_id = ? AND applicant_id = ?`,
+      [status, reason, req.user.id, documentId, applicantId]
+    );
+    if (!result.affectedRows) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Document not found.' });
+    }
+    await writeActivity(connection, req, applicantId, `DOCUMENT_${status.toUpperCase()}`, reason, null, { document_id: documentId });
+    await connection.commit();
+    res.json({ message: `Document marked ${status}.` });
+  } catch (error) {
+    await connection.rollback();
+    res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/applicants/:applicantId/integrity', async (req, res) => {
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const [rows] = await pool.execute(
+      `SELECT oic.*, oaa.action, oaa.reason, oaa.old_value, oaa.new_value
+         FROM onboarding_integrity_chain oic
+         JOIN onboarding_applicant_activity oaa ON oaa.activity_id = oic.activity_id
+        ORDER BY oic.chain_id`
+    );
+    let chainValid = true;
+    let previousHash = null;
+    for (const row of rows) {
+      const expectedHash = hashActivity(row.activity_id, row.applicant_id, row.action, row.reason, row.old_value, row.new_value, previousHash);
+      if (row.previous_hash !== previousHash || row.chain_hash !== expectedHash) chainValid = false;
+      previousHash = row.chain_hash;
+    }
+    const records = rows
+      .filter(row => Number(row.applicant_id) === applicantId)
+      .map(row => ({
+        chain_id: row.chain_id,
+        activity_id: row.activity_id,
+        chain_hash: row.chain_hash,
+        anchor_status: row.anchor_status,
+        blockchain_reference: row.blockchain_reference,
+        created_at: row.created_at,
+      }));
+    res.json({
+      chain_valid: chainValid,
+      records,
+      pending_anchor_count: records.filter(row => row.anchor_status === 'PENDING').length,
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.get('/applicants/:applicantId/audit', async (req, res) => {
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const [rows] = await pool.execute(
+      `SELECT oaa.*, u.username AS actor, oic.chain_hash, oic.anchor_status
+         FROM onboarding_applicant_activity oaa
+         JOIN users u ON u.id = oaa.actor_user_id
+         LEFT JOIN onboarding_integrity_chain oic ON oic.activity_id = oaa.activity_id
+        WHERE oaa.applicant_id = ?
+        ORDER BY oaa.created_at DESC, oaa.activity_id DESC`,
+      [applicantId]
+    );
+    res.json(rows);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+module.exports = router;

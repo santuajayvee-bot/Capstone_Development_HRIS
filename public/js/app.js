@@ -11,7 +11,7 @@ const PAGE_TITLES = {
   attendance: 'Attendance Tracking',
   '201file':  '201-File Management',
   payroll:    'Payroll',
-  onboarding: 'HR Officer – Recruitment Management',
+  onboarding: 'HR Admin - Onboarding Management',
   blockchain: 'Blockchain',
   'system-admin': 'System Administration',
   'employee-dashboard': 'Employee Dashboard',
@@ -51,6 +51,15 @@ function navigate(pageId, navEl, params = null) {
   // When navigating to leave, load leave requests
   if (pageId === 'leave' && typeof loadLeaveRequests === 'function') {
     loadLeaveRequests();
+  }
+
+  // Refresh role-aware attendance surfaces on every visit.
+  if (pageId === 'attendance' && typeof initAttendance === 'function') {
+    initAttendance();
+  }
+
+  if (pageId === 'onboarding' && typeof initOnboarding === 'function') {
+    initOnboarding();
   }
 
   // When navigating to 201-file, load list

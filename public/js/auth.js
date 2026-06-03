@@ -1,8 +1,8 @@
 /* ============================================================
-   public/js/auth.js — Client-side auth: JWT, role guard, sidebar
+   Client-side auth: JWT, role guard, sidebar
+   Server-side route guards remain authoritative.
    ============================================================ */
 
-// ── Role → permitted pages ────────────────────────────────────
 const ROLE_PERMISSIONS = {
   admin: [
     'dashboard', 'employees', 'register', 'leave', 'requests',
@@ -13,7 +13,7 @@ const ROLE_PERMISSIONS = {
     'attendance', 'payroll', 'onboarding', 'blockchain', '201file', 'employee-profile',
   ],
   system_admin: [
-    'dashboard', 'system-admin', 'blockchain',
+    'dashboard', 'system-admin', 'attendance', 'blockchain',
   ],
   payroll_officer: [
     'dashboard', 'attendance', 'leave', 'payroll', 'requests', 'blockchain',
@@ -26,60 +26,59 @@ const ROLE_PERMISSIONS = {
   ],
 };
 
-// ── Sidebar nav items per role ────────────────────────────────
 const NAV_CONFIG = {
   admin: [
-    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'employees', icon: '👥', label: 'Employees' },
-    { page: 'leave', icon: '📅', label: 'Leave Management' },
-    { page: 'requests', icon: '📋', label: 'Request' },
-    { page: 'attendance', icon: '⏰', label: 'Attendance' },
-    { page: '201file', icon: '📄', label: '201-File' },
-    { page: 'payroll', icon: '💰', label: 'Payroll' },
-    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
-    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'employees', icon: 'EM', label: 'Employees' },
+    { page: 'leave', icon: 'LV', label: 'Leave Management' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance' },
+    { page: '201file', icon: '20', label: '201-File' },
+    { page: 'payroll', icon: 'PR', label: 'Payroll' },
+    { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   hr_admin: [
-    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'employees', icon: '👥', label: 'Employees' },
-    { page: 'leave', icon: '📅', label: 'Leave Management' },
-    { page: 'requests', icon: '📋', label: 'Request' },
-    { page: 'attendance', icon: '⏰', label: 'Attendance' },
-    { page: '201file', icon: '📄', label: '201-File' },
-    { page: 'payroll', icon: '💰', label: 'Payroll' },
-    { page: 'onboarding', icon: '🚀', label: 'On-Boarding' },
-    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'employees', icon: 'EM', label: 'Employees' },
+    { page: 'leave', icon: 'LV', label: 'Leave Management' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance' },
+    { page: '201file', icon: '20', label: '201-File' },
+    { page: 'payroll', icon: 'PR', label: 'Payroll' },
+    { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   system_admin: [
-    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'system-admin', icon: '🔐', label: 'System Admin' },
-    { page: 'blockchain', icon: '🔗', label: 'Audit Log' },
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'system-admin', icon: 'SA', label: 'System Admin' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance Sync' },
+    { page: 'blockchain', icon: 'BC', label: 'Audit Log' },
   ],
   payroll_officer: [
-    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'attendance', icon: '⏰', label: 'Attendance' },
-    { page: 'leave', icon: '📅', label: 'Leave Management' },
-    { page: 'payroll', icon: '💰', label: 'Payroll' },
-    { page: 'requests', icon: '📋', label: 'Request' },
-    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance' },
+    { page: 'leave', icon: 'LV', label: 'Leave Management' },
+    { page: 'payroll', icon: 'PR', label: 'Payroll' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   payroll_manager: [
-    { page: 'dashboard', icon: '⊞', label: 'Dashboard' },
-    { page: 'attendance', icon: '⏰', label: 'Attendance' },
-    { page: 'leave', icon: '📅', label: 'Leave Management' },
-    { page: 'payroll', icon: '💰', label: 'Payroll' },
-    { page: 'reports', icon: '📊', label: 'Reports' },
-    { page: 'requests', icon: '📋', label: 'Request' },
-    { page: 'blockchain', icon: '🔗', label: 'Blockchain' },
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance' },
+    { page: 'leave', icon: 'LV', label: 'Leave Management' },
+    { page: 'payroll', icon: 'PR', label: 'Payroll' },
+    { page: 'reports', icon: 'RP', label: 'Reports' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   employee: [
-    { page: 'dashboard', icon: '⊞', label: 'My Dashboard' },
-    { page: 'requests', icon: '📋', label: 'My Requests' },
-    { page: 'attendance', icon: '⏰', label: 'My Attendance' },
+    { page: 'dashboard', icon: 'DB', label: 'My Dashboard' },
+    { page: 'requests', icon: 'RQ', label: 'My Requests' },
+    { page: 'attendance', icon: 'AT', label: 'My Attendance' },
   ],
 };
 
-// ── Token helpers ─────────────────────────────────────────────
 function saveAuth(token, user) {
   sessionStorage.setItem('vp_token', token);
   sessionStorage.setItem('vp_user', JSON.stringify(user));
@@ -103,80 +102,52 @@ function isLoggedIn() {
   return !!getToken();
 }
 
-// ── API helper — attaches Bearer token automatically ──────────
 async function apiFetch(url, options = {}) {
   const token = getToken();
-
-  // For FormData uploads, don't set Content-Type - let browser handle it
   const isFormData = options.body instanceof FormData;
-
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-
-  // Only set Content-Type if not FormData and not already set
-  if (!isFormData && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  const res = await fetch(url, { ...options, headers });
-
-  if (res.status === 401) {
-    // Token expired or invalid → log it but return response so caller can handle
-    console.warn('⚠️ 401 Unauthorized:', url);
-    // Optional: show a reconnect prompt or auto-logout after a delay
-    // For now, return the response so the caller can handle it
-    return res;
-  }
-  return res;
+  if (!isFormData && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) console.warn('401 Unauthorized:', url);
+  return response;
 }
 
-// ── Sidebar builder ───────────────────────────────────────────
 function buildSidebar(user) {
   const navItems = document.getElementById('nav-items');
   if (!navItems) return;
-
   const config = NAV_CONFIG[user.role] || NAV_CONFIG.employee;
-  navItems.innerHTML = config.map((item, i) => `
-    <div class="nav-item ${i === 0 ? 'active' : ''}"
+  navItems.innerHTML = config.map((item, index) => `
+    <div class="nav-item ${index === 0 ? 'active' : ''}"
          data-page="${item.page}"
          onclick="navigate('${item.page}', this)">
       <span class="nav-icon">${item.icon}</span> ${item.label}
     </div>
   `).join('');
 
-  // Update user info in sidebar
-  const nameEl = document.getElementById('sidebar-user-name');
-  const roleEl = document.getElementById('sidebar-user-role');
-  if (nameEl) nameEl.textContent = user.username;
-  if (roleEl) roleEl.textContent = user.roleLabel;
-
-  // Show role badge
-  const badgeEl = document.getElementById('role-badge');
-  if (badgeEl) {
-    badgeEl.textContent = user.roleLabel;
-    badgeEl.className = `role-badge role-${user.role}`;
-    badgeEl.style.display = 'inline-block';
+  const name = document.getElementById('sidebar-user-name');
+  if (name) name.textContent = user.username;
+  const badge = document.getElementById('role-badge');
+  if (badge) {
+    badge.textContent = user.roleLabel;
+    badge.className = `role-badge role-${user.role}`;
+    badge.style.display = 'inline-block';
   }
 }
 
-// ── Route guard ───────────────────────────────────────────────
 function canAccess(pageId) {
   const user = getUser();
-  if (!user) return false;
-  const allowed = ROLE_PERMISSIONS[user.role] || [];
-  return allowed.includes(pageId);
+  return !!user && (ROLE_PERMISSIONS[user.role] || []).includes(pageId);
 }
 
-// ── Logout ────────────────────────────────────────────────────
 function logout() {
   clearAuth();
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
 }
 
-// ── On page load — restore session if token exists ───────────
 document.addEventListener('DOMContentLoaded', () => {
   if (isLoggedIn()) {
     const user = getUser();
@@ -184,13 +155,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('app').style.display = 'block';
     buildSidebar(user);
   }
-
-  // Wire logout button
-  const logoutBtn = document.getElementById('btn-logout');
-  if (logoutBtn) logoutBtn.addEventListener('click', logout);
+  document.getElementById('btn-logout')?.addEventListener('click', logout);
 });
 
-// Expose globally
 window.saveAuth = saveAuth;
 window.getToken = getToken;
 window.getUser = getUser;

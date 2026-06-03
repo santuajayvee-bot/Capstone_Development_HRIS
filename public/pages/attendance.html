@@ -1,62 +1,57 @@
 <!-- ============================================================
-     pages/attendance.html — Attendance Management Module
+     Attendance Management Module
      ============================================================ -->
 <div class="page-header">
   <div>
     <div class="section-title">Attendance Management</div>
-    <div class="section-sub">Secure QR-based attendance tracking & management</div>
+    <div class="section-sub">Fingerprint biometric integration, verified payroll inputs, and audit-ready corrections</div>
   </div>
   <div class="page-header-right">
-    <div class="tabs" style="margin-bottom:0;">
-      <div class="tab active" onclick="switchAttTab('overview', this)">Overview</div>
-      <div class="tab" onclick="switchAttTab('records', this)">Records</div>
-      <div class="tab" id="att-tab-overtime" onclick="switchAttTab('overtime', this)">Overtime</div>
-      <div class="tab" id="att-tab-audit" onclick="switchAttTab('audit', this)">Audit Log</div>
+    <div class="tabs attendance-tabs" style="margin-bottom:0;">
+      <div class="tab active" data-att-tab="overview" onclick="switchAttTab('overview', this)">Overview</div>
+      <div class="tab" data-att-tab="records" onclick="switchAttTab('records', this)">Records</div>
+      <div class="tab" id="att-tab-overtime" data-att-tab="overtime" onclick="switchAttTab('overtime', this)">Overtime</div>
+      <div class="tab" id="att-tab-exceptions" data-att-tab="exceptions" onclick="switchAttTab('exceptions', this)">Exceptions</div>
+      <div class="tab" id="att-tab-biometric" data-att-tab="biometric" onclick="switchAttTab('biometric', this)">Biometric Sync</div>
+      <div class="tab" id="att-tab-audit" data-att-tab="audit" onclick="switchAttTab('audit', this)">Audit Log</div>
     </div>
   </div>
 </div>
 
-<!-- ═══════ OVERVIEW TAB ═══════ -->
 <div id="att-overview">
-  <!-- QR Clock In/Out Card (All roles) -->
-  <div class="card" id="qr-attendance-card" style="margin-bottom:24px;overflow:hidden;">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
-      <div>
-        <h3 style="margin:0;font-size:18px;font-weight:700;">🔐 QR Attendance</h3>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px;" id="att-clock-status">Checking status...</div>
-      </div>
-      <div style="display:flex;gap:10px;" id="att-clock-buttons">
-        <button class="btn btn-green" id="btn-clock-in" onclick="startClockIn()" disabled>
-          <span style="margin-right:4px;">📥</span> Clock In
-        </button>
-        <button class="btn btn-outline" id="btn-clock-out" onclick="startClockOut()" disabled style="display:none;">
-          <span style="margin-right:4px;">📤</span> Clock Out
-        </button>
-      </div>
-    </div>
-
-    <!-- QR Scanner Container (hidden by default) -->
-    <div id="qr-scanner-container" style="display:none;margin-top:20px;padding:20px;background:var(--bg-alt);border-radius:12px;border:1px solid var(--border);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <div style="font-weight:600;font-size:14px;">📷 Scan Site QR Code</div>
-        <button class="btn btn-outline btn-sm" onclick="cancelQrScan()">✕ Cancel</button>
-      </div>
-      <div id="qr-reader" style="width:100%;max-width:400px;margin:0 auto;border-radius:8px;overflow:hidden;"></div>
-      <div id="qr-scan-status" style="text-align:center;margin-top:12px;font-size:13px;color:var(--muted);"></div>
-    </div>
-
-    <!-- GPS Status -->
-    <div id="gps-status" style="display:none;margin-top:12px;padding:10px 16px;border-radius:8px;font-size:12px;background:rgba(76,175,80,0.1);border:1px solid rgba(76,175,80,0.2);color:var(--green);">
-      📍 GPS Location acquired
-    </div>
+  <div class="att-security-banner">
+    <strong>Privacy-preserving biometric attendance</strong>
+    <span>LGSV HR stores encrypted biometric reference IDs and scan metadata only. Raw fingerprints and fingerprint images are not stored.</span>
   </div>
 
-  <!-- Admin: Generate QR Code -->
-  <div class="card" id="qr-generate-card" style="display:none;margin-bottom:24px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+  <div class="card" id="qr-attendance-card" style="margin-bottom:20px;overflow:hidden;">
+    <div class="att-card-heading">
       <div>
-        <h3 style="margin:0;font-size:16px;font-weight:700;">🏭 Site QR Code Generator</h3>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px;">Generate the QR code to display at the factory entrance</div>
+        <h3>QR Geofence Fallback</h3>
+        <p id="att-clock-status">Checking your attendance status...</p>
+      </div>
+      <div class="att-actions" id="att-clock-buttons">
+        <button class="btn btn-green" id="btn-clock-in" onclick="startClockIn()" disabled>Clock In</button>
+        <button class="btn btn-outline" id="btn-clock-out" onclick="startClockOut()" disabled style="display:none;">Clock Out</button>
+      </div>
+    </div>
+    <div class="att-note">Use this fallback only when the biometric device is unavailable or HR instructs you to do so.</div>
+    <div id="qr-scanner-container" class="att-scanner" style="display:none;">
+      <div class="att-card-heading">
+        <strong>Scan Site QR Code</strong>
+        <button class="btn btn-outline btn-sm" onclick="cancelQrScan()">Cancel</button>
+      </div>
+      <div id="qr-reader"></div>
+      <div id="qr-scan-status" class="att-muted"></div>
+    </div>
+    <div id="gps-status" class="att-success" style="display:none;"></div>
+  </div>
+
+  <div class="card" id="qr-generate-card" style="display:none;margin-bottom:20px;">
+    <div class="att-card-heading">
+      <div>
+        <h3>Fallback QR Code</h3>
+        <p>Generate the controlled QR fallback for the factory entrance.</p>
       </div>
       <button class="btn btn-primary btn-sm" onclick="generateSiteQR()">Generate QR</button>
     </div>
@@ -66,135 +61,184 @@
     </div>
   </div>
 
-  <!-- Stats Cards -->
-  <div style="font-size:12px;color:var(--muted);margin-bottom:16px;" id="att-date-label">
-    📅 Loading attendance overview...
+  <div class="att-section-label" id="att-date-label">Loading attendance overview...</div>
+  <div class="att-stats">
+    <div class="att-stat"><div class="att-icon status-ok">OK</div><div><div class="att-num" id="stat-present">-</div><div class="att-label">Present</div></div></div>
+    <div class="att-stat"><div class="att-icon status-warn">L</div><div><div class="att-num" id="stat-late">-</div><div class="att-label">Late</div></div></div>
+    <div class="att-stat"><div class="att-icon status-info">LV</div><div><div class="att-num" id="stat-leave">-</div><div class="att-label">On Leave</div></div></div>
+    <div class="att-stat"><div class="att-icon status-bad">A</div><div><div class="att-num" id="stat-absent">-</div><div class="att-label">Absent</div></div></div>
   </div>
-  <div class="att-stats" id="att-stats-grid">
-    <div class="att-stat"><div class="att-icon" style="color:var(--green)">✓</div><div><div class="att-num" id="stat-present">-</div><div class="att-label">Present</div></div></div>
-    <div class="att-stat"><div class="att-icon" style="color:var(--yellow)">⏰</div><div><div class="att-num" id="stat-late">-</div><div class="att-label">Late</div></div></div>
-    <div class="att-stat"><div class="att-icon" style="color:var(--yellow)">ℹ</div><div><div class="att-num" id="stat-leave">-</div><div class="att-label">On Leave</div></div></div>
-    <div class="att-stat"><div class="att-icon" style="color:var(--red)">👤</div><div><div class="att-num" id="stat-absent">-</div><div class="att-label">Absent</div></div></div>
-  </div>
-
   <div class="att-bottom">
-    <div class="att-big blue"><div class="ab-icon">⏱</div><div class="ab-val" id="stat-total-hours">-</div><div class="ab-label">Total Hours Worked · Today's total across all employees</div></div>
-    <div class="att-big green"><div class="ab-icon">⏱</div><div class="ab-val" id="stat-overtime">-</div><div class="ab-label">Total Overtime · Today's overtime hours</div></div>
+    <div class="att-big blue"><div class="ab-val" id="stat-total-hours">-</div><div class="ab-label">Verified regular hours</div></div>
+    <div class="att-big green"><div class="ab-val" id="stat-overtime">-</div><div class="ab-label">Approved overtime hours</div></div>
   </div>
 
-  <!-- Employee Personal Summary (shown only for employees) -->
   <div id="emp-summary-card" class="card" style="display:none;margin-top:20px;">
-    <h3 style="margin:0 0 16px;font-size:16px;font-weight:700;">📊 My Monthly Summary</h3>
+    <h3 class="att-title">My Monthly Summary</h3>
     <div class="records-summary">
-      <div class="card"><div style="color:var(--green);font-size:13px;font-weight:700;margin-bottom:4px;">● Days Present</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-present">-</div></div>
-      <div class="card"><div style="color:var(--yellow);font-size:13px;font-weight:700;margin-bottom:4px;">⏰ Overtime Hours</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-overtime">-</div></div>
-      <div class="card"><div style="color:var(--red);font-size:13px;font-weight:700;margin-bottom:4px;">✕ Absences</div><div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;" id="my-absences">-</div></div>
+      <div class="card"><div class="att-kicker status-ok">Days Present</div><div class="att-summary-number" id="my-present">-</div></div>
+      <div class="card"><div class="att-kicker status-warn">Overtime Hours</div><div class="att-summary-number" id="my-overtime">-</div></div>
+      <div class="card"><div class="att-kicker status-bad">Absences</div><div class="att-summary-number" id="my-absences">-</div></div>
     </div>
   </div>
 </div>
 
-<!-- ═══════ RECORDS TAB ═══════ -->
 <div id="att-records" style="display:none;">
-  <!-- Admin search controls -->
-  <div id="att-records-controls" style="display:none;margin-bottom:16px;">
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-      <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Search Employee</label>
-        <input type="text" id="att-search" placeholder="Name..." style="padding:6px 12px;border-radius:6px;font-size:13px;border:1px solid var(--border);background:var(--bg-alt);color:var(--text);width:200px;" onkeyup="loadAttRecords()" /></div>
-      <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Date</label>
-        <input type="date" id="att-date-filter" style="padding:6px 12px;border-radius:6px;font-size:13px;border:1px solid var(--border);background:var(--bg-alt);color:var(--text);" onchange="loadAttRecords()" /></div>
-      <button class="btn btn-outline btn-sm" onclick="clearAttFilters()">Clear Filters</button>
+  <div class="att-toolbar">
+    <div>
+      <label>Search Employee</label>
+      <input type="text" id="att-search" placeholder="Name..." onkeyup="loadAttRecords()" />
     </div>
+    <div>
+      <label>Date</label>
+      <input type="date" id="att-date-filter" onchange="loadAttRecords()" />
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="clearAttFilters()">Clear Filters</button>
+    <button class="btn btn-primary btn-sm" id="btn-manual-attendance" onclick="openManualModal()" style="display:none;">Add Manual Attendance</button>
   </div>
-
-  <div class="table-wrap" style="margin-bottom:20px;">
+  <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th>Employee</th><th>Date</th><th>Time In</th><th>Time Out</th>
-          <th>Hours</th><th>OT</th><th>Status</th>
-          <th id="att-action-col" style="display:none;">Actions</th>
+          <th>Hours</th><th>OT</th><th>Status</th><th>Verification</th><th>Source</th>
+          <th id="att-action-col">Actions</th>
         </tr>
       </thead>
       <tbody id="att-records-tbody">
-        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">Loading...</td></tr>
+        <tr><td colspan="10" class="att-empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
 </div>
 
-<!-- ═══════ OVERTIME TAB ═══════ -->
 <div id="att-overtime" style="display:none;">
-  <div class="card" style="margin-bottom:20px;">
-    <h3 style="margin:0 0 16px;font-size:16px;font-weight:700;">📝 Manual Overtime Encoding</h3>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Encode overtime hours from physical paper records for production floor workers.</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:flex-end;">
-      <div>
-        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Employee</label>
-        <select id="ot-employee" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);">
-          <option value="">-- Select Employee --</option>
-        </select>
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Date</label>
-        <input type="date" id="ot-date" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" />
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Overtime Hours</label>
-        <input type="number" id="ot-hours" min="0" max="24" step="0.5" placeholder="e.g. 2.5" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" />
-      </div>
-      <button class="btn btn-primary" onclick="encodeOvertime()">💾 Encode</button>
+  <div class="card">
+    <h3 class="att-title">Approved Overtime Encoding</h3>
+    <p class="att-muted">HR may encode approved overtime. Every change requires a reason and is added to the integrity chain.</p>
+    <div class="att-form-grid att-form-grid-5">
+      <div><label>Employee</label><select id="ot-employee"><option value="">Select employee</option></select></div>
+      <div><label>Date</label><input type="date" id="ot-date" /></div>
+      <div><label>Hours</label><input type="number" id="ot-hours" min="0" max="24" step="0.5" placeholder="2.5" /></div>
+      <div><label>Reason</label><input type="text" id="ot-reason" placeholder="Approved OT request reference" /></div>
+      <button class="btn btn-primary" onclick="encodeOvertime()">Save OT</button>
     </div>
-  </div>
-
-  <!-- OT records table -->
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Employee</th><th>Date</th><th>Regular Hours</th><th>OT Hours</th><th>Encoded By</th></tr></thead>
-      <tbody id="ot-records-tbody">
-        <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px;">Select an employee to view records</td></tr>
-      </tbody>
-    </table>
   </div>
 </div>
 
-<!-- ═══════ AUDIT LOG TAB ═══════ -->
-<div id="att-audit" style="display:none;">
-  <div class="card" style="padding:0;overflow:hidden;border-radius:12px;">
-    <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt);">
-      <h3 style="margin:0;font-size:16px;font-weight:700;">🔒 System Audit Log</h3>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px;">Immutable record of all manual overrides and corrections — Non-repudiation trail</div>
+<div id="att-exceptions" style="display:none;">
+  <div class="card">
+    <div class="att-card-heading">
+      <div><h3>Biometric Exceptions</h3><p>Review unmapped or malformed device scans before manual recovery.</p></div>
+      <button class="btn btn-outline btn-sm" onclick="loadBiometricExceptions()">Refresh</button>
     </div>
-    <div class="table-wrap" style="margin:0;border:none;">
-      <table style="margin:0;border:none;">
-        <thead><tr><th>Timestamp</th><th>Performed By</th><th>Employee</th><th>Action</th><th>Old Value</th><th>New Value</th><th>IP Address</th></tr></thead>
-        <tbody id="audit-tbody">
-          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px;">Loading...</td></tr>
-        </tbody>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Timestamp</th><th>Device</th><th>Employee</th><th>Punch</th><th>Status</th><th>Reason</th></tr></thead>
+        <tbody id="att-exceptions-tbody"><tr><td colspan="6" class="att-empty">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
 </div>
 
-<!-- ═══════ OVERRIDE MODAL ═══════ -->
-<div id="override-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:var(--bg);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4);width:90%;max-width:440px;border:1px solid var(--border);">
-    <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:var(--bg-alt);border-radius:12px 12px 0 0;">
-      <h3 style="margin:0;font-size:16px;font-weight:700;">⚠️ Override Attendance</h3>
-      <div style="font-size:12px;color:var(--muted);margin-top:4px;">This action is permanently recorded in the audit log.</div>
-    </div>
-    <div style="padding:20px 24px;">
-      <div id="override-emp-info" style="margin-bottom:16px;padding:12px;background:var(--bg-alt);border-radius:8px;font-size:13px;"></div>
-      <input type="hidden" id="override-att-id" />
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-        <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Time In</label>
-          <input type="time" id="override-time-in" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" /></div>
-        <div><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:4px;">Time Out</label>
-          <input type="time" id="override-time-out" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-alt);color:var(--text);" /></div>
+<div id="att-biometric" style="display:none;">
+  <div class="att-sync-layout">
+    <div class="card">
+      <h3 class="att-title">Register Biometric Device</h3>
+      <p class="att-muted">Store vendor credentials encrypted with AES-256-GCM. Use an HTTPS API endpoint in deployed environments.</p>
+      <div class="att-form-grid">
+        <div><label>Reference</label><input id="bio-device-reference" placeholder="MARULAS-BIO-01" /></div>
+        <div><label>Device Name</label><input id="bio-device-name" placeholder="Main Gate Fingerprint Scanner" /></div>
+        <div><label>Vendor</label><input id="bio-device-vendor" placeholder="Vendor name" /></div>
+        <div><label>API Base URL</label><input id="bio-device-url" placeholder="https://biometric.example/api/" /></div>
+        <div><label>Logs Endpoint</label><input id="bio-device-endpoint" value="/attendance/logs" /></div>
+        <div><label>Authentication</label>
+          <select id="bio-device-auth"><option>API_KEY</option><option>BEARER</option><option>HMAC</option><option>OAUTH2</option><option>MTLS</option></select>
+        </div>
+        <div><label>Secret / Token</label><input id="bio-device-secret" type="password" autocomplete="new-password" placeholder="Stored encrypted" /></div>
       </div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;">
-        <button class="btn btn-outline" onclick="closeOverrideModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="submitOverride()">⚠️ Confirm Override</button>
+      <button class="btn btn-primary" onclick="saveBiometricDevice()">Register Device</button>
+    </div>
+    <div class="card">
+      <h3 class="att-title">Map Employee Reference</h3>
+      <p class="att-muted">Only the encrypted vendor reference and a one-way lookup hash are stored.</p>
+      <div class="att-form-grid">
+        <div><label>Device</label><select id="bio-map-device"><option value="">Select device</option></select></div>
+        <div><label>Employee</label><select id="bio-map-employee"><option value="">Select employee</option></select></div>
+        <div><label>Biometric User ID</label><input id="bio-map-user-id" placeholder="Vendor reference ID" /></div>
+      </div>
+      <button class="btn btn-primary" onclick="saveBiometricMapping()">Save Encrypted Mapping</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <div class="att-card-heading">
+      <div><h3>Device Health</h3><p>Synchronization state, mapped employees, and rejected scan counts.</p></div>
+      <div class="att-actions">
+        <button class="btn btn-outline btn-sm" onclick="loadBiometricHealth()">Refresh</button>
+        <button class="btn btn-primary btn-sm" onclick="anchorPendingIntegrity()">Anchor Integrity Queue</button>
       </div>
     </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Device</th><th>Vendor</th><th>Mappings</th><th>Exceptions</th><th>Last Success</th><th>Last Error</th><th>Action</th></tr></thead>
+        <tbody id="bio-health-tbody"><tr><td colspan="7" class="att-empty">No devices configured.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <h3 class="att-title">Encrypted Employee Mappings</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Device</th><th>Employee</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="bio-mapping-tbody"><tr><td colspan="5" class="att-empty">No mappings configured.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="att-audit" style="display:none;">
+  <div class="card">
+    <div class="att-card-heading">
+      <div><h3>Attendance Audit Log</h3><p>Reasoned corrections, verification actions, mappings, and synchronization operations.</p></div>
+      <button class="btn btn-outline btn-sm" onclick="loadAuditLog()">Refresh</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Timestamp</th><th>Performed By</th><th>Employee</th><th>Action</th><th>Old Value</th><th>New Value</th><th>IP</th></tr></thead>
+        <tbody id="audit-tbody"><tr><td colspan="7" class="att-empty">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="override-modal" class="att-modal" style="display:none;">
+  <div class="att-modal-card">
+    <h3>Correct Attendance</h3>
+    <p>Every correction requires a reason and is permanently audited.</p>
+    <input type="hidden" id="override-att-id" />
+    <div id="override-emp-info" class="att-note"></div>
+    <div class="att-form-grid">
+      <div><label>Time In</label><input type="time" id="override-time-in" /></div>
+      <div><label>Time Out</label><input type="time" id="override-time-out" /></div>
+    </div>
+    <div><label>Correction Reason</label><textarea id="override-reason" rows="3" placeholder="Describe the device issue, missing punch, or approved adjustment."></textarea></div>
+    <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeOverrideModal()">Cancel</button><button class="btn btn-primary" onclick="submitOverride()">Save Correction</button></div>
+  </div>
+</div>
+
+<div id="manual-modal" class="att-modal" style="display:none;">
+  <div class="att-modal-card">
+    <h3>Add Manual Attendance</h3>
+    <p>Use for verified biometric downtime or incomplete punches only.</p>
+    <div class="att-form-grid">
+      <div><label>Employee</label><select id="manual-employee"><option value="">Select employee</option></select></div>
+      <div><label>Date</label><input type="date" id="manual-date" /></div>
+      <div><label>Time In</label><input type="time" id="manual-time-in" /></div>
+      <div><label>Time Out</label><input type="time" id="manual-time-out" /></div>
+    </div>
+    <div><label>Reason</label><textarea id="manual-reason" rows="3" placeholder="Document the outage or approved manual adjustment."></textarea></div>
+    <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeManualModal()">Cancel</button><button class="btn btn-primary" onclick="submitManualAttendance()">Create Audited Record</button></div>
   </div>
 </div>

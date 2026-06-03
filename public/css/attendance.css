@@ -1,50 +1,64 @@
-/* ============================================================
-   ATTENDANCE.CSS
-   ============================================================ */
-
-.att-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
-}
-.att-stat {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px;
+/* Attendance Management Module */
+.att-security-banner {
   display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.att-icon  { font-size: 22px; }
-.att-num   { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 800; }
-.att-label { font-size: 12px; color: var(--muted); }
-
-.att-bottom {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 8px 14px;
   margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(37, 99, 235, .25);
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(37, 99, 235, .08);
+  font-size: 13px;
 }
-.att-big { border-radius: 14px; padding: 20px; }
-.att-big.blue  { background: var(--blue); }
-.att-big.green { background: #1a7a5e; }
-.att-big .ab-icon  { font-size: 20px; margin-bottom: 8px; }
-.att-big .ab-val   { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; color: #fff; }
-.att-big .ab-label { font-size: 13px; color: rgba(255,255,255,0.8); }
-
-/* Overtime section */
-.ot-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.ot-name     { width: 120px; font-size: 12px; color: var(--muted); }
-.ot-bar-wrap { flex: 1; background: var(--border); border-radius: 4px; height: 8px; }
-.ot-bar      { height: 100%; border-radius: 4px; }
-.ot-val      { font-size: 12px; font-weight: 600; width: 36px; text-align: right; }
-
-/* Records summary cards */
-.records-summary {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+.att-security-banner span, .att-muted, .att-card-heading p { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.att-card-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+.att-card-heading h3, .att-title { margin:0; font-size:16px; font-weight:700; }
+.att-card-heading p { margin:4px 0 0; }
+.att-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.att-note { margin-top:12px; padding:10px 12px; border-radius:8px; background:var(--bg-alt); color:var(--muted); font-size:12px; }
+.att-scanner { margin-top:16px; padding:16px; border:1px solid var(--border); border-radius:10px; background:var(--bg-alt); }
+#qr-reader { max-width:420px; margin:14px auto; overflow:hidden; border-radius:8px; }
+.att-success { margin-top:12px; padding:10px 12px; border-radius:8px; color:var(--green); background:rgba(34, 197, 94, .1); font-size:12px; }
+.att-section-label { margin-bottom:14px; color:var(--muted); font-size:12px; }
+.att-stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:20px; }
+.att-stat { display:flex; gap:14px; align-items:center; padding:18px; border:1px solid var(--border); border-radius:12px; background:var(--card); }
+.att-icon { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; background:var(--bg-alt); font-size:11px; font-weight:800; }
+.status-ok { color:var(--green); }
+.status-warn { color:var(--yellow); }
+.status-bad { color:var(--red); }
+.status-info { color:var(--accent); }
+.att-num, .att-summary-number { font-family:'Syne', sans-serif; font-size:26px; font-weight:800; }
+.att-label { color:var(--muted); font-size:12px; }
+.att-bottom { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.att-big { padding:20px; border-radius:12px; }
+.att-big.blue { background:var(--blue); }
+.att-big.green { background:#1a7a5e; }
+.att-big .ab-val { color:#fff; font-family:'Syne', sans-serif; font-size:30px; font-weight:800; }
+.att-big .ab-label { color:rgba(255,255,255,.82); font-size:13px; }
+.records-summary { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; margin-top:14px; }
+.records-summary .card { text-align:center; }
+.att-kicker { margin-bottom:5px; font-size:12px; font-weight:700; }
+.att-toolbar { display:flex; align-items:flex-end; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
+.att-toolbar label, .att-form-grid label, .att-modal label { display:block; margin-bottom:5px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
+.att-toolbar input, .att-form-grid input, .att-form-grid select, .att-modal input, .att-modal select, .att-modal textarea {
+  width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-alt); color:var(--text); font-size:13px;
 }
-.records-summary .card { text-align: center; }
+.att-toolbar input { width:190px; }
+.att-form-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin:14px 0; }
+.att-form-grid-5 { grid-template-columns:1.2fr .8fr .7fr 1.5fr auto; align-items:end; }
+.att-sync-layout { display:grid; grid-template-columns:1.2fr .8fr; gap:18px; }
+.att-empty { padding:24px; color:var(--muted); text-align:center; }
+.att-hash { color:var(--muted); font-family:monospace; font-size:10px; }
+.att-modal { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.58); }
+.att-modal-card { width:min(520px, 100%); padding:20px; border:1px solid var(--border); border-radius:12px; background:var(--bg); box-shadow:0 20px 60px rgba(0,0,0,.35); }
+.att-modal-card h3 { margin:0; font-size:17px; }
+.att-modal-card p { color:var(--muted); font-size:12px; }
+.att-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+@media (max-width: 1000px) {
+  .att-stats, .records-summary, .att-sync-layout { grid-template-columns:repeat(2, 1fr); }
+  .att-form-grid-5 { grid-template-columns:repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .att-stats, .records-summary, .att-bottom, .att-sync-layout, .att-form-grid, .att-form-grid-5 { grid-template-columns:1fr; }
+}

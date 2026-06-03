@@ -149,7 +149,7 @@ router.get('/dashboard', async (req, res) => {
     // 2. Latest payslip summary
     const [payslipRows] = await pool.execute(
       `SELECT ps.id, ps.net_pay, ps.total_earning, ps.total_deduction, ps.status,
-              pr.period_start, pr.period_end, pr.month_year
+              pr.start_date AS period_start, pr.end_date AS period_end, pr.month_year
        FROM payslips ps
        JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
        WHERE ps.employee_id = ?
@@ -171,9 +171,12 @@ router.get('/dashboard', async (req, res) => {
 
     // 5. Today's attendance
     const [attendanceRows] = await pool.execute(
-      `SELECT clock_in, clock_out FROM attendance_logs
-       WHERE employee_id = ? AND DATE(clock_in) = CURDATE()
-       ORDER BY clock_in DESC LIMIT 1`,
+      `SELECT
+         CASE WHEN time_in IS NULL THEN NULL ELSE CONCAT(date, ' ', time_in) END AS clock_in,
+         CASE WHEN time_out IS NULL THEN NULL ELSE CONCAT(date, ' ', time_out) END AS clock_out
+       FROM attendance_log
+       WHERE employee_id = ? AND date = CURDATE()
+       LIMIT 1`,
       [empId]
     ).catch(() => [[]]);
 
@@ -299,7 +302,7 @@ router.get('/payslips', async (req, res) => {
     const empId = req.user.employeeId;
 
     const [payslips] = await pool.execute(
-      `SELECT ps.*, pr.period_start, pr.period_end, pr.month_year, pr.status AS run_status,
+      `SELECT ps.*, pr.start_date AS period_start, pr.end_date AS period_end, pr.month_year, pr.status AS run_status,
               wt.name AS wage_type_name
        FROM payslips ps
        JOIN payroll_runs pr ON pr.id = ps.payroll_run_id

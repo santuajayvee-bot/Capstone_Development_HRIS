@@ -36,6 +36,11 @@ const ADDRESS_FORM_CONFIGS = {
     home: { input: 'profile-edit-address' },
     current: { input: 'profile-edit-current-address', same: 'profile-current-same-home' },
     mailing: { input: 'profile-edit-mailing-address', same: 'profile-mailing-same-home' }
+  },
+  onboarding: {
+    home: { input: 'onb-home-address' },
+    current: { input: 'onb-current-address', same: 'onb-current-same-home' },
+    mailing: { input: 'onb-mailing-address', same: 'onb-mailing-same-home' }
   }
 };
 
@@ -82,6 +87,7 @@ function renderAddressSuggestions(input, results) {
   if (!results.length) {
     box.innerHTML = '<div class="address-suggestion">No address found.</div>';
     box.style.display = 'block';
+    input.setAttribute('aria-expanded', 'true');
     return;
   }
   box.innerHTML = results.map((item, index) => `
@@ -109,6 +115,7 @@ function renderAddressSuggestions(input, results) {
       }
       setAddressSelection(input, item.full_address, item.latitude, item.longitude);
       box.style.display = 'none';
+      input.setAttribute('aria-expanded', 'false');
       Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
     });
   });
@@ -119,7 +126,21 @@ function setupAddressInput(inputId) {
   const input = document.getElementById(inputId);
   if (!input || input.dataset.addressReady === '1') return;
   input.dataset.addressReady = '1';
+  const box = document.getElementById(`${input.id}-suggestions`);
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  if (box) {
+    box.setAttribute('role', 'listbox');
+    input.setAttribute('aria-controls', box.id);
+  }
   let timer = null;
+  input.addEventListener('focus', () => {
+    if (!box || input.value.trim().length >= 3) return;
+    box.innerHTML = '<div class="address-suggestion address-suggestion-hint">Type at least 3 characters to search Philippine addresses.</div>';
+    box.style.display = 'block';
+    input.setAttribute('aria-expanded', 'true');
+  });
   input.addEventListener('input', () => {
     clearAddressSelection(input);
     Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
@@ -127,7 +148,11 @@ function setupAddressInput(inputId) {
     const query = input.value.trim();
     const box = document.getElementById(`${input.id}-suggestions`);
     if (query.length < 3) {
-      if (box) box.style.display = 'none';
+      if (box) {
+        box.innerHTML = '<div class="address-suggestion address-suggestion-hint">Type at least 3 characters to search Philippine addresses.</div>';
+        box.style.display = 'block';
+        input.setAttribute('aria-expanded', 'true');
+      }
       return;
     }
     timer = setTimeout(async () => {
@@ -167,10 +192,14 @@ function initializeEmployeeAddressAutocomplete(scope = document) {
       });
     });
   });
-  document.addEventListener('click', event => {
-    if (event.target.closest('.address-autocomplete')) return;
-    document.querySelectorAll('.address-suggestions').forEach(box => { box.style.display = 'none'; });
-  }, { once: true });
+  if (document.documentElement.dataset.addressDismissReady !== '1') {
+    document.documentElement.dataset.addressDismissReady = '1';
+    document.addEventListener('click', event => {
+      if (event.target.closest('.address-autocomplete')) return;
+      document.querySelectorAll('.address-suggestions').forEach(box => { box.style.display = 'none'; });
+      document.querySelectorAll('.address-autocomplete input').forEach(input => input.setAttribute('aria-expanded', 'false'));
+    });
+  }
 }
 
 function collectEmployeeAddressPayload(mode = 'emp') {
