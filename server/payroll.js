@@ -9,10 +9,10 @@ const { requireAuth, requireRole, ROLES } = require('./middleware');
 const PAYROLL_PERMISSIONS = {
   view: ROLES.payroll_any,
   calculate: ROLES.payroll_any,
-  approve: ['payroll_manager', 'hr_admin', 'admin'],
-  release: ['payroll_manager', 'hr_admin', 'admin'],
-  settings: ['payroll_manager', 'hr_admin', 'admin'],
-  reports: ['payroll_manager', 'hr_admin', 'admin']
+  approve: ['payroll_manager', 'hr_manager'],
+  release: ['payroll_manager', 'hr_manager'],
+  settings: ['payroll_manager', 'hr_manager', 'hr_admin', 'admin'],
+  reports: ['payroll_manager', 'hr_manager', 'hr_admin', 'admin']
 };
 
 function currentUserId(req) {

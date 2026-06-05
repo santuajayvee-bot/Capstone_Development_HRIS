@@ -12,6 +12,7 @@ const ROLE_ALIASES = {
   'admin': 'hr_admin',      // Map old 'admin' to new 'hr_admin'
   'system_admin': 'system_admin',
   'hr_admin': 'hr_admin',
+  'hr_manager': 'hr_manager',
   'payroll_officer': 'payroll_officer',
   'payroll_manager': 'payroll_manager',
   'employee': 'employee'
@@ -20,14 +21,16 @@ const ROLE_ALIASES = {
 const ROLES = {
   system_admin:    ['system_admin', 'hr_admin', 'admin'],  // Accept system_admin, hr_admin, or old admin
   hr_admin:        ['hr_admin', 'admin'],                  // Accept hr_admin or old admin
+  hr_manager:      ['hr_manager', 'admin'],
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
-  payroll_any:     ['payroll_officer', 'payroll_manager', 'admin', 'hr_admin'],  // Added hr_admin + admin
-  hr_ops:          ['hr_admin', 'admin'],                           // HR operations (Leave, Attendance)
-  staff_management: ['hr_admin', 'admin'],                          // Employee management (register, profiles, documents)
-  admin_any:       ['hr_admin', 'system_admin', 'admin'],           // Any admin role
-  staff_any:       ['hr_admin', 'admin', 'payroll_officer', 'payroll_manager'],  // All staff roles
-  any:             ['hr_admin', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
+  payroll_any:     ['payroll_officer', 'payroll_manager', 'admin', 'hr_admin', 'hr_manager'],
+  hr_ops:          ['hr_admin', 'hr_manager', 'admin'],
+  hr_final_approval: ['hr_manager'],
+  staff_management: ['hr_admin', 'hr_manager', 'admin'],
+  admin_any:       ['hr_admin', 'hr_manager', 'system_admin', 'admin'],
+  staff_any:       ['hr_admin', 'hr_manager', 'admin', 'payroll_officer', 'payroll_manager'],
+  any:             ['hr_admin', 'hr_manager', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
 };
 
 /**

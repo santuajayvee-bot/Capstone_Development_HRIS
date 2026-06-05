@@ -24,6 +24,11 @@ const ONB_APPLIED_POSITIONS = [
 ];
 const ONB_WAGE_STYLE_POSITIONS = ['Base Salary Worker', 'Hourly Worker', 'Per-Trip Worker', 'Piece-Rate Worker'];
 
+function onbCanFinalApprove() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return user?.role === 'hr_manager';
+}
+
 function onbEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -639,7 +644,8 @@ function onbRenderReview(applicant, documents, audit, integrity) {
   const body = document.getElementById('onb-review-body');
   if (!body) return;
   const locked = applicant.workflow_status === 'Transferred';
-  const canTransfer = applicant.approval_status === 'Approved' && applicant.workflow_status === 'Approved';
+  const canFinalApprove = onbCanFinalApprove();
+  const canTransfer = canFinalApprove && applicant.approval_status === 'Approved' && applicant.workflow_status === 'Approved';
   const documentTypes = ONB_LOOKUPS.document_types.map(value => ({ value, label: value }));
   body.innerHTML = `
     <div class="onb-review-grid">${onbApplicantDetails(applicant)}</div>
@@ -660,12 +666,14 @@ function onbRenderReview(applicant, documents, audit, integrity) {
             <textarea id="onb-progress-reason" rows="2" placeholder="Required reason for this workflow change"></textarea>
           </div>
           <div class="onb-modal-actions"><button class="btn btn-secondary" type="button" onclick="onbUpdateProgress()">Save Progress</button></div>
-          <h4>HR Decision</h4>
-          <div class="onb-workflow-grid">
-            <select id="onb-decision">${onbOptions(ONB_DECISIONS, applicant.approval_status)}</select>
-            <textarea id="onb-decision-reason" rows="2" placeholder="Required reason for this decision"></textarea>
-          </div>
-          <div class="onb-modal-actions"><button class="btn btn-primary" type="button" onclick="onbSaveDecision()">Record Decision</button></div>
+          ${canFinalApprove ? `
+            <h4>HR Manager Decision</h4>
+            <div class="onb-workflow-grid">
+              <select id="onb-decision">${onbOptions(ONB_DECISIONS, applicant.approval_status)}</select>
+              <textarea id="onb-decision-reason" rows="2" placeholder="Required reason for this decision"></textarea>
+            </div>
+            <div class="onb-modal-actions"><button class="btn btn-primary" type="button" onclick="onbSaveDecision()">Record Decision</button></div>
+          ` : ''}
         `}
       </section>
       <section class="onb-review-section">
@@ -749,6 +757,7 @@ async function onbUpdateProgress() {
 }
 
 async function onbSaveDecision() {
+  if (!onbCanFinalApprove()) return onbToast('Only HR Manager can record the final decision.', 'error');
   try {
     await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/decision`, {
       method: 'PATCH',
@@ -765,6 +774,7 @@ async function onbSaveDecision() {
 }
 
 async function onbTransferApplicant() {
+  if (!onbCanFinalApprove()) return onbToast('Only HR Manager can transfer approved hires.', 'error');
   if (!confirm('Transfer this approved hire into the official Employee Directory?')) return;
   try {
     const data = await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/transfer`, {

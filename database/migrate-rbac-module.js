@@ -31,10 +31,34 @@ async function migrateRBACModule() {
     }
 
     // ── 2. Set access levels for existing roles ────────────────
+    const roleDefinitions = [
+      { name: 'employee',        label: 'Employee (Level 1)',             level: 'Level 1' },
+      { name: 'hr_admin',        label: 'HR Admin (Level 2)',             level: 'Level 2' },
+      { name: 'payroll_officer', label: 'Payroll Officer (Level 2)',      level: 'Level 2' },
+      { name: 'hr_manager',      label: 'HR Manager (Level 3)',           level: 'Level 3' },
+      { name: 'payroll_manager', label: 'Payroll Manager (Level 3)',      level: 'Level 3' },
+      { name: 'system_admin',    label: 'System Administrator (Level 4)', level: 'Level 4' },
+    ];
+    for (const role of roleDefinitions) {
+      await conn.execute(
+        `INSERT INTO roles (name, label, access_level)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE label = VALUES(label), access_level = VALUES(access_level)`,
+        [role.name, role.label, role.level]
+      );
+    }
+    await conn.execute(
+      `UPDATE users
+          SET role_id = (SELECT id FROM roles WHERE name = 'hr_manager' LIMIT 1)
+        WHERE username = 'hr.admin'`
+    );
+    console.log('  Updated hr.admin account to HR Manager role');
+
     const roleLevels = [
       { name: 'employee',        level: 'Level 1' },
       { name: 'hr_admin',        level: 'Level 2' },
       { name: 'payroll_officer', level: 'Level 2' },
+      { name: 'hr_manager',      level: 'Level 3' },
       { name: 'payroll_manager', level: 'Level 3' },
       { name: 'system_admin',    level: 'Level 4' },
       { name: 'admin',           level: 'Level 4' },  // Legacy admin gets Level 4

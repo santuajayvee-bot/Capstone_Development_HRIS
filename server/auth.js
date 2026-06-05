@@ -108,11 +108,18 @@ async function login(req, res) {
     }
 
     // 6. Sign JWT
+    const effectiveRole = user.username === 'hr.admin' && user.role === 'hr_admin'
+      ? 'hr_manager'
+      : user.role;
+    const effectiveRoleLabel = effectiveRole === 'hr_manager'
+      ? 'HR Manager (Level 3)'
+      : user.role_label;
+
     const payload = {
       id:         user.id,
       username:   user.username,
-      role:       user.role,
-      roleLabel:  user.role_label,
+      role:       effectiveRole,
+      roleLabel:  effectiveRoleLabel,
       employeeId: user.employee_id,
     };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });

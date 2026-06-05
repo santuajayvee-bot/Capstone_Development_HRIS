@@ -29,7 +29,7 @@ const {
 
 const router = express.Router();
 
-const HR_ROLES = ['hr_admin', 'admin'];
+const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
 const SYSTEM_ADMIN_ROLES = ['system_admin', 'admin'];
 const PAYROLL_OFFICER_ROLES = ['payroll_officer'];
 const PAYROLL_MANAGER_ROLES = ['payroll_manager'];

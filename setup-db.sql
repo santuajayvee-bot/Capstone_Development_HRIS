@@ -87,7 +87,9 @@ CREATE TABLE leave_requests (
 
 -- Insert default roles
 INSERT INTO roles (name, label) VALUES
-  ('admin', 'Administrator'),
+  ('system_admin', 'System Administrator'),
+  ('hr_admin', 'HR Admin'),
+  ('hr_manager', 'HR Manager'),
   ('payroll_officer', 'Payroll Officer'),
   ('payroll_manager', 'Payroll Manager'),
   ('employee', 'Employee');

@@ -16,7 +16,8 @@ const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
 
 const router = express.Router();
-const HR_ROLES = ['hr_admin', 'admin'];
+const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
+const HR_FINAL_APPROVAL_ROLES = ['hr_manager'];
 const SYSTEM_ADMIN_ROLES = ['system_admin', 'admin'];
 const SCREENING_STATUSES = [
   'Pending Screening', 'For Interview', 'For Requirements Checking',
@@ -1000,7 +1001,7 @@ async function transferApprovedApplicant(connection, req, applicant, reason, emp
   return { employee_id: employeeId, employee_code: employeeCode };
 }
 
-router.patch('/applicants/:applicantId/decision', async (req, res) => {
+router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_ROLES), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
@@ -1053,7 +1054,7 @@ router.patch('/applicants/:applicantId/decision', async (req, res) => {
   }
 });
 
-router.post('/applicants/:applicantId/transfer', async (req, res) => {
+router.post('/applicants/:applicantId/transfer', requireRole(HR_FINAL_APPROVAL_ROLES), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');

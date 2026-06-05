@@ -1,6 +1,6 @@
 /* ============================================================
    database/migrate-roles.js
-   Migrates roles table to include HR Admin and System Admin.
+   Migrates roles table to include HR Admin, HR Manager, and System Admin.
    Run once to update role definitions.
    ============================================================ */
 
@@ -18,7 +18,6 @@ async function migrateRoles() {
 
     // Delete any old admin role if it exists (cascade should be safe now)
     try {
-      await conn.execute("UPDATE users SET role_id = 1 WHERE role_id > 4");
       await conn.execute("DELETE FROM roles WHERE name IN ('admin', 'old_admin')");
       console.log('   ✅ Removed legacy admin role');
     } catch (e) {
@@ -29,6 +28,7 @@ async function migrateRoles() {
     const roles = [
       { name: 'employee', label: 'Employee (Level 1)' },
       { name: 'hr_admin', label: 'HR Admin (Level 2)' },
+      { name: 'hr_manager', label: 'HR Manager (Level 3)' },
       { name: 'payroll_officer', label: 'Payroll Officer (Level 2)' },
       { name: 'payroll_manager', label: 'Payroll Manager (Level 3)' },
       { name: 'system_admin', label: 'System Administrator (Level 4)' },
@@ -57,10 +57,17 @@ async function migrateRoles() {
     }
 
     console.log('\n✅ Role migration completed successfully.');
+    await conn.execute(
+      `UPDATE users
+          SET role_id = (SELECT id FROM roles WHERE name = 'hr_manager' LIMIT 1)
+        WHERE username = 'hr.admin'`
+    );
+    console.log('   Updated hr.admin account to HR Manager role');
+
     console.log('\nNew Role Structure:');
     console.log('  Level 1: employee');
     console.log('  Level 2: hr_admin, payroll_officer');
-    console.log('  Level 3: payroll_manager');
+    console.log('  Level 3: hr_manager, payroll_manager');
     console.log('  Level 4: system_admin\n');
 
   } catch (err) {

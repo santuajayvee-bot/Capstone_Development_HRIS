@@ -16,7 +16,7 @@ function esc(value) {
   }[char]));
 }
 
-function isHr() { return ['hr_admin', 'admin'].includes(ATT_USER?.role); }
+function isHr() { return ['hr_admin', 'hr_manager', 'admin'].includes(ATT_USER?.role); }
 function isSystemAdmin() { return ['system_admin', 'admin'].includes(ATT_USER?.role); }
 function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
 function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }

@@ -37,6 +37,10 @@ const upload = multer({
   }
 });
 
+function isHrDocumentRole(role) {
+  return ['hr_admin', 'hr_manager', 'admin'].includes(role);
+}
+
 // Helper: Log 201-file access to audit trail
 async function logAccessLog(employeeId, userId, action, resourceType, resourceId, details) {
   try {
@@ -85,8 +89,8 @@ router.get('/:employeeId', async (req, res) => {
     const userRole = req.user.role;
     const userEmployeeId = req.user.employeeId;
 
-    // Permission check: Allow if user is HR admin OR viewing their own documents
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Allow if user is HR staff OR viewing their own documents
+    const isHrAdmin = isHrDocumentRole(userRole);
     const isOwnRecord = parseInt(employeeId) === userEmployeeId;
     
     if (!isHrAdmin && !isOwnRecord) {
@@ -192,10 +196,10 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // Permission check: Only HR admins can view sensitive data
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Only HR document roles can view sensitive data
+    const isHrAdmin = isHrDocumentRole(userRole);
     if (!isHrAdmin) {
-      return res.status(403).json({ error: 'Only HR admins can view sensitive employee data.' });
+      return res.status(403).json({ error: 'Only HR document roles can view sensitive employee data.' });
     }
 
     // Log sensitive data access
@@ -235,10 +239,10 @@ router.put('/:employeeId/sensitive-data', async (req, res) => {
     const userRole = req.user.role;
     const { ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info } = req.body;
 
-    // Permission check: Only HR admins can edit sensitive data
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Only HR document roles can edit sensitive data
+    const isHrAdmin = isHrDocumentRole(userRole);
     if (!isHrAdmin) {
-      return res.status(403).json({ error: 'Only HR admins can edit sensitive employee data.' });
+      return res.status(403).json({ error: 'Only HR document roles can edit sensitive employee data.' });
     }
 
     // Check if sensitive data exists
@@ -283,10 +287,10 @@ router.post('/:employeeId/documents', upload.single('file'), async (req, res) =>
     const userRole = req.user.role;
     const { document_type } = req.body;
 
-    // Permission check: Only HR admins can upload documents
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Only HR document roles can upload documents
+    const isHrAdmin = isHrDocumentRole(userRole);
     if (!isHrAdmin) {
-      return res.status(403).json({ error: 'Only HR admins can upload documents.' });
+      return res.status(403).json({ error: 'Only HR document roles can upload documents.' });
     }
 
     if (!req.file) {
@@ -321,10 +325,10 @@ router.delete('/:employeeId/documents/:docId', async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // Permission check: Only HR admins can delete documents
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Only HR document roles can delete documents
+    const isHrAdmin = isHrDocumentRole(userRole);
     if (!isHrAdmin) {
-      return res.status(403).json({ error: 'Only HR admins can delete documents.' });
+      return res.status(403).json({ error: 'Only HR document roles can delete documents.' });
     }
 
     const [[existingDoc]] = await pool.execute(`
@@ -367,10 +371,10 @@ router.put('/:employeeId/verify-document/:docId', async (req, res) => {
     const userRole = req.user.role;
     const { verification_status, rejection_reason } = req.body;
 
-    // Permission check: Only HR admins can verify documents
-    const isHrAdmin = userRole === 'hr_admin' || userRole === 'admin';
+    // Permission check: Only HR document roles can verify documents
+    const isHrAdmin = isHrDocumentRole(userRole);
     if (!isHrAdmin) {
-      return res.status(403).json({ error: 'Only HR admins can verify documents.' });
+      return res.status(403).json({ error: 'Only HR document roles can verify documents.' });
     }
 
     if (!['Verified', 'Rejected'].includes(verification_status)) {

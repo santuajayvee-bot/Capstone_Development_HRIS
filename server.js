@@ -1643,14 +1643,14 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
 });
 
 const LEAVE_PERMISSION_ROLES = {
-  'leave.request.create': ['employee', 'hr_admin', 'admin', 'system_admin'],
-  'leave.request.view_own': ['employee', 'hr_admin', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.manual.create': ['hr_admin', 'admin', 'system_admin'],
-  'leave.request.approve': ['hr_admin', 'admin', 'system_admin'],
-  'leave.request.view_all': ['hr_admin', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.balance.manage': ['hr_admin', 'admin', 'system_admin'],
-  'leave.report.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.audit.view': ['hr_admin', 'admin', 'system_admin', 'payroll_manager']
+  'leave.request.create': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
+  'leave.manual.create': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.request.approve': ROLES.hr_final_approval,
+  'leave.request.view_all': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
+  'leave.balance.manage': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.report.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
+  'leave.audit.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager']
 };
 
 function hasLeavePermission(user, permission) {
@@ -2220,7 +2220,7 @@ app.post('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) 
   } catch (err) { res.status(500).json({ error: 'Failed to submit request.' }); }
 });
 
-app.patch('/api/requests/:id/status', requireAuth, requireRole(['hr_admin']), async (req, res) => {
+app.patch('/api/requests/:id/status', requireAuth, requireRole(ROLES.hr_final_approval), async (req, res) => {
   try {
     const pool = require('./config/db');
     await pool.execute(

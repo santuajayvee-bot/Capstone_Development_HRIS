@@ -54,7 +54,8 @@ async function run() {
       JOIN roles r ON r.id = u.role_id
   `);
   const sysAdmin = users.find(user => user.role === 'system_admin');
-  const hrAdmin = users.find(user => user.role === 'hr_admin');
+  const hrAdmin = users.find(user => user.username === 'hr.admin' && user.role === 'hr_manager')
+    || users.find(user => user.role === 'hr_manager');
   const officer = users.find(user => user.role === 'payroll_officer');
   const manager = users.find(user => user.role === 'payroll_manager');
   const employee = users.find(user => user.role === 'employee' && user.employee_id);
@@ -172,7 +173,7 @@ async function run() {
   check('System admin can view device health', result.status === 200);
 
   result = await api('/api/attendance/biometric/health', { headers: bearer(tokens.hrAdmin) });
-  check('HR admin cannot manage device health', result.status === 403);
+  check('HR manager cannot manage device health', result.status === 403);
 
   result = await api(`/api/attendance/integrity/${attendanceId}`, { headers: bearer(tokens.employee) });
   check('Employee integrity verification passes', result.status === 200 && result.data.chain_valid === true);

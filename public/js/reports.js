@@ -200,7 +200,7 @@ async function previewMasterReport() {
     if (empId !== 'all' && data.length === 1) {
       // Individual Bond Paper Mode
       const user = getUser();
-      if (user && user.role !== 'payroll_manager' && user.role !== 'admin' && user.role !== 'hr_admin' && user.role !== 'system_admin') {
+      if (user && user.role !== 'payroll_manager' && user.role !== 'admin' && user.role !== 'hr_manager' && user.role !== 'hr_admin' && user.role !== 'system_admin') {
         alert("Access Denied: Detailed individual view is restricted to Access Level 3 (Payroll Manager) or higher.");
         return;
       }

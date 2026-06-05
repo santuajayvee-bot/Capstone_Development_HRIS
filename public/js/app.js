@@ -11,7 +11,7 @@ const PAGE_TITLES = {
   attendance: 'Attendance Tracking',
   '201file':  '201-File Management',
   payroll:    'Payroll',
-  onboarding: 'HR Admin - Onboarding Management',
+  onboarding: 'HR - Onboarding Management',
   blockchain: 'Blockchain',
   'system-admin': 'System Administration',
   'employee-dashboard': 'Employee Dashboard',

@@ -48,11 +48,12 @@ async function run() {
       FROM users u
       JOIN roles r ON r.id = u.role_id
   `);
-  const hrAdmin = users.find(user => user.role === 'hr_admin');
+  const hrManager = users.find(user => user.username === 'hr.admin' && user.role === 'hr_manager')
+    || users.find(user => user.role === 'hr_manager');
   const sysAdmin = users.find(user => user.role === 'system_admin');
   const payrollOfficer = users.find(user => user.role === 'payroll_officer');
-  check('Required HR, system admin, and payroll roles exist', hrAdmin && sysAdmin && payrollOfficer);
-  const hrToken = issueToken(hrAdmin);
+  check('Required HR manager, system admin, and payroll roles exist', hrManager && sysAdmin && payrollOfficer);
+  const hrToken = issueToken(hrManager);
   const sysAdminToken = issueToken(sysAdmin);
   const payrollToken = issueToken(payrollOfficer);
 
@@ -60,7 +61,7 @@ async function run() {
   check('Payroll officer cannot enter HR onboarding', result.status === 403);
 
   result = await api('/api/onboarding/lookups', { headers: jsonHeaders(hrToken) });
-  check('HR admin can load onboarding lookups', result.status === 200 && result.data.wage_types.length > 0);
+  check('HR manager can load onboarding lookups', result.status === 200 && result.data.wage_types.length > 0);
   const wageTypeId = result.data.wage_types[0].id;
 
   const routedEmployeeCode = `TST-R-${nonce}`;
@@ -332,14 +333,14 @@ async function run() {
   let download = await fetch(`${baseUrl}/api/onboarding/applicants/${directApplicantId}/documents/${documentId}/download`, {
     headers: { Authorization: `Bearer ${hrToken}` },
   });
-  check('Authorized HR admin can download prepared document', download.status === 200 && Buffer.compare(Buffer.from(await download.arrayBuffer()), documentBody) === 0);
+  check('Authorized HR manager can download prepared document', download.status === 200 && Buffer.compare(Buffer.from(await download.arrayBuffer()), documentBody) === 0);
 
   result = await api(`/api/onboarding/applicants/${directApplicantId}/documents/${documentId}/verify`, {
     method: 'PATCH',
     headers: jsonHeaders(hrToken),
     body: JSON.stringify({ verification_status: 'Verified' }),
   });
-  check('HR admin can verify prepared 201-file document', result.status === 200);
+  check('HR manager can verify prepared 201-file document', result.status === 200);
 
   result = await api(`/api/onboarding/applicants/${directApplicantId}/decision`, {
     method: 'PATCH',
@@ -420,7 +421,7 @@ async function run() {
     headers: jsonHeaders(hrToken),
     body: JSON.stringify({ reason: 'Duplicate applicant record removed by HR.' }),
   });
-  check('HR admin can remove pre-employment applicant', result.status === 200 && result.data.vault_cleanup_pending === 0);
+  check('HR manager can remove pre-employment applicant', result.status === 200 && result.data.vault_cleanup_pending === 0);
   check('Applicant removal purges encrypted vault files', !fs.existsSync(archivedDocument.encrypted_file_path));
   const [[archivedApplicant]] = await pool.execute('SELECT deleted_at, deletion_reason FROM onboarding_applicant WHERE applicant_id = ?', [archivedApplicantId]);
   check('Applicant removal retains soft-delete audit metadata', archivedApplicant.deleted_at && archivedApplicant.deletion_reason === 'Duplicate applicant record removed by HR.');
@@ -514,7 +515,7 @@ async function run() {
   const [integrityRows] = await pool.execute('SELECT chain_hash FROM onboarding_integrity_chain WHERE applicant_id IN (?, ?)', [directApplicantId, agencyApplicantId]);
   check('Onboarding activity is protected by tamper-evident ledger hashes', integrityRows.length === activities.length);
   result = await api(`/api/onboarding/applicants/${agencyApplicantId}/integrity`, { headers: jsonHeaders(hrToken) });
-  check('HR admin can verify onboarding integrity chain', result.status === 200 && result.data.chain_valid === true && result.data.pending_anchor_count > 0);
+  check('HR manager can verify onboarding integrity chain', result.status === 200 && result.data.chain_valid === true && result.data.pending_anchor_count > 0);
   result = await api('/api/onboarding/integrity/anchor-pending', { method: 'POST', headers: jsonHeaders(payrollToken) });
   check('Payroll officer cannot anchor onboarding ledger entries', result.status === 403);
   result = await api('/api/onboarding/integrity/anchor-pending', { method: 'POST', headers: jsonHeaders(sysAdminToken) });

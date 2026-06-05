@@ -58,6 +58,10 @@ function populateLeaveTypeSelects() {
   }
 }
 
+function isLeaveApprover() {
+  return CURRENT_USER && CURRENT_USER.role === 'hr_manager';
+}
+
 // Check if employee is eligible to file leave requests based on wage type
 async function checkLeaveRequestEligibility() {
   try {
@@ -223,6 +227,7 @@ window.renderLeaveTable = function() {
   if (!tbody) return;
 
   const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+  const canApprove = isLeaveApprover();
 
   let filtered = ALL_LEAVES_DATA;
   
@@ -230,8 +235,8 @@ window.renderLeaveTable = function() {
   if (CURRENT_LEAVE_TAB === 'pending') {
     filtered = filtered.filter(r => r.status === 'Pending');
     if (actionColHead) {
-      actionColHead.textContent = isAdmin ? 'Actions' : 'Status';
-      actionColHead.style.textAlign = isAdmin ? 'right' : 'left';
+      actionColHead.textContent = canApprove ? 'Actions' : 'Status';
+      actionColHead.style.textAlign = canApprove ? 'right' : 'left';
     }
   } else {
     filtered = filtered.filter(r => r.status !== 'Pending');
@@ -299,8 +304,8 @@ window.renderLeaveTable = function() {
           ${leave.file_path ? `<a href="${leave.file_path}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text);text-decoration:none;background:var(--bg-alt);padding:4px 10px;border-radius:6px;border:1px solid var(--border);width:max-content;opacity:0.8;transition:opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">📎 View File</a>` : ''}
         </div>
       </td>
-      <td style="padding:16px 24px;text-align:${(CURRENT_LEAVE_TAB === 'pending' && isAdmin) ? 'right' : 'left'};">
-        ${CURRENT_LEAVE_TAB === 'pending' ? (isAdmin ? `
+      <td style="padding:16px 24px;text-align:${(CURRENT_LEAVE_TAB === 'pending' && canApprove) ? 'right' : 'left'};">
+        ${CURRENT_LEAVE_TAB === 'pending' ? (canApprove ? `
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button class="btn" style="background:var(--green);color:white;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="approveLeave(this)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Approve
@@ -312,7 +317,7 @@ window.renderLeaveTable = function() {
         ` : `<span class="badge badge-yellow" style="padding:4px 8px;border-radius:20px;">Pending</span>`) : `
           <div style="display:flex;align-items:center;gap:8px;">
             <span class="badge badge-${leave.status === 'Approved' ? 'green' : leave.status === 'Cancelled' ? 'yellow' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${leave.status}</span>
-            ${(isAdmin && leave.status === 'Approved') ? `<button class="btn" style="background:none;border:1px solid rgba(244,67,54,0.3);color:var(--red);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="cancelLeave(this)">Cancel</button>` : ''}
+            ${(canApprove && leave.status === 'Approved') ? `<button class="btn" style="background:none;border:1px solid rgba(244,67,54,0.3);color:var(--red);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="cancelLeave(this)">Cancel</button>` : ''}
           </div>
         `}
       </td>
@@ -674,7 +679,7 @@ async function submitManualLeave(event) {
   }
 
   // Check if user is HR Admin or payroll staff
-  if (!['admin', 'hr_admin', 'system_admin', 'payroll_officer', 'payroll_manager'].includes(CURRENT_USER.role)) {
+  if (!['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager'].includes(CURRENT_USER.role)) {
     alert('Error: You do not have permission to manually encode leaves.');
     return;
   }
@@ -851,12 +856,12 @@ function renderGenTable() {
   const colHead = document.getElementById('gen-dynamic-col');
   if (!tbody) return;
 
-  const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+  const canApprove = isLeaveApprover();
   let filtered = ALL_GEN_REQUESTS;
 
   if (CURRENT_GEN_TAB === 'pending') {
     filtered = filtered.filter(r => r.status === 'Pending');
-    if (colHead) { colHead.textContent = 'Actions'; colHead.style.textAlign = 'right'; }
+    if (colHead) { colHead.textContent = canApprove ? 'Actions' : 'Status'; colHead.style.textAlign = canApprove ? 'right' : 'left'; }
   } else {
     filtered = filtered.filter(r => r.status !== 'Pending');
     if (colHead) { colHead.textContent = 'Status'; colHead.style.textAlign = 'left'; }
@@ -904,8 +909,8 @@ function renderGenTable() {
         <span style="text-overflow:ellipsis;overflow:hidden;white-space:nowrap;display:block;" title="${req.reason || '-'}">${req.reason || '-'}</span>
       </td>
       <td style="padding:16px 24px;font-size:13px;color:var(--muted);">${req.parsedDate.toLocaleDateString()}</td>
-      <td style="padding:16px 24px;text-align:${CURRENT_GEN_TAB === 'pending' ? 'right' : 'left'};">
-        ${CURRENT_GEN_TAB === 'pending' ? `
+      <td style="padding:16px 24px;text-align:${(CURRENT_GEN_TAB === 'pending' && canApprove) ? 'right' : 'left'};">
+        ${CURRENT_GEN_TAB === 'pending' ? (canApprove ? `
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button class="btn" style="background:var(--green);color:white;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="approveGenRequest(this)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Approve
@@ -914,7 +919,7 @@ function renderGenTable() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Reject
             </button>
           </div>
-        ` : `
+        ` : `<span class="badge badge-yellow" style="padding:4px 8px;border-radius:20px;">Pending</span>`) : `
           <span class="badge badge-${req.status === 'Approved' ? 'green' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${req.status}</span>
         `}
       </td>
@@ -1095,7 +1100,7 @@ window.renderLeaveTable = function() {
       <td>${leaveBadge(leave.status, leave.status)}</td>
       <td><div class="leave-actions">
         <button class="btn btn-outline" onclick="viewLeaveDetails(${leave.id})">View</button>
-        ${isLeaveManager() && leave.status === 'Pending' ? `<button class="btn btn-primary" onclick="approveLeaveById(${leave.id})">Approve</button><button class="btn btn-outline" onclick="rejectLeaveById(${leave.id})">Reject</button>` : ''}
+        ${isLeaveApprover() && leave.status === 'Pending' ? `<button class="btn btn-primary" onclick="approveLeaveById(${leave.id})">Approve</button><button class="btn btn-outline" onclick="rejectLeaveById(${leave.id})">Reject</button>` : ''}
       </div></td>
     </tr>
   `).join('');
