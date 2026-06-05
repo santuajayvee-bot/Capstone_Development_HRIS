@@ -935,3 +935,58 @@ input.lgsv-date-native[type="date"] {
   width: 14px;
   height: 14px;
 }
+
+.draft-save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.draft-save-status.saving {
+  color: #fbbf24;
+}
+
+.draft-save-status.saved {
+  color: #86efac;
+}
+
+.draft-save-status.error {
+  color: #fca5a5;
+}
+
+.draft-restore-banner {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10020;
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+  color: var(--text);
+}
+
+.draft-restore-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.draft-restore-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.draft-restore-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

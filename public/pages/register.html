@@ -117,7 +117,10 @@
   .employee-form-block-title {
     margin: 0 0 16px;
     color: var(--text);
-    font: 700 13px Georgia, "Times New Roman", serif;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0;
   }
 
   .employee-form-grid {
@@ -395,25 +398,8 @@
         <h3 class="employee-form-block-title">Employment Information</h3>
         <div class="employee-form-grid">
           <div class="form-group"><label>Department</label><select id="emp-dept"><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></div>
-          <div class="form-group">
-            <label>Position / Job Title</label>
-            <select id="emp-position">
-              <option value="">Select position</option>
-              <option>Manager</option>
-              <option>HR Staff</option>
-              <option>Admin Staff</option>
-              <option>Office Staff</option>
-              <option>Supervisor</option>
-              <option>Operator</option>
-              <option>Production Worker</option>
-              <option>Production Staff</option>
-              <option>Piece-Rate Worker</option>
-              <option>Factory Worker</option>
-              <option>Logistics Helper</option>
-              <option>Machine Operator</option>
-            </select>
-          </div>
-          <div class="form-group"><label>Employment Type</label><select id="emp-type"><option>Full-time</option><option>Part-time</option><option>Contractual</option></select></div>
+          <div class="form-group"><label>Position / Job Title</label><select id="emp-position"><option value="">Select department first</option></select></div>
+          <div class="form-group"><label>Employment Type</label><select id="emp-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></div>
           <div class="form-group"><label>Hiring Classification</label><select id="emp-hiring-type"><option>Direct Hire</option><option>Agency-Hired</option></select></div>
           <div class="form-group"><label>Employment Status</label><select id="emp-status-field"><option>Active</option><option>Inactive</option></select></div>
           <div class="form-group"><label>Date Hired</label><input id="emp-hired-date" type="date" /></div>

@@ -15,6 +15,7 @@ const ROLE_ALIASES = {
   'hr_manager': 'hr_manager',
   'payroll_officer': 'payroll_officer',
   'payroll_manager': 'payroll_manager',
+  'manager': 'manager',
   'employee': 'employee'
 };
 

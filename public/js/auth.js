@@ -25,8 +25,11 @@ const ROLE_PERMISSIONS = {
   payroll_manager: [
     'dashboard', 'attendance', 'leave', 'payroll', 'requests', 'reports', 'blockchain',
   ],
+  manager: [
+    'dashboard', 'attendance', 'leave', 'requests', 'reports',
+  ],
   employee: [
-    'dashboard', 'requests', 'attendance',
+    'dashboard', 'requests', 'attendance', 'leave', 'payroll', 'employee-profile',
   ],
 };
 
@@ -87,6 +90,13 @@ const NAV_CONFIG = {
     { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'requests', icon: 'RQ', label: 'Request' },
     { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
+  ],
+  manager: [
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'attendance', icon: 'AT', label: 'Team Attendance' },
+    { page: 'leave', icon: 'LV', label: 'Leave Approvals' },
+    { page: 'reports', icon: 'RP', label: 'Reports' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
   ],
   employee: [
     { page: 'dashboard', icon: 'DB', label: 'My Dashboard' },
@@ -155,7 +165,26 @@ function buildSidebar(user) {
 
 function canAccess(pageId) {
   const user = getUser();
-  return !!user && (ROLE_PERMISSIONS[user.role] || []).includes(pageId);
+  if (!user) return false;
+  const permissionPageMap = {
+    employees: ['employee.view', 'employee.manage'],
+    register: ['employee.manage'],
+    'employee-profile': ['employee.view'],
+    attendance: ['attendance.view', 'attendance.manage'],
+    leave: ['leave.request.create', 'leave.request.approve', 'leave.request.view_all', 'leave.request.view_own'],
+    payroll: ['payroll.view', 'payroll.calculate', 'payroll.approve'],
+    reports: ['report.view', 'payroll.report.view', 'leave.report.view'],
+    '201file': ['employee.view', 'employee.manage'],
+    onboarding: ['employee.manage'],
+    'system-admin': ['settings.manage'],
+    blockchain: ['settings.manage', 'report.view'],
+  };
+  const permissionKeys = permissionPageMap[pageId] || [];
+  if (permissionKeys.length && Array.isArray(user.permissions)) {
+    return user.permissions.some(permission => permissionKeys.includes(permission));
+  }
+  const allowed = ROLE_PERMISSIONS[user.role] || [];
+  return allowed.includes(pageId);
 }
 
 function logout() {
@@ -170,6 +199,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     buildSidebar(user);
+    if (typeof loadDashboard === 'function') {
+      loadDashboard();
+    }
   }
   document.getElementById('btn-logout')?.addEventListener('click', logout);
 });

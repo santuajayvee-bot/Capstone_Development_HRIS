@@ -5,6 +5,230 @@
 let EMPLOYEES = []; // Will be populated from API
 let EMPLOYEES_RAW = []; // Store raw API data for editing
 
+function employeeSetupEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  }[char]));
+}
+
+async function refreshEmployeeSetupUI() {
+  if (typeof loadEmployeePositionOptions !== 'function') return;
+  await loadEmployeePositionOptions();
+  renderEmployeeDepartmentFilter();
+  renderEmployeeSetupPositionDepartmentSelect();
+  renderEmployeeSetupRows();
+  if (typeof initializeEmployeePositionDropdowns === 'function') {
+    initializeEmployeePositionDropdowns();
+  }
+}
+
+function renderEmployeeDepartmentFilter() {
+  const select = document.querySelector('.filter-bar select#emp-dept');
+  if (!select || typeof getEmployeeDepartments !== 'function') return;
+  const selected = select.value;
+  const departments = getEmployeeDepartments();
+  select.innerHTML = '<option>All Departments</option>' + departments
+    .map(department => `<option>${employeeSetupEscape(department.name)}</option>`)
+    .join('');
+  if (selected && (selected === 'All Departments' || departments.some(department => department.name === selected))) {
+    select.value = selected;
+  }
+}
+
+function renderEmployeeSetupPositionDepartmentSelect() {
+  const select = document.getElementById('setup-position-department');
+  if (!select || typeof getEmployeeDepartments !== 'function') return;
+  const selected = select.value;
+  const departments = getEmployeeDepartments();
+  select.innerHTML = '<option value="">Select department</option>' + departments
+    .map(department => `<option value="${department.id}">${employeeSetupEscape(department.name)}</option>`)
+    .join('');
+  if (selected && departments.some(department => String(department.id) === String(selected))) {
+    select.value = selected;
+  }
+}
+
+function renderEmployeeSetupRows() {
+  const body = document.getElementById('employee-setup-rows');
+  if (!body || typeof getEmployeeDepartments !== 'function' || typeof getEmployeePositions !== 'function') return;
+  const departments = getEmployeeDepartments();
+  const positions = getEmployeePositions();
+  const groups = departments.map(department => {
+    const departmentPositions = positions
+      .filter(position => Number(position.department_id) === Number(department.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const positionRows = departmentPositions.length
+      ? departmentPositions.map(position => `
+          <div class="employee-setup-position-row">
+            <span>${employeeSetupEscape(position.name)}</span>
+            <div class="employee-setup-actions">
+              <button class="employee-setup-action" type="button" onclick="editEmployeeSetupPosition(${position.id})">Edit Position</button>
+              <button class="employee-setup-action danger" type="button" onclick="deleteEmployeeSetupPosition(${position.id})">Remove Position</button>
+            </div>
+          </div>
+        `).join('')
+      : '<div class="employee-setup-empty">No positions yet</div>';
+
+    return `
+      <details class="employee-setup-department">
+        <summary>
+          <span>${employeeSetupEscape(department.name)}</span>
+          <span class="employee-setup-count">${departmentPositions.length} position${departmentPositions.length === 1 ? '' : 's'}</span>
+          <span class="employee-setup-caret">></span>
+        </summary>
+        <div class="employee-setup-position-list">
+          <div class="employee-setup-position-row">
+            <span style="color:var(--muted);">Department actions</span>
+            <div class="employee-setup-actions">
+              <button class="employee-setup-action" type="button" onclick="editEmployeeSetupDepartment(${department.id})">Edit Department</button>
+              <button class="employee-setup-action danger" type="button" onclick="deleteEmployeeSetupDepartment(${department.id})">Remove Department</button>
+            </div>
+          </div>
+          ${positionRows}
+        </div>
+      </details>
+    `;
+  });
+
+  body.innerHTML = groups.length ? groups.join('') : '<div class="employee-setup-empty">No departments configured.</div>';
+}
+
+function toggleEmployeeSetupPanel() {
+  const panel = document.getElementById('employee-setup-panel');
+  const label = document.getElementById('employee-setup-toggle-label');
+  if (!panel) return;
+  panel.classList.toggle('open');
+  if (label) label.textContent = panel.classList.contains('open') ? 'Hide' : 'Show';
+  refreshEmployeeSetupUI();
+}
+
+async function saveEmployeeSetupDepartment(event) {
+  event.preventDefault();
+  const input = document.getElementById('setup-department-name');
+  const name = input?.value.trim();
+  if (!name) return showAlert?.('Department name is required.', 'Validation Error', 'warning') || alert('Department name is required.');
+
+  const response = await apiFetch('/api/employee-setup/departments', {
+    method: 'POST',
+    body: JSON.stringify({ name })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to save department.', 'Error', 'error') || alert(data.error || 'Failed to save department.');
+
+  input.value = '';
+  if (window.EMPLOYEE_POSITION_OPTIONS_PROMISE) window.EMPLOYEE_POSITION_OPTIONS_PROMISE = null;
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Department saved.', 'Saved', 'success');
+}
+
+async function saveEmployeeSetupPosition(event) {
+  event.preventDefault();
+  const departmentSelect = document.getElementById('setup-position-department');
+  const nameInput = document.getElementById('setup-position-name');
+  const department_id = departmentSelect?.value;
+  const name = nameInput?.value.trim();
+  if (!department_id) return showAlert?.('Please select a department.', 'Validation Error', 'warning') || alert('Please select a department.');
+  if (!name) return showAlert?.('Position / job title is required.', 'Validation Error', 'warning') || alert('Position / job title is required.');
+
+  const response = await apiFetch('/api/employee-setup/positions', {
+    method: 'POST',
+    body: JSON.stringify({ department_id, name })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to save position.', 'Error', 'error') || alert(data.error || 'Failed to save position.');
+
+  nameInput.value = '';
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Position saved.', 'Saved', 'success');
+}
+
+async function resetEmployeeSetupLookupCache() {
+  if (typeof window.resetEmployeePositionOptions === 'function') {
+    window.resetEmployeePositionOptions();
+  }
+  if (typeof loadEmployeePositionOptions === 'function') {
+    await loadEmployeePositionOptions();
+  }
+}
+
+async function employeeSetupConfirm(message) {
+  if (typeof showConfirm === 'function') return showConfirm(message);
+  return confirm(message);
+}
+
+async function editEmployeeSetupDepartment(departmentId) {
+  const department = getEmployeeDepartments?.().find(item => Number(item.id) === Number(departmentId));
+  if (!department) return;
+  const name = prompt('Edit department name:', department.name);
+  if (name === null) return;
+  const cleanName = name.trim();
+  if (!cleanName) return showAlert?.('Department name is required.', 'Validation Error', 'warning') || alert('Department name is required.');
+
+  const response = await apiFetch(`/api/employee-setup/departments/${departmentId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: cleanName })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to update department.', 'Error', 'error') || alert(data.error || 'Failed to update department.');
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Department updated.', 'Saved', 'success');
+}
+
+async function deleteEmployeeSetupDepartment(departmentId) {
+  const department = getEmployeeDepartments?.().find(item => Number(item.id) === Number(departmentId));
+  if (!department) return;
+  const ok = await employeeSetupConfirm(`Remove "${department.name}" from active dropdowns? Existing employees will keep their current department.`);
+  if (!ok) return;
+
+  const response = await apiFetch(`/api/employee-setup/departments/${departmentId}`, { method: 'DELETE' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to remove department.', 'Error', 'error') || alert(data.error || 'Failed to remove department.');
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Department removed.', 'Saved', 'success');
+}
+
+async function editEmployeeSetupPosition(positionId) {
+  const position = getEmployeePositions?.().find(item => Number(item.id) === Number(positionId));
+  if (!position) return;
+  const name = prompt('Edit position / job title:', position.name);
+  if (name === null) return;
+  const cleanName = name.trim();
+  if (!cleanName) return showAlert?.('Position / job title is required.', 'Validation Error', 'warning') || alert('Position / job title is required.');
+
+  const response = await apiFetch(`/api/employee-setup/positions/${positionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ department_id: position.department_id, name: cleanName })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to update position.', 'Error', 'error') || alert(data.error || 'Failed to update position.');
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Position updated.', 'Saved', 'success');
+}
+
+async function deleteEmployeeSetupPosition(positionId) {
+  const position = getEmployeePositions?.().find(item => Number(item.id) === Number(positionId));
+  if (!position) return;
+  const ok = await employeeSetupConfirm(`Remove "${position.name}" from active dropdowns? Existing employees will keep their current job title.`);
+  if (!ok) return;
+
+  const response = await apiFetch(`/api/employee-setup/positions/${positionId}`, { method: 'DELETE' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return showAlert?.(data.error || 'Failed to remove position.', 'Error', 'error') || alert(data.error || 'Failed to remove position.');
+  await resetEmployeeSetupLookupCache();
+  await refreshEmployeeSetupUI();
+  await showAlert?.(data.message || 'Position removed.', 'Saved', 'success');
+}
+
 async function fetchEmployees() {
   try {
     console.log('📡 Fetching employees from API...');
@@ -255,8 +479,9 @@ function prefillEmployeeForm(employee) {
   const empDept = document.querySelector('#form-employment select#emp-dept');
   if (empDept) empDept.value = employee.department || 'HR';
   
-  const empPosition = document.querySelector('#form-employment #emp-position');
-  if (empPosition) empPosition.value = employee.position || '';
+  if (typeof bindDepartmentPositionDropdown === 'function') {
+    bindDepartmentPositionDropdown('emp-dept', 'emp-position', employee.position || '');
+  }
   
   const empType = document.querySelector('#form-employment select#emp-type');
   if (empType) empType.value = employee.employment_type || 'Full-time';
@@ -456,7 +681,6 @@ function clearEmployeeForm() {
   const emergAddress = document.getElementById('emp-emerg-address');
   if (emergAddress) emergAddress.value = '';
   document.querySelector('#form-employment select#emp-dept').value = 'HR';
-  document.querySelector('#form-employment #emp-position').value = '';
   document.querySelector('#form-employment select#emp-type').value = 'Full-time';
   const hiringType = document.querySelector('#form-employment select#emp-hiring-type');
   if (hiringType) hiringType.value = 'Direct Hire';
@@ -481,6 +705,12 @@ function clearEmployeeForm() {
   if (deploymentStatus) deploymentStatus.value = 'Pending Deployment';
   if (typeof toggleEmployeeAgencyFields === 'function') toggleEmployeeAgencyFields();
   if (typeof toggleEmployeeLifecycleDecisionFields === 'function') toggleEmployeeLifecycleDecisionFields();
+  if (typeof bindDepartmentPositionDropdown === 'function') {
+    bindDepartmentPositionDropdown('emp-dept', 'emp-position', '');
+  } else {
+    const positionSelect = document.querySelector('#form-employment select#emp-position');
+    if (positionSelect) positionSelect.value = '';
+  }
   const empStatusField = document.querySelector('#form-employment select#emp-status-field');
   if (empStatusField) empStatusField.value = 'Active';
   document.querySelector('#form-employment input#emp-hired-date').value = '';
@@ -649,7 +879,11 @@ async function editEmployee(empId) {
     
     // Populate Employment Details Tab
     document.getElementById('edit-emp-dept').value = getDeptName(employee.department_id) || 'HR';
-    document.getElementById('edit-emp-position').value = employee.position || '';
+    if (typeof bindDepartmentPositionDropdown === 'function') {
+      await bindDepartmentPositionDropdown('edit-emp-dept', 'edit-emp-position', employee.position || '');
+    } else {
+      document.getElementById('edit-emp-position').value = employee.position || '';
+    }
     document.getElementById('edit-emp-type').value = employee.employment_type || '';
     document.getElementById('edit-emp-date-hired').value = employee.date_hired ? employee.date_hired.split('T')[0] : '';
     document.getElementById('edit-emp-supervisor').value = employee.supervisor || '';
@@ -725,24 +959,18 @@ function closeEditEmployeeModal() {
 }
 
 function getDeptName(deptId) {
-  const deptMap = {
-    1: 'HR',
-    2: 'Accounting',
-    3: 'Production',
-    4: 'Logistics',
-    5: 'Personnel'
-  };
+  const departments = typeof getEmployeeDepartments === 'function' ? getEmployeeDepartments() : [];
+  const department = departments.find(item => Number(item.id) === Number(deptId));
+  if (department) return department.name;
+  const deptMap = { 1: 'HR', 2: 'Accounting', 3: 'Production', 4: 'Logistics', 5: 'Personnel' };
   return deptMap[deptId] || 'HR';
 }
 
 function getDeptId(deptName) {
-  const deptMap = {
-    'HR': 1,
-    'Accounting': 2,
-    'Production': 3,
-    'Logistics': 4,
-    'Personnel': 5
-  };
+  if (typeof getDepartmentId === 'function') {
+    return getDepartmentId(deptName) || 1;
+  }
+  const deptMap = { HR: 1, Accounting: 2, Production: 3, Logistics: 4, Personnel: 5 };
   return deptMap[deptName] || 1;
 }
 
@@ -925,7 +1153,9 @@ let EMPLOYEE_PAGE_INITIALIZED = false;
 
 function initializeEmployeePage() {
   if (!document.getElementById('emp-tbody')) return;
+  if (!document.getElementById('page-employees')?.classList.contains('active')) return;
 
+  refreshEmployeeSetupUI();
   fetchEmployees();
 
   // Auto-refresh employees every 5 seconds to catch new additions
@@ -941,6 +1171,15 @@ function initializeEmployeePage() {
 
 document.addEventListener('DOMContentLoaded', initializeEmployeePage);
 document.addEventListener('partialsLoaded', initializeEmployeePage);
+
+window.toggleEmployeeSetupPanel = toggleEmployeeSetupPanel;
+window.initializeEmployeePage = initializeEmployeePage;
+window.saveEmployeeSetupDepartment = saveEmployeeSetupDepartment;
+window.saveEmployeeSetupPosition = saveEmployeeSetupPosition;
+window.editEmployeeSetupDepartment = editEmployeeSetupDepartment;
+window.deleteEmployeeSetupDepartment = deleteEmployeeSetupDepartment;
+window.editEmployeeSetupPosition = editEmployeeSetupPosition;
+window.deleteEmployeeSetupPosition = deleteEmployeeSetupPosition;
 
 // Payroll config wage type change handler
 document.addEventListener('change', (e) => {
@@ -1473,6 +1712,7 @@ async function loadEmployeeProfilePage(params = {}) {
   }
 
   currentProfileEmployee = EMPLOYEES_RAW.find(emp => String(emp.id) === String(employeeId));
+  window.currentProfileEmployee = currentProfileEmployee;
 
   if (!currentProfileEmployee) {
     renderProfileEmpty('Employee profile not found.');
@@ -2424,6 +2664,10 @@ function populateProfileEditForm(employee) {
     if (input) input.value = value || '';
   });
 
+  if (typeof bindDepartmentPositionDropdown === 'function') {
+    bindDepartmentPositionDropdown('profile-edit-department', 'profile-edit-position', employee.position || '');
+  }
+
   if (window.setAddressSelection) {
     setAddressSelection(document.getElementById('profile-edit-address'), employee.residential_address || '', employee.residential_address_lat, employee.residential_address_lng);
     setAddressSelection(document.getElementById('profile-edit-current-address'), employee.current_address || '', employee.current_address_lat, employee.current_address_lng);
@@ -2446,6 +2690,7 @@ function populateProfileEditForm(employee) {
 function toggleProfileEditMode(forceState = null, skipTabSync = false) {
   const view = document.getElementById('profile-view-root');
   const edit = document.getElementById('profile-edit-root');
+  const page = document.querySelector('.profile-page');
   let nextState = forceState === null ? !edit?.classList.contains('active') : !!forceState;
 
   if (nextState && PROFILE_TABLE_ONLY_TABS.has(currentProfileTab)) {
@@ -2454,6 +2699,7 @@ function toggleProfileEditMode(forceState = null, skipTabSync = false) {
 
   if (view) view.classList.toggle('hidden', nextState);
   if (edit) edit.classList.toggle('active', nextState);
+  if (page) page.classList.toggle('profile-editing', nextState);
   if (!skipTabSync) switchProfileTab(currentProfileTab);
 }
 

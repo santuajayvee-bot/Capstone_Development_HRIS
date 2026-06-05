@@ -5,7 +5,12 @@
 const bcrypt = require('bcrypt');
 const argon2 = require('argon2');
 const jwt    = require('jsonwebtoken');
-const { findByUsername, updateLastLogin } = require('./users');
+const {
+  findByUsername,
+  updateLastLogin,
+  getUserPermissions,
+  getLinkedEmployeeProfile,
+} = require('./users');
 
 const JWT_SECRET  = process.env.JWT_SECRET;
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '8h';
@@ -107,6 +112,9 @@ async function login(req, res) {
       // Columns may not exist — continue
     }
 
+    const permissions = await getUserPermissions(user.id, user.role);
+    const employeeProfile = await getLinkedEmployeeProfile(user.employee_id);
+
     // 6. Sign JWT
     const effectiveRole = user.username === 'hr.admin' && user.role === 'hr_admin'
       ? 'hr_manager'
@@ -121,6 +129,8 @@ async function login(req, res) {
       role:       effectiveRole,
       roleLabel:  effectiveRoleLabel,
       employeeId: user.employee_id,
+      permissions,
+      employeeProfile,
     };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
