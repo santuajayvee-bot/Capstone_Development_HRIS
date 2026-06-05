@@ -18,6 +18,7 @@ const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
+const dashboardRoutes                        = require('./server/dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -192,8 +193,107 @@ app.get('/api/address/details', requireAuth, requireRole(ROLES.any), async (req,
   }
 });
 
+app.get('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await pool.execute(
+      `UPDATE form_drafts
+       SET status = 'Expired'
+       WHERE status = 'Active' AND expires_at IS NOT NULL AND expires_at < NOW()`
+    );
+
+    const moduleName = String(req.query.module_name || '').trim();
+    const formName = String(req.query.form_name || '').trim();
+    const recordId = req.query.record_id === undefined || req.query.record_id === ''
+      ? '__new__'
+      : String(req.query.record_id);
+
+    if (!moduleName || !formName) {
+      return res.status(400).json({ error: 'module_name and form_name are required.' });
+    }
+
+    const [rows] = await pool.execute(
+      `SELECT id, user_id, module_name, form_name, NULLIF(record_id, '__new__') AS record_id,
+              draft_data_json, status, last_saved_at, expires_at, created_at, updated_at
+       FROM form_drafts
+       WHERE user_id = ? AND module_name = ? AND form_name = ? AND record_id = ? AND status = 'Active'
+       LIMIT 1`,
+      [req.user.id, moduleName, formName, recordId]
+    );
+
+    res.json(rows[0] || null);
+  } catch (err) {
+    console.error('Form draft fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch form draft.' });
+  }
+});
+
+app.post('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const moduleName = String(req.body.module_name || '').trim();
+    const formName = String(req.body.form_name || '').trim();
+    const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
+      ? '__new__'
+      : String(req.body.record_id);
+    const status = ['Active', 'Submitted', 'Discarded'].includes(req.body.status) ? req.body.status : 'Active';
+    const expiryDays = Math.max(parseInt(req.body.expiry_days || process.env.FORM_DRAFT_EXPIRY_DAYS || '14', 10) || 14, 1);
+    const draftData = req.body.draft_data || {};
+
+    if (!moduleName || !formName) {
+      return res.status(400).json({ error: 'module_name and form_name are required.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO form_drafts
+         (user_id, module_name, form_name, record_id, draft_data_json, status, last_saved_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? DAY))
+       ON DUPLICATE KEY UPDATE
+         draft_data_json = VALUES(draft_data_json),
+         status = VALUES(status),
+         last_saved_at = NOW(),
+         expires_at = VALUES(expires_at)`,
+      [req.user.id, moduleName, formName, recordId, JSON.stringify(draftData), status, expiryDays]
+    );
+
+    res.json({ message: 'Draft saved.', last_saved_at: new Date().toISOString() });
+  } catch (err) {
+    console.error('Form draft save error:', err.message);
+    res.status(500).json({ error: 'Failed to save form draft.' });
+  }
+});
+
+app.patch('/api/form-drafts/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const moduleName = String(req.body.module_name || '').trim();
+    const formName = String(req.body.form_name || '').trim();
+    const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
+      ? '__new__'
+      : String(req.body.record_id);
+    const status = ['Submitted', 'Discarded', 'Expired'].includes(req.body.status) ? req.body.status : 'Discarded';
+
+    if (!moduleName || !formName) {
+      return res.status(400).json({ error: 'module_name and form_name are required.' });
+    }
+
+    await pool.execute(
+      `UPDATE form_drafts
+       SET status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND module_name = ? AND form_name = ? AND record_id = ?`,
+      [status, req.user.id, moduleName, formName, recordId]
+    );
+
+    res.json({ message: 'Draft status updated.' });
+  } catch (err) {
+    console.error('Form draft status error:', err.message);
+    res.status(500).json({ error: 'Failed to update form draft.' });
+  }
+});
+
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // 201-File Management (Auth required, role-based per endpoint)
 app.use('/api/201-files', requireAuth, fileManagementRoutes);
@@ -471,6 +571,186 @@ app.get('/api/employees/next-code', requireAuth, requireRole(ROLES.staff_managem
   } catch (err) {
     console.error('Error generating next employee code:', err);
     res.status(500).json({ error: 'Failed to generate employee code.' });
+  }
+});
+
+async function ensureEmployeeSetupSchema(pool) {
+  const [departmentColumns] = await pool.execute("SHOW COLUMNS FROM departments LIKE 'is_active'");
+  if (!departmentColumns.length) {
+    await pool.execute('ALTER TABLE departments ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1');
+  }
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS positions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      department_id INT NOT NULL,
+      name VARCHAR(120) NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_positions_department_name (department_id, name),
+      CONSTRAINT fk_positions_department
+        FOREIGN KEY (department_id) REFERENCES departments(id)
+        ON DELETE CASCADE
+    )
+  `);
+}
+
+app.get('/api/employee-setup/lookups', requireAuth, requireRole(ROLES.any), async (_req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const [departments] = await pool.execute('SELECT id, name, is_active FROM departments WHERE is_active = 1 ORDER BY name');
+    const [positions] = await pool.execute(`
+      SELECT p.id, p.department_id, p.name, p.is_active, d.name AS department
+        FROM positions p
+        JOIN departments d ON d.id = p.department_id
+       WHERE p.is_active = 1 AND d.is_active = 1
+       ORDER BY d.name, p.name
+    `);
+    res.json({ departments, positions });
+  } catch (err) {
+    console.error('Error loading employee setup lookups:', err);
+    res.status(500).json({ error: 'Failed to load departments and positions.' });
+  }
+});
+
+app.post('/api/employee-setup/departments', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Department name is required.' });
+    if (name.length > 100) return res.status(400).json({ error: 'Department name is too long.' });
+
+    await ensureEmployeeSetupSchema(pool);
+    await pool.execute(
+      `INSERT INTO departments (name, is_active)
+       VALUES (?, 1)
+       ON DUPLICATE KEY UPDATE is_active = 1`,
+      [name]
+    );
+    const [[department]] = await pool.execute('SELECT id, name, is_active FROM departments WHERE name = ? LIMIT 1', [name]);
+    res.json({ department, message: 'Department saved.' });
+  } catch (err) {
+    console.error('Error saving department:', err);
+    res.status(500).json({ error: 'Failed to save department.' });
+  }
+});
+
+app.put('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const id = Number(req.params.id);
+    const name = String(req.body.name || '').trim();
+    if (!id) return res.status(400).json({ error: 'Department is required.' });
+    if (!name) return res.status(400).json({ error: 'Department name is required.' });
+    if (name.length > 100) return res.status(400).json({ error: 'Department name is too long.' });
+
+    await pool.execute('UPDATE departments SET name = ?, is_active = 1 WHERE id = ?', [name, id]);
+    const [[department]] = await pool.execute('SELECT id, name, is_active FROM departments WHERE id = ? LIMIT 1', [id]);
+    res.json({ department, message: 'Department updated.' });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Department name already exists.' });
+    console.error('Error updating department:', err);
+    res.status(500).json({ error: 'Failed to update department.' });
+  }
+});
+
+app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Department is required.' });
+
+    await pool.execute('UPDATE departments SET is_active = 0 WHERE id = ?', [id]);
+    await pool.execute('UPDATE positions SET is_active = 0 WHERE department_id = ?', [id]);
+    res.json({ message: 'Department removed from active dropdowns.' });
+  } catch (err) {
+    console.error('Error deactivating department:', err);
+    res.status(500).json({ error: 'Failed to remove department.' });
+  }
+});
+
+app.post('/api/employee-setup/positions', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const departmentId = Number(req.body.department_id);
+    const name = String(req.body.name || '').trim();
+    if (!departmentId) return res.status(400).json({ error: 'Department is required.' });
+    if (!name) return res.status(400).json({ error: 'Position / job title is required.' });
+    if (name.length > 120) return res.status(400).json({ error: 'Position / job title is too long.' });
+
+    const [[department]] = await pool.execute('SELECT id FROM departments WHERE id = ? LIMIT 1', [departmentId]);
+    if (!department) return res.status(404).json({ error: 'Department not found.' });
+
+    await pool.execute(
+      `INSERT INTO positions (department_id, name, is_active)
+       VALUES (?, ?, 1)
+       ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+      [departmentId, name]
+    );
+    const [[position]] = await pool.execute(
+      `SELECT p.id, p.department_id, p.name, p.is_active, d.name AS department
+         FROM positions p
+         JOIN departments d ON d.id = p.department_id
+        WHERE p.department_id = ? AND p.name = ?
+        LIMIT 1`,
+      [departmentId, name]
+    );
+    res.json({ position, message: 'Position saved.' });
+  } catch (err) {
+    console.error('Error saving position:', err);
+    res.status(500).json({ error: 'Failed to save position.' });
+  }
+});
+
+app.put('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const id = Number(req.params.id);
+    const departmentId = Number(req.body.department_id);
+    const name = String(req.body.name || '').trim();
+    if (!id) return res.status(400).json({ error: 'Position is required.' });
+    if (!departmentId) return res.status(400).json({ error: 'Department is required.' });
+    if (!name) return res.status(400).json({ error: 'Position / job title is required.' });
+    if (name.length > 120) return res.status(400).json({ error: 'Position / job title is too long.' });
+
+    await pool.execute(
+      'UPDATE positions SET department_id = ?, name = ?, is_active = 1 WHERE id = ?',
+      [departmentId, name, id]
+    );
+    const [[position]] = await pool.execute(
+      `SELECT p.id, p.department_id, p.name, p.is_active, d.name AS department
+         FROM positions p
+         JOIN departments d ON d.id = p.department_id
+        WHERE p.id = ?
+        LIMIT 1`,
+      [id]
+    );
+    res.json({ position, message: 'Position updated.' });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Position already exists in this department.' });
+    console.error('Error updating position:', err);
+    res.status(500).json({ error: 'Failed to update position.' });
+  }
+});
+
+app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeSetupSchema(pool);
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Position is required.' });
+
+    await pool.execute('UPDATE positions SET is_active = 0 WHERE id = ?', [id]);
+    res.json({ message: 'Position removed from active dropdowns.' });
+  } catch (err) {
+    console.error('Error deactivating position:', err);
+    res.status(500).json({ error: 'Failed to remove position.' });
   }
 });
 

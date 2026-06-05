@@ -312,6 +312,32 @@
   .emp-menu-item:disabled:hover {
     background: transparent;
   }
+
+  .employee-setup-panel { border: 1px solid var(--border); border-radius: 8px; background: var(--card); margin-bottom: 18px; overflow: hidden; font-family: inherit; }
+  .employee-setup-toggle { width: 100%; border: 0; background: transparent; color: var(--text); display: flex; justify-content: space-between; align-items: center; padding: 15px 16px; cursor: pointer; font: inherit; font-size: 14px; font-weight: 800; }
+  .employee-setup-body { display: none; border-top: 1px solid var(--border); padding: 16px; }
+  .employee-setup-panel.open .employee-setup-body { display: block; }
+  .employee-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .employee-setup-form { border: 1px solid var(--border); border-radius: 8px; padding: 15px; display: grid; gap: 12px; background: #101722; }
+  .employee-setup-form strong { font-size: 14px; font-weight: 800; color: var(--text); }
+  .employee-setup-form label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+  .employee-setup-form input, .employee-setup-form select { width: 100%; background: #0f1724; color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; font: inherit; font-size: 13px; }
+  .employee-setup-list { display: grid; gap: 8px; }
+  .employee-setup-department { border: 1px solid var(--border); border-radius: 8px; background: #111827; overflow: hidden; }
+  .employee-setup-department summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: center; gap: 12px; padding: 13px 14px; color: var(--text); font-size: 13px; font-weight: 800; }
+  .employee-setup-department summary::-webkit-details-marker { display: none; }
+  .employee-setup-caret { color: var(--muted); font-size: 12px; }
+  .employee-setup-count { color: var(--muted); font-size: 12px; font-weight: 700; }
+  .employee-setup-department[open] .employee-setup-caret { transform: rotate(90deg); }
+  .employee-setup-position-list { border-top: 1px solid var(--border); display: grid; }
+  .employee-setup-position-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; padding: 11px 14px; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .employee-setup-position-row:first-child { border-top: 0; }
+  .employee-setup-empty { padding: 13px 14px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+  .employee-setup-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .employee-setup-action { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: #151d2b; color: var(--text); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .employee-setup-action:hover { background: rgba(79,124,255,0.14); }
+  .employee-setup-action.danger { color: #ffb4b4; }
+  @media (max-width: 800px) { .employee-setup-grid { grid-template-columns: 1fr; } }
 </style>
 <div class="page-header">
   <div>
@@ -320,6 +346,29 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-primary" onclick="openAddEmployeeModal()">+ Add Employee</button>
+  </div>
+</div>
+
+<div class="employee-setup-panel" id="employee-setup-panel">
+  <button class="employee-setup-toggle" type="button" onclick="toggleEmployeeSetupPanel()">
+    <span>Department & Job Position Setup</span>
+    <span id="employee-setup-toggle-label">Show</span>
+  </button>
+  <div class="employee-setup-body">
+    <div class="employee-setup-grid">
+      <form class="employee-setup-form" onsubmit="saveEmployeeSetupDepartment(event)">
+        <strong>Add Department</strong>
+        <label>Department Name<input id="setup-department-name" placeholder="e.g. Quality Assurance"></label>
+        <button class="btn btn-primary" type="submit">Save Department</button>
+      </form>
+      <form class="employee-setup-form" onsubmit="saveEmployeeSetupPosition(event)">
+        <strong>Add Job Position</strong>
+        <label>Department<select id="setup-position-department"><option value="">Select department</option></select></label>
+        <label>Position / Job Title<input id="setup-position-name" placeholder="e.g. QA Inspector"></label>
+        <button class="btn btn-primary" type="submit">Save Position</button>
+      </form>
+    </div>
+    <div class="employee-setup-list" id="employee-setup-rows">Loading setup...</div>
   </div>
 </div>
 
@@ -525,7 +574,9 @@
             </div>
             <div>
               <label style="display:block;font-size:12px;color:#666 !important;margin-bottom:4px;font-weight:600;">Position</label>
-              <input id="edit-emp-position" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+              <select id="edit-emp-position" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;color:#333 !important;box-sizing:border-box;background:white !important;">
+                <option value="">Select department first</option>
+              </select>
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">

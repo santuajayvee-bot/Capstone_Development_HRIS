@@ -28,6 +28,49 @@ async function findByUsername(username) {
   return rows[0] || null;
 }
 
+const FALLBACK_ROLE_PERMISSIONS = {
+  system_admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
+  admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
+  hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
+  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.report.view', 'employee.view'],
+  payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.report.view', 'report.view'],
+  manager: ['attendance.view', 'leave.request.approve', 'report.view'],
+  employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'payroll.view'],
+};
+
+async function getUserPermissions(userId, roleName = 'employee') {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT p.permission_key
+         FROM users u
+         JOIN role_permissions rp ON rp.role_id = u.role_id
+         JOIN permissions p ON p.id = rp.permission_id
+        WHERE u.id = ?
+        ORDER BY p.permission_key`,
+      [userId]
+    );
+    if (rows.length) return rows.map(row => row.permission_key);
+  } catch (error) {
+    // Permissions tables are optional for older installs.
+  }
+  return FALLBACK_ROLE_PERMISSIONS[roleName] || FALLBACK_ROLE_PERMISSIONS.employee;
+}
+
+async function getLinkedEmployeeProfile(employeeId) {
+  if (!employeeId) return null;
+  const [rows] = await pool.execute(
+    `SELECT e.id, e.employee_code, e.first_name, e.last_name, e.status, e.position,
+            d.name AS department, wt.name AS wage_type
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+      WHERE e.id = ?
+      LIMIT 1`,
+    [employeeId]
+  );
+  return rows[0] || null;
+}
+
 /**
  * Update last_login timestamp.
  * @param {number} userId
@@ -67,4 +110,4 @@ async function getUserProfile(userId) {
   return rows[0] || null;
 }
 
-module.exports = { findByUsername, updateLastLogin, getUserProfile };
+module.exports = { findByUsername, updateLastLogin, getUserProfile, getUserPermissions, getLinkedEmployeeProfile };

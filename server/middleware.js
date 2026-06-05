@@ -14,6 +14,7 @@ const ROLE_ALIASES = {
   'hr_admin': 'hr_admin',
   'payroll_officer': 'payroll_officer',
   'payroll_manager': 'payroll_manager',
+  'manager': 'manager',
   'employee': 'employee'
 };
 
@@ -23,11 +24,12 @@ const ROLES = {
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
   payroll_any:     ['payroll_officer', 'payroll_manager', 'admin', 'hr_admin'],  // Added hr_admin + admin
+  manager:         ['manager'],
   hr_ops:          ['hr_admin', 'admin'],                           // HR operations (Leave, Attendance)
   staff_management: ['hr_admin', 'admin'],                          // Employee management (register, profiles, documents)
   admin_any:       ['hr_admin', 'system_admin', 'admin'],           // Any admin role
-  staff_any:       ['hr_admin', 'admin', 'payroll_officer', 'payroll_manager'],  // All staff roles
-  any:             ['hr_admin', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
+  staff_any:       ['hr_admin', 'admin', 'payroll_officer', 'payroll_manager', 'manager'],  // All staff roles
+  any:             ['hr_admin', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'manager', 'employee'],
 };
 
 /**
