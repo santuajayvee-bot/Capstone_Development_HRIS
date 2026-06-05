@@ -328,12 +328,6 @@ async function showRegisterModal() {
   document.getElementById('reg-password').value = '';
   document.getElementById('reg-password-confirm').value = '';
   document.getElementById('reg-role-id').value = '';
-  document.getElementById('reg-sss').value = '';
-  document.getElementById('reg-philhealth').value = '';
-  document.getElementById('reg-pagibig').value = '';
-  document.getElementById('reg-tin').value = '';
-  document.getElementById('reg-bank-name').value = '';
-  document.getElementById('reg-bank-account').value = '';
   document.getElementById('reg-employee-preview').style.display = 'none';
   document.getElementById('register-modal-title').textContent = 'Register New Account';
 
@@ -405,6 +399,20 @@ function onEmployeeSelect() {
 }
 
 // ── Step Navigation ─────────────────────────────────────────
+function validateRegistrationAccountSetup() {
+  const username = document.getElementById('reg-username').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const confirm  = document.getElementById('reg-password-confirm').value;
+  const roleId   = document.getElementById('reg-role-id').value;
+
+  if (!username) { showSysToast('Username is required.', 'error'); return false; }
+  if (!/^[a-z0-9._-]+$/.test(username)) { showSysToast('Username can only contain lowercase letters, numbers, dots, hyphens.', 'error'); return false; }
+  if (!password || password.length < 8) { showSysToast('Password must be at least 8 characters.', 'error'); return false; }
+  if (password !== confirm) { showSysToast('Passwords do not match.', 'error'); return false; }
+  if (!roleId) { showSysToast('Please select a role.', 'error'); return false; }
+  return true;
+}
+
 function regStepNext() {
   if (sysCurrentStep === 1) {
     if (!document.getElementById('reg-employee-id').value) {
@@ -413,19 +421,10 @@ function regStepNext() {
     }
   }
   if (sysCurrentStep === 2) {
-    const username = document.getElementById('reg-username').value.trim();
-    const password = document.getElementById('reg-password').value;
-    const confirm  = document.getElementById('reg-password-confirm').value;
-    const roleId   = document.getElementById('reg-role-id').value;
-
-    if (!username) { showSysToast('Username is required.', 'error'); return; }
-    if (!/^[a-z0-9._-]+$/.test(username)) { showSysToast('Username can only contain lowercase letters, numbers, dots, hyphens.', 'error'); return; }
-    if (!password || password.length < 8) { showSysToast('Password must be at least 8 characters.', 'error'); return; }
-    if (password !== confirm) { showSysToast('Passwords do not match.', 'error'); return; }
-    if (!roleId) { showSysToast('Please select a role.', 'error'); return; }
+    if (!validateRegistrationAccountSetup()) return;
   }
 
-  if (sysCurrentStep < 3) {
+  if (sysCurrentStep < 2) {
     sysCurrentStep++;
     updateStepUI();
   }
@@ -448,17 +447,14 @@ function updateStepUI() {
   });
 
   // Show/hide step content
-  for (let i = 1; i <= 3; i++) {
-    const content = document.getElementById('reg-step-' + i);
-    if (content) {
-      content.classList.toggle('active', i === sysCurrentStep);
-    }
-  }
+  document.querySelectorAll('#register-modal .modal-step-content').forEach(content => {
+    content.classList.toggle('active', content.id === `reg-step-${sysCurrentStep}`);
+  });
 
   // Show/hide buttons
   document.getElementById('btn-reg-back').style.display = sysCurrentStep > 1 ? 'inline-flex' : 'none';
-  document.getElementById('btn-reg-next').style.display = sysCurrentStep < 3 ? 'inline-flex' : 'none';
-  document.getElementById('btn-reg-submit').style.display = sysCurrentStep === 3 ? 'inline-flex' : 'none';
+  document.getElementById('btn-reg-next').style.display = sysCurrentStep < 2 ? 'inline-flex' : 'none';
+  document.getElementById('btn-reg-submit').style.display = sysCurrentStep === 2 ? 'inline-flex' : 'none';
 }
 
 // ── Submit Registration ─────────────────────────────────────
@@ -468,21 +464,11 @@ async function submitRegistration() {
   const password   = document.getElementById('reg-password').value;
   const roleId     = parseInt(document.getElementById('reg-role-id').value);
 
-  // Build PII payload
-  const pii = {};
-  const sss = document.getElementById('reg-sss').value.trim();
-  const philhealth = document.getElementById('reg-philhealth').value.trim();
-  const pagibig = document.getElementById('reg-pagibig').value.trim();
-  const tin = document.getElementById('reg-tin').value.trim();
-  const bankName = document.getElementById('reg-bank-name').value.trim();
-  const bankAccount = document.getElementById('reg-bank-account').value.trim();
-
-  if (sss) pii.sss_number = sss;
-  if (philhealth) pii.philhealth_number = philhealth;
-  if (pagibig) pii.pagibig_number = pagibig;
-  if (tin) pii.tin = tin;
-  if (bankName) pii.bank_name = bankName;
-  if (bankAccount) pii.bank_account = bankAccount;
+  if (!employeeId) {
+    showSysToast('Please select an employee.', 'error');
+    return;
+  }
+  if (!validateRegistrationAccountSetup()) return;
 
   const payload = {
     employee_id: employeeId,
@@ -490,7 +476,6 @@ async function submitRegistration() {
     password,
     role_id: roleId,
   };
-  if (Object.keys(pii).length > 0) payload.pii = pii;
 
   try {
     const submitBtn = document.getElementById('btn-reg-submit');

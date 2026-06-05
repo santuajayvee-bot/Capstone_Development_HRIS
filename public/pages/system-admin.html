@@ -141,7 +141,6 @@
       <div class="modal-steps">
         <div class="step active" data-step="1"><span>1</span> Select Employee</div>
         <div class="step" data-step="2"><span>2</span> Account Setup</div>
-        <div class="step" data-step="3"><span>3</span> Sensitive Data</div>
       </div>
 
       <!-- Step 1: Select Employee -->
@@ -190,46 +189,6 @@
         <div class="password-strength" id="password-strength"></div>
       </div>
 
-      <!-- Step 3: Sensitive Data (PII) -->
-      <div class="modal-step-content" id="reg-step-3">
-        <div class="pii-notice">
-          <span class="pii-icon">🔒</span>
-          <div>
-            <strong>AES-256 Encrypted Storage</strong>
-            <p>These fields are encrypted before saving. They cannot be viewed in plain text in the database.</p>
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-col">
-            <label class="sysadmin-label">SSS Number</label>
-            <input type="text" id="reg-sss" class="sysadmin-input" placeholder="XX-XXXXXXX-X" />
-          </div>
-          <div class="form-col">
-            <label class="sysadmin-label">PhilHealth Number</label>
-            <input type="text" id="reg-philhealth" class="sysadmin-input" placeholder="XXXX-XXXX-XXXX" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-col">
-            <label class="sysadmin-label">Pag-IBIG Number</label>
-            <input type="text" id="reg-pagibig" class="sysadmin-input" placeholder="XXXX-XXXX-XXXX" />
-          </div>
-          <div class="form-col">
-            <label class="sysadmin-label">TIN</label>
-            <input type="text" id="reg-tin" class="sysadmin-input" placeholder="XXX-XXX-XXX" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-col">
-            <label class="sysadmin-label">Bank Name</label>
-            <input type="text" id="reg-bank-name" class="sysadmin-input" placeholder="e.g. BDO, BPI" />
-          </div>
-          <div class="form-col">
-            <label class="sysadmin-label">Bank Account Number</label>
-            <input type="text" id="reg-bank-account" class="sysadmin-input" placeholder="Account number" />
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="modal-footer">

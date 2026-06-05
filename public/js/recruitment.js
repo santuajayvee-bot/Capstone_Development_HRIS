@@ -585,35 +585,65 @@ function onbValidatePositionAndWage() {
   }
 }
 
+function onbRecordTable(rows) {
+  return `
+    <table class="onb-record-table">
+      <tbody>
+        ${rows.map(([label, value, raw = false]) => `
+          <tr>
+            <th scope="row">${onbEscape(label)}</th>
+            <td>${raw ? value : onbEscape(value || '-')}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function onbRecordSection(title, rows) {
+  return `
+    <section class="onb-page-section">
+      <h4>${onbEscape(title)}</h4>
+      ${onbRecordTable(rows)}
+    </section>
+  `;
+}
+
 function onbApplicantDetails(applicant) {
-  const items = [
-    ['Hiring source', applicant.hiring_type],
-    ['Applied position', applicant.applied_position],
-    ['Department', applicant.department || 'Unassigned'],
-    ['Branch', applicant.branch],
-    ['Email', applicant.email],
-    ['Work email', applicant.work_email || 'Not prepared'],
-    ['Contact number', applicant.contact_number],
-    ['Birth details', [applicant.date_of_birth, applicant.place_of_birth].filter(Boolean).join(' / ') || 'Not provided'],
-    ['Personal profile', [applicant.gender, applicant.civil_status, applicant.blood_type].filter(Boolean).join(' / ') || 'Not provided'],
-    ['Residential address', applicant.residential_address],
-    ['Emergency contact', applicant.emergency_contact_name ? `${applicant.emergency_contact_name} / ${applicant.emergency_contact_number || 'number pending'}` : 'Not provided'],
-    ['Employment type', applicant.desired_employment_type || 'Full-time'],
-    ['Shift', applicant.shift_schedule || 'Not prepared'],
-    ['Payroll setup', applicant.expected_wage_type ? `${applicant.expected_wage_type}: ${applicant.expected_base_rate ?? 'rate pending'}` : 'Configure after transfer'],
-    ['Government IDs', applicant.sss_number || applicant.philhealth_number || applicant.pagibig_number || applicant.tin ? 'Prepared securely' : 'Not provided'],
-    ['Bank details', applicant.bank_name || applicant.bank_account ? 'Prepared securely' : 'Not provided'],
-    ['Biometric reference', applicant.biometric_prepared ? `${applicant.biometric_reference} (${applicant.biometric_device_name || 'device prepared'})` : 'Not prepared'],
+  const sections = [
+    onbRecordSection('Employment Details', [
+      ['Hiring source', applicant.hiring_type],
+      ['Applied position', applicant.applied_position],
+      ['Department', applicant.department || 'Unassigned'],
+      ['Branch', applicant.branch],
+      ['Employment type', applicant.desired_employment_type || 'Full-time'],
+      ['Shift', applicant.shift_schedule || 'Not prepared'],
+    ]),
+    onbRecordSection('Contact and Personal Information', [
+      ['Email', applicant.email],
+      ['Work email', applicant.work_email || 'Not prepared'],
+      ['Contact number', applicant.contact_number],
+      ['Birth details', [applicant.date_of_birth, applicant.place_of_birth].filter(Boolean).join(' / ') || 'Not provided'],
+      ['Personal profile', [applicant.gender, applicant.civil_status, applicant.blood_type].filter(Boolean).join(' / ') || 'Not provided'],
+      ['Residential address', applicant.residential_address],
+      ['Emergency contact', applicant.emergency_contact_name ? `${applicant.emergency_contact_name} / ${applicant.emergency_contact_number || 'number pending'}` : 'Not provided'],
+    ]),
+    onbRecordSection('Payroll and Secure References', [
+      ['Payroll setup', applicant.expected_wage_type ? `${applicant.expected_wage_type}: ${applicant.expected_base_rate ?? 'rate pending'}` : 'Configure after transfer'],
+      ['Government IDs', applicant.sss_number || applicant.philhealth_number || applicant.pagibig_number || applicant.tin ? 'Prepared securely' : 'Not provided'],
+      ['Bank details', applicant.bank_name || applicant.bank_account ? 'Prepared securely' : 'Not provided'],
+      ['Biometric reference', applicant.biometric_prepared ? `${applicant.biometric_reference} (${applicant.biometric_device_name || 'device prepared'})` : 'Not prepared'],
+    ]),
   ];
   if (applicant.hiring_type === 'Agency-Hired') {
-    items.push(
+    sections.push(onbRecordSection('Agency Deployment', [
       ['Agency', applicant.agency_name],
       ['Agency contact', `${applicant.agency_contact_person} / ${applicant.agency_contact_number}`],
       ['Deployment', applicant.deployment_status],
       ['Contract', `${applicant.contract_start_date || 'Not set'} to ${applicant.contract_end_date || 'Not set'}`],
-    );
+    ]));
   }
-  return items.map(([label, value]) => `<div class="onb-review-item"><span>${onbEscape(label)}</span><strong>${onbEscape(value || '-')}</strong></div>`).join('');
+  return sections.join('');
 }
 
 function onbDocumentRows(documents) {
@@ -648,16 +678,16 @@ function onbRenderReview(applicant, documents, audit, integrity) {
   const canTransfer = canFinalApprove && applicant.approval_status === 'Approved' && applicant.workflow_status === 'Approved';
   const documentTypes = ONB_LOOKUPS.document_types.map(value => ({ value, label: value }));
   body.innerHTML = `
-    <div class="onb-review-grid">${onbApplicantDetails(applicant)}</div>
-    <div class="onb-review-columns">
+    <div class="onb-record-page">
+      ${onbApplicantDetails(applicant)}
       <section class="onb-review-section">
         <h4>Workflow Status</h4>
-        <div class="onb-review-grid">
-          <div class="onb-review-item"><span>Workflow</span><strong>${onbBadge(applicant.workflow_status)}</strong></div>
-          <div class="onb-review-item"><span>Approval</span><strong>${onbBadge(applicant.approval_status)}</strong></div>
-          <div class="onb-review-item"><span>Screening route</span><strong>${applicant.requires_onboarding ? 'Required' : 'Not required'}</strong></div>
-          <div class="onb-review-item"><span>Training route</span><strong>${applicant.requires_training ? 'Required' : 'Not required'}</strong></div>
-        </div>
+        ${onbRecordTable([
+          ['Workflow', onbBadge(applicant.workflow_status), true],
+          ['Approval', onbBadge(applicant.approval_status), true],
+          ['Screening route', applicant.requires_onboarding ? 'Required' : 'Not required'],
+          ['Training route', applicant.requires_training ? 'Required' : 'Not required'],
+        ])}
         ${locked ? '' : `
           <h4>Update Screening and Training</h4>
           <div class="onb-workflow-grid">
@@ -687,8 +717,7 @@ function onbRenderReview(applicant, documents, audit, integrity) {
           </div>
         `}
       </section>
-    </div>
-    ${canTransfer ? `
+      ${canTransfer ? `
       <section class="onb-review-section onb-transfer">
         <h4>Transfer Approved Hire</h4>
         <p class="onb-muted">Creates the official Employee Directory record and payroll-ready wage row, carries prepared documents forward, and activates the biometric reference mapping when configured.</p>
@@ -714,6 +743,7 @@ function onbRenderReview(applicant, documents, audit, integrity) {
       <p class="onb-muted">Integrity ledger: ${integrity.chain_valid ? 'verified' : 'verification failed'} · ${Number(integrity.records.length)} chained actions · ${Number(integrity.pending_anchor_count)} pending permissioned-ledger anchors</p>
       <div class="onb-audit-list">${onbAuditRows(audit)}</div>
     </section>
+    </div>
   `;
 }
 

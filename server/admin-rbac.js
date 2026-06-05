@@ -8,7 +8,6 @@
    2. Account Registration / Role Assignment (Use Case 17)
    3. Immutable Audit Logging (ISO/IEC 27001 Non-Repudiation)
    4. Role CRUD for System Administrator
-   5. AES-256 PII encryption on sensitive fields
    ============================================================ */
 
 const express  = require('express');
@@ -16,7 +15,6 @@ const argon2   = require('argon2');
 const router   = express.Router();
 const pool     = require('../config/db');
 const { requireAuth }    = require('./middleware');
-const { encryptPII, decryptPII } = require('./crypto');
 
 // ── Argon2 Configuration (OWASP recommended) ────────────────
 const ARGON2_OPTIONS = {
@@ -25,12 +23,6 @@ const ARGON2_OPTIONS = {
   timeCost:    3,                 // 3 iterations
   parallelism: 4,                 // 4 threads
 };
-
-// ── PII fields that require AES-256 encryption ──────────────
-const PII_FIELDS = [
-  'sss_number', 'philhealth_number', 'pagibig_number',
-  'tin', 'bank_account', 'bank_name',
-];
 
 /* ================================================================
    MIDDLEWARE: requireLevel4 — Strict System Administrator Guard
@@ -111,7 +103,6 @@ router.use(requireLevel4);
    
    Creates or updates a user account and assigns a role.
    - Hashes password with Argon2id
-   - Encrypts PII with AES-256-GCM
    - Logs immutable audit entry
    
    Body: {
@@ -119,15 +110,12 @@ router.use(requireLevel4);
      username:         (required) login username
      password:         (required) default password
      role_id:          (required) role to assign
-     pii: {            (optional) sensitive fields to encrypt
-       sss_number, tin, bank_account, ...
-     }
    }
    ================================================================ */
 router.post('/register-role', async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    const { employee_id, username, password, role_id, pii } = req.body;
+    const { employee_id, username, password, role_id } = req.body;
 
     // ── Input Validation ─────────────────────────────────────
     if (!employee_id || !username || !password || !role_id) {
@@ -173,20 +161,6 @@ router.post('/register-role', async (req, res) => {
     // ── Hash password with Argon2id ──────────────────────────
     const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
 
-    // ── Encrypt PII with AES-256-GCM (if provided) ──────────
-    let encryptedPiiPayload = null;
-    if (pii && typeof pii === 'object' && Object.keys(pii).length > 0) {
-      const piiToEncrypt = {};
-      for (const field of PII_FIELDS) {
-        if (pii[field]) {
-          piiToEncrypt[field] = sanitizeInput(pii[field]);
-        }
-      }
-      if (Object.keys(piiToEncrypt).length > 0) {
-        encryptedPiiPayload = encryptPII(piiToEncrypt);
-      }
-    }
-
     // ── Begin Transaction ────────────────────────────────────
     await conn.beginTransaction();
 
@@ -231,14 +205,6 @@ router.post('/register-role', async (req, res) => {
       actionPerformed = `ACCOUNT_CREATED: New account '${cleanUsername}' for Employee ${employee.employee_code} (${employee.first_name} ${employee.last_name}) with role ${assignedRole.label} (${assignedRole.access_level})`;
     }
 
-    // ── Save encrypted PII to employees table ────────────────
-    if (encryptedPiiPayload) {
-      await conn.execute(
-        'UPDATE employees SET encrypted_pii = ? WHERE id = ?',
-        [encryptedPiiPayload, employee_id]
-      );
-    }
-
     // ── Immutable Audit Log Entry (Non-Repudiation) ──────────
     const newValue = JSON.stringify({
       user_id: userId,
@@ -247,7 +213,6 @@ router.post('/register-role', async (req, res) => {
       role_name: assignedRole.name,
       role_label: assignedRole.label,
       access_level: assignedRole.access_level,
-      pii_encrypted: !!encryptedPiiPayload,
     });
 
     const adminIP = extractClientIP(req);
@@ -278,7 +243,6 @@ router.post('/register-role', async (req, res) => {
           label: assignedRole.label,
           access_level: assignedRole.access_level,
         },
-        pii_encrypted: !!encryptedPiiPayload,
       },
     });
 
