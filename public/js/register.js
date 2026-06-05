@@ -26,6 +26,135 @@ const DOC_TYPES = {
   other: 'Other'
 };
 
+const DEFAULT_DEPARTMENT_POSITIONS = {
+  HR: ['HR Officer', 'HR Manager', 'Recruitment Officer', 'HR Assistant'],
+  Accounting: ['Finance Manager', 'Accounting Staff', 'Payroll Officer', 'Bookkeeper'],
+  Production: ['Assembly Worker', 'Machine Operator', 'Quality Inspector', 'Production Supervisor'],
+  Logistics: ['Deliver Driver', 'Delivery Helper', 'Warehouse Staff', 'Logistics Coordinator'],
+  Personnel: ['Personnel Officer', 'Personnel Assistant', 'Admin Staff'],
+};
+
+let EMPLOYEE_POSITION_ROUTES = [];
+let EMPLOYEE_DEPARTMENTS = [];
+let EMPLOYEE_POSITION_OPTIONS_PROMISE = null;
+
+function employeeOptionEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  }[char]));
+}
+
+async function loadEmployeePositionOptions() {
+  if (EMPLOYEE_POSITION_OPTIONS_PROMISE) return EMPLOYEE_POSITION_OPTIONS_PROMISE;
+  EMPLOYEE_POSITION_OPTIONS_PROMISE = (async () => {
+    try {
+      const response = await apiFetch('/api/employee-setup/lookups');
+      if (!response || !response.ok) throw new Error('Unable to load departments and positions.');
+      const data = await response.json();
+      EMPLOYEE_DEPARTMENTS = Array.isArray(data.departments) ? data.departments : [];
+      EMPLOYEE_POSITION_ROUTES = Array.isArray(data.positions) ? data.positions : [];
+    } catch (error) {
+      console.warn('Using fallback department positions:', error.message);
+      EMPLOYEE_DEPARTMENTS = Object.keys(DEFAULT_DEPARTMENT_POSITIONS).map((name, index) => ({ id: index + 1, name }));
+      EMPLOYEE_POSITION_ROUTES = [];
+    }
+    renderEmployeeDepartmentOptions();
+    return EMPLOYEE_POSITION_ROUTES;
+  })();
+  return EMPLOYEE_POSITION_OPTIONS_PROMISE;
+}
+
+function getEmployeeSetupElement(id) {
+  if (id === 'emp-dept') return document.querySelector('#form-employment select#emp-dept');
+  if (id === 'emp-position') return document.querySelector('#form-employment select#emp-position');
+  return document.getElementById(id);
+}
+
+function renderEmployeeDepartmentOptions(selectedById = {}) {
+  const targets = [
+    ['emp-dept', 'Select department'],
+    ['profile-edit-department', 'Select department'],
+    ['edit-emp-dept', 'Select department'],
+  ];
+
+  targets.forEach(([id, placeholder]) => {
+    const select = getEmployeeSetupElement(id);
+    if (!select) return;
+    const selected = selectedById[id] ?? select.value;
+    select.innerHTML = `<option value="">${placeholder}</option>` + EMPLOYEE_DEPARTMENTS
+      .map(department => `<option value="${employeeOptionEscape(department.name)}">${employeeOptionEscape(department.name)}</option>`)
+      .join('');
+    if (selected && EMPLOYEE_DEPARTMENTS.some(department => department.name === selected)) {
+      select.value = selected;
+    }
+  });
+}
+
+function getEmployeePositionsForDepartment(departmentName, selectedValue = '') {
+  const dept = String(departmentName || '').trim();
+  const configured = EMPLOYEE_POSITION_ROUTES
+    .filter(route => {
+      const routeDepartment = String(route.department || '').trim();
+      const positionName = route.name || route.position_name;
+      return positionName && (!routeDepartment || routeDepartment === dept);
+    })
+    .map(route => route.name || route.position_name);
+
+  const fallback = DEFAULT_DEPARTMENT_POSITIONS[dept] || [];
+  const positions = [...new Set([...configured, ...fallback])].sort((a, b) => a.localeCompare(b));
+
+  if (selectedValue && !positions.includes(selectedValue)) {
+    positions.unshift(selectedValue);
+  }
+
+  return positions;
+}
+
+function renderEmployeePositionOptions(positionSelect, departmentName, selectedValue = '') {
+  if (!positionSelect) return;
+  const positions = getEmployeePositionsForDepartment(departmentName, selectedValue);
+  const placeholder = departmentName ? 'Select position / job title' : 'Select department first';
+  positionSelect.innerHTML = `<option value="">${placeholder}</option>` + positions
+    .map(position => `<option value="${employeeOptionEscape(position)}">${employeeOptionEscape(position)}</option>`)
+    .join('');
+  positionSelect.value = selectedValue && positions.includes(selectedValue) ? selectedValue : '';
+}
+
+async function bindDepartmentPositionDropdown(departmentId, positionId, selectedPosition = '') {
+  const departmentSelect = getEmployeeSetupElement(departmentId);
+  const positionSelect = getEmployeeSetupElement(positionId);
+  if (!departmentSelect || !positionSelect) return;
+
+  await loadEmployeePositionOptions();
+
+  const update = (nextSelected = '') => {
+    renderEmployeePositionOptions(positionSelect, departmentSelect.value, nextSelected || positionSelect.value);
+  };
+
+  if (!departmentSelect.dataset.positionDropdownBound) {
+    departmentSelect.dataset.positionDropdownBound = '1';
+    departmentSelect.addEventListener('change', () => update(''));
+  }
+
+  update(selectedPosition || positionSelect.value);
+}
+
+function initializeEmployeePositionDropdowns() {
+  bindDepartmentPositionDropdown('emp-dept', 'emp-position');
+  bindDepartmentPositionDropdown('profile-edit-department', 'profile-edit-position');
+  bindDepartmentPositionDropdown('edit-emp-dept', 'edit-emp-position');
+}
+
+function resetEmployeePositionOptions() {
+  EMPLOYEE_POSITION_OPTIONS_PROMISE = null;
+  EMPLOYEE_POSITION_ROUTES = [];
+  EMPLOYEE_DEPARTMENTS = [];
+}
+
 const ADDRESS_FORM_CONFIGS = {
   emp: {
     home: { input: 'emp-address' },
@@ -238,6 +367,12 @@ function collectEmployeeAddressPayload(mode = 'emp') {
   };
 }
 
+window.initializeEmployeePositionDropdowns = initializeEmployeePositionDropdowns;
+window.bindDepartmentPositionDropdown = bindDepartmentPositionDropdown;
+window.loadEmployeePositionOptions = loadEmployeePositionOptions;
+window.resetEmployeePositionOptions = resetEmployeePositionOptions;
+window.getEmployeeDepartments = () => EMPLOYEE_DEPARTMENTS;
+window.getEmployeePositions = () => EMPLOYEE_POSITION_ROUTES;
 window.initializeEmployeeAddressAutocomplete = initializeEmployeeAddressAutocomplete;
 window.collectEmployeeAddressPayload = collectEmployeeAddressPayload;
 window.setAddressSelection = setAddressSelection;
@@ -535,9 +670,6 @@ function loadEmployeeData() {
   if (maritalInput) maritalInput.value = emp.marital_status || 'Single';
   
   // Populate Employment Details using specific selectors
-  const positionInput = document.querySelector('#form-employment input#emp-position');
-  if (positionInput) positionInput.value = emp.position || '';
-  
   const typeInput = document.querySelector('#form-employment select#emp-type');
   if (typeInput) typeInput.value = emp.employment_type || 'Regular';
 
@@ -602,6 +734,8 @@ function loadEmployeeData() {
     console.warn('  - deptSelect found:', !!deptSelect);
     console.warn('  - emp.department value:', emp.department);
   }
+
+  bindDepartmentPositionDropdown('emp-dept', 'emp-position', emp.position || '');
   
   // Clear the temp storage
   sessionStorage.removeItem('editEmployee');
@@ -776,7 +910,7 @@ function saveEmployee() {
   // DEBUG: Log what we're reading from the employment fields
   console.log('=== EMPLOYMENT FIELDS DEBUG ===');
   console.log('emp-dept value:', document.querySelector('#form-employment select#emp-dept')?.value);
-  console.log('emp-position value:', document.querySelector('#form-employment input#emp-position')?.value);
+  console.log('emp-position value:', document.querySelector('#form-employment select#emp-position')?.value);
   console.log('emp-type value:', document.querySelector('#form-employment select#emp-type')?.value);
   console.log('emp-status-field value:', document.querySelector('#form-employment select#emp-status-field')?.value);
   console.log('emp-hired-date value:', document.querySelector('#form-employment input#emp-hired-date')?.value);
@@ -820,7 +954,7 @@ function saveEmployee() {
     
     // Employment Details
     department_id: departmentId,
-    position: document.querySelector('#form-employment input#emp-position')?.value || null,
+    position: document.querySelector('#form-employment select#emp-position')?.value || null,
     employment_type: document.querySelector('#form-employment select#emp-type')?.value || 'Regular',
     date_hired: document.querySelector('#form-employment input#emp-hired-date')?.value || null,
     end_of_contract: document.querySelector('#form-employment input#emp-end-contract')?.value || null,
@@ -993,14 +1127,10 @@ function saveEmployee() {
 }
 
 function getDepartmentId(deptName) {
-  const deptMap = {
-    'HR': 1,
-    'Accounting': 2,
-    'Production': 3,
-    'Logistics': 4,
-    'Personnel': 5
-  };
-  return deptMap[deptName] || null;
+  const department = EMPLOYEE_DEPARTMENTS.find(item => item.name === deptName);
+  if (department) return department.id;
+  const fallback = Object.keys(DEFAULT_DEPARTMENT_POSITIONS).indexOf(deptName);
+  return fallback >= 0 ? fallback + 1 : null;
 }
 
 // Get wage type ID from name
@@ -1687,6 +1817,7 @@ let REGISTER_PAGE_INITIALIZED = false;
 
 function initializeRegisterPage() {
   if (!document.getElementById('register-form-view')) return;
+  if (!document.getElementById('page-register')?.classList.contains('active')) return;
   if (REGISTER_PAGE_INITIALIZED) return;
   REGISTER_PAGE_INITIALIZED = true;
 
@@ -1695,6 +1826,7 @@ function initializeRegisterPage() {
   initializeFileUploads();
   initializeWageConfig();
   initializeEmployeeAddressAutocomplete();
+  initializeEmployeePositionDropdowns();
   
   // Apply role-based access after a short delay to ensure DOM is ready
   setTimeout(() => {
@@ -1706,3 +1838,4 @@ function initializeRegisterPage() {
 // register form actually exists.
 document.addEventListener('DOMContentLoaded', initializeRegisterPage);
 document.addEventListener('partialsLoaded', initializeRegisterPage);
+window.initializeRegisterPage = initializeRegisterPage;

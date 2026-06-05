@@ -39,9 +39,19 @@ function navigate(pageId, navEl, params = null) {
   }
 
   window.ROUTE_PARAMS = { pageId, ...(params || {}) };
+
+  if (pageId === 'dashboard' && typeof loadDashboard === 'function') {
+    loadDashboard();
+  }
+
+  if (pageId === 'employees' && typeof initializeEmployeePage === 'function') {
+    initializeEmployeePage();
+  }
   
   // When navigating to register, load employee data if editing
-  if (pageId === 'register' && typeof loadEmployeeData === 'function') {
+  if (pageId === 'register' && typeof initializeRegisterPage === 'function') {
+    initializeRegisterPage();
+  } else if (pageId === 'register' && typeof loadEmployeeData === 'function') {
     loadEmployeeData();
     if (typeof generateEmployeeID === 'function') {
       generateEmployeeID();

@@ -45,6 +45,8 @@
   .profile-photo { width: 118px; height: 118px; border: 1px solid var(--border); border-radius: 8px; display: grid; place-items: center; overflow: hidden; background: #101720; font-size: 28px; font-weight: 800; }
   .profile-photo img { width: 100%; height: 100%; object-fit: cover; }
   .profile-upload, .profile-edit-btn, .profile-doc-upload, .profile-family-add, .profile-family-save { border: 0; border-radius: 8px; padding: 9px 14px; background: var(--accent); color: white; font-weight: 800; cursor: pointer; }
+  .profile-upload { display: none; }
+  .profile-page.profile-editing .profile-upload { display: inline-flex; }
   .profile-summary-grid, .profile-field-grid, .profile-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
   .profile-field { border: 1px solid var(--form-line); border-radius: 8px; padding: 12px; background: var(--bg); }
   .profile-label { display: block; color: var(--form-muted); font-size: 12px; margin-bottom: 5px; }
@@ -63,6 +65,10 @@
   .profile-record-list { display: grid; gap: 12px; }
   .profile-record { border: 1px solid var(--form-line); border-radius: 8px; padding: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; background: var(--bg); }
   .profile-form-grid label { color: var(--muted); font-size: 12px; font-weight: 700; display: grid; gap: 7px; }
+  .profile-address-field { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+  .profile-address-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 18px; }
+  .profile-page .address-same-check { margin: 0; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; line-height: 1.2; text-transform: none; }
+  .profile-page .address-same-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); flex: 0 0 auto; }
   .profile-form-grid input, .profile-form-grid select, .profile-form-grid textarea, .profile-family-form input, .profile-family-form select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--form-line); border-radius: 8px; padding: 10px; }
   .profile-form-grid input[type="date"], .profile-family-form input[type="date"] {
     color-scheme: dark;
@@ -129,7 +135,7 @@
         <img id="profile-photo-img" alt="" style="display:none;">
         <span id="profile-initials">--</span>
       </div>
-      <button class="profile-upload" type="button" onclick="document.getElementById('profile-photo-input').click()">Upload</button>
+      <button class="profile-upload" id="profile-photo-upload-btn" type="button" onclick="document.getElementById('profile-photo-input').click()">Upload</button>
       <input id="profile-photo-input" type="file" accept="image/jpeg,image/png,image/jpg" hidden onchange="uploadProfilePhoto(event)">
     </div>
     <div class="profile-summary-grid">
@@ -200,20 +206,26 @@
                 <div class="address-suggestions" id="profile-edit-address-suggestions"></div>
               </div>
             </label>
-            <label>Current Address
-              <span class="address-same-check"><input id="profile-current-same-home" type="checkbox"> Same as Home Address</span>
+            <div class="profile-address-field">
+              <div class="profile-address-label-row">
+                <span>Current Address</span>
+                <label class="address-same-check"><input id="profile-current-same-home" type="checkbox"> Same as Home Address</label>
+              </div>
               <div class="address-autocomplete" data-address-field="profile-current">
                 <input id="profile-edit-current-address" type="text" autocomplete="off">
                 <div class="address-suggestions" id="profile-edit-current-address-suggestions"></div>
               </div>
-            </label>
-            <label>Mailing Address
-              <span class="address-same-check"><input id="profile-mailing-same-home" type="checkbox"> Same as Home Address</span>
+            </div>
+            <div class="profile-address-field">
+              <div class="profile-address-label-row">
+                <span>Mailing Address</span>
+                <label class="address-same-check"><input id="profile-mailing-same-home" type="checkbox"> Same as Home Address</label>
+              </div>
               <div class="address-autocomplete" data-address-field="profile-mailing">
                 <input id="profile-edit-mailing-address" type="text" autocomplete="off">
                 <div class="address-suggestions" id="profile-edit-mailing-address-suggestions"></div>
               </div>
-            </label>
+            </div>
           </div>
           <h3 class="profile-section-title" style="margin-top:22px;">Emergency Contacts</h3>
           <div class="profile-form-grid">
@@ -229,7 +241,7 @@
         <div id="profile-edit-tab-employment" class="profile-edit-tab-panel">
           <div class="profile-form-grid">
             <label>Department<select id="profile-edit-department"><option value="">Select department</option><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></label>
-            <label>Job Title / Position<input id="profile-edit-position" type="text"></label>
+            <label>Job Title / Position<select id="profile-edit-position"><option value="">Select department first</option></select></label>
             <label>Employee Type<select id="profile-edit-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></label>
             <label>Employment Status<select id="profile-edit-status"><option>Active</option><option>Inactive</option></select></label>
             <label>Date Hired<input id="profile-edit-hired" type="date"></label>

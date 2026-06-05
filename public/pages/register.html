@@ -117,7 +117,10 @@
   .employee-form-block-title {
     margin: 0 0 16px;
     color: var(--text);
-    font: 700 13px Georgia, "Times New Roman", serif;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0;
   }
 
   .employee-form-grid {
@@ -363,7 +366,7 @@
         <h3 class="employee-form-block-title">Employment Information</h3>
         <div class="employee-form-grid">
           <div class="form-group"><label>Department</label><select id="emp-dept"><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></div>
-          <div class="form-group"><label>Position / Job Title</label><input id="emp-position" placeholder="e.g. HR Officer" /></div>
+          <div class="form-group"><label>Position / Job Title</label><select id="emp-position"><option value="">Select department first</option></select></div>
           <div class="form-group"><label>Employee Type</label><select id="emp-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></div>
           <div class="form-group"><label>Employment Status</label><select id="emp-status-field"><option>Active</option><option>Inactive</option></select></div>
           <div class="form-group"><label>Date Hired</label><input id="emp-hired-date" type="date" /></div>
