@@ -4,6 +4,22 @@
 
 let currentPayrollData = [];
 let currentMonthYear = null;
+let pieceRateConfig = {
+  sew_types: [],
+  size_ranges: [],
+  piece_rates: [],
+  production_shares: [],
+  production_share_rules: [],
+  incentives: [],
+  incentive_entries: [],
+  production_outputs: [],
+  production_pairs: []
+};
+let pieceRateRecordsView = 'rates';
+
+function money(value) {
+  return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
 // Open Run Payroll Modal
 function openRunPayrollModal() {
@@ -859,10 +875,542 @@ function switchPayrollTab(tab) {
   });
 
   if (tab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
+  if (tab === 'piece-config') loadPieceRateConfig();
   if (tab === 'deductions') loadPayrollSettings('deduction');
   if (tab === 'allowances') loadPayrollSettings('allowance');
   if (tab === 'reports') loadPayrollAudit();
   if (tab === 'records' || tab === 'payslips') loadSalaryCalculations();
+}
+
+async function loadPieceRateConfig() {
+  const grid = document.getElementById('piece-rate-config-grid');
+  try {
+    const res = await apiFetch('/api/payroll/piece-rate-config');
+    if (!res.ok) throw new Error('Failed to load piece-rate configuration');
+    pieceRateConfig = await res.json();
+    window.pieceRateConfig = pieceRateConfig;
+    populatePieceRateDropdowns();
+    const pairingSelect = document.querySelector('#production-share-rule-form [name="pairing_type"]');
+    if (pairingSelect && !pairingSelect.dataset.bound) {
+      pairingSelect.addEventListener('change', applyPairingTypeDefaults);
+      pairingSelect.dataset.bound = '1';
+    }
+    bindProductionPairPreview();
+    enhancePieceRateMinimizers();
+    if (grid) grid.innerHTML = renderPieceRateConfig(pieceRateConfig);
+  } catch (err) {
+    if (grid) grid.innerHTML = `<div style="padding:30px;color:var(--red);text-align:center;">${err.message}</div>`;
+  }
+}
+
+function enhancePieceRateMinimizers() {
+  const sections = document.querySelectorAll('#payroll-tab-piece-config .payroll-form-page fieldset');
+  sections.forEach((section, index) => {
+    const legend = section.querySelector('legend');
+    if (!legend || legend.dataset.minimizeReady) return;
+    const key = section.dataset.minimizeKey || legend.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    section.dataset.minimizeKey = key;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'payroll-mini-toggle';
+    button.addEventListener('click', () => {
+      const next = !section.classList.contains('is-minimized');
+      setPieceRateSectionMinimized(section, next, true);
+    });
+    legend.appendChild(button);
+    legend.dataset.minimizeReady = '1';
+    const saved = localStorage.getItem(`pieceRateSection:${key}`);
+    const shouldMinimize = saved === '1' || (saved == null && index > 0);
+    setPieceRateSectionMinimized(section, shouldMinimize, false);
+  });
+}
+
+function setPieceRateSectionMinimized(section, minimized, persist = true) {
+  section.classList.toggle('is-minimized', minimized);
+  const button = section.querySelector('.payroll-mini-toggle');
+  if (button) button.textContent = minimized ? 'Expand' : 'Minimize';
+  if (persist && section.dataset.minimizeKey) {
+    localStorage.setItem(`pieceRateSection:${section.dataset.minimizeKey}`, minimized ? '1' : '0');
+  }
+}
+
+function setPieceRateSectionsMinimized(minimized) {
+  const sections = document.querySelectorAll('#payroll-tab-piece-config .payroll-form-page fieldset');
+  sections.forEach(section => setPieceRateSectionMinimized(section, minimized, true));
+}
+
+function activeRows(rows) {
+  return (rows || []).filter(row => Number(row.is_active) === 1);
+}
+
+function latestByDate(rows) {
+  return [...(rows || [])].sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')))[0] || null;
+}
+
+function getConfiguredPieceRate(sewType, sizeRange) {
+  const sew = String(sewType || '').trim();
+  const size = String(sizeRange || '').trim();
+  return latestByDate(activeRows(pieceRateConfig.piece_rates).filter(row => {
+    const rowSew = row.sew_type_code || row.product_type;
+    const rowSize = row.size_range || row.product_category || '';
+    return rowSew === sew && rowSize === size;
+  }));
+}
+
+function getConfiguredPairRule(pairingType) {
+  return latestByDate(activeRows(pieceRateConfig.production_share_rules).filter(row => row.pairing_type === pairingType));
+}
+
+function populatePieceRateDropdowns() {
+  const sewOptions = activeRows(pieceRateConfig.sew_types)
+    .map(row => `<option value="${row.code}">${row.code}${row.description ? ` - ${row.description}` : ''}</option>`)
+    .join('');
+  const sizeOptions = activeRows(pieceRateConfig.size_ranges)
+    .map(row => `<option value="${row.size_range}">${row.size_range}${row.description ? ` - ${row.description}` : ''}</option>`)
+    .join('');
+  const rateOptions = activeRows(pieceRateConfig.piece_rates)
+    .map(row => {
+      const sew = row.sew_type_code || row.product_type;
+      const size = row.size_range || row.product_category || '';
+      return `<option value="${sew}" data-size="${size}" data-category="${size}">${sew}${size ? ` / ${size}` : ''} (${money(row.piece_rate)})</option>`;
+    })
+    .join('');
+  const workerOptions = activeRows(pieceRateConfig.production_shares)
+    .map(row => `<option value="${row.worker_category}">${row.worker_category} (${Number(row.percentage_share || 0)}%)</option>`)
+    .join('');
+
+  ['rate-sew-type', 'output-sew-type', 'pair-sew-type'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = `<option value="">Select type</option>${sewOptions}`;
+  });
+  ['rate-size-range', 'salary-piece-size-range', 'output-size-range', 'pair-size-range'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = `<option value="">Select size range</option>${sizeOptions}`;
+  });
+  ['salary-piece-product'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = `<option value="">Select type</option>${sewOptions || rateOptions}`;
+  });
+  ['salary-worker-category', 'output-worker-category'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = `<option value="">Select category</option>${workerOptions}`;
+  });
+  updateProductionPairSummary();
+}
+
+function renderPieceRateConfig(config) {
+  const views = [
+    ['rates', 'Piece Rates'],
+    ['sew', 'Type of Sew'],
+    ['sizes', 'Size Ranges'],
+    ['rules', 'Sharing Rules'],
+    ['incentives', 'Incentive Rules'],
+    ['production', 'Production Encodings'],
+    ['entries', 'Incentive Encodings']
+  ];
+  return `
+    <div class="piece-records-compact">
+      <div class="piece-records-head">
+        <div>
+          <h3>Records</h3>
+          <p>Choose one record type to view or edit. This keeps the page light.</p>
+        </div>
+        <select id="piece-rate-record-view" onchange="switchPieceRateRecordsView(this.value)">
+          ${views.map(([value, label]) => `<option value="${value}" ${pieceRateRecordsView === value ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>
+      <div id="piece-rate-record-table">${renderPieceRateRecordTable(config, pieceRateRecordsView)}</div>
+    </div>
+  `;
+}
+
+function switchPieceRateRecordsView(view) {
+  pieceRateRecordsView = view;
+  const target = document.getElementById('piece-rate-record-table');
+  if (target) target.innerHTML = renderPieceRateRecordTable(pieceRateConfig, pieceRateRecordsView);
+}
+
+function renderPieceRateRecordTable(config, view) {
+  const limit = 12;
+  if (view === 'sew') {
+    const rows = (config.sew_types || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Code</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.code}</td><td>${row.description || '-'}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editSewType(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="4">No Type of Sew configured.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'sizes') {
+    const rows = (config.size_ranges || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Size Range</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.size_range}</td><td>${row.description || '-'}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editSizeRange(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="4">No size ranges configured.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'rules') {
+    const rows = (config.production_share_rules || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Pairing Type</th><th>Worker 1</th><th>Worker 2</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.pairing_type}</td><td>${Number(row.worker1_share || 0)}%</td><td>${Number(row.worker2_share || 0)}%</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editProductionShareRule(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No sharing rules configured.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'incentives') {
+    const rows = (config.incentives || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Name</th><th>Category</th><th>Amount</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.incentive_name}</td><td>${row.incentive_category}</td><td>${money(row.amount)}</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editPieceIncentive(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No incentive rules configured.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'production') {
+    const rows = (config.production_pairs || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Date</th><th>Pairing</th><th>Sewer</th><th>Partner</th><th>Sew / Size</th><th>Qty</th><th>Raw Earnings</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${(row.production_date || '').slice(0, 10)}</td><td>${row.pairing_type}</td><td>${row.worker1_name || row.worker1_employee_id}</td><td>${row.worker2_name || row.worker2_employee_id}</td><td>${row.sew_type_code || row.product_type} / ${row.size_range || row.product_category || '-'}</td><td>${row.quantity_produced}</td><td>${money(row.production_value)}</td></tr>`).join('') || '<tr><td colspan="7">No production encodings yet.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'entries') {
+    const rows = (config.incentive_entries || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Employee</th><th>Period</th><th>Type</th><th>Amount</th><th>Remarks</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.employee_name || row.employee_code || row.employee_id}</td><td>${row.payroll_period}</td><td>${row.incentive_type}</td><td>${money(row.amount)}</td><td>${row.remarks || '-'}</td></tr>`).join('') || '<tr><td colspan="5">No incentive encodings yet.</td></tr>'}</tbody></table>`;
+  }
+  const rows = (config.piece_rates || []).slice(0, limit);
+  return `
+    <table><thead><tr><th>Type of Sew</th><th>Size Range</th><th>Rate</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody>${rows.map(row => `<tr><td>${row.sew_type_code || row.product_type}</td><td>${row.size_range || row.product_category || '-'}</td><td>${money(row.piece_rate)}</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editPieceRate(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No piece rates configured.</td></tr>'}</tbody></table>`;
+}
+
+function setFormValues(formId, row) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  Object.entries(row).forEach(([key, value]) => {
+    const input = form.elements[key];
+    if (!input) return;
+    input.value = key.includes('date') && value ? String(value).slice(0, 10) : value ?? '';
+  });
+}
+
+function editPieceRate(row) {
+  setFormValues('piece-rate-form', {
+    ...row,
+    sew_type_code: row.sew_type_code || row.product_type,
+    size_range: row.size_range || row.product_category
+  });
+  document.getElementById('piece-rate-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+function editSewType(row) {
+  setFormValues('sew-type-form', row);
+  document.getElementById('sew-type-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+function editSizeRange(row) {
+  setFormValues('size-range-form', row);
+  document.getElementById('size-range-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+async function saveSewType(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  try {
+    const res = await apiFetch('/api/payroll/sew-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save Type of Sew');
+    form.reset();
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert('Type of Sew saved.', 'Saved', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+async function saveSizeRange(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  try {
+    const res = await apiFetch('/api/payroll/size-ranges', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save size range');
+    form.reset();
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert('Size range saved.', 'Saved', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+function editPieceIncentive(row) {
+  setFormValues('piece-incentive-form', row);
+  document.getElementById('piece-incentive-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+function editProductionShareRule(row) {
+  setFormValues('production-share-rule-form', row);
+  document.getElementById('production-share-rule-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+function applyPairingTypeDefaults() {
+  const form = document.getElementById('production-share-rule-form');
+  if (!form) return;
+  const type = form.elements.pairing_type?.value;
+  if (type === 'Standard Sewer-Fixer') {
+    form.elements.worker1_share.value = 55;
+    form.elements.worker2_share.value = 45;
+  } else if (type === 'Substitute Sewer-Sewer') {
+    form.elements.worker1_share.value = 50;
+    form.elements.worker2_share.value = 50;
+  }
+}
+
+function bindProductionPairPreview() {
+  const form = document.getElementById('production-pair-form');
+  if (!form || form.dataset.previewBound) return;
+  ['pairing_type', 'sew_type_code', 'size_range', 'quantity_produced'].forEach(name => {
+    const input = form.elements[name];
+    if (!input) return;
+    input.addEventListener('input', updateProductionPairSummary);
+    input.addEventListener('change', updateProductionPairSummary);
+  });
+  form.dataset.previewBound = '1';
+  restoreProductionPairDraft();
+  updateProductionPairSummary();
+}
+
+function setPairSummary(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function updateProductionPairSummary() {
+  const form = document.getElementById('production-pair-form');
+  if (!form) return;
+  const sewType = form.elements.sew_type_code?.value || '';
+  const sizeRange = form.elements.size_range?.value || '';
+  const quantity = Number(form.elements.quantity_produced?.value || 0);
+  const pairingType = form.elements.pairing_type?.value || '';
+  const rate = getConfiguredPieceRate(sewType, sizeRange);
+  const rule = getConfiguredPairRule(pairingType);
+  const pieceRate = Number(rate?.piece_rate || 0);
+  const raw = quantity * pieceRate;
+  const worker1Share = Number(rule?.worker1_share || 0);
+  const worker2Share = Number(rule?.worker2_share || 0);
+  const rateInput = document.getElementById('pair-piece-rate-preview');
+  if (rateInput) rateInput.value = money(pieceRate);
+  setPairSummary('pair-raw-earnings', money(raw));
+  setPairSummary('pair-worker1-share', `${worker1Share}%`);
+  setPairSummary('pair-worker1-earnings', money(raw * (worker1Share / 100)));
+  setPairSummary('pair-worker2-share', `${worker2Share}%`);
+  setPairSummary('pair-worker2-earnings', money(raw * (worker2Share / 100)));
+}
+
+function saveProductionPairDraft() {
+  const form = document.getElementById('production-pair-form');
+  const status = document.getElementById('production-pair-status');
+  if (!form) return;
+  const data = Object.fromEntries(new FormData(form).entries());
+  localStorage.setItem('payrollProductionPairDraft', JSON.stringify({ data, savedAt: new Date().toISOString() }));
+  if (status) status.textContent = 'Draft saved.';
+}
+
+function restoreProductionPairDraft() {
+  const form = document.getElementById('production-pair-form');
+  if (!form || form.dataset.draftRestored) return;
+  const raw = localStorage.getItem('payrollProductionPairDraft');
+  if (!raw) {
+    form.dataset.draftRestored = '1';
+    return;
+  }
+  try {
+    const draft = JSON.parse(raw);
+    Object.entries(draft.data || {}).forEach(([key, value]) => {
+      if (form.elements[key]) form.elements[key].value = value;
+    });
+  } catch (err) {
+    console.warn('Unable to restore production pair draft:', err.message);
+  }
+  form.dataset.draftRestored = '1';
+}
+
+function clearProductionPairForm() {
+  const form = document.getElementById('production-pair-form');
+  const status = document.getElementById('production-pair-status');
+  if (!form) return;
+  form.reset();
+  localStorage.removeItem('payrollProductionPairDraft');
+  updateProductionPairSummary();
+  if (status) status.textContent = '';
+}
+
+async function savePieceRate(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  try {
+    const res = await apiFetch('/api/payroll/piece-rates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save piece rate');
+    form.reset();
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert('Piece rate saved.', 'Saved', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+async function saveProductionShares(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  const total = Number(data.sewer_share || 0) + Number(data.fixer_share || 0);
+  const status = document.getElementById('share-save-status');
+  if (Math.abs(total - 100) > 0.001) {
+    if (status) status.textContent = 'Shares must total exactly 100%.';
+    return;
+  }
+  const shares = [
+    { worker_category: 'Sewer', percentage_share: data.sewer_share, effective_date: data.effective_date },
+    { worker_category: 'Fixer', percentage_share: data.fixer_share, effective_date: data.effective_date }
+  ];
+  try {
+    const res = await apiFetch('/api/payroll/production-shares', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shares })
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save shares');
+    if (status) status.textContent = 'Shares saved.';
+    await loadPieceRateConfig();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function saveProductionShareRule(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('pair-rule-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  const total = Number(data.worker1_share || 0) + Number(data.worker2_share || 0);
+  if (Math.abs(total - 100) > 0.001) {
+    if (status) status.textContent = 'Worker shares must total exactly 100%.';
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/payroll/production-share-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save pair rule');
+    if (status) status.textContent = 'Pair rule saved.';
+    form.reset();
+    await loadPieceRateConfig();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function savePieceIncentive(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
+  try {
+    const res = await apiFetch('/api/payroll/piece-incentives', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save incentive');
+    form.reset();
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert('Incentive saved.', 'Saved', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+async function encodeProductionOutput(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('production-output-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  data.is_sunday = data.is_sunday === '1';
+  try {
+    const res = await apiFetch('/api/payroll/production-output', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to encode production output');
+    if (status) status.textContent = `Saved. Gross pay: ${money(result.final_gross_pay)}`;
+    form.reset();
+    await loadPieceRateConfig();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function encodePieceIncentive(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('piece-incentive-entry-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  try {
+    const res = await apiFetch('/api/payroll/piece-incentive-entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to encode incentive');
+    if (status) status.textContent = 'Incentive encoded.';
+    form.reset();
+    await loadPieceRateConfig();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function encodeProductionPair(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('production-pair-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (String(data.worker1_employee_id || '') === String(data.worker2_employee_id || '')) {
+    if (status) status.textContent = 'Sewer and partner cannot be the same employee.';
+    return;
+  }
+  const rate = getConfiguredPieceRate(data.sew_type_code, data.size_range);
+  if (!rate) {
+    if (status) status.textContent = 'No active rate found for this Type of Sew and Size Range.';
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/payroll/production-pairs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to encode production pair');
+    if (status) status.textContent = `Saved. Worker 1: ${money(result.worker1_earnings)} | Worker 2: ${money(result.worker2_earnings)}`;
+    localStorage.removeItem('payrollProductionPairDraft');
+    form.reset();
+    updateProductionPairSummary();
+    await loadPieceRateConfig();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
 }
 
 function refreshPayrollDashboard() {

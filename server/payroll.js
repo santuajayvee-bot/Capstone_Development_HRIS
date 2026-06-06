@@ -75,6 +75,449 @@ async function computeConfiguredDeductions(pool, grossPay, calculationDate) {
   return { total, applied, weekNumber };
 }
 
+async function ensurePieceRatePayrollSchema(pool) {
+  const ensureColumn = async (table, column, definition) => {
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) AS count
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = ?
+          AND COLUMN_NAME = ?`,
+      [table, column]
+    );
+    if (!Number(rows[0]?.count || 0)) {
+      await pool.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  };
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_sew_types (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      code VARCHAR(40) NOT NULL,
+      description VARCHAR(255) NULL,
+      effective_date DATE NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_payroll_sew_type_code_date (code, effective_date),
+      INDEX idx_sew_type_active (is_active, effective_date)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_size_ranges (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      size_range VARCHAR(40) NOT NULL,
+      description VARCHAR(255) NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_payroll_size_range (size_range),
+      INDEX idx_size_range_active (is_active)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_piece_rates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      product_type VARCHAR(120) NOT NULL,
+      product_category VARCHAR(120) NULL,
+      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      effective_date DATE NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_piece_rate_active (is_active, effective_date),
+      INDEX idx_piece_rate_product (product_type, product_category)
+    )
+  `);
+
+  await ensureColumn('payroll_piece_rates', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
+  await ensureColumn('payroll_piece_rates', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_production_shares (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      worker_category VARCHAR(80) NOT NULL,
+      percentage_share DECIMAL(6,2) NOT NULL DEFAULT 0,
+      effective_date DATE NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_share_active (is_active, effective_date),
+      INDEX idx_share_category (worker_category)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_production_share_rules (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      pairing_type ENUM('Standard Sewer-Fixer','Substitute Sewer-Sewer') NOT NULL,
+      worker1_share DECIMAL(6,2) NOT NULL DEFAULT 0,
+      worker2_share DECIMAL(6,2) NOT NULL DEFAULT 0,
+      effective_date DATE NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_pair_rule_active (is_active, effective_date),
+      INDEX idx_pair_rule_type (pairing_type)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_piece_incentives (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      incentive_name VARCHAR(120) NOT NULL,
+      incentive_category ENUM('Quota Incentive','Sunday Work Incentive','Special Sewing Type Incentive') NOT NULL,
+      amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      threshold_quantity INT NULL,
+      sewing_type VARCHAR(120) NULL,
+      computation_type ENUM('Fixed Amount','Percentage Multiplier') NOT NULL DEFAULT 'Fixed Amount',
+      effective_date DATE NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_incentive_active (is_active, effective_date),
+      INDEX idx_incentive_category (incentive_category)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_production_outputs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NULL,
+      payroll_period VARCHAR(7) NOT NULL,
+      product_type VARCHAR(120) NOT NULL,
+      product_category VARCHAR(120) NULL,
+      sew_type_code VARCHAR(40) NULL,
+      size_range VARCHAR(40) NULL,
+      worker_category VARCHAR(80) NOT NULL,
+      quantity_produced INT NOT NULL DEFAULT 0,
+      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      production_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+      share_percentage DECIMAL(6,2) NOT NULL DEFAULT 0,
+      quota_incentive DECIMAL(12,2) NOT NULL DEFAULT 0,
+      sunday_incentive DECIMAL(12,2) NOT NULL DEFAULT 0,
+      special_incentive DECIMAL(12,2) NOT NULL DEFAULT 0,
+      final_gross_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+      output_date DATE NOT NULL,
+      created_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_production_period (payroll_period, output_date),
+      INDEX idx_production_employee (employee_id)
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_production_pairs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      production_date DATE NOT NULL,
+      payroll_period VARCHAR(7) NOT NULL,
+      worker1_employee_id INT NOT NULL,
+      worker2_employee_id INT NOT NULL,
+      pairing_type ENUM('Standard Sewer-Fixer','Substitute Sewer-Sewer') NOT NULL,
+      product_type VARCHAR(120) NOT NULL,
+      product_category VARCHAR(120) NULL,
+      sew_type_code VARCHAR(40) NULL,
+      size_range VARCHAR(40) NULL,
+      quantity_produced INT NOT NULL DEFAULT 0,
+      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      production_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+      worker1_share DECIMAL(6,2) NOT NULL DEFAULT 0,
+      worker2_share DECIMAL(6,2) NOT NULL DEFAULT 0,
+      worker1_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
+      worker2_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
+      rule_snapshot JSON NULL,
+      created_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_pair_period (payroll_period, production_date),
+      INDEX idx_pair_workers (worker1_employee_id, worker2_employee_id)
+    )
+  `);
+
+  await ensureColumn('payroll_production_outputs', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
+  await ensureColumn('payroll_production_outputs', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
+  await ensureColumn('payroll_production_pairs', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
+  await ensureColumn('payroll_production_pairs', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_piece_incentive_entries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NOT NULL,
+      payroll_period VARCHAR(7) NOT NULL,
+      incentive_type ENUM('Quota Incentive','Sunday Work Incentive','Special Sewing Incentive') NOT NULL,
+      amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      remarks VARCHAR(255) NULL,
+      created_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_piece_incentive_entry_employee (employee_id, payroll_period),
+      INDEX idx_piece_incentive_entry_period (payroll_period)
+    )
+  `);
+
+  const [shares] = await pool.execute('SELECT COUNT(*) AS count FROM payroll_production_shares WHERE is_active = 1');
+  if (!Number(shares[0].count)) {
+    const today = new Date().toISOString().split('T')[0];
+    await pool.execute(
+      `INSERT INTO payroll_production_shares (worker_category, percentage_share, effective_date, is_active)
+       VALUES ('Sewer', 55, ?, 1), ('Fixer', 45, ?, 1)`,
+      [today, today]
+    );
+  }
+
+  const [pairRules] = await pool.execute('SELECT COUNT(*) AS count FROM payroll_production_share_rules WHERE is_active = 1');
+  if (!Number(pairRules[0].count)) {
+    const today = new Date().toISOString().split('T')[0];
+    await pool.execute(
+      `INSERT INTO payroll_production_share_rules
+         (pairing_type, worker1_share, worker2_share, effective_date, is_active)
+       VALUES
+         ('Standard Sewer-Fixer', 55, 45, ?, 1),
+         ('Substitute Sewer-Sewer', 50, 50, ?, 1)`,
+      [today, today]
+    );
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const [sewTypes] = await pool.execute('SELECT COUNT(*) AS count FROM payroll_sew_types');
+  if (!Number(sewTypes[0].count)) {
+    await pool.execute(
+      `INSERT INTO payroll_sew_types (code, description, effective_date, is_active)
+       VALUES
+         ('UL', 'UL sewing operation', ?, 1),
+         ('MT', 'MT sewing operation', ?, 1),
+         ('HL', 'HL sewing operation', ?, 1),
+         ('AL', 'AL sewing operation', ?, 1),
+         ('DF', 'DF sewing operation', ?, 1)`,
+      [today, today, today, today, today]
+    );
+  }
+
+  const [sizeRanges] = await pool.execute('SELECT COUNT(*) AS count FROM payroll_size_ranges');
+  if (!Number(sizeRanges[0].count)) {
+    await pool.execute(
+      `INSERT INTO payroll_size_ranges (size_range, description, is_active)
+       VALUES
+         ('14-19', 'Size range 14-19', 1),
+         ('20-23', 'Size range 20-23', 1),
+         ('24-26', 'Size range 24-26', 1),
+         ('27-29', 'Size range 27-29', 1)`,
+    );
+  }
+}
+
+async function activePieceRate(pool, productType, productCategory, dateValue) {
+  const date = dateValue || new Date().toISOString().split('T')[0];
+  const sewTypeCode = String(productType || '').trim();
+  const sizeRange = String(productCategory || '').trim();
+  const [rows] = await pool.execute(`
+    SELECT *
+      FROM payroll_piece_rates
+     WHERE is_active = 1
+       AND (
+          sew_type_code = ?
+          OR product_type = ?
+       )
+       AND (
+          size_range = ?
+          OR product_category = ?
+          OR ((size_range IS NULL OR size_range = '') AND (product_category IS NULL OR product_category = ''))
+       )
+       AND effective_date <= ?
+     ORDER BY
+       CASE WHEN sew_type_code = ? THEN 0 ELSE 1 END,
+       CASE WHEN size_range = ? THEN 0 ELSE 1 END,
+       effective_date DESC,
+       id DESC
+     LIMIT 1
+  `, [sewTypeCode, sewTypeCode, sizeRange, sizeRange, date, sewTypeCode, sizeRange]);
+  return rows[0] || null;
+}
+
+async function getEmployeeProductionRole(pool, employeeId) {
+  const [rows] = await pool.execute(`
+    SELECT e.id, e.employee_code, e.first_name, e.last_name,
+           COALESCE(p.name, e.position, '') AS position,
+           w.name AS wage_type
+      FROM employees e
+      LEFT JOIN positions p ON p.id = e.position_id
+      LEFT JOIN wage_types w ON w.id = e.wage_type_id
+     WHERE e.id = ?
+     LIMIT 1
+  `, [employeeId]);
+  const employee = rows[0];
+  if (!employee) throw new Error('Selected worker was not found.');
+  const position = String(employee.position || '').toLowerCase();
+  const role = position.includes('fixer') ? 'Fixer' : position.includes('sewer') ? 'Sewer' : '';
+  return { ...employee, production_role: role };
+}
+
+async function activeProductionShares(pool, dateValue) {
+  const date = dateValue || new Date().toISOString().split('T')[0];
+  const [rows] = await pool.execute(`
+    SELECT worker_category, percentage_share, effective_date
+      FROM payroll_production_shares
+     WHERE is_active = 1 AND effective_date <= ?
+     ORDER BY effective_date DESC, worker_category
+  `, [date]);
+  const latestByCategory = new Map();
+  rows.forEach(row => {
+    if (!latestByCategory.has(row.worker_category)) latestByCategory.set(row.worker_category, row);
+  });
+  return [...latestByCategory.values()];
+}
+
+async function activePieceIncentives(pool, dateValue) {
+  const date = dateValue || new Date().toISOString().split('T')[0];
+  const [rows] = await pool.execute(`
+    SELECT *
+      FROM payroll_piece_incentives
+     WHERE is_active = 1 AND effective_date <= ?
+     ORDER BY effective_date DESC, threshold_quantity DESC, amount DESC
+  `, [date]);
+  return rows;
+}
+
+async function activeProductionPairRule(pool, pairingType, dateValue) {
+  const date = dateValue || new Date().toISOString().split('T')[0];
+  const [rows] = await pool.execute(`
+    SELECT *
+      FROM payroll_production_share_rules
+     WHERE is_active = 1 AND pairing_type = ? AND effective_date <= ?
+     ORDER BY effective_date DESC, id DESC
+     LIMIT 1
+  `, [pairingType, date]);
+  return rows[0] || null;
+}
+
+async function computeProductionPairPayroll(pool, input) {
+  await ensurePieceRatePayrollSchema(pool);
+  const productionDate = input.production_date || new Date().toISOString().split('T')[0];
+  const sewTypeCode = String(input.sew_type_code || input.product_type || '').trim();
+  const sizeRange = String(input.size_range || input.product_category || '').trim();
+  const pairingType = String(input.pairing_type || '').trim();
+  const quantity = Math.max(0, parseInt(input.quantity_produced || 0, 10) || 0);
+  if (!sewTypeCode) throw new Error('Type of Sew is required.');
+  if (!sizeRange) throw new Error('Size Range is required.');
+  if (!['Standard Sewer-Fixer', 'Substitute Sewer-Sewer'].includes(pairingType)) throw new Error('Valid pairing type is required.');
+  if (!quantity) throw new Error('Quantity produced is required.');
+  if (!input.worker1_employee_id || !input.worker2_employee_id) throw new Error('Worker 1 and Worker 2 are required.');
+  if (String(input.worker1_employee_id) === String(input.worker2_employee_id)) throw new Error('Worker 1 and Worker 2 must be different employees.');
+
+  const worker1 = await getEmployeeProductionRole(pool, input.worker1_employee_id);
+  const worker2 = await getEmployeeProductionRole(pool, input.worker2_employee_id);
+  if (worker1.production_role !== 'Sewer') throw new Error('Worker 1 must be classified as Sewer.');
+  if (pairingType === 'Standard Sewer-Fixer' && worker2.production_role !== 'Fixer') {
+    throw new Error('Standard pairing requires Worker 2 to be classified as Fixer.');
+  }
+  if (pairingType === 'Substitute Sewer-Sewer' && worker2.production_role !== 'Sewer') {
+    throw new Error('Substitute pairing requires Worker 2 to be another Sewer.');
+  }
+
+  const rate = await activePieceRate(pool, sewTypeCode, sizeRange, productionDate);
+  if (!rate) throw new Error('No active piece rate found for the selected Type of Sew, Size Range, and date.');
+  const rule = await activeProductionPairRule(pool, pairingType, productionDate);
+  if (!rule) throw new Error('No active production share rule found for this pairing type.');
+  const totalShare = Number(rule.worker1_share || 0) + Number(rule.worker2_share || 0);
+  if (Math.abs(totalShare - 100) > 0.001) throw new Error('Production share rule must total exactly 100%.');
+
+  const productionValue = quantity * Number(rate.piece_rate || 0);
+  return {
+    production_date: productionDate,
+    payroll_period: input.payroll_period || productionDate.slice(0, 7),
+    worker1_employee_id: Number(input.worker1_employee_id),
+    worker2_employee_id: Number(input.worker2_employee_id),
+    pairing_type: pairingType,
+    product_type: sewTypeCode,
+    product_category: sizeRange,
+    sew_type_code: sewTypeCode,
+    size_range: sizeRange,
+    quantity_produced: quantity,
+    piece_rate: Number(rate.piece_rate || 0),
+    production_value: productionValue,
+    worker1_share: Number(rule.worker1_share || 0),
+    worker2_share: Number(rule.worker2_share || 0),
+    worker1_earnings: productionValue * (Number(rule.worker1_share || 0) / 100),
+    worker2_earnings: productionValue * (Number(rule.worker2_share || 0) / 100),
+    rule_snapshot: { rate, rule, worker1, worker2 }
+  };
+}
+
+async function computePieceRatePayroll(pool, input) {
+  await ensurePieceRatePayrollSchema(pool);
+  const outputDate = input.output_date || input.calculation_date || new Date().toISOString().split('T')[0];
+  const quantity = Math.max(0, parseInt(input.quantity_produced ?? input.quantity ?? 0, 10) || 0);
+  const productType = String(input.sew_type_code || input.product_type || '').trim();
+  const productCategory = String(input.size_range || input.product_category || '').trim();
+  const workerCategory = String(input.worker_category || '').trim();
+  if (!productType) throw new Error('Type of Sew is required for piece-rate payroll.');
+  if (!productCategory) throw new Error('Size Range is required for piece-rate payroll.');
+  if (!workerCategory) throw new Error('Worker category is required for piece-rate payroll.');
+  if (!quantity) throw new Error('Quantity produced is required for piece-rate payroll.');
+
+  const rate = await activePieceRate(pool, productType, productCategory, outputDate);
+  if (!rate) throw new Error('No active piece rate found for the selected Type of Sew, Size Range, and date.');
+
+  const shares = await activeProductionShares(pool, outputDate);
+  const totalShare = shares.reduce((sum, row) => sum + Number(row.percentage_share || 0), 0);
+  if (Math.abs(totalShare - 100) > 0.001) throw new Error('Active production share percentages must total exactly 100%.');
+  const share = shares.find(row => row.worker_category.toLowerCase() === workerCategory.toLowerCase());
+  if (!share) throw new Error('No active production share found for this worker category.');
+
+  const productionValue = quantity * Number(rate.piece_rate || 0);
+  const shareEarnings = productionValue * (Number(share.percentage_share || 0) / 100);
+  const incentives = await activePieceIncentives(pool, outputDate);
+  const quota = incentives
+    .filter(item => item.incentive_category === 'Quota Incentive' && Number(item.threshold_quantity || 0) <= quantity)
+    .sort((a, b) => Number(b.threshold_quantity || 0) - Number(a.threshold_quantity || 0))[0];
+  const sunday = input.is_sunday
+    ? incentives.find(item => item.incentive_category === 'Sunday Work Incentive')
+    : null;
+  const special = incentives.find(item =>
+    item.incentive_category === 'Special Sewing Type Incentive'
+    && (!item.sewing_type || item.sewing_type.toLowerCase() === productCategory.toLowerCase() || item.sewing_type.toLowerCase() === productType.toLowerCase())
+  );
+
+  const sundayAmount = sunday
+    ? sunday.computation_type === 'Percentage Multiplier'
+      ? shareEarnings * (Number(sunday.amount || 0) / 100)
+      : Number(sunday.amount || 0)
+    : 0;
+  const quotaAmount = quota ? Number(quota.amount || 0) : 0;
+  const specialAmount = special ? Number(special.amount || 0) : 0;
+
+  return {
+    product_type: productType,
+    product_category: productCategory,
+    sew_type_code: productType,
+    size_range: productCategory,
+    worker_category: share.worker_category,
+    quantity_produced: quantity,
+    piece_rate: Number(rate.piece_rate || 0),
+    production_value: productionValue,
+    share_percentage: Number(share.percentage_share || 0),
+    gross_production_earnings: shareEarnings,
+    quota_incentive: quotaAmount,
+    sunday_incentive: sundayAmount,
+    special_incentive: specialAmount,
+    final_gross_pay: shareEarnings + quotaAmount + sundayAmount + specialAmount,
+    output_date: outputDate,
+    config_snapshot: { rate, share, quota: quota || null, sunday: sunday || null, special: special || null }
+  };
+}
+
 // Get all wage types
 router.get('/wage-types', requireAuth, async (req, res) => {
   try {
@@ -382,6 +825,394 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
   }
 });
 
+router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const [sewTypes] = await pool.execute('SELECT * FROM payroll_sew_types ORDER BY is_active DESC, code');
+    const [sizeRanges] = await pool.execute('SELECT * FROM payroll_size_ranges ORDER BY is_active DESC, size_range');
+    const [pieceRates] = await pool.execute('SELECT * FROM payroll_piece_rates ORDER BY is_active DESC, effective_date DESC, product_type, product_category');
+    const [shares] = await pool.execute('SELECT * FROM payroll_production_shares ORDER BY is_active DESC, effective_date DESC, worker_category');
+    const [pairRules] = await pool.execute('SELECT * FROM payroll_production_share_rules ORDER BY is_active DESC, effective_date DESC, pairing_type');
+    const [incentives] = await pool.execute('SELECT * FROM payroll_piece_incentives ORDER BY is_active DESC, effective_date DESC, incentive_category, incentive_name');
+    const [incentiveEntries] = await pool.execute(`
+      SELECT pie.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, e.employee_code
+        FROM payroll_piece_incentive_entries pie
+        LEFT JOIN employees e ON e.id = pie.employee_id
+       ORDER BY pie.created_at DESC, pie.id DESC
+       LIMIT 100
+    `);
+    const [outputs] = await pool.execute(`
+      SELECT po.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, e.employee_code
+        FROM payroll_production_outputs po
+        LEFT JOIN employees e ON e.id = po.employee_id
+       ORDER BY po.output_date DESC, po.id DESC
+       LIMIT 100
+    `);
+    const [pairs] = await pool.execute(`
+      SELECT pp.*,
+             CONCAT(w1.first_name, ' ', w1.last_name) AS worker1_name,
+             CONCAT(w2.first_name, ' ', w2.last_name) AS worker2_name
+        FROM payroll_production_pairs pp
+        LEFT JOIN employees w1 ON w1.id = pp.worker1_employee_id
+        LEFT JOIN employees w2 ON w2.id = pp.worker2_employee_id
+       ORDER BY pp.production_date DESC, pp.id DESC
+       LIMIT 100
+    `);
+    res.json({
+      sew_types: sewTypes,
+      size_ranges: sizeRanges,
+      piece_rates: pieceRates,
+      production_shares: shares,
+      production_share_rules: pairRules,
+      incentives,
+      incentive_entries: incentiveEntries,
+      production_outputs: outputs,
+      production_pairs: pairs
+    });
+  } catch (err) {
+    console.error('Error fetching piece-rate config:', err);
+    res.status(500).json({ error: 'Failed to fetch piece-rate payroll configuration' });
+  }
+});
+
+router.post('/sew-types', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { id, code, description, effective_date, is_active } = req.body;
+    const sewCode = String(code || '').trim().toUpperCase();
+    if (!sewCode) return res.status(400).json({ error: 'Type of Sew code is required.' });
+    if (!effective_date) return res.status(400).json({ error: 'Effective date is required.' });
+    let oldValue = null;
+    if (id) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_sew_types WHERE id = ?', [id]);
+      oldValue = oldRows[0] || null;
+      await pool.execute(`
+        UPDATE payroll_sew_types
+           SET code = ?, description = ?, effective_date = ?, is_active = ?, updated_by = ?
+         WHERE id = ?
+      `, [sewCode, description || null, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO payroll_sew_types (code, description, effective_date, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [sewCode, description || null, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(pool, req, 'sew_type_configuration_saved', {
+      remarks: `Saved Type of Sew: ${sewCode}`,
+      metadata: { old_value: oldValue, new_value: req.body }
+    });
+    res.json({ message: 'Type of Sew saved.' });
+  } catch (err) {
+    console.error('Error saving sew type:', err);
+    res.status(500).json({ error: 'Failed to save Type of Sew.' });
+  }
+});
+
+router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { id, size_range, description, is_active } = req.body;
+    const range = String(size_range || '').trim();
+    if (!range) return res.status(400).json({ error: 'Size range is required.' });
+    let oldValue = null;
+    if (id) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_size_ranges WHERE id = ?', [id]);
+      oldValue = oldRows[0] || null;
+      await pool.execute(`
+        UPDATE payroll_size_ranges
+           SET size_range = ?, description = ?, is_active = ?, updated_by = ?
+         WHERE id = ?
+      `, [range, description || null, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO payroll_size_ranges (size_range, description, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?)
+      `, [range, description || null, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(pool, req, 'size_range_configuration_saved', {
+      remarks: `Saved size range: ${range}`,
+      metadata: { old_value: oldValue, new_value: req.body }
+    });
+    res.json({ message: 'Size range saved.' });
+  } catch (err) {
+    console.error('Error saving size range:', err);
+    res.status(500).json({ error: 'Failed to save size range.' });
+  }
+});
+
+router.post('/production-share-rules', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { id, pairing_type, worker1_share, worker2_share, effective_date, is_active } = req.body;
+    if (!['Standard Sewer-Fixer', 'Substitute Sewer-Sewer'].includes(pairing_type)) {
+      return res.status(400).json({ error: 'Valid pairing type is required.' });
+    }
+    const total = Number(worker1_share || 0) + Number(worker2_share || 0);
+    if (Math.abs(total - 100) > 0.001) return res.status(400).json({ error: 'Worker shares must total exactly 100%.' });
+    if (!effective_date) return res.status(400).json({ error: 'Effective date is required.' });
+
+    let oldValue = null;
+    if (id) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_production_share_rules WHERE id = ?', [id]);
+      oldValue = oldRows[0] || null;
+      await pool.execute(`
+        UPDATE payroll_production_share_rules
+           SET pairing_type = ?, worker1_share = ?, worker2_share = ?, effective_date = ?, is_active = ?, updated_by = ?
+         WHERE id = ?
+      `, [pairing_type, worker1_share, worker2_share, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO payroll_production_share_rules
+          (pairing_type, worker1_share, worker2_share, effective_date, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [pairing_type, worker1_share, worker2_share, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(pool, req, 'production_pair_share_rule_saved', {
+      remarks: `Saved production pair rule: ${pairing_type}`,
+      metadata: { old_value: oldValue, new_value: req.body }
+    });
+    res.json({ message: 'Production share rule saved.' });
+  } catch (err) {
+    console.error('Error saving production share rule:', err);
+    res.status(500).json({ error: 'Failed to save production share rule.' });
+  }
+});
+
+router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { id, product_type, product_category, sew_type_code, size_range, piece_rate, effective_date, is_active } = req.body;
+    const sewCode = String(sew_type_code || product_type || '').trim().toUpperCase();
+    const range = String(size_range || product_category || '').trim();
+    if (!sewCode) return res.status(400).json({ error: 'Type of Sew is required.' });
+    if (!range) return res.status(400).json({ error: 'Size Range is required.' });
+    if (!(Number(piece_rate) > 0)) return res.status(400).json({ error: 'Piece rate must be greater than zero.' });
+    if (!effective_date) return res.status(400).json({ error: 'Effective date is required.' });
+
+    let oldValue = null;
+    if (id) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_piece_rates WHERE id = ?', [id]);
+      oldValue = oldRows[0] || null;
+      await pool.execute(`
+        UPDATE payroll_piece_rates
+           SET product_type = ?, product_category = ?, sew_type_code = ?, size_range = ?,
+               piece_rate = ?, effective_date = ?, is_active = ?, updated_by = ?
+         WHERE id = ?
+      `, [sewCode, range, sewCode, range, piece_rate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO payroll_piece_rates
+          (product_type, product_category, sew_type_code, size_range, piece_rate, effective_date, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [sewCode, range, sewCode, range, piece_rate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(pool, req, 'piece_rate_configuration_saved', {
+      remarks: `Saved piece rate: ${sewCode} / ${range}`,
+      metadata: { old_value: oldValue, new_value: req.body }
+    });
+    res.json({ message: 'Piece rate saved.' });
+  } catch (err) {
+    console.error('Error saving piece rate:', err);
+    res.status(500).json({ error: 'Failed to save piece rate.' });
+  }
+});
+
+router.post('/production-shares', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  const pool = require('../config/db');
+  const connection = await pool.getConnection();
+  try {
+    await ensurePieceRatePayrollSchema(pool);
+    const rows = Array.isArray(req.body.shares) ? req.body.shares : [];
+    if (!rows.length) return res.status(400).json({ error: 'At least one production share row is required.' });
+    const total = rows.reduce((sum, row) => sum + Number(row.percentage_share || 0), 0);
+    if (Math.abs(total - 100) > 0.001) return res.status(400).json({ error: 'Production share percentages must total exactly 100%.' });
+    if (rows.some(row => !String(row.worker_category || '').trim() || !(Number(row.percentage_share) > 0) || !row.effective_date)) {
+      return res.status(400).json({ error: 'Worker category, percentage share, and effective date are required.' });
+    }
+
+    await connection.beginTransaction();
+    const [oldRows] = await connection.execute('SELECT * FROM payroll_production_shares WHERE is_active = 1 ORDER BY worker_category');
+    await connection.execute('UPDATE payroll_production_shares SET is_active = 0, updated_by = ? WHERE is_active = 1', [currentUserId(req)]);
+    for (const row of rows) {
+      await connection.execute(`
+        INSERT INTO payroll_production_shares
+          (worker_category, percentage_share, effective_date, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `, [String(row.worker_category).trim(), row.percentage_share, row.effective_date, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(connection, req, 'production_share_configuration_saved', {
+      remarks: 'Saved production share percentages',
+      metadata: { old_value: oldRows, new_value: rows }
+    });
+    await connection.commit();
+    res.json({ message: 'Production shares saved.' });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Error saving production shares:', err);
+    res.status(500).json({ error: 'Failed to save production shares.' });
+  } finally {
+    connection.release();
+  }
+});
+
+router.post('/piece-incentives', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { id, incentive_name, incentive_category, amount, threshold_quantity, sewing_type, computation_type, effective_date, is_active } = req.body;
+    const categories = ['Quota Incentive', 'Sunday Work Incentive', 'Special Sewing Type Incentive'];
+    if (!String(incentive_name || '').trim()) return res.status(400).json({ error: 'Incentive name is required.' });
+    if (!categories.includes(incentive_category)) return res.status(400).json({ error: 'Valid incentive category is required.' });
+    if (!(Number(amount) >= 0)) return res.status(400).json({ error: 'Incentive amount is required.' });
+    if (!effective_date) return res.status(400).json({ error: 'Effective date is required.' });
+    if (incentive_category === 'Quota Incentive' && !(Number(threshold_quantity) > 0)) {
+      return res.status(400).json({ error: 'Quota incentive requires a threshold quantity.' });
+    }
+
+    let oldValue = null;
+    if (id) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_piece_incentives WHERE id = ?', [id]);
+      oldValue = oldRows[0] || null;
+      await pool.execute(`
+        UPDATE payroll_piece_incentives
+           SET incentive_name = ?, incentive_category = ?, amount = ?, threshold_quantity = ?,
+               sewing_type = ?, computation_type = ?, effective_date = ?, is_active = ?, updated_by = ?
+         WHERE id = ?
+      `, [incentive_name.trim(), incentive_category, amount, threshold_quantity || null, sewing_type || null, computation_type || 'Fixed Amount', effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO payroll_piece_incentives
+          (incentive_name, incentive_category, amount, threshold_quantity, sewing_type, computation_type, effective_date, is_active, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [incentive_name.trim(), incentive_category, amount, threshold_quantity || null, sewing_type || null, computation_type || 'Fixed Amount', effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+    }
+    await logPayrollAudit(pool, req, 'piece_incentive_configuration_saved', {
+      remarks: `Saved incentive: ${incentive_name}`,
+      metadata: { old_value: oldValue, new_value: req.body }
+    });
+    res.json({ message: 'Piece-rate incentive saved.' });
+  } catch (err) {
+    console.error('Error saving piece-rate incentive:', err);
+    res.status(500).json({ error: 'Failed to save piece-rate incentive.' });
+  }
+});
+
+router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const { employee_id, payroll_period, incentive_type, amount, remarks } = req.body;
+    const types = ['Quota Incentive', 'Sunday Work Incentive', 'Special Sewing Incentive'];
+    if (!employee_id) return res.status(400).json({ error: 'Employee is required.' });
+    if (!payroll_period) return res.status(400).json({ error: 'Payroll period is required.' });
+    if (!types.includes(incentive_type)) return res.status(400).json({ error: 'Valid incentive type is required.' });
+    if (!(Number(amount) > 0)) return res.status(400).json({ error: 'Amount must be greater than zero.' });
+    const [result] = await pool.execute(`
+      INSERT INTO payroll_piece_incentive_entries
+        (employee_id, payroll_period, incentive_type, amount, remarks, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [employee_id, payroll_period, incentive_type, amount, remarks || null, currentUserId(req)]);
+    await logPayrollAudit(pool, req, 'piece_incentive_encoded', {
+      employee_id,
+      remarks: `Encoded ${incentive_type}`,
+      metadata: { id: result.insertId, new_value: req.body }
+    });
+    res.json({ id: result.insertId, message: 'Incentive encoded.' });
+  } catch (err) {
+    console.error('Error encoding piece incentive:', err);
+    res.status(500).json({ error: 'Failed to encode incentive.' });
+  }
+});
+
+router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const payroll = await computePieceRatePayroll(pool, req.body);
+    const payrollPeriod = req.body.payroll_period || payroll.output_date.slice(0, 7);
+    const [result] = await pool.execute(`
+      INSERT INTO payroll_production_outputs
+        (employee_id, payroll_period, product_type, product_category, sew_type_code, size_range, worker_category, quantity_produced,
+         piece_rate, production_value, share_percentage, quota_incentive, sunday_incentive, special_incentive,
+         final_gross_pay, output_date, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      req.body.employee_id || null,
+      payrollPeriod,
+      payroll.product_type,
+      payroll.product_category || null,
+      payroll.sew_type_code || payroll.product_type,
+      payroll.size_range || payroll.product_category || null,
+      payroll.worker_category,
+      payroll.quantity_produced,
+      payroll.piece_rate,
+      payroll.production_value,
+      payroll.share_percentage,
+      payroll.quota_incentive,
+      payroll.sunday_incentive,
+      payroll.special_incentive,
+      payroll.final_gross_pay,
+      payroll.output_date,
+      currentUserId(req)
+    ]);
+    await logPayrollAudit(pool, req, 'production_output_encoded', {
+      employee_id: req.body.employee_id || null,
+      remarks: `Encoded ${payroll.quantity_produced} pieces for ${payroll.product_type}`,
+      metadata: { id: result.insertId, payroll }
+    });
+    res.json({ id: result.insertId, ...payroll });
+  } catch (err) {
+    console.error('Error encoding production output:', err);
+    res.status(400).json({ error: err.message || 'Failed to encode production output.' });
+  }
+});
+
+router.post('/production-pairs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const pair = await computeProductionPairPayroll(pool, req.body);
+    const [result] = await pool.execute(`
+      INSERT INTO payroll_production_pairs
+        (production_date, payroll_period, worker1_employee_id, worker2_employee_id, pairing_type,
+         product_type, product_category, sew_type_code, size_range, quantity_produced, piece_rate, production_value,
+         worker1_share, worker2_share, worker1_earnings, worker2_earnings, rule_snapshot, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      pair.production_date,
+      pair.payroll_period,
+      pair.worker1_employee_id,
+      pair.worker2_employee_id,
+      pair.pairing_type,
+      pair.product_type,
+      pair.product_category || null,
+      pair.sew_type_code,
+      pair.size_range,
+      pair.quantity_produced,
+      pair.piece_rate,
+      pair.production_value,
+      pair.worker1_share,
+      pair.worker2_share,
+      pair.worker1_earnings,
+      pair.worker2_earnings,
+      JSON.stringify(pair.rule_snapshot),
+      currentUserId(req)
+    ]);
+    await logPayrollAudit(pool, req, 'production_pair_assignment_encoded', {
+      employee_id: pair.worker1_employee_id,
+      remarks: `Encoded ${pair.pairing_type} pair output for ${pair.sew_type_code} / ${pair.size_range}`,
+      metadata: { id: result.insertId, pair }
+    });
+    res.json({ id: result.insertId, ...pair });
+  } catch (err) {
+    console.error('Error encoding production pair:', err);
+    res.status(400).json({ error: err.message || 'Failed to encode production pair.' });
+  }
+});
+
 // Save salary calculation (Base Salary or Hourly)
 router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
@@ -408,7 +1239,21 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       net_pay,
       calculation_date,
       payroll_period,
-      status
+      status,
+      product_type,
+      product_category,
+      sew_type_code,
+      size_range,
+      worker_category,
+      quantity_produced,
+      is_sunday,
+      partner_employee_id,
+      pairing_type,
+      production_date,
+      piece_rows,
+      quota_incentive,
+      sunday_incentive,
+      special_incentive
     } = req.body;
 
     console.log('\n=== POST /api/payroll/salary-calculation ===');
@@ -417,19 +1262,92 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     console.log('Gross:', gross_pay, '| Net:', net_pay);
     console.log('Hours Worked:', hours_worked, '| Days Worked:', days_worked);
 
+    const calcDate = calculation_date || new Date().toISOString().split('T')[0];
+    const [wageRows] = await pool.execute('SELECT name FROM wage_types WHERE id = ? LIMIT 1', [wage_type_id]);
+    const wageTypeName = wageRows[0]?.name || '';
+    const isPieceRate = /piece/i.test(wageTypeName);
+    let serverGrossPay = parseFloat(gross_pay || 0);
+    let serverBaseRate = parseFloat(base_rate || 0);
+    let serverQuantity = quantity || 1;
+    let pieceComputation = null;
+
+    if (isPieceRate) {
+      const rows = Array.isArray(piece_rows) ? piece_rows : [];
+      if (rows.length) {
+        if (!partner_employee_id) throw new Error('Partner employee is required for per-piece salary calculation.');
+        const pairRows = [];
+        for (const row of rows) {
+          if (!(Number(row.quantity_produced) > 0)) continue;
+          const pair = await computeProductionPairPayroll(pool, {
+            production_date: production_date || calcDate,
+            payroll_period: payroll_period || calcDate.slice(0, 7),
+            worker1_employee_id: employee_id,
+            worker2_employee_id: partner_employee_id,
+            pairing_type: pairing_type || 'Standard Sewer-Fixer',
+            sew_type_code: row.sew_type_code || row.product_type,
+            size_range: row.size_range || row.product_category,
+            quantity_produced: row.quantity_produced
+          });
+          pairRows.push(pair);
+        }
+        if (!pairRows.length) throw new Error('At least one valid per-piece output row is required.');
+        const rawTotal = pairRows.reduce((sum, row) => sum + Number(row.production_value || 0), 0);
+        const worker1Earnings = pairRows.reduce((sum, row) => sum + Number(row.worker1_earnings || 0), 0);
+        const worker2Earnings = pairRows.reduce((sum, row) => sum + Number(row.worker2_earnings || 0), 0);
+        const incentiveTotal = Number(quota_incentive || 0) + Number(sunday_incentive || 0) + Number(special_incentive || 0);
+        pieceComputation = {
+          mode: 'pair_rows',
+          rows: pairRows,
+          product_type: pairRows[0].product_type,
+          product_category: pairRows[0].product_category,
+          sew_type_code: pairRows[0].sew_type_code,
+          size_range: pairRows[0].size_range,
+          worker_category: 'Sewer',
+          quantity_produced: pairRows.reduce((sum, row) => sum + Number(row.quantity_produced || 0), 0),
+          piece_rate: pairRows[0].piece_rate,
+          production_value: rawTotal,
+          share_percentage: pairRows[0].worker1_share,
+          worker2_share_percentage: pairRows[0].worker2_share,
+          worker1_earnings: worker1Earnings,
+          worker2_earnings: worker2Earnings,
+          quota_incentive: Number(quota_incentive || 0),
+          sunday_incentive: Number(sunday_incentive || 0),
+          special_incentive: Number(special_incentive || 0),
+          final_gross_pay: worker1Earnings + incentiveTotal,
+          output_date: production_date || calcDate,
+          config_snapshot: { pair_rows: pairRows }
+        };
+      } else {
+        pieceComputation = await computePieceRatePayroll(pool, {
+          product_type,
+          product_category,
+          sew_type_code,
+          size_range,
+          worker_category,
+          quantity_produced: quantity_produced || quantity,
+          is_sunday,
+          calculation_date: calcDate
+        });
+      }
+      serverBaseRate = 0;
+      serverQuantity = pieceComputation.quantity_produced;
+      serverGrossPay = pieceComputation.final_gross_pay + parseFloat(total_allowances || 0);
+    }
+
     // Validate required fields
-    if (!employee_id || !wage_type_id || !base_rate || !gross_pay || !net_pay) {
+    if (!employee_id || !wage_type_id || (!isPieceRate && !serverBaseRate) || !serverGrossPay) {
       return res.status(400).json({ 
-        error: 'Required fields: employee_id, wage_type_id, base_rate, gross_pay, net_pay' 
+        error: isPieceRate
+          ? 'Required fields: employee_id, wage_type_id, Type of Sew, Size Range, worker category, quantity produced'
+          : 'Required fields: employee_id, wage_type_id, base_rate, gross_pay'
       });
     }
 
     const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
     const submittedAt = calculationStatus === 'Submitted' ? new Date() : null;
-    const calcDate = calculation_date || new Date().toISOString().split('T')[0];
-    const configuredDeductions = await computeConfiguredDeductions(pool, gross_pay, calcDate);
+    const configuredDeductions = await computeConfiguredDeductions(pool, serverGrossPay, calcDate);
     const computedTotalDeductions = configuredDeductions.total;
-    const computedNetPay = parseFloat(gross_pay || 0) - computedTotalDeductions;
+    const computedNetPay = serverGrossPay - computedTotalDeductions;
     const deductionByName = configuredDeductions.applied.reduce((acc, item) => {
       acc[item.name.toLowerCase()] = item.amount;
       return acc;
@@ -466,8 +1384,8 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     `, [
       employee_id,
       wage_type_id,
-      base_rate,
-      quantity || 1,
+      serverBaseRate,
+      serverQuantity,
       hours_worked || 0,
       days_worked || 0,
       housing_allowance || 0,
@@ -477,7 +1395,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       total_allowances || 0,
       overtime_hours || 0,
       overtime_amount || 0,
-      gross_pay,
+      serverGrossPay,
       deductionByName.sss || 0,
       deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
       deductionByName.philhealth || 0,
@@ -490,19 +1408,76 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       submittedAt
     ]);
 
+    if (pieceComputation?.mode === 'pair_rows') {
+      for (const pair of pieceComputation.rows) {
+        await pool.execute(`
+          INSERT INTO payroll_production_pairs
+            (production_date, payroll_period, worker1_employee_id, worker2_employee_id, pairing_type,
+             product_type, product_category, sew_type_code, size_range, quantity_produced, piece_rate, production_value,
+             worker1_share, worker2_share, worker1_earnings, worker2_earnings, rule_snapshot, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          pair.production_date,
+          pair.payroll_period,
+          pair.worker1_employee_id,
+          pair.worker2_employee_id,
+          pair.pairing_type,
+          pair.product_type,
+          pair.product_category || null,
+          pair.sew_type_code,
+          pair.size_range,
+          pair.quantity_produced,
+          pair.piece_rate,
+          pair.production_value,
+          pair.worker1_share,
+          pair.worker2_share,
+          pair.worker1_earnings,
+          pair.worker2_earnings,
+          JSON.stringify({ ...pair.rule_snapshot, salary_calculation_id: result.insertId }),
+          currentUserId(req)
+        ]);
+      }
+    } else if (pieceComputation) {
+      await pool.execute(`
+        INSERT INTO payroll_production_outputs
+          (employee_id, payroll_period, product_type, product_category, sew_type_code, size_range, worker_category, quantity_produced,
+           piece_rate, production_value, share_percentage, quota_incentive, sunday_incentive, special_incentive,
+           final_gross_pay, output_date, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        employee_id,
+        payroll_period || calcDate.slice(0, 7),
+        pieceComputation.product_type,
+        pieceComputation.product_category || null,
+        pieceComputation.sew_type_code || pieceComputation.product_type,
+        pieceComputation.size_range || pieceComputation.product_category || null,
+        pieceComputation.worker_category,
+        pieceComputation.quantity_produced,
+        pieceComputation.piece_rate,
+        pieceComputation.production_value,
+        pieceComputation.share_percentage,
+        pieceComputation.quota_incentive,
+        pieceComputation.sunday_incentive,
+        pieceComputation.special_incentive,
+        pieceComputation.final_gross_pay,
+        pieceComputation.output_date,
+        currentUserId(req)
+      ]);
+    }
+
     console.log('✅ Salary calculation saved with ID:', result.insertId);
     await logPayrollAudit(pool, req, calculationStatus === 'Draft' ? 'salary_calculation_draft' : 'salary_calculation_submitted', {
       employee_id,
       salary_calculation_id: result.insertId,
       remarks: `${calculationStatus} salary calculation`,
-      metadata: { gross_pay, net_pay: computedNetPay, payroll_period, deductions: configuredDeductions.applied }
+      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, deductions: configuredDeductions.applied, piece_rate: pieceComputation }
     });
     
     res.json({ 
       success: true, 
       id: result.insertId,
       message: `Salary calculation saved for employee ID ${employee_id}`,
-      gross_pay,
+      gross_pay: serverGrossPay,
       net_pay: computedNetPay,
       calculation_id: result.insertId
     });

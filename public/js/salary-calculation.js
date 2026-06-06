@@ -8,6 +8,7 @@ let payrollDeductionSettings = [];
 let salaryPageInitialized = false;
 let salarySearchListenerAttached = false;
 let salaryInputListenersAttached = false;
+let salaryPieceRowCounter = 0;
 
 // Init when DOM ready
 window.addEventListener('DOMContentLoaded', () => {
@@ -35,6 +36,7 @@ async function loadSalaryCalculationPage() {
     try {
       await fetchWageTypes();
       await fetchPayrollDeductionSettings();
+      if (typeof loadPieceRateConfig === 'function') await loadPieceRateConfig();
     } catch (err) {
       console.error('Failed to load wage types:', err);
     }
@@ -62,6 +64,220 @@ async function fetchPayrollDeductionSettings() {
 }
 
 document.addEventListener('partialsLoaded', loadSalaryCalculationPage);
+
+function getActivePieceRate(productType, sizeRange = '') {
+  const sewCode = String(productType || '').trim();
+  const selectedSize = String(sizeRange || '').trim();
+  const rows = (window.pieceRateConfig?.piece_rates || []).filter(row => {
+    if (Number(row.is_active) !== 1) return false;
+    const rowSew = row.sew_type_code || row.product_type;
+    const rowSize = row.size_range || row.product_category || '';
+    return rowSew === sewCode && (!selectedSize || rowSize === selectedSize);
+  });
+  return rows.sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')))[0] || null;
+}
+
+function getActiveShare(workerCategory) {
+  const rows = (window.pieceRateConfig?.production_shares || []).filter(row => Number(row.is_active) === 1 && row.worker_category === workerCategory);
+  return rows.sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')))[0] || null;
+}
+
+function getPieceIncentivePreview(quantity, productType, productCategory, isSunday, shareEarnings) {
+  const incentives = (window.pieceRateConfig?.incentives || []).filter(row => Number(row.is_active) === 1);
+  const quota = incentives
+    .filter(row => row.incentive_category === 'Quota Incentive' && Number(row.threshold_quantity || 0) <= quantity)
+    .sort((a, b) => Number(b.threshold_quantity || 0) - Number(a.threshold_quantity || 0))[0];
+  const sunday = isSunday ? incentives.find(row => row.incentive_category === 'Sunday Work Incentive') : null;
+  const special = incentives.find(row =>
+    row.incentive_category === 'Special Sewing Type Incentive'
+    && (!row.sewing_type || row.sewing_type === productCategory || row.sewing_type === productType)
+  );
+  const sundayAmount = sunday
+    ? sunday.computation_type === 'Percentage Multiplier'
+      ? shareEarnings * ((Number(sunday.amount || 0)) / 100)
+      : Number(sunday.amount || 0)
+    : 0;
+  return {
+    quota: quota ? Number(quota.amount || 0) : 0,
+    sunday: sundayAmount,
+    special: special ? Number(special.amount || 0) : 0
+  };
+}
+
+function updatePieceDetailView() {
+  const preview = currentSalaryEmployee?.piecePreview;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  const peso = value => `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  set('salary-piece-rate-view', peso(preview?.piece_rate));
+  set('salary-share-view', preview ? `${Number(preview.share_percentage || 0)}%` : '0%');
+  set('salary-quota-view', peso(preview?.quota_incentive));
+  set('salary-sunday-view', peso(preview?.sunday_incentive));
+  set('salary-special-view', peso(preview?.special_incentive));
+}
+
+function salaryMoney(value) {
+  return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function getActivePairRule(pairingType) {
+  const rows = (window.pieceRateConfig?.production_share_rules || [])
+    .filter(row => Number(row.is_active) === 1 && row.pairing_type === pairingType);
+  return rows.sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')))[0] || null;
+}
+
+function pieceOptionHtml(type) {
+  if (type === 'sew') {
+    return (window.pieceRateConfig?.sew_types || [])
+      .filter(row => Number(row.is_active) === 1)
+      .map(row => `<option value="${row.code}">${row.code}${row.description ? ` - ${row.description}` : ''}</option>`)
+      .join('');
+  }
+  return (window.pieceRateConfig?.size_ranges || [])
+    .filter(row => Number(row.is_active) === 1)
+    .map(row => `<option value="${row.size_range}">${row.size_range}${row.description ? ` - ${row.description}` : ''}</option>`)
+    .join('');
+}
+
+function addSalaryPieceRow(row = {}) {
+  const tbody = document.getElementById('salary-piece-rows');
+  if (!tbody) return;
+  const id = ++salaryPieceRowCounter;
+  const tr = document.createElement('tr');
+  tr.dataset.rowId = String(id);
+  tr.innerHTML = `
+    <td><select class="piece-row-sew"><option value="">Select type</option>${pieceOptionHtml('sew')}</select></td>
+    <td><select class="piece-row-size"><option value="">Select size</option>${pieceOptionHtml('size')}</select></td>
+    <td><input class="piece-row-qty" type="number" min="1" step="1" value="${row.quantity_produced || ''}" placeholder="0" /></td>
+    <td><span class="piece-row-rate salary-readonly">PHP 0.00</span></td>
+    <td><span class="piece-row-amount salary-readonly">PHP 0.00</span></td>
+    <td><button class="btn btn-outline btn-sm" type="button" onclick="removeSalaryPieceRow(this)">Remove</button></td>
+  `;
+  tbody.appendChild(tr);
+  tr.querySelector('.piece-row-sew').value = row.sew_type_code || row.product_type || '';
+  tr.querySelector('.piece-row-size').value = row.size_range || row.product_category || '';
+  tr.querySelectorAll('select,input').forEach(input => {
+    input.addEventListener('input', calculateSalaryNow);
+    input.addEventListener('change', calculateSalaryNow);
+  });
+  calculateSalaryNow();
+}
+
+function removeSalaryPieceRow(button) {
+  button.closest('tr')?.remove();
+  if (!document.querySelector('#salary-piece-rows tr')) addSalaryPieceRow();
+  calculateSalaryNow();
+}
+
+function getSalaryPieceRows() {
+  return [...document.querySelectorAll('#salary-piece-rows tr')].map(tr => {
+    const sewType = tr.querySelector('.piece-row-sew')?.value || '';
+    const sizeRange = tr.querySelector('.piece-row-size')?.value || '';
+    const quantity = Number(tr.querySelector('.piece-row-qty')?.value || 0);
+    const rate = getActivePieceRate(sewType, sizeRange);
+    const pieceRate = Number(rate?.piece_rate || 0);
+    const amount = quantity * pieceRate;
+    const rateEl = tr.querySelector('.piece-row-rate');
+    const amountEl = tr.querySelector('.piece-row-amount');
+    if (rateEl) rateEl.textContent = salaryMoney(pieceRate);
+    if (amountEl) amountEl.textContent = salaryMoney(amount);
+    return {
+      sew_type_code: sewType,
+      size_range: sizeRange,
+      product_type: sewType,
+      product_category: sizeRange,
+      quantity_produced: quantity,
+      piece_rate: pieceRate,
+      amount
+    };
+  });
+}
+
+function updateSalarySummary(qty, base, allowances, gross, appliedDeductions, deductions, net) {
+  document.getElementById('summary-qty').textContent = Number(qty || 0).toFixed(2);
+  document.getElementById('summary-base').textContent = `₱${Number(base || 0).toFixed(2)}`;
+  document.getElementById('summary-allowances').textContent = `₱${Number(allowances || 0).toFixed(2)}`;
+  document.getElementById('summary-gross').textContent = `₱${Number(gross || 0).toFixed(2)}`;
+  document.getElementById('summary-deductions').innerHTML = appliedDeductions.length
+    ? appliedDeductions.map(item => `
+      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
+        <span style="color:var(--muted);">${item.name}</span>
+        <span>₱${item.amount.toFixed(2)}</span>
+      </div>
+    `).join('')
+    : '<div style="color:var(--muted); font-size:11px;">No configured deductions for this payroll week.</div>';
+  document.getElementById('summary-total-deductions').textContent = `₱${Number(deductions || 0).toFixed(2)}`;
+  document.getElementById('summary-net').textContent = `₱${Number(net || 0).toFixed(2)}`;
+  const deductionNote = document.getElementById('summary-deduction-note');
+  if (deductionNote) {
+    deductionNote.classList.toggle('applied', deductions > 0);
+    deductionNote.textContent = deductions > 0
+      ? `${appliedDeductions.length} deduction rule${appliedDeductions.length === 1 ? '' : 's'} applied. Net pay already reflects the deduction.`
+      : 'No deduction applied for this payroll week/schedule.';
+  }
+}
+
+function calculatePieceSalaryNow() {
+  const rows = getSalaryPieceRows();
+  const validRows = rows.filter(row => row.sew_type_code && row.size_range && row.quantity_produced > 0 && row.piece_rate > 0);
+  const rawTotal = validRows.reduce((sum, row) => sum + row.amount, 0);
+  const qty = validRows.reduce((sum, row) => sum + row.quantity_produced, 0);
+  const pairingType = document.getElementById('salary-piece-pairing')?.value || 'Standard Sewer-Fixer';
+  const rule = getActivePairRule(pairingType);
+  const worker1Share = Number(rule?.worker1_share || (pairingType === 'Substitute Sewer-Sewer' ? 50 : 55));
+  const worker2Share = Number(rule?.worker2_share || (pairingType === 'Substitute Sewer-Sewer' ? 50 : 45));
+  const worker1Earnings = rawTotal * (worker1Share / 100);
+  const worker2Earnings = rawTotal * (worker2Share / 100);
+  const quota = Number(document.getElementById('salary-quota-incentive')?.value || 0);
+  const sunday = Number(document.getElementById('salary-sunday-incentive')?.value || 0);
+  const special = Number(document.getElementById('salary-special-incentive')?.value || 0);
+  const incentives = quota + sunday + special;
+  const base = worker1Earnings + incentives;
+  const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
+  const meal = parseFloat(document.getElementById('salary-meal').value) || 0;
+  const transport = parseFloat(document.getElementById('salary-transport').value) || 0;
+  const bonus = parseFloat(document.getElementById('salary-bonus').value) || 0;
+  const allowances = housing + meal + transport + bonus;
+  const gross = base + allowances;
+  const appliedDeductions = calculateConfiguredDeductions(gross);
+  const deductions = appliedDeductions.reduce((sum, item) => sum + item.amount, 0);
+  const net = gross - deductions;
+
+  currentSalaryEmployee.piecePreview = validRows.length ? {
+    product_type: validRows[0].sew_type_code,
+    product_category: validRows[0].size_range,
+    sew_type_code: validRows[0].sew_type_code,
+    size_range: validRows[0].size_range,
+    worker_category: 'Sewer',
+    piece_rate: validRows[0].piece_rate,
+    production_value: rawTotal,
+    share_percentage: worker1Share,
+    worker2_share_percentage: worker2Share,
+    worker1_earnings: worker1Earnings,
+    worker2_earnings: worker2Earnings,
+    quota_incentive: quota,
+    sunday_incentive: sunday,
+    special_incentive: special,
+    final_gross_pay: base,
+    pairing_type: pairingType,
+    partner_employee_id: document.getElementById('salary-piece-partner')?.value || null,
+    production_date: document.getElementById('salary-piece-production-date')?.value || new Date().toISOString().split('T')[0],
+    rows: validRows
+  } : null;
+
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  document.getElementById('salary-pieces').value = qty;
+  set('salary-piece-raw-total', salaryMoney(rawTotal));
+  set('salary-share-view', `${worker1Share}%`);
+  set('salary-piece-worker1-earnings', salaryMoney(worker1Earnings));
+  set('salary-piece-worker2-share', `${worker2Share}%`);
+  set('salary-piece-worker2-earnings', salaryMoney(worker2Earnings));
+  set('salary-piece-final', salaryMoney(base));
+  updatePieceDetailView();
+  updateSalarySummary(qty, base, allowances, gross, appliedDeductions, deductions, net);
+}
 
 // Fetch wage type reference data (sewing types, logistics regions)
 async function fetchWageTypes() {
@@ -250,6 +466,10 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     console.log('✅ Current salary employee set:', currentSalaryEmployee);
     
     // Update display
+    document.getElementById('salary-dept').textContent = dept || '-';
+    document.getElementById('salary-pos').textContent = pos || '-';
+    const workerSource = document.getElementById('salary-worker-source');
+    if (workerSource) workerSource.textContent = config.employee?.employment_type || config.employee?.hiring_type || '-';
     document.getElementById('salary-wage-type').textContent = config.wage_type || '—';
     document.getElementById('salary-rate').textContent = `₱${currentSalaryEmployee.rate.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
     
@@ -274,6 +494,10 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     
     // Reset inputs
     document.getElementById('salary-pieces').value = '';
+    const pieceProductionDate = document.getElementById('salary-piece-production-date');
+    if (pieceProductionDate && !pieceProductionDate.value) pieceProductionDate.value = new Date().toISOString().split('T')[0];
+    const pieceSewer = document.getElementById('salary-piece-sewer');
+    if (pieceSewer) pieceSewer.textContent = `${code} - ${first} ${last}`;
     document.getElementById('salary-trips').value = '';
     document.getElementById('salary-region').value = '';
     document.getElementById('salary-housing').value = '0';
@@ -313,6 +537,9 @@ function showWageStructureForm(wageType) {
     const dailySection = document.getElementById('daily-section');
     if (hourlySection) hourlySection.style.display = 'none';
     if (dailySection) dailySection.style.display = 'none';
+    if (!document.querySelector('#salary-piece-rows tr')) addSalaryPieceRow();
+    console.log('Per-Piece work output table ready');
+    return;
     
     // Populate other sewing types
     const container = document.getElementById('salary-other-sewing');
@@ -416,11 +643,46 @@ function calculateSalaryNow() {
   let qty = 0;
   let actualRate = currentSalaryEmployee.rate;
   let calculationNote = '';
+  if (currentSalaryEmployee.wageType === 'Per-Piece') {
+    calculatePieceSalaryNow();
+    return;
+  }
   
   // Determine quantity and rate based on wage type
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
     const pieces = parseFloat(document.getElementById('salary-pieces').value) || 0;
     qty = pieces;
+    const productSelect = document.getElementById('salary-piece-product');
+    const sizeSelect = document.getElementById('salary-piece-size-range');
+    const workerSelect = document.getElementById('salary-worker-category');
+    const productType = productSelect?.value || '';
+    const sizeRange = sizeSelect?.value || '';
+    const productRate = getActivePieceRate(productType, sizeRange);
+    const workerShare = getActiveShare(workerSelect?.value || '');
+    const isSunday = document.getElementById('salary-is-sunday')?.checked || false;
+    actualRate = productRate ? Number(productRate.piece_rate || 0) : 0;
+    currentSalaryEmployee.piecePreview = null;
+    if (productRate && workerShare) {
+      const productionValue = pieces * actualRate;
+      const shareEarnings = productionValue * (Number(workerShare.percentage_share || 0) / 100);
+      const resolvedSize = productRate.size_range || productRate.product_category || sizeRange;
+      const incentives = getPieceIncentivePreview(pieces, productType, resolvedSize, isSunday, shareEarnings);
+      currentSalaryEmployee.piecePreview = {
+        product_type: productType,
+        product_category: resolvedSize,
+        sew_type_code: productType,
+        size_range: resolvedSize,
+        worker_category: workerShare.worker_category,
+        piece_rate: actualRate,
+        production_value: productionValue,
+        share_percentage: Number(workerShare.percentage_share || 0),
+        quota_incentive: incentives.quota,
+        sunday_incentive: incentives.sunday,
+        special_incentive: incentives.special,
+        final_gross_pay: shareEarnings + incentives.quota + incentives.sunday + incentives.special
+      };
+      calculationNote = `${pieces} pieces x ${actualRate} x ${workerShare.percentage_share}%`;
+    }
     
     // Add other sewing types completed
     let otherSewingTotal = 0;
@@ -485,7 +747,9 @@ function calculateSalaryNow() {
   const transport = parseFloat(document.getElementById('salary-transport').value) || 0;
   const bonus = parseFloat(document.getElementById('salary-bonus').value) || 0;
   
-  const base = qty * actualRate;
+  const base = currentSalaryEmployee.wageType === 'Per-Piece' && currentSalaryEmployee.piecePreview
+    ? currentSalaryEmployee.piecePreview.final_gross_pay
+    : qty * actualRate;
   const allowances = housing + meal + transport + bonus;
   const gross = base + allowances;
   
@@ -518,6 +782,7 @@ function calculateSalaryNow() {
       ? `${appliedDeductions.length} deduction rule${appliedDeductions.length === 1 ? '' : 's'} applied. Net pay already reflects the deduction.`
       : 'No deduction applied for this payroll week/schedule.';
   }
+  updatePieceDetailView();
 }
 
 function currentPayrollWeek() {
@@ -548,7 +813,7 @@ function calculateConfiguredDeductions(gross) {
 function attachSalaryInputListeners() {
   if (salaryInputListenersAttached) return;
 
-  const ids = ['salary-pieces', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked'];
+  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked'];
   let attachedAny = false;
   ids.forEach(id => {
     const elem = document.getElementById(id);
@@ -775,8 +1040,25 @@ async function saveSalaryRecord(status = 'Submitted') {
       return;
     }
   } else if (currentSalaryEmployee.wageType === 'Per-Piece') {
-    quantity = parseFloat(document.getElementById('salary-pieces').value) || 0;
-    basePayAmount = quantity * currentSalaryEmployee.rate;
+    calculateSalaryNow();
+    const partnerId = document.getElementById('salary-piece-partner')?.value || '';
+    const pieceRows = getSalaryPieceRows();
+    const invalidRows = pieceRows.filter(row => row.sew_type_code || row.size_range || row.quantity_produced > 0)
+      .filter(row => !row.sew_type_code || !row.size_range || !(row.quantity_produced > 0) || !(row.piece_rate > 0));
+    quantity = pieceRows.reduce((sum, row) => sum + (row.piece_rate > 0 ? row.quantity_produced : 0), 0);
+    if (!partnerId) {
+      await showAlert('Please enter the partner employee for this per-piece output.', 'Warning', 'warning');
+      return;
+    }
+    if (String(partnerId) === String(currentSalaryEmployee.id)) {
+      await showAlert('Sewer and partner cannot be the same employee.', 'Warning', 'warning');
+      return;
+    }
+    if (invalidRows.length || !currentSalaryEmployee.piecePreview) {
+      await showAlert('Please complete at least one valid Type of Sew, Size Range, and quantity row with an active configured rate.', 'Warning', 'warning');
+      return;
+    }
+    basePayAmount = currentSalaryEmployee.piecePreview.final_gross_pay;
 
     if (quantity === 0) {
       await showAlert('Please enter pieces completed', 'Warning', 'warning');
@@ -840,6 +1122,23 @@ async function saveSalaryRecord(status = 'Submitted') {
     payroll_period: document.getElementById('salary-payroll-period')?.value || today.toISOString().slice(0, 7),
     status
   };
+  if (currentSalaryEmployee.wageType === 'Per-Piece') {
+    payload.base_rate = 0;
+    payload.product_type = currentSalaryEmployee.piecePreview?.product_type || document.getElementById('salary-piece-product')?.value || null;
+    payload.product_category = currentSalaryEmployee.piecePreview?.product_category || null;
+    payload.sew_type_code = currentSalaryEmployee.piecePreview?.sew_type_code || payload.product_type;
+    payload.size_range = currentSalaryEmployee.piecePreview?.size_range || document.getElementById('salary-piece-size-range')?.value || payload.product_category;
+    payload.worker_category = currentSalaryEmployee.piecePreview?.worker_category || document.getElementById('salary-worker-category')?.value || null;
+    payload.quantity_produced = quantity;
+    payload.is_sunday = false;
+    payload.partner_employee_id = currentSalaryEmployee.piecePreview?.partner_employee_id || null;
+    payload.pairing_type = currentSalaryEmployee.piecePreview?.pairing_type || 'Standard Sewer-Fixer';
+    payload.production_date = currentSalaryEmployee.piecePreview?.production_date || payload.calculation_date;
+    payload.piece_rows = currentSalaryEmployee.piecePreview?.rows || [];
+    payload.quota_incentive = currentSalaryEmployee.piecePreview?.quota_incentive || 0;
+    payload.sunday_incentive = currentSalaryEmployee.piecePreview?.sunday_incentive || 0;
+    payload.special_incentive = currentSalaryEmployee.piecePreview?.special_incentive || 0;
+  }
   
   console.log('📤 Sending payload to API:', payload);
   
@@ -873,6 +1172,24 @@ async function saveSalaryRecord(status = 'Submitted') {
 function resetCalculationForm() {
   document.getElementById('salary-employee-search').value = '';
   document.getElementById('salary-pieces').value = '';
+  const pieceRows = document.getElementById('salary-piece-rows');
+  if (pieceRows) pieceRows.innerHTML = '';
+  const pieceProduct = document.getElementById('salary-piece-product');
+  if (pieceProduct) pieceProduct.value = '';
+  const pieceSize = document.getElementById('salary-piece-size-range');
+  if (pieceSize) pieceSize.value = '';
+  const piecePartner = document.getElementById('salary-piece-partner');
+  if (piecePartner) piecePartner.value = '';
+  const piecePairing = document.getElementById('salary-piece-pairing');
+  if (piecePairing) piecePairing.value = 'Standard Sewer-Fixer';
+  ['salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.value = '0';
+  });
+  const workerCategory = document.getElementById('salary-worker-category');
+  if (workerCategory) workerCategory.value = '';
+  const isSunday = document.getElementById('salary-is-sunday');
+  if (isSunday) isSunday.checked = false;
   document.getElementById('salary-trips').value = '';
   document.getElementById('salary-region').value = '';
   document.getElementById('salary-hours-worked').value = '';
@@ -889,6 +1206,8 @@ function resetCalculationForm() {
   document.getElementById('summary-gross').textContent = '₱0.00';
   document.getElementById('summary-total-deductions').textContent = '₱0.00';
   document.getElementById('summary-net').textContent = '₱0.00';
+  if (currentSalaryEmployee) currentSalaryEmployee.piecePreview = null;
+  updatePieceDetailView();
   
   currentSalaryEmployee = null;
   console.log('✅ Form reset');

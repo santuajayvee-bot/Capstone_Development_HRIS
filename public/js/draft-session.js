@@ -21,12 +21,33 @@ const DraftSession = (() => {
     return `${config.module}:${config.form}:${config.record() || 'new'}`;
   }
 
+  function queryOne(selector) {
+    const value = String(selector || '').trim();
+    if (!value) return null;
+    try {
+      return document.querySelector(value);
+    } catch (error) {
+      if (value.startsWith('#') && !value.includes(',') && !value.includes(' ')) {
+        return document.getElementById(value.slice(1));
+      }
+      console.warn('[DraftSession] invalid selector skipped:', value);
+      return null;
+    }
+  }
+
+  function queryFirst(selectorList) {
+    return String(selectorList || '')
+      .split(',')
+      .map(selector => queryOne(selector))
+      .find(Boolean) || null;
+  }
+
   function findRoot(config) {
-    return document.querySelector(config.selector);
+    return queryFirst(config.selector);
   }
 
   function controlsFor(config) {
-    const roots = [findRoot(config), ...(config.extraSelectors || []).map(selector => document.querySelector(selector))].filter(Boolean);
+    const roots = [findRoot(config), ...(config.extraSelectors || []).map(queryFirst)].filter(Boolean);
     return [...new Set(roots.flatMap(root => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(root.tagName)) return [root];
       return [...root.querySelectorAll('input, select, textarea')];

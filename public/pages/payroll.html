@@ -17,6 +17,7 @@
   <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Salary Calculation</button>
   <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
   <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslip Management</button>
+  <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece-Rate Config</button>
   <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deduction Settings</button>
   <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowance Settings</button>
   <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
@@ -81,148 +82,111 @@
       <div class="section-title small">Salary Calculation</div>
       <div class="section-sub">Select a payroll period, choose an employee, then calculate based on wage type.</div>
     </div>
-    <div class="page-header-right">
-      <button class="btn btn-outline" onclick="saveSalaryAsDraft()">Save Draft</button>
-      <button class="btn btn-primary" onclick="saveCalculation()">Submit Calculation</button>
-    </div>
   </div>
 
-  <div class="payroll-form-grid">
-    <div class="payroll-card">
-      <h4>Employee Information</h4>
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Payroll Period</label>
-          <input id="salary-payroll-period" type="month" />
-        </div>
-        <div class="form-group">
-          <label>Search & Select Employee</label>
-          <div class="payroll-search-box">
-            <input id="salary-employee-search" type="text" placeholder="Search by name, code, or department..." autocomplete="off" />
-            <div id="salary-employee-dropdown" class="payroll-search-dropdown"></div>
-          </div>
-          <select id="salary-employee" hidden>
-            <option value="">Choose an employee</option>
-          </select>
-        </div>
-      </div>
-
-      <div id="salary-employee-info" class="payroll-info-strip" style="display:none;">
-        <div>
-          <span>Selected Employee</span>
-          <strong id="salary-employee-name">-</strong>
-        </div>
-        <div>
-          <span>Department</span>
-          <strong id="salary-employee-dept-info">-</strong>
-        </div>
-        <div>
-          <span>Position</span>
-          <strong id="salary-employee-pos-info">-</strong>
-        </div>
-        <div>
-          <span>Wage Structure</span>
-          <strong id="salary-employee-wage-info">-</strong>
-        </div>
-      </div>
-
-      <div class="payroll-info-strip subtle">
-        <div>
-          <span>Department</span>
-          <strong id="salary-dept">-</strong>
-        </div>
-        <div>
-          <span>Position</span>
-          <strong id="salary-pos">-</strong>
-        </div>
-        <div>
-          <span>Wage Type</span>
-          <strong id="salary-wage-type">-</strong>
-        </div>
-        <div>
-          <span>Rate</span>
-          <strong id="salary-rate">PHP 0.00</strong>
-        </div>
-      </div>
+  <div class="salary-form">
+    <h3>Employee and Payroll Period</h3>
+    <div class="salary-form-row">
+      <label>Payroll Period<input id="salary-payroll-period" type="month" /></label>
+      <label class="salary-form-wide">Search / Select Employee
+        <span class="payroll-search-box">
+          <input id="salary-employee-search" type="text" placeholder="Search by name, code, or department..." autocomplete="off" />
+          <span id="salary-employee-dropdown" class="payroll-search-dropdown"></span>
+        </span>
+        <select id="salary-employee" hidden><option value="">Choose an employee</option></select>
+      </label>
+      <label>Department<span class="salary-readonly" id="salary-dept">-</span></label>
+      <label>Position<span class="salary-readonly" id="salary-pos">-</span></label>
+      <label>Worker Source<span class="salary-readonly" id="salary-worker-source">-</span></label>
+      <label>Wage Type<span class="salary-readonly" id="salary-wage-type">-</span></label>
+      <label>Rate<span class="salary-readonly" id="salary-rate">PHP 0.00</span></label>
     </div>
 
-    <div class="payroll-card">
-      <h4>Work Output</h4>
-      <div class="form-grid">
-        <div class="form-group" id="daily-section" style="display:none;">
-          <label>Days Worked</label>
-          <input id="salary-days-worked" type="number" min="0" step="0.5" placeholder="Enter days worked" />
-        </div>
-        <div class="form-group" id="hourly-section" style="display:none;">
-          <label>Hours Worked</label>
-          <input id="salary-hours-worked" type="number" min="0" step="0.5" placeholder="Enter hours worked" />
-        </div>
-        <div class="form-group" id="per-piece-section" style="display:none;">
-          <label>Pieces Completed</label>
-          <input id="salary-pieces" type="number" min="0" step="1" placeholder="Enter pieces completed" />
-          <div id="salary-other-sewing" class="payroll-inline-list"></div>
-        </div>
-        <div class="form-group" id="per-trip-section" style="display:none;">
-          <label>Trips Completed</label>
-          <input id="salary-trips" type="number" min="0" step="1" placeholder="Enter trips completed" />
-          <label style="margin-top:12px;">Delivery Region</label>
-          <select id="salary-region"></select>
-        </div>
-        <div class="form-group">
-          <label>Overtime Hours</label>
-          <input id="salary-ot-hours" type="number" min="0" step="0.5" value="0" />
-        </div>
-      </div>
+    <div id="salary-employee-info" class="salary-selected-strip" style="display:none;">
+      <span>Employee: <strong id="salary-employee-name">-</strong></span>
+      <span>Department: <strong id="salary-employee-dept-info">-</strong></span>
+      <span>Position: <strong id="salary-employee-pos-info">-</strong></span>
+      <span>Wage Structure: <strong id="salary-employee-wage-info">-</strong></span>
+    </div>
+
+    <h3>Work Output</h3>
+    <div class="salary-form-row">
+      <label id="daily-section" style="display:none;">Days Worked<input id="salary-days-worked" type="number" min="0" step="0.5" placeholder="Enter days worked" /></label>
+      <label id="hourly-section" style="display:none;">Hours Worked<input id="salary-hours-worked" type="number" min="0" step="0.5" placeholder="Enter hours worked" /></label>
+      <label id="per-trip-section" style="display:none;">Trips Completed<input id="salary-trips" type="number" min="0" step="1" placeholder="Enter trips completed" /><span class="salary-inline-label">Delivery Region</span><select id="salary-region"></select></label>
+      <label>Overtime Hours<input id="salary-ot-hours" type="number" min="0" step="0.5" value="0" /></label>
       <input id="salary-quantity" type="number" hidden />
     </div>
 
-    <div class="payroll-card">
-      <h4>Allowances</h4>
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Housing</label>
-          <input id="salary-housing" type="number" min="0" step="0.01" value="0" />
-        </div>
-        <div class="form-group">
-          <label>Meal</label>
-          <input id="salary-meal" type="number" min="0" step="0.01" value="0" />
-        </div>
-        <div class="form-group">
-          <label>Transport</label>
-          <input id="salary-transport" type="number" min="0" step="0.01" value="0" />
-        </div>
-        <div class="form-group">
-          <label>Bonus / Other</label>
-          <input id="salary-bonus" type="number" min="0" step="0.01" value="0" />
-        </div>
+    <div id="per-piece-section" class="salary-piece-section" style="display:none;">
+      <h3>Piece-Rate Work Output</h3>
+      <div class="salary-form-row">
+        <label>Production Date<input id="salary-piece-production-date" type="date" /></label>
+        <label>Sewer Employee<span class="salary-readonly" id="salary-piece-sewer">-</span></label>
+        <label>Partner Employee ID<input id="salary-piece-partner" type="number" min="1" placeholder="Fixer or substitute sewer" /></label>
+        <label>Pairing Type<select id="salary-piece-pairing"><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
+      </div>
+      <table class="salary-work-table">
+        <thead>
+          <tr><th>Type of Sew</th><th>Size Range</th><th>Quantity Produced</th><th>Rate</th><th>Amount</th><th></th></tr>
+        </thead>
+        <tbody id="salary-piece-rows"></tbody>
+      </table>
+      <div class="salary-table-actions">
+        <button class="btn btn-outline btn-sm" type="button" onclick="addSalaryPieceRow()">Add Row</button>
+      </div>
+      <h3>Piece-Rate Incentives</h3>
+      <div class="salary-form-row">
+        <label>Quota Incentive<input id="salary-quota-incentive" type="number" min="0" step="0.01" value="0" /></label>
+        <label>Sunday Work Incentive<input id="salary-sunday-incentive" type="number" min="0" step="0.01" value="0" /></label>
+        <label>Special Sewing Incentive<input id="salary-special-incentive" type="number" min="0" step="0.01" value="0" /></label>
+        <label>Raw Total<span class="salary-readonly" id="salary-piece-raw-total">PHP 0.00</span></label>
+        <label>Worker 1 Share<span class="salary-readonly" id="salary-share-view">0%</span></label>
+        <label>Worker 1 Earnings<span class="salary-readonly" id="salary-piece-worker1-earnings">PHP 0.00</span></label>
+        <label>Worker 2 Share<span class="salary-readonly" id="salary-piece-worker2-share">0%</span></label>
+        <label>Worker 2 Earnings<span class="salary-readonly" id="salary-piece-worker2-earnings">PHP 0.00</span></label>
+        <label>Final Salary<span class="salary-readonly" id="salary-piece-final">PHP 0.00</span></label>
+        <label hidden>Piece Rate<span class="salary-readonly" id="salary-piece-rate-view">PHP 0.00</span></label>
+        <label hidden>Quota Incentive View<span class="salary-readonly" id="salary-quota-view">PHP 0.00</span></label>
+        <label hidden>Sunday Work Incentive View<span class="salary-readonly" id="salary-sunday-view">PHP 0.00</span></label>
+        <label hidden>Sewing Type Incentive View<span class="salary-readonly" id="salary-special-view">PHP 0.00</span></label>
+        <input id="salary-pieces" type="number" hidden />
+        <select id="salary-worker-category" hidden><option value="Sewer">Sewer</option></select>
+        <select id="salary-piece-product" hidden><option value="">Select type</option></select>
+        <select id="salary-piece-size-range" hidden><option value="">Select size range</option></select>
+        <input id="salary-is-sunday" type="checkbox" hidden />
       </div>
     </div>
 
-    <div class="payroll-card payroll-summary-card">
-      <h4>Salary Summary</h4>
-      <div class="summary-employee">
-        <span>Employee</span>
-        <strong id="summary-employee">-</strong>
-      </div>
-      <div class="summary-grid">
-        <div><span>Wage Type</span><strong id="summary-wage-type">-</strong></div>
-        <div><span>Rate</span><strong id="summary-rate">PHP 0.00</strong></div>
-        <div><span>Output</span><strong id="summary-qty">0</strong></div>
-      </div>
-      <div class="summary-lines">
-        <div><span>Base Pay</span><strong id="summary-base">PHP 0.00</strong></div>
-        <div><span>Allowances</span><strong id="summary-allowances">PHP 0.00</strong></div>
-        <div><span>Gross Pay</span><strong id="summary-gross">PHP 0.00</strong></div>
-      </div>
-      <div class="summary-deductions" id="summary-deductions"></div>
-      <div class="summary-lines">
-        <div><span>Total Deductions</span><strong id="summary-total-deductions">PHP 0.00</strong></div>
-      </div>
-      <div class="payroll-deduction-note" id="summary-deduction-note">No deduction applied yet.</div>
-      <div class="summary-net">
-        <span>Net Pay</span>
-        <strong id="summary-net">PHP 0.00</strong>
-      </div>
+    <h3>Allowances</h3>
+    <div class="salary-form-row">
+      <label>Housing<input id="salary-housing" type="number" min="0" step="0.01" value="0" /></label>
+      <label>Meal<input id="salary-meal" type="number" min="0" step="0.01" value="0" /></label>
+      <label>Transport<input id="salary-transport" type="number" min="0" step="0.01" value="0" /></label>
+      <label>Bonus / Other<input id="salary-bonus" type="number" min="0" step="0.01" value="0" /></label>
+    </div>
+
+    <h3>Salary Summary</h3>
+    <div class="salary-summary-meta">
+      <span>Employee: <strong id="summary-employee">-</strong></span>
+      <span>Wage Type: <strong id="summary-wage-type">-</strong></span>
+      <span>Rate: <strong id="summary-rate">PHP 0.00</strong></span>
+      <span>Output: <strong id="summary-qty">0</strong></span>
+    </div>
+    <table class="salary-summary-table">
+      <tbody>
+        <tr><th>Base Pay</th><td id="summary-base">PHP 0.00</td></tr>
+        <tr><th>Allowances</th><td id="summary-allowances">PHP 0.00</td></tr>
+        <tr><th>Gross Pay</th><td id="summary-gross">PHP 0.00</td></tr>
+        <tr><th>Deductions</th><td><span id="summary-total-deductions">PHP 0.00</span><div class="summary-deductions" id="summary-deductions"></div></td></tr>
+        <tr class="salary-summary-net"><th>Net Pay</th><td id="summary-net">PHP 0.00</td></tr>
+      </tbody>
+    </table>
+    <div class="payroll-deduction-note" id="summary-deduction-note">No deduction applied yet.</div>
+    <div class="salary-form-actions">
+      <button class="btn btn-outline" onclick="saveSalaryAsDraft()">Save Draft</button>
+      <button class="btn btn-primary" onclick="saveCalculation()">Submit Calculation</button>
+      <button class="btn btn-outline" onclick="resetCalculationForm()">Clear Form</button>
     </div>
   </div>
 </section>
@@ -251,6 +215,136 @@
     </div>
     <div id="payroll-payslips-grid"></div>
   </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-piece-config">
+  <div class="page-header compact">
+    <div>
+      <div class="section-title small">Piece-Rate Payroll Configuration</div>
+      <div class="section-sub">Configure sew codes, size ranges, rates, sharing rules, production output, and incentives.</div>
+    </div>
+    <button class="btn btn-outline" onclick="loadPieceRateConfig()">Refresh</button>
+  </div>
+
+  <div class="payroll-form-page">
+    <div class="payroll-form-page-tools">
+      <button class="btn btn-outline btn-sm" type="button" onclick="setPieceRateSectionsMinimized(true)">Minimize All</button>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setPieceRateSectionsMinimized(false)">Expand All</button>
+    </div>
+    <h3>Piece-Rate Payroll Configuration</h3>
+    <fieldset>
+      <legend>Type of Sew Configuration</legend>
+      <form id="sew-type-form" class="payroll-field-row" onsubmit="saveSewType(event)">
+        <input type="hidden" name="id" />
+        <label>Type of Sew Code<input name="code" required placeholder="HL" /></label>
+        <label>Description<input name="description" placeholder="Hemming line" /></label>
+        <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
+        <label>Effective Date<input name="effective_date" type="date" required /></label>
+        <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Type</button></div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Size Range Configuration</legend>
+      <form id="size-range-form" class="payroll-field-row" onsubmit="saveSizeRange(event)">
+        <input type="hidden" name="id" />
+        <label>Size Range<input name="size_range" required placeholder="24-26" /></label>
+        <label class="span-2">Description<input name="description" placeholder="Medium production size range" /></label>
+        <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
+        <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Size</button></div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Piece Rate Configuration</legend>
+      <form id="piece-rate-form" class="payroll-field-row" onsubmit="savePieceRate(event)">
+        <input type="hidden" name="id" />
+        <label>Type of Sew<select name="sew_type_code" id="rate-sew-type" required><option value="">Select type</option></select></label>
+        <label>Size Range<select name="size_range" id="rate-size-range" required><option value="">Select size range</option></select></label>
+        <label>Rate<input name="piece_rate" type="number" min="0.01" step="0.01" required /></label>
+        <label>Effective Date<input name="effective_date" type="date" required /></label>
+        <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
+        <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Rate</button></div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sharing Rule Configuration</legend>
+      <form id="production-share-rule-form" class="payroll-field-row" onsubmit="saveProductionShareRule(event)">
+        <input type="hidden" name="id" />
+        <label>Pairing Type<select name="pairing_type" required><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
+        <label>Worker 1 Share %<input name="worker1_share" type="number" min="0" max="100" step="0.01" value="55" required /></label>
+        <label>Worker 2 Share %<input name="worker2_share" type="number" min="0" max="100" step="0.01" value="45" required /></label>
+        <label>Effective Date<input name="effective_date" type="date" required /></label>
+        <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
+        <div class="payroll-form-actions"><span id="pair-rule-status" class="payroll-form-status"></span><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Rule</button></div>
+      </form>
+    </fieldset>
+
+    <h3>Production Encoding</h3>
+    <form id="production-pair-form" onsubmit="encodeProductionPair(event)">
+      <fieldset>
+        <legend>Payroll Information</legend>
+        <div class="payroll-field-row">
+          <label>Payroll Period<input name="payroll_period" type="month" required /></label>
+          <label>Production Date<input name="production_date" type="date" required /></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Worker Pairing</legend>
+        <div class="payroll-field-row">
+          <label>Pairing Type<select name="pairing_type" id="pair-assignment-type" required><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
+          <label>Sewer Employee<input name="worker1_employee_id" type="number" min="1" required /></label>
+          <label>Partner Employee<input name="worker2_employee_id" type="number" min="1" required /></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Production Details</legend>
+        <div class="payroll-field-row">
+          <label>Type of Sew<select name="sew_type_code" id="pair-sew-type" required></select></label>
+          <label>Size Range<select name="size_range" id="pair-size-range" required></select></label>
+          <label>Quantity Produced<input name="quantity_produced" type="number" min="1" step="1" required /></label>
+          <label>Rate<input id="pair-piece-rate-preview" type="text" value="PHP 0.00" readonly /></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Computation Summary</legend>
+        <table class="payroll-simple-table">
+          <tbody>
+            <tr><th>Raw Earnings</th><td id="pair-raw-earnings">PHP 0.00</td></tr>
+            <tr><th>Worker 1 Share %</th><td id="pair-worker1-share">0%</td></tr>
+            <tr><th>Worker 1 Earnings</th><td id="pair-worker1-earnings">PHP 0.00</td></tr>
+            <tr><th>Worker 2 Share %</th><td id="pair-worker2-share">0%</td></tr>
+            <tr><th>Worker 2 Earnings</th><td id="pair-worker2-earnings">PHP 0.00</td></tr>
+          </tbody>
+        </table>
+      </fieldset>
+
+      <div class="payroll-form-actions">
+        <span id="production-pair-status" class="payroll-form-status"></span>
+        <button class="btn btn-outline" type="button" onclick="saveProductionPairDraft()">Save Draft</button>
+        <button class="btn btn-primary" type="submit">Submit Encoding</button>
+        <button class="btn btn-outline" type="button" onclick="clearProductionPairForm()">Clear Form</button>
+      </div>
+    </form>
+
+    <fieldset>
+      <legend>Incentives</legend>
+      <form id="piece-incentive-entry-form" class="payroll-field-row" onsubmit="encodePieceIncentive(event)">
+        <label>Employee<input name="employee_id" type="number" min="1" required /></label>
+        <label>Payroll Period<input name="payroll_period" type="month" required /></label>
+        <label>Incentive Type<select name="incentive_type"><option>Quota Incentive</option><option>Sunday Work Incentive</option><option>Special Sewing Incentive</option></select></label>
+        <label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+        <label class="span-2">Remarks<input name="remarks" placeholder="Optional notes" /></label>
+        <div class="payroll-form-actions"><span id="piece-incentive-entry-status" class="payroll-form-status"></span><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Incentive</button></div>
+      </form>
+    </fieldset>
+  </div>
+
+  <div class="table-wrap" style="margin-top:18px;"><div id="piece-rate-config-grid"></div></div>
 </section>
 
 <section class="payroll-panel" id="payroll-tab-deductions">
