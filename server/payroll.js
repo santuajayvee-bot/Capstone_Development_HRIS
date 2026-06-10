@@ -11,7 +11,7 @@ const PAYROLL_PERMISSIONS = {
   calculate: ROLES.payroll_any,
   approve: ['payroll_manager', 'hr_manager'],
   release: ['payroll_manager', 'hr_manager'],
-  settings: ['payroll_manager', 'hr_manager', 'hr_admin', 'admin'],
+  settings: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin'],
   reports: ['payroll_manager', 'hr_manager', 'hr_admin', 'admin']
 };
 
@@ -89,6 +89,8 @@ async function ensurePieceRatePayrollSchema(pool) {
       await pool.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   };
+
+  await ensureColumn('salary_calculations', 'agency_name', 'VARCHAR(180) NULL AFTER payroll_period');
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS payroll_sew_types (
@@ -349,10 +351,9 @@ async function activePieceRate(pool, productType, productCategory, dateValue) {
 async function getEmployeeProductionRole(pool, employeeId) {
   const [rows] = await pool.execute(`
     SELECT e.id, e.employee_code, e.first_name, e.last_name,
-           COALESCE(p.name, e.position, '') AS position,
+           COALESCE(e.position, '') AS position,
            w.name AS wage_type
       FROM employees e
-      LEFT JOIN positions p ON p.id = e.position_id
       LEFT JOIN wage_types w ON w.id = e.wage_type_id
      WHERE e.id = ?
      LIMIT 1
@@ -576,7 +577,8 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
     const [empRows] = await pool.execute(`
       SELECT e.id, e.employee_code, e.first_name, e.last_name, 
              e.wage_type_id, w.name AS wage_type, w.id AS wage_type_id_val,
-             e.department_id, d.name AS department
+             e.department_id, d.name AS department,
+             e.employment_type, e.hiring_type, e.agency_name
       FROM employees e
       LEFT JOIN wage_types w ON w.id = e.wage_type_id
       LEFT JOIN departments d ON d.id = e.department_id
@@ -654,7 +656,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
 });
 
 // Set employee wage type and rates (ADMIN only)
-router.post('/employees/:id/wage-config', requireAuth, requireRole(ROLES.admin), async (req, res) => {
+router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
   try {
     const pool = require('../config/db');
     const empId = req.params.id;
@@ -1239,6 +1241,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       net_pay,
       calculation_date,
       payroll_period,
+      agency_name,
       status,
       product_type,
       product_category,
@@ -1263,6 +1266,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     console.log('Hours Worked:', hours_worked, '| Days Worked:', days_worked);
 
     const calcDate = calculation_date || new Date().toISOString().split('T')[0];
+    await ensurePieceRatePayrollSchema(pool);
     const [wageRows] = await pool.execute('SELECT name FROM wage_types WHERE id = ? LIMIT 1', [wage_type_id]);
     const wageTypeName = wageRows[0]?.name || '';
     const isPieceRate = /piece/i.test(wageTypeName);
@@ -1377,10 +1381,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         net_pay,
         calculation_date,
         payroll_period,
+        agency_name,
         status,
         calculated_by,
         submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       employee_id,
       wage_type_id,
@@ -1403,6 +1408,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       computedNetPay,
       calcDate,
       payroll_period || calcDate.slice(0, 7),
+      agency_name || null,
       calculationStatus,
       currentUserId(req),
       submittedAt
@@ -1470,7 +1476,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       employee_id,
       salary_calculation_id: result.insertId,
       remarks: `${calculationStatus} salary calculation`,
-      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, deductions: configuredDeductions.applied, piece_rate: pieceComputation }
+      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: configuredDeductions.applied, piece_rate: pieceComputation }
     });
     
     res.json({ 
@@ -1659,14 +1665,13 @@ router.get('/employees/:id/readonly', requireAuth, requireRole(ROLES.payroll_any
       SELECT 
         e.id, e.employee_code, e.first_name, e.last_name, e.email,
         e.contact_number, e.residential_address, e.birth_date,
-        d.name AS department, p.name AS position, s.id AS supervisor_id,
+        d.name AS department, e.position AS position, s.id AS supervisor_id,
         CONCAT(s.first_name, ' ', s.last_name) AS supervisor_name,
         e.date_hired, e.employment_status, e.wage_type_id, w.name AS wage_type,
         e.sss_number, e.philhealth_number, e.pagibig_number, e.tin,
         e.bank_name, e.bank_account, e.status
       FROM employees e
       LEFT JOIN departments d ON d.id = e.department_id
-      LEFT JOIN positions p ON p.id = e.position_id
       LEFT JOIN employees s ON s.id = e.supervisor_id
       LEFT JOIN wage_types w ON w.id = e.wage_type_id
       WHERE e.id = ?
@@ -1921,6 +1926,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
 router.get('/salary-calculations', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
     const { employee_id, status, from_date, to_date, limit = 100 } = req.query;
 
     let query = `
@@ -1950,6 +1956,7 @@ router.get('/salary-calculations', requireAuth, requireRole(ROLES.payroll_any), 
         sc.net_pay,
         sc.status,
         sc.calculation_date,
+        sc.agency_name,
         sc.created_at,
         sc.updated_at
       FROM salary_calculations sc

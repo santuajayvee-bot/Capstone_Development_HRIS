@@ -98,6 +98,7 @@
       <label>Department<span class="salary-readonly" id="salary-dept">-</span></label>
       <label>Position<span class="salary-readonly" id="salary-pos">-</span></label>
       <label>Worker Source<span class="salary-readonly" id="salary-worker-source">-</span></label>
+      <label>Agency<select id="salary-agency"><option value="">Direct / No agency</option></select></label>
       <label>Wage Type<span class="salary-readonly" id="salary-wage-type">-</span></label>
       <label>Rate<span class="salary-readonly" id="salary-rate">PHP 0.00</span></label>
     </div>
@@ -123,7 +124,13 @@
       <div class="salary-form-row">
         <label>Production Date<input id="salary-piece-production-date" type="date" /></label>
         <label>Sewer Employee<span class="salary-readonly" id="salary-piece-sewer">-</span></label>
-        <label>Partner Employee ID<input id="salary-piece-partner" type="number" min="1" placeholder="Fixer or substitute sewer" /></label>
+        <label class="salary-form-wide">Partner Employee
+          <span class="payroll-search-box">
+            <input id="salary-piece-partner-search" type="text" placeholder="Search fixer or substitute sewer..." autocomplete="off" />
+            <span id="salary-piece-partner-dropdown" class="payroll-search-dropdown"></span>
+          </span>
+          <input id="salary-piece-partner" type="hidden" />
+        </label>
         <label>Pairing Type<select id="salary-piece-pairing"><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
       </div>
       <table class="salary-work-table">
@@ -169,6 +176,7 @@
     <h3>Salary Summary</h3>
     <div class="salary-summary-meta">
       <span>Employee: <strong id="summary-employee">-</strong></span>
+      <span>Agency: <strong id="summary-agency">-</strong></span>
       <span>Wage Type: <strong id="summary-wage-type">-</strong></span>
       <span>Rate: <strong id="summary-rate">PHP 0.00</strong></span>
       <span>Output: <strong id="summary-qty">0</strong></span>

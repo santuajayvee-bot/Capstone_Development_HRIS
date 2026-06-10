@@ -225,11 +225,11 @@ function onbToggleAgency() {
   }
 }
 
-const ONB_ADDRESS_PARTS = ['street', 'barangay', 'city', 'province', 'postal', 'country'];
+const ONB_ADDRESS_PARTS = ['street', 'barangay', 'city', 'province', 'region', 'postal', 'country'];
 const ONB_ADDRESS_GROUPS = {
-  home: { key: 'home', inputId: 'onb-home-address', label: 'Residential address', requiredParts: ['street', 'barangay', 'city', 'province'] },
-  current: { key: 'current', inputId: 'onb-current-address', label: 'Current address', requiredParts: ['street', 'barangay', 'city', 'province'] },
-  mailing: { key: 'mailing', inputId: 'onb-mailing-address', label: 'Mailing address', requiredParts: ['street', 'barangay', 'city', 'province'] },
+  home: { key: 'home', inputId: 'onb-home-address', label: 'Residential address', requiredParts: ['street', 'barangay', 'city', 'province', 'region'] },
+  current: { key: 'current', inputId: 'onb-current-address', label: 'Current address', requiredParts: ['street', 'barangay', 'city', 'province', 'region'] },
+  mailing: { key: 'mailing', inputId: 'onb-mailing-address', label: 'Mailing address', requiredParts: ['street', 'barangay', 'city', 'province', 'region'] },
 };
 
 function onbAddressGroupByInput(inputId) {
@@ -301,6 +301,7 @@ function onbAddressPartLabel(part) {
     barangay: 'barangay',
     city: 'city / municipality',
     province: 'province',
+    region: 'region',
   }[part] || part;
 }
 
@@ -370,14 +371,32 @@ function onbLocationPayload() {
       residential_address: home?.value || '',
       residential_address_lat: '',
       residential_address_lng: '',
+      residential_address_region: onbAddressPart('home', 'region')?.value || '',
+      residential_address_province: onbAddressPart('home', 'province')?.value || '',
+      residential_address_city_municipality: onbAddressPart('home', 'city')?.value || '',
+      residential_address_barangay: onbAddressPart('home', 'barangay')?.value || '',
+      residential_address_street_address: onbAddressPart('home', 'street')?.value || '',
+      residential_address_full_address: home?.value || '',
       current_address: currentSame ? home?.value || '' : current?.value || '',
       current_address_lat: '',
       current_address_lng: '',
       current_address_same_as_home: currentSame ? 1 : 0,
+      current_address_region: onbAddressPart(currentSame ? 'home' : 'current', 'region')?.value || '',
+      current_address_province: onbAddressPart(currentSame ? 'home' : 'current', 'province')?.value || '',
+      current_address_city_municipality: onbAddressPart(currentSame ? 'home' : 'current', 'city')?.value || '',
+      current_address_barangay: onbAddressPart(currentSame ? 'home' : 'current', 'barangay')?.value || '',
+      current_address_street_address: onbAddressPart(currentSame ? 'home' : 'current', 'street')?.value || '',
+      current_address_full_address: currentSame ? home?.value || '' : current?.value || '',
       mailing_address: mailingSame ? home?.value || '' : mailing?.value || '',
       mailing_address_lat: '',
       mailing_address_lng: '',
       mailing_address_same_as_home: mailingSame ? 1 : 0,
+      mailing_address_region: onbAddressPart(mailingSame ? 'home' : 'mailing', 'region')?.value || '',
+      mailing_address_province: onbAddressPart(mailingSame ? 'home' : 'mailing', 'province')?.value || '',
+      mailing_address_city_municipality: onbAddressPart(mailingSame ? 'home' : 'mailing', 'city')?.value || '',
+      mailing_address_barangay: onbAddressPart(mailingSame ? 'home' : 'mailing', 'barangay')?.value || '',
+      mailing_address_street_address: onbAddressPart(mailingSame ? 'home' : 'mailing', 'street')?.value || '',
+      mailing_address_full_address: mailingSame ? home?.value || '' : mailing?.value || '',
       place_of_birth: placeOfBirth?.value.trim() || '',
       place_of_birth_lat: '',
       place_of_birth_lng: '',
@@ -386,6 +405,9 @@ function onbLocationPayload() {
 }
 
 function onbInitializeLocationDropdowns() {
+  if (window.initializeOnboardingPhilippineAddressForms) {
+    window.initializeOnboardingPhilippineAddressForms(document);
+  }
   onbBindStandardAddressInputs();
 }
 

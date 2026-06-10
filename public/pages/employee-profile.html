@@ -100,6 +100,8 @@
   .profile-doc-toolbar, .profile-family-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
   .profile-doc-grid { display: grid; gap: 10px; }
   .profile-doc-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; gap: 10px; align-items: center; background: var(--bg); }
+  .profile-doc-card.clickable { cursor: pointer; }
+  .profile-doc-card.clickable:hover, .profile-doc-card.clickable:focus { border-color: var(--form-accent); background: rgba(79,124,255,.08); outline: none; }
   .profile-family-surface { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; color: var(--text); }
   .profile-family-table-wrap { overflow-x: auto; }
   .profile-family-table { width: 100%; border-collapse: collapse; font-size: 13px; }

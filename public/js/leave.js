@@ -42,11 +42,11 @@ function populateLeaveTypeSelects() {
   const activeTypes = LEAVE_TYPES.filter(type => Number(type.is_active) === 1);
   const options = activeTypes.map(type => `<option value="${type.id}" data-name="${type.name}" data-category="${type.category}">${type.name}</option>`).join('');
 
-  ['manual-leave-type', 'req-leave-type'].forEach(id => {
+  ['manual-leave-type', 'req-leave-type', 'balance-leave-type'].forEach(id => {
     const select = document.getElementById(id);
     if (!select) return;
     const current = select.value;
-    select.innerHTML = options || '<option value="">No active leave types</option>';
+    select.innerHTML = '<option value="">Select leave type</option>' + options;
     if ([...select.options].some(option => option.value === current)) select.value = current;
   });
 
@@ -960,6 +960,7 @@ async function denyGenRequest(btn) {
 // Enhanced Leave Management module
 let LEAVE_EMPLOYEES = [];
 let LEAVE_AUDIT = [];
+let LEAVE_BALANCES = [];
 
 function leaveStatusValue(status) {
   return status === 'Denied' ? 'Rejected' : (status || 'Pending');
@@ -1012,6 +1013,8 @@ async function loadLeaveRequests() {
     renderLeaveAudit();
     renderLeaveTypes();
     loadLeaveBalancesForSelection();
+    initializeLeaveBalancePreviews();
+    renderLeaveBalanceConfigTable();
   } catch (error) {
     console.error('Error loading leave management:', error);
   }
@@ -1026,6 +1029,30 @@ function setupLeaveUi() {
     employeeSelect.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
       .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
       .join('');
+  }
+
+  const balanceCard = document.getElementById('leave-balance-config-card');
+  if (balanceCard) balanceCard.style.display = isLeaveManager() ? 'block' : 'none';
+  const balanceEmployee = document.getElementById('balance-employee');
+  if (balanceEmployee) {
+    const current = balanceEmployee.value;
+    balanceEmployee.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
+      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
+      .join('');
+    balanceEmployee.value = current;
+  }
+  const balanceYear = document.getElementById('balance-year');
+  if (balanceYear && !balanceYear.value) balanceYear.value = new Date().getFullYear();
+
+  const balanceViewerField = document.getElementById('leave-balance-viewer-field');
+  const balanceViewerEmployee = document.getElementById('leave-balance-viewer-employee');
+  if (balanceViewerField && balanceViewerEmployee) {
+    balanceViewerField.style.display = isLeaveManager() ? 'block' : 'none';
+    const current = balanceViewerEmployee.value;
+    balanceViewerEmployee.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
+      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
+      .join('');
+    balanceViewerEmployee.value = current;
   }
 
   const departments = [...new Set(LEAVE_EMPLOYEES.map(emp => emp.department).filter(Boolean))].sort();
@@ -1112,7 +1139,10 @@ async function approveLeaveById(id) {
     method: 'PATCH',
     body: JSON.stringify({ status: 'Approved', remarks: 'Approved' })
   });
-  if (!res || !res.ok) return alert('Failed to approve leave.');
+  if (!res || !res.ok) {
+    const error = await res?.json().catch(() => ({}));
+    return alert(error.error || 'Failed to approve leave.');
+  }
   await loadLeaveRequests();
 }
 
@@ -1123,7 +1153,10 @@ async function rejectLeaveById(id) {
     method: 'PATCH',
     body: JSON.stringify({ status: 'Rejected', remarks })
   });
-  if (!res || !res.ok) return alert('Failed to reject leave.');
+  if (!res || !res.ok) {
+    const error = await res?.json().catch(() => ({}));
+    return alert(error.error || 'Failed to reject leave.');
+  }
   await loadLeaveRequests();
 }
 
@@ -1132,6 +1165,11 @@ function viewLeaveDetails(id) {
   const modal = document.getElementById('leave-detail-modal');
   const body = document.getElementById('leave-detail-body');
   if (!leave || !modal || !body) return;
+  const total = Number(leave.balance_total_days || 0);
+  const used = Number(leave.balance_used_days || 0);
+  const remaining = Number(leave.balance_remaining_days || 0);
+  const requested = Number(leave.days || 1);
+  const afterApproval = remaining - requested;
   body.innerHTML = `
     <div class="leave-grid" style="grid-template-columns:1fr 1fr;">
       <div><strong>Employee</strong><br>${leave.employee_name || '-'}</div>
@@ -1145,6 +1183,18 @@ function viewLeaveDetails(id) {
       <div><strong>Reason</strong><br>${leave.reason || '-'}</div>
       <div><strong>Remarks</strong><br>${leave.remarks || leave.rejection_remarks || '-'}</div>
       ${leave.file_path ? `<div><a href="${leave.file_path}" target="_blank">View Attachment</a></div>` : ''}
+    </div>
+    <div style="margin-top:14px;">
+      <strong>Leave Balance Before Approval</strong>
+      <div class="leave-table-wrap" style="margin-top:8px;">
+        <table class="leave-table" style="min-width:520px;">
+          <tbody>
+            <tr><th>Total Days</th><td>${total.toFixed(1)}</td><th>Used Days</th><td>${used.toFixed(1)}</td></tr>
+            <tr><th>Remaining Days</th><td>${remaining.toFixed(1)}</td><th>Requested Days</th><td>${requested.toFixed(1)}</td></tr>
+            <tr><th>Balance After Approval</th><td colspan="3" style="color:${afterApproval < 0 ? 'var(--red)' : 'var(--green)'};">${afterApproval.toFixed(1)}</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>`;
   modal.style.display = 'flex';
 }
@@ -1177,6 +1227,7 @@ function calculateManualDuration() {
   const duration = document.getElementById('manual-duration');
   if (!from || !to || !duration) return;
   duration.value = Math.max(Math.floor((new Date(to) - new Date(from)) / 86400000) + 1, 1);
+  updateManualBalancePreview();
 }
 
 async function submitManualLeave(event) {
@@ -1211,21 +1262,213 @@ function clearLeaveForm() {
 }
 
 async function loadLeaveBalancesForSelection(employeeId = null) {
-  const id = employeeId || document.getElementById('manual-employee')?.value || CURRENT_USER?.employeeId;
-  if (!id) return;
+  const id = employeeId || document.getElementById('leave-balance-viewer-employee')?.value || document.getElementById('manual-employee')?.value || CURRENT_USER?.employeeId;
+  const list = document.getElementById('leave-balances-list');
+  if (!id) {
+    if (list) list.innerHTML = '<div style="color:var(--muted);font-size:13px;">Select an employee to view configured leave balances.</div>';
+    return;
+  }
   const res = await apiFetch(`/api/leave/balances?employee_id=${id}`);
   if (!res || !res.ok) return;
   const balances = await res.json();
-  const list = document.getElementById('leave-balances-list');
+  LEAVE_BALANCES = balances;
   if (list) {
     list.innerHTML = balances.map(row => `
       <div>
         <div class="leave-card-label">${row.leave_type}</div>
-        <div class="leave-card-value">${Number(row.remaining || 0).toFixed(1)} / ${Number(row.balance || 0).toFixed(1)}</div>
+        <div class="leave-card-value">${Number(row.remaining_days ?? row.remaining ?? 0).toFixed(1)} / ${Number(row.total_days ?? row.balance ?? 0).toFixed(1)}</div>
         <div style="color:var(--muted);font-size:11px;">${row.category || 'Company'} · used ${Number(row.used || 0).toFixed(1)}</div>
       </div>
-    `).join('') || '<div style="color:var(--muted);font-size:13px;">No leave balances available.</div>';
+    `).join('') || '<div style="color:var(--muted);font-size:13px;">No leave balances configured yet. Open the Leave Types tab and use Employee Leave Balance Setup.</div>';
   }
+  renderLeaveBalanceConfigTable();
+}
+
+function renderLeaveBalanceConfigTable() {
+  const tbody = document.getElementById('leave-balance-config-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = LEAVE_BALANCES.map(row => `
+    <tr>
+      <td><strong>${row.leave_type || '-'}</strong><div style="color:var(--muted);font-size:11px;">${row.category || 'Company'}</div></td>
+      <td>${row.year || '-'}</td>
+      <td>${Number(row.total_days ?? row.balance ?? 0).toFixed(1)}</td>
+      <td>${Number(row.used_days ?? row.used ?? 0).toFixed(1)}</td>
+      <td>${Number(row.remaining_days ?? row.remaining ?? 0).toFixed(1)}</td>
+      <td>${row.last_updated_by_name || '-'}</td>
+      <td><button class="btn btn-outline" type="button" onclick="editLeaveBalanceConfig(${row.id})">Edit</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">No configured balances for this employee/year.</td></tr>';
+}
+
+function selectedLeaveBalance(employeeId, leaveTypeId) {
+  return LEAVE_BALANCES.find(row =>
+    String(row.employee_id) === String(employeeId) &&
+    String(row.leave_type_id) === String(leaveTypeId)
+  );
+}
+
+function updateBalanceRemainingPreview() {
+  const total = Number(document.getElementById('balance-total-days')?.value || 0);
+  const used = Number(document.getElementById('balance-used-days')?.value || 0);
+  const remaining = document.getElementById('balance-remaining-days');
+  if (remaining) remaining.value = Number.isFinite(total - used) ? Math.max(total - used, 0).toFixed(1) : '';
+}
+
+async function loadBalanceConfigForEmployee() {
+  const employeeId = document.getElementById('balance-employee')?.value;
+  const year = document.getElementById('balance-year')?.value || new Date().getFullYear();
+  if (!employeeId) {
+    LEAVE_BALANCES = [];
+    renderLeaveBalanceConfigTable();
+    return;
+  }
+  const res = await apiFetch(`/api/leave/balances?employee_id=${employeeId}&year=${year}`);
+  LEAVE_BALANCES = res && res.ok ? await res.json() : [];
+  renderLeaveBalanceConfigTable();
+  fillBalanceFormFromSelection();
+}
+
+function fillBalanceFormFromSelection() {
+  const employeeId = document.getElementById('balance-employee')?.value;
+  const leaveTypeId = document.getElementById('balance-leave-type')?.value;
+  const row = selectedLeaveBalance(employeeId, leaveTypeId);
+  const total = document.getElementById('balance-total-days');
+  const used = document.getElementById('balance-used-days');
+  if (row) {
+    if (total) total.value = Number(row.total_days ?? row.balance ?? 0).toFixed(1);
+    if (used) used.value = Number(row.used_days ?? row.used ?? 0).toFixed(1);
+  }
+  updateBalanceRemainingPreview();
+}
+
+function editLeaveBalanceConfig(id) {
+  const row = LEAVE_BALANCES.find(item => Number(item.id) === Number(id));
+  if (!row) return;
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
+  set('balance-employee', row.employee_id);
+  set('balance-leave-type', row.leave_type_id);
+  set('balance-year', row.year);
+  set('balance-total-days', Number(row.total_days ?? row.balance ?? 0).toFixed(1));
+  set('balance-used-days', Number(row.used_days ?? row.used ?? 0).toFixed(1));
+  updateBalanceRemainingPreview();
+}
+
+function resetLeaveBalanceForm() {
+  ['balance-leave-type', 'balance-total-days', 'balance-used-days', 'balance-remaining-days'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = id === 'balance-used-days' ? '0' : '';
+  });
+  const status = document.getElementById('leave-balance-save-status');
+  if (status) status.textContent = '';
+}
+
+async function saveLeaveBalanceConfig(event) {
+  event.preventDefault();
+  const payload = {
+    employee_id: document.getElementById('balance-employee')?.value,
+    leave_type_id: document.getElementById('balance-leave-type')?.value,
+    year: document.getElementById('balance-year')?.value,
+    total_days: document.getElementById('balance-total-days')?.value,
+    used_days: document.getElementById('balance-used-days')?.value || 0
+  };
+  const status = document.getElementById('leave-balance-save-status');
+  if (status) status.textContent = 'Saving...';
+  const res = await apiFetch('/api/leave/balances', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res || !res.ok) {
+    const error = await res?.json().catch(() => ({}));
+    if (status) status.textContent = error.error || 'Save failed.';
+    return;
+  }
+  if (status) status.textContent = 'Saved.';
+  await loadBalanceConfigForEmployee();
+  await loadLeaveBalancesForSelection(payload.employee_id);
+}
+
+function requestedLeaveDays(prefix = 'req') {
+  const startId = prefix === 'manual' ? 'manual-start-date' : 'req-start';
+  const endId = prefix === 'manual' ? 'manual-end-date' : 'req-end';
+  const manualDuration = document.getElementById('manual-duration')?.value;
+  if (prefix === 'manual' && manualDuration) return Number(manualDuration) || 0;
+  const start = document.getElementById(startId)?.value;
+  const end = document.getElementById(endId)?.value || start;
+  if (!start || !end) return 0;
+  return Math.max(Math.ceil((new Date(end) - new Date(start)) / 86400000) + 1, 1);
+}
+
+function renderBalancePreview(targetId, balance, requestedDays, label = 'Balance After Request') {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  if (!balance) {
+    target.innerHTML = '<div style="color:var(--red);font-size:12px;">No leave balance configured for this leave type/year.</div>';
+    return;
+  }
+  const total = Number(balance.total_days ?? balance.balance ?? 0);
+  const used = Number(balance.used_days ?? balance.used ?? 0);
+  const remaining = Number(balance.remaining_days ?? balance.remaining ?? 0);
+  const after = remaining - Number(requestedDays || 0);
+  target.innerHTML = `
+    <div class="leave-table-wrap" style="margin-top:10px;">
+      <table class="leave-table" style="min-width:520px;">
+        <tbody>
+          <tr><th>Total Days</th><td>${total.toFixed(1)}</td><th>Used Days</th><td>${used.toFixed(1)}</td></tr>
+          <tr><th>Remaining Days</th><td>${remaining.toFixed(1)}</td><th>Requested Days</th><td>${Number(requestedDays || 0).toFixed(1)}</td></tr>
+          <tr><th>${label}</th><td colspan="3" style="color:${after < 0 ? 'var(--red)' : 'var(--green)'};">${after.toFixed(1)}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function loadEmployeeLeaveBalances(employeeId, year = new Date().getFullYear()) {
+  if (!employeeId) return [];
+  const res = await apiFetch(`/api/leave/balances?employee_id=${employeeId}&year=${year}`);
+  return res && res.ok ? await res.json() : [];
+}
+
+async function updateLeaveRequestBalancePreview() {
+  const targetId = 'req-leave-balance-preview';
+  if (!document.getElementById(targetId)) return;
+  const leaveTypeId = document.getElementById('req-leave-type')?.value;
+  const year = new Date(document.getElementById('req-start')?.value || Date.now()).getFullYear();
+  const balances = await loadEmployeeLeaveBalances(CURRENT_USER?.employeeId, year);
+  const balance = balances.find(row => String(row.leave_type_id) === String(leaveTypeId));
+  renderBalancePreview(targetId, balance, requestedLeaveDays('req'), 'Balance After Request');
+}
+
+async function updateManualBalancePreview() {
+  const targetId = 'manual-leave-balance-preview';
+  if (!document.getElementById(targetId)) return;
+  const employeeId = document.getElementById('manual-employee')?.value;
+  const leaveTypeId = document.getElementById('manual-leave-type')?.value;
+  const year = new Date(document.getElementById('manual-start-date')?.value || Date.now()).getFullYear();
+  const balances = employeeId ? await loadEmployeeLeaveBalances(employeeId, year) : [];
+  const balance = balances.find(row => String(row.leave_type_id) === String(leaveTypeId));
+  renderBalancePreview(targetId, balance, requestedLeaveDays('manual'), 'Balance After Save');
+}
+
+function initializeLeaveBalancePreviews() {
+  const reqFields = document.getElementById('req-leave-fields');
+  if (reqFields && !document.getElementById('req-leave-balance-preview')) {
+    const preview = document.createElement('div');
+    preview.id = 'req-leave-balance-preview';
+    preview.className = 'form-group full';
+    reqFields.appendChild(preview);
+  }
+  const manualForm = document.getElementById('manual-leave-form');
+  if (manualForm && !document.getElementById('manual-leave-balance-preview')) {
+    const preview = document.createElement('div');
+    preview.id = 'manual-leave-balance-preview';
+    preview.className = 'leave-field full';
+    const grid = manualForm.querySelector('.leave-form-grid');
+    if (grid) grid.appendChild(preview);
+  }
+  ['req-leave-type', 'req-start', 'req-end'].forEach(id => document.getElementById(id)?.addEventListener('change', updateLeaveRequestBalancePreview));
+  ['manual-employee', 'manual-leave-type', 'manual-start-date', 'manual-end-date', 'manual-duration'].forEach(id => document.getElementById(id)?.addEventListener('change', updateManualBalancePreview));
+  updateLeaveRequestBalancePreview();
+  updateManualBalancePreview();
 }
 
 function eligibilityText(type) {
@@ -1740,6 +1983,12 @@ window.loadLeaveTypes = loadLeaveTypes;
 window.saveLeaveTypePolicy = saveLeaveTypePolicy;
 window.editLeaveTypePolicy = editLeaveTypePolicy;
 window.resetLeaveTypeForm = resetLeaveTypeForm;
+window.loadBalanceConfigForEmployee = loadBalanceConfigForEmployee;
+window.fillBalanceFormFromSelection = fillBalanceFormFromSelection;
+window.updateBalanceRemainingPreview = updateBalanceRemainingPreview;
+window.saveLeaveBalanceConfig = saveLeaveBalanceConfig;
+window.editLeaveBalanceConfig = editLeaveBalanceConfig;
+window.resetLeaveBalanceForm = resetLeaveBalanceForm;
 
 window.renderLeaveCalendar = function() {
   const calendar = document.getElementById('leave-calendar');

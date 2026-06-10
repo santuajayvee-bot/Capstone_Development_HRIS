@@ -7,8 +7,29 @@ let logisticsRegions = [];
 let payrollDeductionSettings = [];
 let salaryPageInitialized = false;
 let salarySearchListenerAttached = false;
+let salaryPartnerSearchListenerAttached = false;
 let salaryInputListenersAttached = false;
 let salaryPieceRowCounter = 0;
+
+function salaryEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
+
+function normalizeSalaryWageType(value) {
+  const name = String(value || '').trim();
+  if (/piece/i.test(name)) return 'Per-Piece';
+  if (/trip/i.test(name)) return 'Per-Trip';
+  if (/hour/i.test(name)) return 'Hourly';
+  if (/day|daily/i.test(name)) return 'Daily';
+  if (/base|salary/i.test(name)) return 'Base Salary';
+  return name;
+}
 
 // Init when DOM ready
 window.addEventListener('DOMContentLoaded', () => {
@@ -320,10 +341,39 @@ async function fetchSalaryEmpList() {
     }
     salaryEmpList = await res.json();
     console.log(`✅ Got ${salaryEmpList.length} employees for salary page`);
+    populateSalaryAgencyOptions();
     attachSearchListener();
+    attachPartnerSearchListener();
   } catch (e) {
     console.error('❌ Failed to fetch employees:', e);
   }
+}
+
+function populateSalaryAgencyOptions(preferredAgency = '') {
+  const select = document.getElementById('salary-agency');
+  if (!select) return;
+
+  const current = preferredAgency || select.value || '';
+  const agencies = [...new Set((salaryEmpList || [])
+    .map(emp => String(emp.agency_name || '').trim())
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+
+  select.innerHTML = '<option value="">Direct / No agency</option>' + agencies
+    .map(agency => `<option value="${salaryEscape(agency)}">${salaryEscape(agency)}</option>`)
+    .join('');
+
+  if (current && !agencies.includes(current)) {
+    select.insertAdjacentHTML('beforeend', `<option value="${salaryEscape(current)}">${salaryEscape(current)}</option>`);
+  }
+  select.value = current;
+  updateSalaryAgencySummary();
+}
+
+function updateSalaryAgencySummary() {
+  const agency = document.getElementById('salary-agency')?.value || '';
+  const summary = document.getElementById('summary-agency');
+  if (summary) summary.textContent = agency || '-';
 }
 
 // Attach search input listener
@@ -405,6 +455,112 @@ function showDropdownList(empList) {
   console.log(`📋 Showing ${empList.length} employees in dropdown`);
 }
 
+function employeeMatchesTerm(emp, term) {
+  const needle = String(term || '').toLowerCase().trim();
+  if (!needle) return true;
+
+  const fullName = `${emp.first_name || ''} ${emp.last_name || ''}`.toLowerCase();
+  const code = String(emp.employee_code || '').toLowerCase();
+  const dept = String(emp.department || '').toLowerCase();
+  const pos = String(emp.position || '').toLowerCase();
+
+  return fullName.includes(needle) || code.includes(needle) || dept.includes(needle) || pos.includes(needle);
+}
+
+function attachPartnerSearchListener() {
+  if (salaryPartnerSearchListenerAttached) return;
+
+  const search = document.getElementById('salary-piece-partner-search');
+  const dropdown = document.getElementById('salary-piece-partner-dropdown');
+  const hiddenInput = document.getElementById('salary-piece-partner');
+
+  if (!search || !dropdown || !hiddenInput) return;
+
+  salaryPartnerSearchListenerAttached = true;
+
+  search.addEventListener('focus', async () => {
+    if (!salaryEmpList.length) await fetchSalaryEmpList();
+    showPartnerDropdown(salaryEmpList);
+  });
+
+  search.addEventListener('input', () => {
+    hiddenInput.value = '';
+    const term = search.value.toLowerCase().trim();
+    const filtered = salaryEmpList.filter(emp => employeeMatchesTerm(emp, term));
+    showPartnerDropdown(filtered);
+    calculateSalaryNow();
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!search.contains(event.target) && !dropdown.contains(event.target)) {
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
+function showPartnerDropdown(empList) {
+  const dropdown = document.getElementById('salary-piece-partner-dropdown');
+  if (!dropdown) return;
+
+  dropdown.innerHTML = '';
+  const currentId = currentSalaryEmployee?.id ? String(currentSalaryEmployee.id) : '';
+  const options = (empList || [])
+    .filter(emp => String(emp.id) !== currentId)
+    .slice(0, 30);
+
+  if (!options.length) {
+    const empty = document.createElement('div');
+    empty.style.padding = '10px';
+    empty.style.color = 'var(--muted)';
+    empty.textContent = 'No employees found';
+    dropdown.appendChild(empty);
+    dropdown.style.display = 'block';
+    return;
+  }
+
+  options.forEach(emp => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.style.display = 'block';
+    item.style.width = '100%';
+    item.style.padding = '10px 12px';
+    item.style.cursor = 'pointer';
+    item.style.border = '0';
+    item.style.borderBottom = '1px solid var(--border)';
+    item.style.background = 'transparent';
+    item.style.textAlign = 'left';
+
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.style.color = 'var(--text)';
+    title.textContent = `${emp.employee_code || 'EMP'} - ${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+
+    const meta = document.createElement('div');
+    meta.style.fontSize = '11px';
+    meta.style.color = 'var(--muted)';
+    meta.textContent = `${emp.department || 'N/A'} - ${emp.position || 'N/A'}`;
+
+    item.appendChild(title);
+    item.appendChild(meta);
+    item.addEventListener('click', () => selectSalaryPiecePartner(emp));
+    dropdown.appendChild(item);
+  });
+
+  dropdown.style.display = 'block';
+}
+
+function selectSalaryPiecePartner(emp) {
+  const search = document.getElementById('salary-piece-partner-search');
+  const dropdown = document.getElementById('salary-piece-partner-dropdown');
+  const hiddenInput = document.getElementById('salary-piece-partner');
+
+  if (hiddenInput) hiddenInput.value = emp.id || '';
+  if (search) search.value = `${emp.employee_code || 'EMP'} - ${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+  if (dropdown) dropdown.style.display = 'none';
+
+  calculateSalaryNow();
+}
+
 // Handle employee selection
 async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   console.log(`\n=== Employee Selection ===`);
@@ -414,6 +570,10 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   // Hide dropdown
   document.getElementById('salary-employee-dropdown').style.display = 'none';
   document.getElementById('salary-employee-search').value = `${code} - ${first} ${last}`;
+  const partnerSearch = document.getElementById('salary-piece-partner-search');
+  const partnerInput = document.getElementById('salary-piece-partner');
+  if (partnerSearch) partnerSearch.value = '';
+  if (partnerInput) partnerInput.value = '';
   
   // Show basic info
   document.getElementById('salary-dept').textContent = dept || '—';
@@ -454,13 +614,16 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       return;
     }
     
+    const normalizedWageType = normalizeSalaryWageType(config.wage_type);
+
     // Store in global
     currentSalaryEmployee = {
       id: parseInt(id),
       code, first, last, dept, pos,
-      wageType: config.wage_type,
+      wageType: normalizedWageType,
       wageTypeId: config.wage_type_id || config.employee?.wage_type_id,
-      rate: parseFloat(config.current_rate) || 0
+      rate: parseFloat(config.current_rate) || 0,
+      agencyName: config.employee?.agency_name || ''
     };
     
     console.log('✅ Current salary employee set:', currentSalaryEmployee);
@@ -470,11 +633,13 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     document.getElementById('salary-pos').textContent = pos || '-';
     const workerSource = document.getElementById('salary-worker-source');
     if (workerSource) workerSource.textContent = config.employee?.employment_type || config.employee?.hiring_type || '-';
+    populateSalaryAgencyOptions(config.employee?.agency_name || '');
     document.getElementById('salary-wage-type').textContent = config.wage_type || '—';
     document.getElementById('salary-rate').textContent = `₱${currentSalaryEmployee.rate.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
     
     // Update summary employee name
     document.getElementById('summary-employee').textContent = `${first} ${last}`;
+    updateSalaryAgencySummary();
     document.getElementById('summary-wage-type').textContent = config.wage_type;
     document.getElementById('summary-rate').textContent = `₱${currentSalaryEmployee.rate.toFixed(2)}`;
     
@@ -489,8 +654,8 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     }
     
     // Show appropriate wage structure form
-    console.log('🔄 Calling showWageStructureForm with:', config.wage_type);
-    showWageStructureForm(config.wage_type);
+    console.log('🔄 Calling showWageStructureForm with:', normalizedWageType);
+    showWageStructureForm(normalizedWageType);
     
     // Reset inputs
     document.getElementById('salary-pieces').value = '';
@@ -516,6 +681,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
 
 // Show appropriate wage structure form based on wage type
 function showWageStructureForm(wageType) {
+  wageType = normalizeSalaryWageType(wageType);
   console.log('🔄 showWageStructureForm called with:', wageType);
   
   const perPieceSection = document.getElementById('per-piece-section');
@@ -813,13 +979,14 @@ function calculateConfiguredDeductions(gross) {
 function attachSalaryInputListeners() {
   if (salaryInputListenersAttached) return;
 
-  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked'];
+  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked', 'salary-agency'];
   let attachedAny = false;
   ids.forEach(id => {
     const elem = document.getElementById(id);
     if (elem) {
       elem.addEventListener('input', calculateSalaryNow);
       elem.addEventListener('change', calculateSalaryNow);
+      if (id === 'salary-agency') elem.addEventListener('change', updateSalaryAgencySummary);
       attachedAny = true;
     }
   });
@@ -870,6 +1037,7 @@ function collectSalaryData() {
     employee_id: currentSalaryEmployee.id,
     employee_code: currentSalaryEmployee.code,
     employee_name: `${currentSalaryEmployee.first} ${currentSalaryEmployee.last}`,
+    agency_name: document.getElementById('salary-agency')?.value || '',
     wage_type: wageType,
     rate: currentSalaryEmployee.rate,
     housing: parseFloat(document.getElementById('salary-housing').value) || 0,
@@ -1120,6 +1288,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     net_pay: netPay,
     calculation_date: today.toISOString().split('T')[0],
     payroll_period: document.getElementById('salary-payroll-period')?.value || today.toISOString().slice(0, 7),
+    agency_name: document.getElementById('salary-agency')?.value || '',
     status
   };
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
@@ -1180,6 +1349,8 @@ function resetCalculationForm() {
   if (pieceSize) pieceSize.value = '';
   const piecePartner = document.getElementById('salary-piece-partner');
   if (piecePartner) piecePartner.value = '';
+  const piecePartnerSearch = document.getElementById('salary-piece-partner-search');
+  if (piecePartnerSearch) piecePartnerSearch.value = '';
   const piecePairing = document.getElementById('salary-piece-pairing');
   if (piecePairing) piecePairing.value = 'Standard Sewer-Fixer';
   ['salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive'].forEach(id => {
@@ -1199,8 +1370,12 @@ function resetCalculationForm() {
   document.getElementById('salary-transport').value = '0';
   document.getElementById('salary-bonus').value = '0';
   document.getElementById('salary-ot-hours').value = '0';
+  const agency = document.getElementById('salary-agency');
+  if (agency) agency.value = '';
   
   document.getElementById('summary-employee').textContent = '—';
+  const summaryAgency = document.getElementById('summary-agency');
+  if (summaryAgency) summaryAgency.textContent = '-';
   document.getElementById('summary-base').textContent = '₱0.00';
   document.getElementById('summary-allowances').textContent = '₱0.00';
   document.getElementById('summary-gross').textContent = '₱0.00';

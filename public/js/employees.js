@@ -4,6 +4,48 @@
 
 let EMPLOYEES = []; // Will be populated from API
 let EMPLOYEES_RAW = []; // Store raw API data for editing
+let wageTypesForPayroll = [];
+
+function normalizeWageTypeName(value) {
+  const name = String(value || '').trim();
+  if (/piece/i.test(name)) return 'Per-Piece';
+  if (/trip/i.test(name)) return 'Per-Trip';
+  if (/hour/i.test(name)) return 'Hourly';
+  if (/day|daily/i.test(name)) return 'Daily';
+  if (/base|salary/i.test(name)) return 'Base Salary';
+  return name;
+}
+
+function getPayrollWageTypeNameById(id) {
+  const selected = wageTypesForPayroll.find(item => String(item.id) === String(id));
+  return selected ? normalizeWageTypeName(selected.name) : '';
+}
+
+function getPayrollWageTypeIdByName(name) {
+  const normalized = normalizeWageTypeName(name);
+  const selected = wageTypesForPayroll.find(item => normalizeWageTypeName(item.name) === normalized);
+  return selected ? String(selected.id) : '';
+}
+
+function isPayrollWageType(idOrName, target) {
+  const name = getPayrollWageTypeNameById(idOrName) || normalizeWageTypeName(idOrName);
+  return normalizeWageTypeName(name) === target;
+}
+
+function populatePayrollWageTypeSelects() {
+  if (!wageTypesForPayroll.length) return;
+  ['edit-payroll-wage-type', 'emp-payroll-wage-select', 'payroll-config-wage-select'].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const selected = select.value;
+    select.innerHTML = '<option value="">- Select wage type -</option>' + wageTypesForPayroll
+      .map(type => `<option value="${type.id}">${employeeSetupEscape(normalizeWageTypeName(type.name))}</option>`)
+      .join('');
+    if (selected && wageTypesForPayroll.some(type => String(type.id) === String(selected))) {
+      select.value = selected;
+    }
+  });
+}
 
 function employeeSetupEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -870,6 +912,9 @@ async function editEmployee(empId) {
   currentEditingEmployeeId = employee.id;
   
   try {
+    if (!wageTypesForPayroll.length) await loadPayrollRefData();
+    populatePayrollWageTypeSelects();
+
     // Populate Personal Info Tab
     document.getElementById('edit-emp-first-name').value = employee.first_name || '';
     document.getElementById('edit-emp-last-name').value = employee.last_name || '';
@@ -890,19 +935,7 @@ async function editEmployee(empId) {
     document.getElementById('edit-emp-work-location').value = employee.work_location || '';
     
     // Populate Payroll & Compensation Tab
-    // Convert wage type name to numeric ID for form select
-    let wageTypeId = '';
-    if (employee.wage_type) {
-      const wageTypeMap = {
-        'Base Salary': '1',
-        'Hourly': '2',
-        'Per-Piece': '3',
-        'Per-Piece (Sewing)': '3',
-        'Per-Trip': '4',
-        'Per-Trip (Logistics)': '4'
-      };
-      wageTypeId = wageTypeMap[employee.wage_type] || '';
-    }
+    const wageTypeId = getPayrollWageTypeIdByName(employee.wage_type);
     document.getElementById('edit-payroll-wage-type').value = wageTypeId;
     document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
     
@@ -992,6 +1025,7 @@ async function saveEditedEmployee() {
   
   // Collect Payroll & Compensation Tab
   const wageType = document.getElementById('edit-payroll-wage-type').value;
+  const wageTypeName = getPayrollWageTypeNameById(wageType);
   const baseRate = document.getElementById('edit-payroll-rate').value;
 
   if (!firstName || !lastName || !email) {
@@ -1001,7 +1035,7 @@ async function saveEditedEmployee() {
 
   // Collect sewing type rates if wage type is per-piece
   let sewingRates = [];
-  if (wageType === '3') { // Per-Piece (Sewing)
+  if (isPayrollWageType(wageType, 'Per-Piece')) {
     const sewingInputs = document.querySelectorAll('.edit-payroll-sewing-rate');
     sewingInputs.forEach(input => {
       const rate = input.value;
@@ -1051,7 +1085,7 @@ async function saveEditedEmployee() {
         date_hired: dateHired,
         supervisor: supervisor,
         work_location: workLocation,
-        wage_type: wageType === '1' ? 'Base Salary' : wageType === '2' ? 'Hourly' : wageType === '3' ? 'Per-Piece' : 'Per-Trip',
+        wage_type: wageTypeName || null,
         base_rate: baseRate ? parseFloat(baseRate) : null,
         sewingRates: sewingRates,
         status: 'Active'
@@ -1078,7 +1112,7 @@ async function saveEditedEmployee() {
 async function updateEditPayrollWageType(wageTypeValue) {
   const sewingSection = document.getElementById('edit-payroll-sewing-section');
   
-  if (wageTypeValue === '3') {
+  if (isPayrollWageType(wageTypeValue, 'Per-Piece')) {
     // Per-Piece (Sewing) selected
     sewingSection.style.display = 'block';
     
@@ -1185,9 +1219,9 @@ window.deleteEmployeeSetupPosition = deleteEmployeeSetupPosition;
 document.addEventListener('change', (e) => {
   if (e.target.id === 'payroll-config-wage-select') {
     const wageTypeId = e.target.value;
-    document.getElementById('payroll-config-hourly-section').style.display = wageTypeId === '2' ? 'block' : 'none';
-    document.getElementById('payroll-config-sewing-section').style.display = wageTypeId === '3' ? 'block' : 'none';
-    document.getElementById('payroll-config-logistics-section').style.display = wageTypeId === '4' ? 'block' : 'none';
+    document.getElementById('payroll-config-hourly-section').style.display = isPayrollWageType(wageTypeId, 'Hourly') ? 'block' : 'none';
+    document.getElementById('payroll-config-sewing-section').style.display = isPayrollWageType(wageTypeId, 'Per-Piece') ? 'block' : 'none';
+    document.getElementById('payroll-config-logistics-section').style.display = isPayrollWageType(wageTypeId, 'Per-Trip') ? 'block' : 'none';
   }
 });
 
@@ -1234,7 +1268,7 @@ async function openEmployeeDetailModal(employeeId) {
   document.getElementById('emp-detail-tab-personal').style.display = 'block';
   
   // Load payroll compensation data if not already loaded
-  if (sewingTypesForPayroll.length === 0) {
+  if (!wageTypesForPayroll.length || sewingTypesForPayroll.length === 0 || logisticsRegionsForPayroll.length === 0) {
     await loadPayrollRefData();
   }
   
@@ -1277,11 +1311,16 @@ function switchTab(tabName) {
 // Load sewing types and logistics regions for payroll form
 async function loadPayrollRefData() {
   try {
-    const [sewRes, logRes] = await Promise.all([
+    const [wageRes, sewRes, logRes] = await Promise.all([
+      apiFetch('/api/payroll/wage-types'),
       apiFetch('/api/payroll/sewing-types'),
       apiFetch('/api/payroll/logistics-regions')
     ]);
     
+    if (wageRes.ok) {
+      wageTypesForPayroll = await wageRes.json();
+      populatePayrollWageTypeSelects();
+    }
     if (sewRes.ok) sewingTypesForPayroll = await sewRes.json();
     if (logRes.ok) logisticsRegionsForPayroll = await logRes.json();
     
@@ -1309,9 +1348,8 @@ async function loadEmpPayrollConfig(employeeId) {
     document.getElementById('emp-payroll-wage-type').textContent = config.wage_type || '—';
     document.getElementById('emp-payroll-rate').textContent = `₱${parseFloat(config.current_rate || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}`;
     
-    // Set wage type select
-    const wageMap = { 'Base Salary': '1', 'Hourly': '2', 'Per-Piece': '3', 'Per-Trip': '4' };
-    const wageValue = wageMap[config.wage_type] || '';
+    // Set wage type select from DB-backed wage type list
+    const wageValue = config.wage_type_id ? String(config.wage_type_id) : getPayrollWageTypeIdByName(config.wage_type);
     document.getElementById('emp-payroll-wage-select').value = wageValue;
     
     // Populate base rate
@@ -1348,14 +1386,14 @@ document.addEventListener('change', (e) => {
     document.getElementById('emp-payroll-logistics-section').style.display = 'none';
     
     // Show appropriate section based on wage type
-    if (wageTypeId === '2') {
+    if (isPayrollWageType(wageTypeId, 'Hourly')) {
       // Hourly
       document.getElementById('emp-payroll-hourly-section').style.display = 'block';
-    } else if (wageTypeId === '3') {
+    } else if (isPayrollWageType(wageTypeId, 'Per-Piece')) {
       // Per-Piece
       document.getElementById('emp-payroll-sewing-section').style.display = 'block';
       renderEmpPayrollSewingTypes();
-    } else if (wageTypeId === '4') {
+    } else if (isPayrollWageType(wageTypeId, 'Per-Trip')) {
       // Per-Trip
       document.getElementById('emp-payroll-logistics-section').style.display = 'block';
       renderEmpPayrollLogisticsRegions();
@@ -1426,8 +1464,8 @@ async function saveEmpPayrollConfig() {
   }
   
   console.log('✅ Wage Type ID Selected:', wageTypeId);
-  const wageTypeMap = { '1': 'Base Salary', '2': 'Hourly', '3': 'Per-Piece', '4': 'Per-Trip' };
-  console.log('   Wage Type Name:', wageTypeMap[wageTypeId]);
+  const wageTypeName = getPayrollWageTypeNameById(wageTypeId);
+  console.log('   Wage Type Name:', wageTypeName);
   
   const primaryRateElement = document.getElementById('emp-payroll-primary-rate');
   const primaryRateValue = primaryRateElement?.value || '';
@@ -1451,7 +1489,7 @@ async function saveEmpPayrollConfig() {
   const rates = [];
   
   // For Hourly wage type (2)
-  if (wageTypeId === '2') {
+  if (isPayrollWageType(wageTypeId, 'Hourly')) {
     console.log('→ Collecting HOURLY rates...');
     if (hourlyRate <= 0) {
       console.error('❌ VALIDATION FAILED: Hourly rate must be > 0, got:', hourlyRate);
@@ -1468,9 +1506,9 @@ async function saveEmpPayrollConfig() {
       logistics_region_id: null
     });
     console.log('   ✅ Hourly rate added to rates array');
-  } else if (wageTypeId === '3' || wageTypeId === '4') {
+  } else if (isPayrollWageType(wageTypeId, 'Per-Piece') || isPayrollWageType(wageTypeId, 'Per-Trip')) {
     // For Per-Piece or Per-Trip - collect from dynamic inputs
-    console.log('→ Collecting ' + (wageTypeId === '3' ? 'PER-PIECE' : 'PER-TRIP') + ' rates...');
+    console.log('→ Collecting ' + (isPayrollWageType(wageTypeId, 'Per-Piece') ? 'PER-PIECE' : 'PER-TRIP') + ' rates...');
     const inputs = document.querySelectorAll('.emp-payroll-rate-input');
     console.log('   Found', inputs.length, 'rate input(s)');
     
@@ -1498,7 +1536,7 @@ async function saveEmpPayrollConfig() {
     console.log('→ Collecting BASE SALARY rates...');
     if (primaryRate <= 0) {
       console.error('❌ VALIDATION FAILED: Base salary must be > 0, got:', primaryRate);
-      await showAlert('❌ For ' + wageTypeMap[wageTypeId] + ': Please enter a VALID rate (must be greater than 0)', 'Validation Error', 'warning');
+      await showAlert('❌ For ' + (wageTypeName || 'selected wage type') + ': Please enter a VALID rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
     console.log('   ✅ Base salary is valid:', primaryRate);
@@ -2673,6 +2711,11 @@ function populateProfileEditForm(employee) {
     setAddressSelection(document.getElementById('profile-edit-current-address'), employee.current_address || '', employee.current_address_lat, employee.current_address_lng);
     setAddressSelection(document.getElementById('profile-edit-mailing-address'), employee.mailing_address || '', employee.mailing_address_lat, employee.mailing_address_lng);
   }
+  if (window.setPhilippineAddressValues) {
+    setPhilippineAddressValues('profile-edit-address', employee);
+    setPhilippineAddressValues('profile-edit-current-address', employee);
+    setPhilippineAddressValues('profile-edit-mailing-address', employee);
+  }
 
   const currentSame = document.getElementById('profile-current-same-home');
   if (currentSame) currentSame.checked = Number(employee.current_address_same_as_home) === 1;
@@ -2900,7 +2943,9 @@ async function loadProfileDocuments(employee) {
     }
 
     list.innerHTML = docs.map(doc => `
-      <div class="profile-doc-card">
+      <div class="profile-doc-card clickable" role="button" tabindex="0"
+           onclick="openProfileDocument(${Number(doc.id)})"
+           onkeydown="if(event.key === 'Enter' || event.key === ' '){ event.preventDefault(); openProfileDocument(${Number(doc.id)}); }">
         <div class="profile-doc-main">
           <span class="profile-doc-icon">[]</span>
           <div>
@@ -2913,6 +2958,33 @@ async function loadProfileDocuments(employee) {
     `).join('');
   } catch {
     list.innerHTML = '<div class="profile-empty">No documents uploaded yet.</div>';
+  }
+}
+
+async function openProfileDocument(docId) {
+  if (!currentProfileEmployee?.employee_code || !docId) return;
+
+  try {
+    const response = await apiFetch(`/api/employees/${currentProfileEmployee.employee_code}/documents/${docId}/view`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Failed to open document');
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank', 'noopener');
+    if (!opened) {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener';
+      anchor.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    console.error('Document open error:', error);
+    await showAlert(error.message, 'Document Unavailable', 'error');
   }
 }
 
@@ -2975,6 +3047,7 @@ window.saveProfilePageChanges = saveProfilePageChanges;
 window.uploadProfilePhoto = uploadProfilePhoto;
 window.openEmployeeDocumentUpload = openEmployeeDocumentUpload;
 window.uploadProfileDocument = uploadProfileDocument;
+window.openProfileDocument = openProfileDocument;
 window.openFamilyModal = openFamilyModal;
 window.closeFamilyModal = closeFamilyModal;
 window.saveFamilyMember = saveFamilyMember;
@@ -3014,7 +3087,7 @@ window.updateEditPayrollWageType = updateEditPayrollWageType;
 /* Payroll Configuration Modal (Manage View) */
 let currentPayrollEmployeeId = null;
 
-function openPayrollConfigModal(employeeId) {
+async function openPayrollConfigModal(employeeId) {
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
   if (!employee) {
     alert('Employee not found');
@@ -3027,13 +3100,13 @@ function openPayrollConfigModal(employeeId) {
   document.getElementById('payroll-modal-emp-id').textContent = employee.employee_code || '—';
   document.getElementById('payroll-modal-emp-name').textContent = `${employee.first_name} ${employee.last_name}`;
   
-  // Load current payroll config
-  loadPayrollConfigForModal(employeeId);
-  
   // Load ref data if needed
-  if (sewingTypesForPayroll.length === 0) {
-    loadPayrollRefData();
+  if (!wageTypesForPayroll.length || sewingTypesForPayroll.length === 0 || logisticsRegionsForPayroll.length === 0) {
+    await loadPayrollRefData();
   }
+
+  // Load current payroll config
+  await loadPayrollConfigForModal(employeeId);
   
   // Show modal
   const modal = document.getElementById('payroll-config-modal');
@@ -3073,7 +3146,7 @@ async function loadPayrollConfigForModal(employeeId) {
       document.getElementById('payroll-config-wage-select').value = config.wage_type_id;
       document.getElementById('payroll-config-primary-rate').value = config.base_rate || '';
       
-      if (config.wage_type_id === 2) {
+      if (isPayrollWageType(config.wage_type_id, 'Hourly')) {
         // Hourly
         document.getElementById('payroll-config-hourly-section').style.display = 'block';
         document.getElementById('payroll-config-hourly-rate').value = config.hourly_rate || '';
@@ -3082,7 +3155,7 @@ async function loadPayrollConfigForModal(employeeId) {
         document.getElementById('payroll-config-hourly-section').style.display = 'none';
       }
       
-      if (config.wage_type_id === 3) {
+      if (isPayrollWageType(config.wage_type_id, 'Per-Piece')) {
         // Sewing
         document.getElementById('payroll-config-sewing-section').style.display = 'block';
         renderPayrollSewingRates(config.rates || []);
@@ -3090,7 +3163,7 @@ async function loadPayrollConfigForModal(employeeId) {
         document.getElementById('payroll-config-sewing-section').style.display = 'none';
       }
       
-      if (config.wage_type_id === 4) {
+      if (isPayrollWageType(config.wage_type_id, 'Per-Trip')) {
         // Logistics
         document.getElementById('payroll-config-logistics-section').style.display = 'block';
         renderPayrollLogisticsRates(config.rates || []);
@@ -3147,7 +3220,7 @@ async function savePayrollConfigFromManage() {
   
   const rates = [];
   
-  if (wageTypeId === '2') {
+  if (isPayrollWageType(wageTypeId, 'Hourly')) {
     // Hourly
     if (hourlyRate <= 0) {
       alert('Please enter a valid hourly rate');
@@ -3161,7 +3234,7 @@ async function savePayrollConfigFromManage() {
       sewing_type_id: null,
       logistics_region_id: null
     });
-  } else if (wageTypeId === '3' || wageTypeId === '4') {
+  } else if (isPayrollWageType(wageTypeId, 'Per-Piece') || isPayrollWageType(wageTypeId, 'Per-Trip')) {
     const inputs = document.querySelectorAll('.emp-payroll-rate-input');
     inputs.forEach((input) => {
       const rate = parseFloat(input.value) || 0;

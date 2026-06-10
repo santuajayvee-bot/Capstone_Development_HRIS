@@ -121,6 +121,123 @@ function haversineDistance(lat1, lng1, lat2, lng2) {
   return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+async function ensureStaticQrAttendanceSchema() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS attendance_locations (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      location_name VARCHAR(160) NOT NULL,
+      latitude DECIMAL(10,8) NOT NULL,
+      longitude DECIMAL(11,8) NOT NULL,
+      allowed_radius_meters INT NOT NULL DEFAULT 200,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS attendance (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NOT NULL,
+      attendance_date DATE NOT NULL,
+      time_in DATETIME NULL,
+      time_out DATETIME NULL,
+      time_in_latitude DECIMAL(10,8) NULL,
+      time_in_longitude DECIMAL(11,8) NULL,
+      time_out_latitude DECIMAL(10,8) NULL,
+      time_out_longitude DECIMAL(11,8) NULL,
+      time_in_distance_meters DECIMAL(10,2) NULL,
+      time_out_distance_meters DECIMAL(10,2) NULL,
+      location_id INT NULL,
+      source VARCHAR(40) NOT NULL DEFAULT 'STATIC_QR',
+      status ENUM('Timed In','Completed') NOT NULL DEFAULT 'Timed In',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_employee_attendance_date (employee_id, attendance_date),
+      INDEX idx_attendance_employee_date (employee_id, attendance_date),
+      CONSTRAINT fk_static_attendance_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+      CONSTRAINT fk_static_attendance_location FOREIGN KEY (location_id) REFERENCES attendance_locations(id) ON DELETE SET NULL
+    )
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS attendance_scan_logs (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NULL,
+      employee_id INT NULL,
+      location_id INT NULL,
+      scan_type ENUM('TIME_IN','TIME_OUT','AUTO','GPS_DENIED','DUPLICATE','OUTSIDE_RADIUS','UNAUTHENTICATED','ERROR') NOT NULL DEFAULT 'AUTO',
+      result ENUM('SUCCESS','REJECTED') NOT NULL,
+      reason VARCHAR(255) NULL,
+      latitude DECIMAL(10,8) NULL,
+      longitude DECIMAL(11,8) NULL,
+      distance_meters DECIMAL(10,2) NULL,
+      allowed_radius_meters INT NULL,
+      ip_address VARCHAR(45) NULL,
+      user_agent VARCHAR(500) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_att_scan_employee_created (employee_id, created_at),
+      INDEX idx_att_scan_result_created (result, created_at)
+    )
+  `);
+
+  const [locations] = await pool.execute('SELECT id FROM attendance_locations LIMIT 1');
+  if (!locations.length) {
+    let geofences = [];
+    try {
+      [geofences] = await pool.execute('SELECT site_name, latitude, longitude, radius_meters FROM geofence_config WHERE is_active = 1 LIMIT 1');
+    } catch (err) {
+      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+    }
+    const source = geofences[0] || {
+      site_name: 'LGSV Main Factory',
+      latitude: 14.5995,
+      longitude: 120.9842,
+      radius_meters: 200,
+    };
+    await pool.execute(
+      `INSERT INTO attendance_locations (location_name, latitude, longitude, allowed_radius_meters)
+       VALUES (?, ?, ?, ?)`,
+      [source.site_name, source.latitude, source.longitude, source.radius_meters]
+    );
+  }
+}
+
+async function logStaticQrScan(req, {
+  employeeId = null,
+  locationId = null,
+  scanType = 'AUTO',
+  result = 'REJECTED',
+  reason = null,
+  latitude = null,
+  longitude = null,
+  distanceMeters = null,
+  allowedRadiusMeters = null,
+} = {}) {
+  await ensureStaticQrAttendanceSchema();
+  await pool.execute(
+    `INSERT INTO attendance_scan_logs
+       (user_id, employee_id, location_id, scan_type, result, reason,
+        latitude, longitude, distance_meters, allowed_radius_meters,
+        ip_address, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      req.user?.id || null,
+      employeeId,
+      locationId,
+      scanType,
+      result,
+      cleanText(reason, 255) || null,
+      latitude,
+      longitude,
+      distanceMeters,
+      allowedRadiusMeters,
+      clientIp(req),
+      cleanText(req.headers['user-agent'], 500),
+    ]
+  );
+}
+
 async function authenticateBiometricWebhook(req, res, next) {
   try {
     const reference = cleanText(req.params.deviceReference, 120);
@@ -582,6 +699,206 @@ router.post('/clock-out', requireAuth, requireRole(ROLES.any), async (req, res) 
     res.json({ message: `Clock-out recorded at ${time}`, time_out: time });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.status ? err.message : 'Clock-out failed.' });
+  }
+});
+
+/* ============================================================
+   Static permanent QR attendance
+   ============================================================ */
+
+router.get('/static-qr', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
+  try {
+    await ensureStaticQrAttendanceSchema();
+    const [locations] = await pool.execute(
+      `SELECT id, location_name, latitude, longitude, allowed_radius_meters
+         FROM attendance_locations
+        WHERE is_active = 1
+        ORDER BY id
+        LIMIT 1`
+    );
+    if (!locations.length) return res.status(404).json({ error: 'No active attendance location configured.' });
+
+    const publicBaseUrl = String(process.env.APP_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
+    const scanUrl = `${publicBaseUrl || requestBaseUrl}/attendance/scan`;
+    const qr = await QRCode.toDataURL(scanUrl, { width: 420, margin: 2 });
+    res.json({ qr, scan_url: scanUrl, location: locations[0] });
+  } catch (err) {
+    console.error('[attendance/static-qr]', err.message);
+    res.status(500).json({ error: 'Failed to generate static attendance QR code.' });
+  }
+});
+
+router.get('/static-qr/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    await ensureStaticQrAttendanceSchema();
+    if (!req.user.employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+
+    const [rows] = await pool.execute(
+      `SELECT id, attendance_date, time_in, time_out, status
+         FROM attendance
+        WHERE employee_id = ? AND attendance_date = CURDATE()
+        LIMIT 1`,
+      [req.user.employeeId]
+    );
+
+    if (!rows.length) return res.json({ has_record: false, next_action: 'time_in' });
+    if (!rows[0].time_out) return res.json({ has_record: true, next_action: 'time_out', record: rows[0] });
+    return res.json({ has_record: true, next_action: 'completed', record: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get static QR attendance status.' });
+  }
+});
+
+router.post('/static-qr/gps-denied', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    await logStaticQrScan(req, {
+      employeeId: req.user.employeeId || null,
+      scanType: 'GPS_DENIED',
+      result: 'REJECTED',
+      reason: cleanText(req.body?.reason || 'GPS permission denied by browser.', 255),
+    });
+    res.status(400).json({ error: 'GPS permission is required to record attendance.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to log GPS denial.' });
+  }
+});
+
+router.post('/static-qr/scan', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await ensureStaticQrAttendanceSchema();
+
+    const employeeId = req.user.employeeId;
+    if (!employeeId) {
+      await logStaticQrScan(req, { scanType: 'UNAUTHENTICATED', result: 'REJECTED', reason: 'User account is not linked to an employee record.' });
+      return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    }
+
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      await logStaticQrScan(req, { employeeId, scanType: 'ERROR', result: 'REJECTED', reason: 'Latitude and longitude are required.' });
+      return res.status(400).json({ error: 'Latitude and longitude are required.' });
+    }
+
+    const [employees] = await pool.execute(
+      'SELECT id, status FROM employees WHERE id = ? LIMIT 1',
+      [employeeId]
+    );
+    if (!employees.length || String(employees[0].status || '').toLowerCase() !== 'active') {
+      await logStaticQrScan(req, { employeeId, scanType: 'ERROR', result: 'REJECTED', reason: 'Employee is not active.', latitude, longitude });
+      return res.status(403).json({ error: 'Only active employees can record attendance.' });
+    }
+
+    const [locations] = await pool.execute(
+      `SELECT id, location_name, latitude, longitude, allowed_radius_meters
+         FROM attendance_locations
+        WHERE is_active = 1
+        ORDER BY id
+        LIMIT 1`
+    );
+    if (!locations.length) return res.status(404).json({ error: 'No active attendance location configured.' });
+
+    const location = locations[0];
+    const distance = haversineDistance(latitude, longitude, Number(location.latitude), Number(location.longitude));
+    if (process.env.DISABLE_GEOFENCE !== 'true' && distance > Number(location.allowed_radius_meters)) {
+      await logStaticQrScan(req, {
+        employeeId,
+        locationId: location.id,
+        scanType: 'OUTSIDE_RADIUS',
+        result: 'REJECTED',
+        reason: `Outside allowed radius. Distance: ${Math.round(distance)}m.`,
+        latitude,
+        longitude,
+        distanceMeters: distance,
+        allowedRadiusMeters: location.allowed_radius_meters,
+      });
+      return res.status(403).json({
+        error: `You are outside the allowed attendance radius (${Math.round(distance)}m away).`,
+        distance_meters: Math.round(distance),
+        allowed_radius_meters: location.allowed_radius_meters,
+      });
+    }
+
+    await conn.beginTransaction();
+    const [existing] = await conn.execute(
+      `SELECT * FROM attendance
+        WHERE employee_id = ? AND attendance_date = CURDATE()
+        FOR UPDATE`,
+      [employeeId]
+    );
+
+    if (!existing.length) {
+      const [result] = await conn.execute(
+        `INSERT INTO attendance
+           (employee_id, attendance_date, time_in, time_in_latitude, time_in_longitude,
+            time_in_distance_meters, location_id, source, status)
+         VALUES (?, CURDATE(), NOW(), ?, ?, ?, ?, 'STATIC_QR', 'Timed In')`,
+        [employeeId, latitude, longitude, distance, location.id]
+      );
+      await conn.commit();
+      await logStaticQrScan(req, {
+        employeeId,
+        locationId: location.id,
+        scanType: 'TIME_IN',
+        result: 'SUCCESS',
+        reason: 'Time-in recorded.',
+        latitude,
+        longitude,
+        distanceMeters: distance,
+        allowedRadiusMeters: location.allowed_radius_meters,
+      });
+      return res.json({ message: 'Time-in recorded successfully.', action: 'time_in', attendance_id: result.insertId });
+    }
+
+    const record = existing[0];
+    if (record.time_in && !record.time_out) {
+      await conn.execute(
+        `UPDATE attendance
+            SET time_out = NOW(),
+                time_out_latitude = ?,
+                time_out_longitude = ?,
+                time_out_distance_meters = ?,
+                location_id = ?,
+                status = 'Completed'
+          WHERE id = ?`,
+        [latitude, longitude, distance, location.id, record.id]
+      );
+      await conn.commit();
+      await logStaticQrScan(req, {
+        employeeId,
+        locationId: location.id,
+        scanType: 'TIME_OUT',
+        result: 'SUCCESS',
+        reason: 'Time-out recorded.',
+        latitude,
+        longitude,
+        distanceMeters: distance,
+        allowedRadiusMeters: location.allowed_radius_meters,
+      });
+      return res.json({ message: 'Time-out recorded successfully.', action: 'time_out', attendance_id: record.id });
+    }
+
+    await conn.rollback();
+    await logStaticQrScan(req, {
+      employeeId,
+      locationId: location.id,
+      scanType: 'DUPLICATE',
+      result: 'REJECTED',
+      reason: 'Duplicate scan. Employee already has time-in and time-out today.',
+      latitude,
+      longitude,
+      distanceMeters: distance,
+      allowedRadiusMeters: location.allowed_radius_meters,
+    });
+    return res.status(409).json({ error: 'Attendance already has time-in and time-out for today.' });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    console.error('[attendance/static-qr/scan]', err.message);
+    res.status(500).json({ error: 'Static QR attendance scan failed.' });
+  } finally {
+    conn.release();
   }
 });
 

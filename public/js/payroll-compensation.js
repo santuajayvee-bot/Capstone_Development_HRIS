@@ -3,7 +3,46 @@
 let compEmployeesList = [];
 let compSewingTypes = [];
 let compLogisticsRegions = [];
+let compWageTypes = [];
 let selectedCompEmployee = null;
+
+function normalizeCompWageType(value) {
+  const name = String(value || '').trim();
+  if (/piece/i.test(name)) return 'Per-Piece';
+  if (/trip/i.test(name)) return 'Per-Trip';
+  if (/hour/i.test(name)) return 'Hourly';
+  if (/day|daily/i.test(name)) return 'Daily';
+  if (/base|salary/i.test(name)) return 'Base Salary';
+  return name;
+}
+
+function getCompWageTypeNameById(id) {
+  const type = compWageTypes.find(item => String(item.id) === String(id));
+  return type ? normalizeCompWageType(type.name) : '';
+}
+
+function getCompWageTypeIdByName(name) {
+  const normalized = normalizeCompWageType(name);
+  const type = compWageTypes.find(item => normalizeCompWageType(item.name) === normalized);
+  return type ? String(type.id) : '';
+}
+
+function isCompWageType(idOrName, target) {
+  const name = getCompWageTypeNameById(idOrName) || normalizeCompWageType(idOrName);
+  return name === target;
+}
+
+function renderCompWageTypeOptions() {
+  const select = document.getElementById('comp-wage-type');
+  if (!select || !compWageTypes.length) return;
+  const selected = select.value;
+  select.innerHTML = '<option value="">- Select wage type -</option>' + compWageTypes
+    .map(type => `<option value="${type.id}">${normalizeCompWageType(type.name)}</option>`)
+    .join('');
+  if (selected && compWageTypes.some(type => String(type.id) === String(selected))) {
+    select.value = selected;
+  }
+}
 
 // Initialize
 window.addEventListener('DOMContentLoaded', () => {
@@ -32,6 +71,11 @@ async function loadCompEmployees() {
 // Load wage type options and related data
 async function loadCompWageTypes() {
   try {
+    const wageRes = await apiFetch('/api/payroll/wage-types');
+    compWageTypes = await wageRes.json();
+    renderCompWageTypeOptions();
+    console.log(`âœ… Loaded ${compWageTypes.length} wage types`);
+
     const sewRes = await apiFetch('/api/payroll/sewing-types');
     compSewingTypes = await sewRes.json();
     console.log(`✅ Loaded ${compSewingTypes.length} sewing types`);
@@ -81,14 +125,7 @@ async function handleCompEmployeeSelect(e) {
     document.getElementById('comp-current-wage').textContent = config.wage_type || '—';
     document.getElementById('comp-current-rate').textContent = `₱${parseFloat(config.current_rate || 0).toLocaleString('en-PH', {minimumFractionDigits: 2})}`;
     
-    // Map wage types to dropdown values
-    const wageMap = {
-      'Base Salary': '1',
-      'Hourly': '2',
-      'Per-Piece': '3',
-      'Per-Trip': '4'
-    };
-    const wageTypeValue = wageMap[config.wage_type] || '';
+    const wageTypeValue = config.wage_type_id ? String(config.wage_type_id) : getCompWageTypeIdByName(config.wage_type);
     document.getElementById('comp-wage-type').value = wageTypeValue;
     
     // Load current rates into forms if they exist
@@ -141,20 +178,20 @@ function handleWageTypeChange(e) {
   document.getElementById('comp-logistics-section').style.display = 'none';
   
   // Show appropriate section based on wage type
-  if (wageTypeId === '1') {
+  if (isCompWageType(wageTypeId, 'Base Salary') || isCompWageType(wageTypeId, 'Daily')) {
     // Base Salary
     console.log('🔧 Showing Base Salary form');
     document.getElementById('comp-base-section').style.display = 'block';
-  } else if (wageTypeId === '2') {
+  } else if (isCompWageType(wageTypeId, 'Hourly')) {
     // Hourly
     console.log('🔧 Showing Hourly form');
     document.getElementById('comp-hourly-section').style.display = 'block';
-  } else if (wageTypeId === '3') {
+  } else if (isCompWageType(wageTypeId, 'Per-Piece')) {
     // Per-Piece (Sewing)
     console.log('🔧 Showing Per-Piece (Sewing) form');
     document.getElementById('comp-sewing-section').style.display = 'block';
     renderSewingTypeRates();
-  } else if (wageTypeId === '4') {
+  } else if (isCompWageType(wageTypeId, 'Per-Trip')) {
     // Per-Trip (Logistics)
     console.log('🔧 Showing Per-Trip (Logistics) form');
     document.getElementById('comp-logistics-section').style.display = 'block';
@@ -234,7 +271,7 @@ async function saveCompensation() {
   
   try {
     // Collect rates based on wage type
-    if (wageTypeId === '1') {
+    if (isCompWageType(wageTypeId, 'Base Salary') || isCompWageType(wageTypeId, 'Daily')) {
       // Base Salary
       const baseSalary = parseFloat(document.getElementById('comp-base-salary').value) || 0;
       if (baseSalary <= 0) {
@@ -251,7 +288,7 @@ async function saveCompensation() {
       });
       console.log('Rate: Base Salary ₱' + baseSalary.toLocaleString('en-PH', {minimumFractionDigits: 2}));
       
-    } else if (wageTypeId === '2') {
+    } else if (isCompWageType(wageTypeId, 'Hourly')) {
       // Hourly
       const hourlyRate = parseFloat(document.getElementById('comp-hourly-rate').value) || 0;
       const overtimeRate = parseFloat(document.getElementById('comp-overtime-rate').value) || 0;
@@ -271,7 +308,7 @@ async function saveCompensation() {
       });
       console.log('Rate: Hourly ₱' + hourlyRate.toLocaleString('en-PH', {minimumFractionDigits: 2}) + ' | OT: ₱' + (overtimeRate || 0).toLocaleString('en-PH', {minimumFractionDigits: 2}));
       
-    } else if (wageTypeId === '3') {
+    } else if (isCompWageType(wageTypeId, 'Per-Piece')) {
       // Per-Piece (Sewing)
       document.querySelectorAll('.comp-rate-input[data-sewing-id]').forEach(input => {
         const rate = parseFloat(input.value) || 0;
@@ -294,7 +331,7 @@ async function saveCompensation() {
       }
       console.log('Rates: ' + rates.length + ' sewing type(s) configured');
       
-    } else if (wageTypeId === '4') {
+    } else if (isCompWageType(wageTypeId, 'Per-Trip')) {
       // Per-Trip (Logistics)
       document.querySelectorAll('.comp-rate-input[data-region-id]').forEach(input => {
         const rate = parseFloat(input.value) || 0;

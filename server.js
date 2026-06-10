@@ -5,6 +5,7 @@
 require('dotenv').config();
 const express    = require('express');
 const https      = require('https');
+const os         = require('os');
 const path       = require('path');
 const multer     = require('multer');
 const fs         = require('fs');
@@ -22,6 +23,11 @@ const dashboardRoutes                        = require('./server/dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
+const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
+const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
+let philippineAddressCache = null;
+let philippineAddressError = null;
 
 app.set('trust proxy', 1);
 
@@ -30,6 +36,45 @@ const uploadsDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
+
+function normalizeLookupKey(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function loadPhilippineAddressDataset() {
+  try {
+    const raw = fs.readFileSync(ADDRESS_DATASET_PATH, 'utf8');
+    const data = JSON.parse(raw);
+    const regions = Object.entries(data).map(([code, region]) => ({
+      code,
+      name: region.region_name,
+      provinceList: region.province_list || {}
+    })).filter(region => region.name);
+
+    philippineAddressCache = {
+      regions: regions.sort((a, b) => a.name.localeCompare(b.name)),
+      regionByName: new Map(regions.map(region => [normalizeLookupKey(region.name), region])),
+      provinceByName: new Map()
+    };
+
+    regions.forEach(region => {
+      Object.entries(region.provinceList).forEach(([provinceName, province]) => {
+        philippineAddressCache.provinceByName.set(normalizeLookupKey(provinceName), {
+          name: provinceName,
+          region: region.name,
+          municipalityList: province.municipality_list || {}
+        });
+      });
+    });
+    console.log(`Loaded Philippine address dataset: ${regions.length} regions`);
+  } catch (error) {
+    philippineAddressCache = null;
+    philippineAddressError = error;
+    console.error(`${ADDRESS_DATASET_UNAVAILABLE} ${error.message}`);
+  }
+}
+
+loadPhilippineAddressDataset();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -73,6 +118,25 @@ function uploadSingle(fieldName) {
   };
 }
 
+function normalizeWageTypeInput(value) {
+  const name = String(value || '').trim();
+  if (/piece/i.test(name)) return 'Per-Piece';
+  if (/trip/i.test(name)) return 'Per-Trip';
+  if (/hour/i.test(name)) return 'Hourly';
+  if (/day|daily/i.test(name)) return 'Daily';
+  if (/base|salary/i.test(name)) return 'Base Salary';
+  return name;
+}
+
+async function resolveWageTypeId(pool, wageType) {
+  const normalized = normalizeWageTypeInput(wageType);
+  const [rows] = await pool.execute(
+    'SELECT id FROM wage_types WHERE LOWER(name) = LOWER(?) LIMIT 1',
+    [normalized]
+  );
+  return rows[0]?.id || null;
+}
+
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buffer) => {
@@ -91,17 +155,139 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/attendance/scan', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'attendance', 'scan.html'));
+});
+
+app.get('/health', (_req, res) => {
+  res.type('text/plain').send('Server is running');
+});
+
 // ── PUBLIC ───────────────────────────────────────────────────
 app.post('/api/auth/login', login);
 
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);
 
+function requirePhilippineAddressCache(res) {
+  if (philippineAddressCache) return true;
+  console.error('Philippine address dataset load error:', philippineAddressError?.message || 'unknown');
+  res.status(503).json({ error: ADDRESS_DATASET_UNAVAILABLE });
+  return false;
+}
+
+function addressOption(value) {
+  return { value, label: value };
+}
+
+function localPhilippineAddressSuggestions(query, limit = 8) {
+  if (!philippineAddressCache) return [];
+  const needle = normalizeLookupKey(query);
+  const suggestions = [];
+
+  const pushSuggestion = (fullAddress, details) => {
+    if (!fullAddress || suggestions.some(item => normalizeLookupKey(item.full_address) === normalizeLookupKey(fullAddress))) return;
+    suggestions.push({
+      full_address: fullAddress,
+      latitude: null,
+      longitude: null,
+      place_id: '',
+      provider: 'philippine_dataset',
+      ...details
+    });
+  };
+
+  for (const region of philippineAddressCache.regions) {
+    if (normalizeLookupKey(region.name).includes(needle)) {
+      pushSuggestion(`${region.name}, Philippines`, {
+        region: region.name,
+        street_address: query
+      });
+    }
+
+    for (const [provinceName, province] of Object.entries(region.provinceList)) {
+      if (normalizeLookupKey(provinceName).includes(needle)) {
+        pushSuggestion(`${provinceName}, ${region.name}, Philippines`, {
+          region: region.name,
+          province: provinceName,
+          street_address: query
+        });
+      }
+
+      for (const [cityName, city] of Object.entries(province.municipality_list || {})) {
+        if (normalizeLookupKey(cityName).includes(needle)) {
+          pushSuggestion(`${cityName}, ${provinceName}, ${region.name}, Philippines`, {
+            region: region.name,
+            province: provinceName,
+            city_municipality: cityName,
+            street_address: query
+          });
+        }
+
+        for (const barangayName of city.barangay_list || []) {
+          if (normalizeLookupKey(barangayName).includes(needle)) {
+            pushSuggestion(`${barangayName}, ${cityName}, ${provinceName}, ${region.name}, Philippines`, {
+              region: region.name,
+              province: provinceName,
+              city_municipality: cityName,
+              barangay: barangayName,
+              street_address: query
+            });
+          }
+          if (suggestions.length >= limit) return suggestions;
+        }
+        if (suggestions.length >= limit) return suggestions;
+      }
+      if (suggestions.length >= limit) return suggestions;
+    }
+  }
+
+  return suggestions;
+}
+
+app.get('/api/address/regions', requireAuth, requireRole(ROLES.any), (_req, res) => {
+  if (!requirePhilippineAddressCache(res)) return;
+  res.json(philippineAddressCache.regions.map(region => ({
+    value: region.name,
+    label: region.name,
+    code: region.code
+  })));
+});
+
+app.get('/api/address/provinces/:region', requireAuth, requireRole(ROLES.any), (req, res) => {
+  if (!requirePhilippineAddressCache(res)) return;
+  const region = philippineAddressCache.regionByName.get(normalizeLookupKey(req.params.region));
+  if (!region) return res.json([]);
+  res.json(Object.keys(region.provinceList).sort((a, b) => a.localeCompare(b)).map(addressOption));
+});
+
+app.get('/api/address/cities/:province', requireAuth, requireRole(ROLES.any), (req, res) => {
+  if (!requirePhilippineAddressCache(res)) return;
+  const province = philippineAddressCache.provinceByName.get(normalizeLookupKey(req.params.province));
+  if (!province) return res.json([]);
+  res.json(Object.keys(province.municipalityList).sort((a, b) => a.localeCompare(b)).map(addressOption));
+});
+
+app.get('/api/address/barangays/:city', requireAuth, requireRole(ROLES.any), (req, res) => {
+  if (!requirePhilippineAddressCache(res)) return;
+  const cityKey = normalizeLookupKey(req.params.city);
+  for (const province of philippineAddressCache.provinceByName.values()) {
+    const cityEntry = Object.entries(province.municipalityList)
+      .find(([cityName]) => normalizeLookupKey(cityName) === cityKey);
+    if (cityEntry) {
+      const barangays = cityEntry[1]?.barangay_list || [];
+      return res.json([...barangays].sort((a, b) => a.localeCompare(b)).map(addressOption));
+    }
+  }
+  res.json([]);
+});
+
 app.get('/api/address/search', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const query = String(req.query.q || '').trim();
     if (query.length < 3) return res.json([]);
 
+    const localSuggestions = localPhilippineAddressSuggestions(query);
     const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY;
     if (apiKey) {
       const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
@@ -124,34 +310,10 @@ app.get('/api/address/search', requireAuth, requireRole(ROLES.any), async (req, 
         provider: 'google_places'
       })).filter(item => item.full_address && item.place_id);
 
-      return res.json(suggestions);
+      return res.json([...suggestions, ...localSuggestions].slice(0, 8));
     }
 
-    const fallbackUrl = new URL('https://nominatim.openstreetmap.org/search');
-    fallbackUrl.searchParams.set('format', 'jsonv2');
-    fallbackUrl.searchParams.set('q', query);
-    fallbackUrl.searchParams.set('countrycodes', 'ph');
-    fallbackUrl.searchParams.set('limit', '6');
-
-    try {
-      const fallbackResponse = await fetch(fallbackUrl, {
-        headers: { 'User-Agent': 'Marulas-HRIS/1.0 address autocomplete' }
-      });
-      const fallbackData = await fallbackResponse.json();
-      const suggestions = (fallbackData || []).map(item => ({
-        full_address: item.display_name,
-        latitude: Number(item.lat),
-        longitude: Number(item.lon),
-        place_id: String(item.place_id || ''),
-        provider: 'nominatim'
-      })).filter(item => item.full_address && Number.isFinite(item.latitude) && Number.isFinite(item.longitude));
-
-      if (suggestions.length) return res.json(suggestions);
-    } catch (fallbackError) {
-      console.warn('Nominatim address fallback failed:', fallbackError.message);
-    }
-
-    res.json(localPhilippineAddressSuggestions(query));
+    res.json(localSuggestions);
   } catch (err) {
     console.error('Address search error:', err.message);
     res.status(500).json({ error: 'Failed to search address.' });
@@ -170,7 +332,7 @@ app.get('/api/address/details', requireAuth, requireRole(ROLES.any), async (req,
 
     const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
     url.searchParams.set('place_id', placeId);
-    url.searchParams.set('fields', 'formatted_address,geometry,place_id');
+    url.searchParams.set('fields', 'formatted_address,geometry,place_id,address_components');
     url.searchParams.set('key', apiKey);
 
     const response = await fetch(url);
@@ -180,11 +342,21 @@ app.get('/api/address/details', requireAuth, requireRole(ROLES.any), async (req,
     }
 
     const result = data.result || {};
+    const components = result.address_components || [];
+    const component = (...types) => {
+      const match = components.find(item => types.some(type => item.types?.includes(type)));
+      return match?.long_name || '';
+    };
     res.json({
       full_address: result.formatted_address,
       latitude: result.geometry?.location?.lat,
       longitude: result.geometry?.location?.lng,
       place_id: result.place_id || placeId,
+      street_address: [component('street_number'), component('route')].filter(Boolean).join(' ') || result.formatted_address,
+      barangay: component('sublocality_level_1', 'sublocality_level_2', 'neighborhood'),
+      city_municipality: component('locality', 'administrative_area_level_3', 'postal_town'),
+      province: component('administrative_area_level_2'),
+      region: component('administrative_area_level_1'),
       provider: 'google_places'
     });
   } catch (err) {
@@ -313,25 +485,83 @@ app.use('/api/employee', employeeDashboardRoutes);
 function normalizeAddressPayload(body) {
   const sameCurrent = boolValue(body.current_address_same_as_home);
   const sameMailing = boolValue(body.mailing_address_same_as_home);
+  const structured = section => ({
+    region: String(body[`${section}_region`] || '').trim(),
+    province: String(body[`${section}_province`] || '').trim(),
+    city_municipality: String(body[`${section}_city_municipality`] || '').trim(),
+    barangay: String(body[`${section}_barangay`] || '').trim(),
+    street_address: String(body[`${section}_street_address`] || '').trim(),
+    full_address: String(body[`${section}_full_address`] || '').trim(),
+    place_id: String(body[`${section}_place_id`] || '').trim()
+  });
   const home = {
     address: String(body.residential_address || '').trim(),
     lat: body.residential_address_lat,
-    lng: body.residential_address_lng
+    lng: body.residential_address_lng,
+    ...structured('residential_address')
   };
   const current = sameCurrent
     ? { ...home }
-    : { address: String(body.current_address || '').trim(), lat: body.current_address_lat, lng: body.current_address_lng };
+    : { address: String(body.current_address || '').trim(), lat: body.current_address_lat, lng: body.current_address_lng, ...structured('current_address') };
   const mailing = sameMailing
     ? { ...home }
-    : { address: String(body.mailing_address || '').trim(), lat: body.mailing_address_lat, lng: body.mailing_address_lng };
+    : { address: String(body.mailing_address || '').trim(), lat: body.mailing_address_lat, lng: body.mailing_address_lng, ...structured('mailing_address') };
 
   return { home, current, mailing, sameCurrent, sameMailing };
+}
+
+function hasStructuredAddressParts(address) {
+  return Boolean(address.region && address.province && address.city_municipality && address.barangay && address.street_address);
 }
 
 function hasCoordinates(address) {
   return address.lat !== undefined && address.lat !== null && address.lat !== ''
     && address.lng !== undefined && address.lng !== null && address.lng !== ''
     && Number.isFinite(Number(address.lat)) && Number.isFinite(Number(address.lng));
+}
+
+function hasSelectedAddress(address) {
+  return hasCoordinates(address) || hasStructuredAddressParts(address) || Boolean(address.place_id);
+}
+
+async function ensurePhilippineAddressColumns(pool) {
+  const columns = [
+    ['residential_address_region', 'VARCHAR(120) NULL'],
+    ['residential_address_province', 'VARCHAR(120) NULL'],
+    ['residential_address_city_municipality', 'VARCHAR(160) NULL'],
+    ['residential_address_barangay', 'VARCHAR(160) NULL'],
+    ['residential_address_street_address', 'VARCHAR(255) NULL'],
+    ['residential_address_full_address', 'TEXT NULL'],
+    ['residential_address_place_id', 'VARCHAR(255) NULL'],
+    ['current_address_region', 'VARCHAR(120) NULL'],
+    ['current_address_province', 'VARCHAR(120) NULL'],
+    ['current_address_city_municipality', 'VARCHAR(160) NULL'],
+    ['current_address_barangay', 'VARCHAR(160) NULL'],
+    ['current_address_street_address', 'VARCHAR(255) NULL'],
+    ['current_address_full_address', 'TEXT NULL'],
+    ['current_address_place_id', 'VARCHAR(255) NULL'],
+    ['mailing_address_region', 'VARCHAR(120) NULL'],
+    ['mailing_address_province', 'VARCHAR(120) NULL'],
+    ['mailing_address_city_municipality', 'VARCHAR(160) NULL'],
+    ['mailing_address_barangay', 'VARCHAR(160) NULL'],
+    ['mailing_address_street_address', 'VARCHAR(255) NULL'],
+    ['mailing_address_full_address', 'TEXT NULL'],
+    ['mailing_address_place_id', 'VARCHAR(255) NULL']
+  ];
+
+  for (const [column, definition] of columns) {
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) AS count
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'employees'
+          AND COLUMN_NAME = ?`,
+      [column]
+    );
+    if (!Number(rows[0]?.count || 0)) {
+      await pool.execute(`ALTER TABLE employees ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 
 function validateEmployeeAddresses(body) {
@@ -341,9 +571,9 @@ function validateEmployeeAddresses(body) {
   if (!addresses.home.address) errors.push('Home Address is required.');
   if (!addresses.sameCurrent && !addresses.current.address) errors.push('Current Address is required unless Same as Home Address is checked.');
   if (!addresses.sameMailing && !addresses.mailing.address) errors.push('Mailing Address is required unless Same as Home Address is checked.');
-  if (addresses.home.address && !hasCoordinates(addresses.home)) errors.push('Home Address must be selected from address suggestions.');
-  if (addresses.current.address && !hasCoordinates(addresses.current)) errors.push('Current Address must be selected from address suggestions.');
-  if (addresses.mailing.address && !hasCoordinates(addresses.mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+  if (addresses.home.address && !hasSelectedAddress(addresses.home)) errors.push('Home Address must be selected from address suggestions.');
+  if (addresses.current.address && !hasSelectedAddress(addresses.current)) errors.push('Current Address must be selected from address suggestions.');
+  if (addresses.mailing.address && !hasSelectedAddress(addresses.mailing)) errors.push('Mailing Address must be selected from address suggestions.');
 
   return { errors, addresses };
 }
@@ -513,53 +743,6 @@ async function writeEmployeeLifecycleAudit(executor, req, action, targetEmployee
       String(req.headers['user-agent'] || 'unknown').slice(0, 500),
     ]
   );
-}
-
-function localPhilippineAddressSuggestions(query) {
-  const value = String(query || '').trim();
-  const needle = value.toLowerCase();
-  const places = [
-    ['Marulas, Valenzuela City, Metro Manila, Philippines', 14.6842, 120.9744, ['marulas', 'valenzuela']],
-    ['Valenzuela City, Metro Manila, Philippines', 14.7011, 120.9830, ['valenzuela']],
-    ['Meycauayan City, Bulacan, Philippines', 14.7369, 120.9603, ['meycauayan', 'bulacan']],
-    ['Caloocan City, Metro Manila, Philippines', 14.6507, 120.9676, ['caloocan']],
-    ['Malabon City, Metro Manila, Philippines', 14.6680, 120.9563, ['malabon']],
-    ['Navotas City, Metro Manila, Philippines', 14.6667, 120.9417, ['navotas']],
-    ['Quezon City, Metro Manila, Philippines', 14.6760, 121.0437, ['quezon city', 'qc']],
-    ['Manila, Metro Manila, Philippines', 14.5995, 120.9842, ['manila']],
-    ['Pasig City, Metro Manila, Philippines', 14.5764, 121.0851, ['pasig']],
-    ['Makati City, Metro Manila, Philippines', 14.5547, 121.0244, ['makati']],
-    ['Taguig City, Metro Manila, Philippines', 14.5176, 121.0509, ['taguig']],
-    ['Pasay City, Metro Manila, Philippines', 14.5378, 121.0014, ['pasay']],
-    ['Paranaque City, Metro Manila, Philippines', 14.4793, 121.0198, ['paranaque', 'parañaque']],
-    ['Las Pinas City, Metro Manila, Philippines', 14.4445, 120.9939, ['las pinas', 'las piñas']],
-    ['Muntinlupa City, Metro Manila, Philippines', 14.4081, 121.0415, ['muntinlupa']],
-    ['San Jose del Monte, Bulacan, Philippines', 14.8139, 121.0453, ['san jose del monte', 'sjdm']],
-    ['Malolos City, Bulacan, Philippines', 14.8527, 120.8160, ['malolos']],
-    ['Santa Maria, Bulacan, Philippines', 14.8188, 120.9563, ['santa maria', 'sta maria']],
-    ['Philippines', 12.8797, 121.7740, ['philippines']]
-  ];
-
-  const matches = places
-    .filter(([label, , , terms]) => label.toLowerCase().includes(needle) || terms.some(term => needle.includes(term) || term.includes(needle)))
-    .slice(0, 6)
-    .map(([label, latitude, longitude], index) => ({
-      full_address: value.toLowerCase().includes('philippines') ? `${value}` : `${value}, ${label}`,
-      latitude,
-      longitude,
-      place_id: `local-${index}`,
-      provider: 'local'
-    }));
-
-  if (matches.length) return matches;
-
-  return [{
-    full_address: value.toLowerCase().includes('philippines') ? value : `${value}, Philippines`,
-    latitude: 12.8797,
-    longitude: 121.7740,
-    place_id: 'local-ph',
-    provider: 'local'
-  }];
 }
 
 // Employees
@@ -956,12 +1139,19 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
   try {
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
+    await ensurePhilippineAddressColumns(pool);
     const [rows] = await pool.execute(
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
               e.work_email, e.mailing_address, e.mailing_address_lat, e.mailing_address_lng, e.mailing_address_same_as_home,
+              e.mailing_address_region, e.mailing_address_province, e.mailing_address_city_municipality, e.mailing_address_barangay,
+              e.mailing_address_street_address, e.mailing_address_full_address, e.mailing_address_place_id,
               e.nationality, e.date_of_birth, e.place_of_birth, e.gender, e.marital_status, e.blood_type, e.religion,
               e.residential_address, e.residential_address_lat, e.residential_address_lng,
+              e.residential_address_region, e.residential_address_province, e.residential_address_city_municipality, e.residential_address_barangay,
+              e.residential_address_street_address, e.residential_address_full_address, e.residential_address_place_id,
               e.current_address, e.current_address_lat, e.current_address_lng, e.current_address_same_as_home,
+              e.current_address_region, e.current_address_province, e.current_address_city_municipality, e.current_address_barangay,
+              e.current_address_street_address, e.current_address_full_address, e.current_address_place_id,
               e.emergency_contact_name, e.emergency_contact_num,
               e.emergency_contact_relationship, e.emergency_contact_secondary_num, e.emergency_contact_email, e.emergency_contact_address,
               e.education_school, e.education_attainment, e.education_units, e.education_year_graduated,
@@ -1018,6 +1208,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     
     const pool = require('./config/db');
     await ensureOnboardingLifecycleSchema(pool);
+    await ensurePhilippineAddressColumns(pool);
     const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     
     console.log('\n=== POST /api/employees ===');
@@ -1176,13 +1367,25 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     await pool.execute(
       `UPDATE employees SET
          residential_address_lat = ?, residential_address_lng = ?,
+         residential_address_region = ?, residential_address_province = ?, residential_address_city_municipality = ?,
+         residential_address_barangay = ?, residential_address_street_address = ?, residential_address_full_address = ?, residential_address_place_id = ?,
          current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         current_address_region = ?, current_address_province = ?, current_address_city_municipality = ?,
+         current_address_barangay = ?, current_address_street_address = ?, current_address_full_address = ?, current_address_place_id = ?,
          mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+         , mailing_address_region = ?, mailing_address_province = ?, mailing_address_city_municipality = ?,
+         mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
        WHERE id = ?`,
       [
         addresses.home.lat, addresses.home.lng,
+        addresses.home.region, addresses.home.province, addresses.home.city_municipality,
+        addresses.home.barangay, addresses.home.street_address, addresses.home.full_address || addresses.home.address, addresses.home.place_id || null,
         addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        addresses.current.region, addresses.current.province, addresses.current.city_municipality,
+        addresses.current.barangay, addresses.current.street_address, addresses.current.full_address || addresses.current.address, addresses.current.place_id || null,
         addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        addresses.mailing.region, addresses.mailing.province, addresses.mailing.city_municipality,
+        addresses.mailing.barangay, addresses.mailing.street_address, addresses.mailing.full_address || addresses.mailing.address, addresses.mailing.place_id || null,
         employee_id
       ]
     );
@@ -1265,14 +1468,9 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       try {
         console.log('💾 Saving wage configuration for new employee...');
         
-        // Get wage_type_id from wage type name
-        const [wageTypeRows] = await pool.execute(
-          'SELECT id FROM wage_types WHERE name = ?',
-          [wage_type]
-        );
+        const wage_type_id = await resolveWageTypeId(pool, wage_type);
         
-        if (wageTypeRows.length > 0) {
-          const wage_type_id = wageTypeRows[0].id;
+        if (wage_type_id) {
           
           // Update employee wage_type_id
           await pool.execute(
@@ -1348,6 +1546,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
+    await ensurePhilippineAddressColumns(pool);
     const { id } = req.params; // numeric employee id
     const { first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
@@ -1403,13 +1602,25 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     await pool.execute(
       `UPDATE employees SET
          residential_address_lat = ?, residential_address_lng = ?,
+         residential_address_region = ?, residential_address_province = ?, residential_address_city_municipality = ?,
+         residential_address_barangay = ?, residential_address_street_address = ?, residential_address_full_address = ?, residential_address_place_id = ?,
          current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         current_address_region = ?, current_address_province = ?, current_address_city_municipality = ?,
+         current_address_barangay = ?, current_address_street_address = ?, current_address_full_address = ?, current_address_place_id = ?,
          mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+         , mailing_address_region = ?, mailing_address_province = ?, mailing_address_city_municipality = ?,
+         mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
        WHERE id = ? OR employee_code = ?`,
       [
         addresses.home.lat, addresses.home.lng,
+        addresses.home.region, addresses.home.province, addresses.home.city_municipality,
+        addresses.home.barangay, addresses.home.street_address, addresses.home.full_address || addresses.home.address, addresses.home.place_id || null,
         addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        addresses.current.region, addresses.current.province, addresses.current.city_municipality,
+        addresses.current.barangay, addresses.current.street_address, addresses.current.full_address || addresses.current.address, addresses.current.place_id || null,
         addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        addresses.mailing.region, addresses.mailing.province, addresses.mailing.city_municipality,
+        addresses.mailing.barangay, addresses.mailing.street_address, addresses.mailing.full_address || addresses.mailing.address, addresses.mailing.place_id || null,
         id, id
       ]
     );
@@ -1427,14 +1638,9 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
       try {
         console.log('💾 Saving wage configuration...');
         
-        // Get wage_type_id from wage type name
-        const [wageTypeRows] = await pool.execute(
-          'SELECT id FROM wage_types WHERE name = ?',
-          [wage_type]
-        );
+        const wage_type_id = await resolveWageTypeId(pool, wage_type);
         
-        if (wageTypeRows.length > 0) {
-          const wage_type_id = wageTypeRows[0].id;
+        if (wage_type_id) {
           
           // Update employee wage_type_id
           await pool.execute(
@@ -1444,8 +1650,17 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
           
           console.log('✅ Updated employee wage_type_id to:', wage_type_id);
           
-          // Save base rate for all wage types (or per-piece primary rate)
-          if (base_rate !== undefined && base_rate !== null && base_rate !== '') {
+          const hasBaseRateInput = Object.prototype.hasOwnProperty.call(req.body, 'base_rate');
+
+          // Save base rate for all wage types (or per-piece primary rate). If the user
+          // clears the field, end the active wage rate so the old value stops showing.
+          if (hasBaseRateInput && (base_rate === null || base_rate === '')) {
+            await pool.execute(
+              'UPDATE employee_wage_rates SET end_date = NOW() WHERE employee_id = ? AND end_date IS NULL',
+              [id]
+            );
+            console.log('✅ Cleared active base rate for employee:', id);
+          } else if (base_rate !== undefined && base_rate !== null && base_rate !== '') {
             // Mark previous rates as ended
             await pool.execute(
               'UPDATE employee_wage_rates SET end_date = NOW() WHERE employee_id = ? AND end_date IS NULL',
@@ -1635,6 +1850,45 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
   } catch (err) {
     console.error('Error fetching documents:', err.message);
     return res.status(500).json({ error: 'Failed to fetch documents.', details: err.message });
+  }
+});
+
+// View employee document
+app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const { id, docId } = req.params;
+
+    const [empRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [id]);
+    if (empRows.length === 0) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    const [docs] = await pool.execute(
+      `SELECT file_name, file_path
+         FROM documents
+        WHERE id = ? AND employee_id = ?
+        LIMIT 1`,
+      [docId, empRows[0].id]
+    );
+
+    if (!docs.length || !docs[0].file_path) {
+      return res.status(404).json({ error: 'Document not found.' });
+    }
+
+    const relativePath = String(docs[0].file_path || '').replace(/^\/+/, '');
+    const absolutePath = path.resolve(__dirname, 'public', relativePath);
+    const uploadsRoot = path.resolve(__dirname, 'public', 'uploads');
+
+    if (!absolutePath.startsWith(uploadsRoot + path.sep) || !fs.existsSync(absolutePath)) {
+      return res.status(404).json({ error: 'Document file not found.' });
+    }
+
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(docs[0].file_name || absolutePath).replace(/"/g, '')}"`);
+    return res.sendFile(absolutePath);
+  } catch (err) {
+    console.error('Error viewing document:', err.message);
+    return res.status(500).json({ error: 'Failed to view document.', details: err.message });
   }
 });
 
@@ -2198,14 +2452,24 @@ async function getLeaveType(pool, { id, name, includeInactive = false } = {}) {
 }
 
 async function ensureLeaveBalance(pool, employeeId, leaveType, year) {
-  await pool.execute(
-    `INSERT INTO leave_balances (employee_id, leave_type_id, leave_type, balance, used, year)
-     VALUES (?, ?, ?, ?, 0, ?)
-     ON DUPLICATE KEY UPDATE
-       leave_type_id = COALESCE(VALUES(leave_type_id), leave_type_id),
-       leave_type = VALUES(leave_type)`,
-    [employeeId, leaveType.id, leaveType.name, decimalValue(leaveType.max_allowed_days), year]
+  return getConfiguredLeaveBalance(pool, employeeId, leaveType, year);
+}
+
+async function getConfiguredLeaveBalance(executor, employeeId, leaveType, year, lock = false) {
+  const [rows] = await executor.execute(
+    `SELECT *,
+            COALESCE(NULLIF(total_days, 0), balance, 0) AS total_days_value,
+            COALESCE(NULLIF(used_days, 0), used, 0) AS used_days_value,
+            COALESCE(remaining_days, COALESCE(NULLIF(total_days, 0), balance, 0) - COALESCE(NULLIF(used_days, 0), used, 0)) AS remaining_days_value
+       FROM leave_balances
+      WHERE employee_id = ?
+        AND year = ?
+        AND (leave_type_id = ? OR leave_type = ?)
+      LIMIT 1
+      ${lock ? 'FOR UPDATE' : ''}`,
+    [employeeId, year, leaveType.id, leaveType.name]
   );
+  return rows[0] || null;
 }
 
 async function writeLeaveAudit(pool, leaveId, employeeId, actorUserId, action, remarks = null, oldStatus = null, newStatus = null, metadata = null) {
@@ -2343,10 +2607,17 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
                     END AS pay_type,
                     filed.username AS filed_by_name,
                     encoded.username AS encoded_by_name,
-                    reviewer.username AS reviewed_by_name
+                    reviewer.username AS reviewed_by_name,
+                    COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) AS balance_total_days,
+                    COALESCE(NULLIF(lb.used_days, 0), lb.used, 0) AS balance_used_days,
+                    COALESCE(lb.remaining_days, COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) - COALESCE(NULLIF(lb.used_days, 0), lb.used, 0)) AS balance_remaining_days
              FROM leave_requests lr
              JOIN employees e ON e.id = lr.employee_id
              LEFT JOIN leave_types lt ON lt.id = lr.leave_type_id
+             LEFT JOIN leave_balances lb
+               ON lb.employee_id = lr.employee_id
+              AND lb.year = YEAR(lr.date_from)
+              AND (lb.leave_type_id = lt.id OR lb.leave_type = COALESCE(lt.name, lr.type))
              LEFT JOIN departments d ON d.id = e.department_id
              LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
              LEFT JOIN users filed ON filed.id = lr.filed_by
@@ -2373,16 +2644,18 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
 
     if (!employeeId) return res.status(400).json({ error: 'employee_id is required.' });
 
-    const [types] = await pool.execute(`SELECT * FROM leave_types WHERE is_active = 1 ORDER BY category, name`);
-    for (const type of types) {
-      await ensureLeaveBalance(pool, employeeId, type, year);
-    }
-
     const [rows] = await pool.execute(
-      `SELECT lb.employee_id, lb.leave_type_id, lb.leave_type, lt.category,
-              lb.balance, lb.used, lb.year, (lb.balance - lb.used) AS remaining
+      `SELECT lb.id, lb.employee_id, lb.leave_type_id, lb.leave_type, lt.category,
+              COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) AS total_days,
+              COALESCE(NULLIF(lb.used_days, 0), lb.used, 0) AS used_days,
+              COALESCE(lb.remaining_days, COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) - COALESCE(NULLIF(lb.used_days, 0), lb.used, 0)) AS remaining_days,
+              COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) AS balance,
+              COALESCE(NULLIF(lb.used_days, 0), lb.used, 0) AS used,
+              COALESCE(lb.remaining_days, COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) - COALESCE(NULLIF(lb.used_days, 0), lb.used, 0)) AS remaining,
+              lb.year, lb.updated_at, updater.username AS last_updated_by_name
        FROM leave_balances lb
        LEFT JOIN leave_types lt ON lt.id = lb.leave_type_id
+       LEFT JOIN users updater ON updater.id = lb.last_updated_by
        WHERE lb.employee_id = ? AND lb.year = ?
        ORDER BY FIELD(COALESCE(lt.category, 'Company'), 'Company', 'Statutory'), lb.leave_type`,
       [employeeId, year]
@@ -2400,19 +2673,39 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
     const employeeId = parseInt(req.body.employee_id, 10);
     const leaveType = await getLeaveType(pool, { id: req.body.leave_type_id, name: req.body.leave_type, includeInactive: true });
     const year = parseInt(req.body.year, 10) || new Date().getFullYear();
-    const balance = Number(req.body.balance);
+    const totalDays = Number(req.body.total_days ?? req.body.balance);
+    const usedDays = Number(req.body.used_days ?? req.body.used ?? 0);
 
-    if (!employeeId || !leaveType || Number.isNaN(balance)) {
-      return res.status(400).json({ error: 'employee_id, leave_type, and balance are required.' });
+    if (!employeeId || !leaveType || Number.isNaN(totalDays) || Number.isNaN(usedDays)) {
+      return res.status(400).json({ error: 'employee_id, leave_type, total_days, and used_days are required.' });
+    }
+    if (totalDays < 0 || usedDays < 0 || usedDays > totalDays) {
+      return res.status(400).json({ error: 'Used days cannot exceed total days.' });
     }
 
+    const remainingDays = totalDays - usedDays;
     await pool.execute(
-      `INSERT INTO leave_balances (employee_id, leave_type_id, leave_type, balance, used, year)
-       VALUES (?, ?, ?, ?, 0, ?)
-       ON DUPLICATE KEY UPDATE balance = VALUES(balance)`,
-      [employeeId, leaveType.id, leaveType.name, balance, year]
+      `INSERT INTO leave_balances
+         (employee_id, leave_type_id, leave_type, balance, used, total_days, used_days, remaining_days, year, last_updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         leave_type_id = VALUES(leave_type_id),
+         leave_type = VALUES(leave_type),
+         balance = VALUES(balance),
+         used = VALUES(used),
+         total_days = VALUES(total_days),
+         used_days = VALUES(used_days),
+         remaining_days = VALUES(remaining_days),
+         last_updated_by = VALUES(last_updated_by)`,
+      [employeeId, leaveType.id, leaveType.name, totalDays, usedDays, totalDays, usedDays, remainingDays, year, req.user.id]
     );
-    await writeLeaveAudit(pool, null, employeeId, req.user.id, 'leave_balance_adjusted', `${leaveType.name} balance set to ${balance}`);
+    await writeLeaveAudit(pool, null, employeeId, req.user.id, 'leave_balance_adjusted', `${leaveType.name}: ${remainingDays}/${totalDays} day(s) remaining`, null, null, {
+      leave_type_id: leaveType.id,
+      year,
+      total_days: totalDays,
+      used_days: usedDays,
+      remaining_days: remainingDays
+    });
     res.json({ message: 'Leave balance updated.' });
   } catch (err) {
     console.error('Error updating leave balance:', err.message);
@@ -2483,11 +2776,10 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     }
 
     const year = fromDate.getFullYear();
-    await ensureLeaveBalance(pool, empId, leaveType, year);
     const [overlaps] = await pool.execute(
       `SELECT id FROM leave_requests
        WHERE employee_id = ?
-         AND status IN ('Draft','Pending','Approved')
+         AND status IN ('Pending','Approved')
          AND date_from <= ? AND date_to >= ?
        LIMIT 1`,
       [empId, date_to, date_from]
@@ -2497,17 +2789,15 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
       return res.status(400).json({ error: 'This employee already has an overlapping leave request.' });
     }
 
-    const [balanceRows] = await pool.execute(
-      `SELECT balance, used, (balance - used) AS remaining
-       FROM leave_balances
-       WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-      [empId, leaveType.name, year]
-    );
-    const remaining = decimalValue(balanceRows[0]?.remaining);
-    const extensionDays = leaveType.allow_unpaid_extension ? decimalValue(leaveType.max_extension_days) : 0;
-    if (requestedDays > remaining + extensionDays) {
+    const balance = await getConfiguredLeaveBalance(pool, empId, leaveType, year);
+    if (!balance) {
       if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'Requested duration exceeds the available leave balance and allowed extension.' });
+      return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
+    }
+    const remaining = decimalValue(balance.remaining_days_value);
+    if (requestedDays > remaining) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Requested duration exceeds the available leave balance.' });
     }
 
     const [annualRows] = await pool.execute(
@@ -2519,6 +2809,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
          AND status IN ('Pending','Approved')`,
       [empId, leaveType.id, year]
     );
+    const extensionDays = leaveType.allow_unpaid_extension ? decimalValue(leaveType.max_extension_days) : 0;
     const annualLimit = decimalValue(leaveType.max_allowed_days) + extensionDays;
     if (decimalValue(annualRows[0]?.total_days) + requestedDays > annualLimit) {
       if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
@@ -2543,49 +2834,63 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
 });
 
 app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.request.approve'), async (req, res) => {
+  const pool = require('./config/db');
+  const connection = await pool.getConnection();
   try {
-    const pool = require('./config/db');
+    await connection.beginTransaction();
     const status = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
     const remarks = req.body.remarks || null;
     if (status === 'Rejected' && !remarks) {
+      await connection.rollback();
       return res.status(400).json({ error: 'Remarks are required when rejecting leave.' });
     }
+    if (!['Approved', 'Rejected', 'Cancelled', 'Pending'].includes(status)) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Invalid leave status.' });
+    }
 
-    const [rows] = await pool.execute(
+    const [rows] = await connection.execute(
       `SELECT lr.*, COALESCE(lt.name, lr.type) AS leave_type_name, lt.id AS configured_leave_type_id, lt.max_allowed_days
        FROM leave_requests lr
        LEFT JOIN leave_types lt ON lt.id = lr.leave_type_id
-       WHERE lr.id = ?`,
+       WHERE lr.id = ?
+       FOR UPDATE`,
       [req.params.id]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Leave request not found.' });
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Leave request not found.' });
+    }
     const leave = rows[0];
-    const leaveType = await getLeaveType(pool, { id: leave.configured_leave_type_id, name: leave.leave_type_name, includeInactive: true });
-    if (!leaveType) return res.status(400).json({ error: 'Leave type configuration was not found.' });
+    const leaveType = await getLeaveType(connection, { id: leave.configured_leave_type_id, name: leave.leave_type_name, includeInactive: true });
+    if (!leaveType) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Leave type configuration was not found.' });
+    }
     const year = new Date(leave.date_from).getFullYear();
-    await ensureLeaveBalance(pool, leave.employee_id, leaveType, year);
 
     if (status === 'Approved' && leave.status !== 'Approved') {
-      const [balanceRows] = await pool.execute(
-        `SELECT (balance - used) AS remaining FROM leave_balances WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-        [leave.employee_id, leaveType.name, year]
-      );
-      if (decimalValue(balanceRows[0]?.remaining) < decimalValue(leave.days || 1)) {
+      const balance = await getConfiguredLeaveBalance(connection, leave.employee_id, leaveType, year, true);
+      if (!balance) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
+      }
+      const requestedDays = decimalValue(leave.days || 1);
+      if (decimalValue(balance.remaining_days_value) < requestedDays) {
+        await connection.rollback();
         return res.status(400).json({ error: 'Insufficient leave balance for approval.' });
       }
-      await pool.execute(
-        `UPDATE leave_balances SET used = used + ? WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-        [leave.days || 1, leave.employee_id, leaveType.name, year]
-      );
-    }
-    if (leave.status === 'Approved' && ['Rejected', 'Cancelled'].includes(status)) {
-      await pool.execute(
-        `UPDATE leave_balances SET used = GREATEST(used - ?, 0) WHERE employee_id = ? AND leave_type = ? AND year = ?`,
-        [leave.days || 1, leave.employee_id, leaveType.name, year]
+      const nextUsed = decimalValue(balance.used_days_value) + requestedDays;
+      const nextRemaining = decimalValue(balance.total_days_value) - nextUsed;
+      await connection.execute(
+        `UPDATE leave_balances
+            SET used_days = ?, remaining_days = ?, used = ?, last_updated_by = ?
+          WHERE id = ?`,
+        [nextUsed, nextRemaining, nextUsed, req.user.id, balance.id]
       );
     }
 
-    await pool.execute(
+    await connection.execute(
       `UPDATE leave_requests SET
          status = ?,
          reviewed_by = ?,
@@ -2602,11 +2907,15 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
       [status, req.user.id, status, req.user.id, status, status, status, remarks, status, req.user.id, status, status, remarks, remarks, req.params.id]
     );
     const action = status === 'Approved' ? 'leave_approved' : status === 'Rejected' ? 'leave_rejected' : status === 'Cancelled' ? 'leave_cancelled' : 'leave_updated';
-    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, action, remarks, leave.status, status);
+    await writeLeaveAudit(connection, req.params.id, leave.employee_id, req.user.id, action, remarks, leave.status, status);
+    await connection.commit();
     res.json({ message: 'Leave status updated.' });
   } catch (err) {
+    await connection.rollback().catch(() => {});
     console.error('Error updating leave:', err.message);
     res.status(500).json({ error: 'Failed to update leave.' });
+  } finally {
+    connection.release();
   }
 });
 
@@ -2786,6 +3095,51 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+function getLocalIPv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const candidates = [];
+  const virtualPattern = /virtual|vmware|vbox|virtualbox|hyper-v|wsl|docker|loopback/i;
+
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    for (const address of addresses || []) {
+      if (address.family === 'IPv4' && !address.internal && !address.address.startsWith('169.254.')) {
+        candidates.push({
+          name,
+          address: address.address,
+          isVirtual: virtualPattern.test(name),
+          isWifi: /wi-?fi|wireless|wlan/i.test(name),
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function getPreferredLocalIPv4Address() {
+  const candidates = getLocalIPv4Addresses();
+  return (
+    candidates.find(item => item.isWifi && !item.isVirtual)
+    || candidates.find(item => !item.isVirtual)
+    || candidates[0]
+    || { address: 'localhost' }
+  ).address;
+}
+
+function logServerUrls(protocol) {
+  const localIp = getPreferredLocalIPv4Address();
+  const candidates = getLocalIPv4Addresses();
+  console.log(`Local access: ${protocol}://localhost:${PORT}`);
+  console.log(`Network access: ${protocol}://${localIp}:${PORT}`);
+  console.log(`Health check: ${protocol}://${localIp}:${PORT}/health`);
+  if (candidates.length > 1) {
+    console.log('Other local IPv4 URLs:');
+    candidates
+      .filter(item => item.address !== localIp)
+      .forEach(item => console.log(`- ${item.name}: ${protocol}://${item.address}:${PORT}`));
+  }
+}
+
 if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
   const tlsOptions = {
     cert: fs.readFileSync(process.env.TLS_CERT_PATH),
@@ -2793,12 +3147,14 @@ if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
     ca: process.env.TLS_CA_PATH ? fs.readFileSync(process.env.TLS_CA_PATH) : undefined,
     minVersion: 'TLSv1.3',
   };
-  https.createServer(tlsOptions, app).listen(PORT, () => {
-    console.log(`LGSV_HR running with TLS 1.3 -> https://localhost:${PORT}`);
+  https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
+    console.log(`LGSV_HR running with TLS 1.3 on ${HOST}:${PORT}`);
+    logServerUrls('https');
   });
 } else {
-  app.listen(PORT, () => {
-    console.log(`LGSV_HR local development server -> http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`LGSV_HR local development server listening on ${HOST}:${PORT}`);
+    logServerUrls('http');
     if (process.env.NODE_ENV === 'production') {
       console.warn('TLS certificate paths are not configured. Terminate TLS 1.3 at the trusted reverse proxy.');
     }

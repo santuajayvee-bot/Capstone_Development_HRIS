@@ -646,11 +646,13 @@ function processQrScan(qrToken) {
 
 async function generateSiteQR() {
   try {
-    const res = await apiFetch('/api/attendance/qr/generate');
+    const res = await apiFetch('/api/attendance/static-qr');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     document.getElementById('site-qr-img').src = data.qr;
-    document.getElementById('site-qr-name').textContent = data.site_name;
+    document.getElementById('site-qr-name').textContent = data.location?.location_name || 'Static QR Attendance';
+    const urlEl = document.getElementById('site-qr-url');
+    if (urlEl) urlEl.textContent = data.scan_url || '/attendance/scan';
     document.getElementById('site-qr-display').style.display = 'block';
   } catch (err) {
     alert(err.message);

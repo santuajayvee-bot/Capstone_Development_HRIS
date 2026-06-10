@@ -105,7 +105,13 @@
   </div>
 
   <div class="leave-card" id="leave-balances-card" style="margin-top:16px;">
-    <h3 class="leave-section-title">Leave Balances</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h3 class="leave-section-title">Leave Balances</h3>
+      <div class="leave-field" id="leave-balance-viewer-field" style="min-width:280px;display:none;">
+        <label>View Employee Balance</label>
+        <select id="leave-balance-viewer-employee" onchange="loadLeaveBalancesForSelection(this.value)"></select>
+      </div>
+    </div>
     <div id="leave-balances-list" class="leave-grid" style="grid-template-columns:repeat(4,minmax(150px,1fr));margin-top:12px;"></div>
   </div>
 </div>
@@ -241,6 +247,31 @@
       <thead><tr><th>Leave Name</th><th>Category</th><th>Max Days</th><th>Paid</th><th>Attachment</th><th>Eligibility</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="leave-types-tbody"></tbody>
     </table>
+  </div>
+
+  <div class="leave-card" id="leave-balance-config-card" style="margin-top:16px;">
+    <h3 class="leave-section-title">Employee Leave Balance Setup</h3>
+    <form id="leave-balance-form" onsubmit="saveLeaveBalanceConfig(event)" style="margin-top:14px;">
+      <div class="leave-form-grid">
+        <div class="leave-field"><label>Employee</label><select id="balance-employee" required onchange="loadBalanceConfigForEmployee()"></select></div>
+        <div class="leave-field"><label>Leave Type</label><select id="balance-leave-type" required onchange="fillBalanceFormFromSelection()"></select></div>
+        <div class="leave-field"><label>Year</label><input id="balance-year" type="number" min="2020" max="2100" required onchange="loadBalanceConfigForEmployee()"></div>
+        <div class="leave-field"><label>Total Days</label><input id="balance-total-days" type="number" min="0" step="0.5" required oninput="updateBalanceRemainingPreview()"></div>
+        <div class="leave-field"><label>Used Days</label><input id="balance-used-days" type="number" min="0" step="0.5" value="0" required oninput="updateBalanceRemainingPreview()"></div>
+        <div class="leave-field"><label>Remaining Days</label><input id="balance-remaining-days" readonly></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+        <span id="leave-balance-save-status" style="align-self:center;color:var(--muted);font-size:12px;"></span>
+        <button type="button" class="btn btn-outline" onclick="resetLeaveBalanceForm()">Clear</button>
+        <button type="submit" class="btn btn-primary">Save Balance</button>
+      </div>
+    </form>
+    <div class="leave-table-wrap" style="margin-top:14px;">
+      <table class="leave-table" style="min-width:760px;">
+        <thead><tr><th>Leave Type</th><th>Year</th><th>Total Days</th><th>Used Days</th><th>Remaining Days</th><th>Updated By</th><th>Actions</th></tr></thead>
+        <tbody id="leave-balance-config-tbody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 

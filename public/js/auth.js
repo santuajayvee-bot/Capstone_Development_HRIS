@@ -161,18 +161,50 @@ function buildSidebar(user) {
     badge.className = `role-badge role-${user.role}`;
     badge.style.display = 'inline-block';
   }
+  buildEmployeeBottomNav(user);
+}
+
+function buildEmployeeBottomNav(user) {
+  const bottomNav = document.getElementById('employee-bottom-nav');
+  if (!bottomNav) return;
+  if (user.role !== 'employee') {
+    bottomNav.innerHTML = '';
+    bottomNav.style.display = 'none';
+    document.body.classList.remove('has-employee-bottom-nav');
+    return;
+  }
+
+  const items = [
+    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'attendance', icon: 'AT', label: 'Attendance' },
+    { page: 'leave', icon: 'LV', label: 'Leave' },
+    { page: 'employee-profile', icon: 'PF', label: 'Profile' },
+  ].filter(item => item.page === 'employee-profile' || canAccess(item.page));
+
+  bottomNav.innerHTML = items.map((item, index) => `
+    <button type="button"
+            class="employee-bottom-nav-item ${index === 0 ? 'active' : ''}"
+            data-page="${item.page}"
+            onclick="navigate('${item.page}', this)">
+      <span>${item.icon}</span>
+      <small>${item.label}</small>
+    </button>
+  `).join('');
+  bottomNav.style.display = '';
+  document.body.classList.add('has-employee-bottom-nav');
 }
 
 function canAccess(pageId) {
   const user = getUser();
   if (!user) return false;
+  if (user.role === 'employee' && pageId === 'employee-profile') return true;
   const permissionPageMap = {
     employees: ['employee.view', 'employee.manage'],
     register: ['employee.manage'],
     'employee-profile': ['employee.view'],
     attendance: ['attendance.view', 'attendance.manage'],
     leave: ['leave.request.create', 'leave.request.approve', 'leave.request.view_all', 'leave.request.view_own'],
-    payroll: ['payroll.view', 'payroll.calculate', 'payroll.approve'],
+    payroll: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve'],
     reports: ['report.view', 'payroll.report.view', 'leave.report.view'],
     '201file': ['employee.view', 'employee.manage'],
     onboarding: ['employee.manage'],
@@ -189,8 +221,21 @@ function canAccess(pageId) {
 
 function logout() {
   clearAuth();
+  closeMobileSidebar();
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
+}
+
+function closeMobileSidebar() {
+  document.body.classList.remove('mobile-sidebar-open');
+  const toggle = document.getElementById('mobile-menu-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+function toggleMobileSidebar() {
+  const isOpen = document.body.classList.toggle('mobile-sidebar-open');
+  const toggle = document.getElementById('mobile-menu-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', String(isOpen));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -204,6 +249,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   document.getElementById('btn-logout')?.addEventListener('click', logout);
+  document.getElementById('mobile-menu-toggle')?.addEventListener('click', toggleMobileSidebar);
+  document.getElementById('mobile-sidebar-backdrop')?.addEventListener('click', closeMobileSidebar);
 });
 
 window.saveAuth = saveAuth;
@@ -215,3 +262,5 @@ window.apiFetch = apiFetch;
 window.buildSidebar = buildSidebar;
 window.canAccess = canAccess;
 window.logout = logout;
+window.closeMobileSidebar = closeMobileSidebar;
+window.toggleMobileSidebar = toggleMobileSidebar;

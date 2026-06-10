@@ -18,6 +18,22 @@ const PAGE_TITLES = {
   'employee-profile': 'Employee Profile',
 };
 
+function enhanceResponsiveTables(root = document) {
+  root.querySelectorAll('table').forEach(table => {
+    const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    if (!headers.length) return;
+    if (table.dataset.responsiveReady !== '1') {
+      table.dataset.responsiveReady = '1';
+      table.classList.add(headers.length <= 7 ? 'responsive-card-table' : 'responsive-scroll-table');
+    }
+    table.querySelectorAll('tbody tr').forEach(row => {
+      [...row.children].forEach((cell, index) => {
+        if (!cell.dataset.label) cell.dataset.label = headers[index] || '';
+      });
+    });
+  });
+}
+
 function navigate(pageId, navEl, params = null) {
   // Role guard — check permission before switching
   if (!canAccess(pageId)) {
@@ -34,9 +50,17 @@ function navigate(pageId, navEl, params = null) {
   if (titleEl) titleEl.textContent = PAGE_TITLES[pageId] || pageId;
 
   if (navEl) {
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => n.classList.remove('active'));
     navEl.classList.add('active');
+  } else {
+    document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => {
+      n.classList.toggle('active', n.dataset.page === pageId);
+    });
   }
+  document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => {
+    if (n !== navEl) n.classList.toggle('active', n.dataset.page === pageId);
+  });
+  if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
 
   window.ROUTE_PARAMS = { pageId, ...(params || {}) };
 
@@ -111,6 +135,8 @@ function navigate(pageId, navEl, params = null) {
   if (pageId === 'employee-profile' && typeof loadEmployeeProfilePage === 'function') {
     loadEmployeeProfilePage(params || {});
   }
+
+  requestAnimationFrame(() => enhanceResponsiveTables(document.getElementById('page-' + pageId) || document));
 }
 
 function showAccessDenied() {
@@ -128,3 +154,16 @@ function showAccessDenied() {
 
 window.navigate         = navigate;
 window.showAccessDenied = showAccessDenied;
+window.enhanceResponsiveTables = enhanceResponsiveTables;
+
+document.addEventListener('partialsLoaded', () => enhanceResponsiveTables());
+
+document.addEventListener('DOMContentLoaded', () => {
+  const pageBody = document.querySelector('.page-body');
+  if (!pageBody) return;
+  let tableEnhanceTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(tableEnhanceTimer);
+    tableEnhanceTimer = setTimeout(() => enhanceResponsiveTables(pageBody), 120);
+  }).observe(pageBody, { childList: true, subtree: true });
+});

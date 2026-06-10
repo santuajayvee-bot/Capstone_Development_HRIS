@@ -582,6 +582,7 @@ function renderSalaryCalculations(records) {
           <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Employee</th>
           <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Code</th>
           <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Department</th>
+          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Agency</th>
           <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Wage Type</th>
           <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Calculation Details</th>
           <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Base Rate</th>
@@ -633,6 +634,7 @@ function renderSalaryCalculations(records) {
               <td style="padding: 12px; color: var(--text); font-weight: 500;">${r.employee_name}</td>
               <td style="padding: 12px; color: var(--muted); font-family: 'Courier New', monospace; font-size: 12px;">${r.employee_code}</td>
               <td style="padding: 12px; color: var(--muted);">${r.department || 'N/A'}</td>
+              <td style="padding: 12px; color: var(--muted);">${r.agency_name || '-'}</td>
               <td style="padding: 12px; color: var(--text);">${r.wage_type || 'N/A'}</td>
               <td style="padding: 12px; color: var(--accent); font-size: 12px; font-weight: 500;">${calcDetails}</td>
               <td style="padding: 12px; text-align: right; color: var(--text);">₱${parseFloat(r.base_rate || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>

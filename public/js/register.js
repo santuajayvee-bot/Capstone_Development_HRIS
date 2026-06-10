@@ -188,14 +188,28 @@ function clearAddressSelection(input) {
   delete input.dataset.addressSelected;
   delete input.dataset.latitude;
   delete input.dataset.longitude;
+  delete input.dataset.placeId;
+  delete input.dataset.region;
+  delete input.dataset.province;
+  delete input.dataset.cityMunicipality;
+  delete input.dataset.barangay;
+  delete input.dataset.streetAddress;
+  delete input.dataset.fullAddress;
 }
 
-function setAddressSelection(input, address, latitude, longitude) {
+function setAddressSelection(input, address, latitude, longitude, placeId = '', details = {}) {
   if (!input) return;
   input.value = address || '';
   input.dataset.addressSelected = address && latitude !== undefined && longitude !== undefined ? '1' : '';
   input.dataset.latitude = latitude ?? '';
   input.dataset.longitude = longitude ?? '';
+  input.dataset.placeId = placeId || '';
+  input.dataset.region = details.region || '';
+  input.dataset.province = details.province || '';
+  input.dataset.cityMunicipality = details.city_municipality || '';
+  input.dataset.barangay = details.barangay || '';
+  input.dataset.streetAddress = details.street_address || address || '';
+  input.dataset.fullAddress = details.full_address || address || '';
 }
 
 function copyHomeAddress(config) {
@@ -205,7 +219,8 @@ function copyHomeAddress(config) {
     const same = document.getElementById(item.same);
     const input = document.getElementById(item.input);
     if (!same || !input || !same.checked) return;
-    setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude);
+    setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude, home?.dataset.placeId);
+    if (window.copyPhilippineAddressSection) window.copyPhilippineAddressSection(config.home.input, item.input);
     input.disabled = true;
   });
 }
@@ -225,7 +240,7 @@ function renderAddressSuggestions(input, results) {
       <span class="address-suggestion-meta">${
         item.latitude !== null && item.latitude !== undefined && item.longitude !== null && item.longitude !== undefined
           ? `${Number(item.latitude).toFixed(5)}, ${Number(item.longitude).toFixed(5)}`
-          : 'Google Places'
+          : item.provider === 'philippine_dataset' ? 'Philippine address dataset' : 'Google Places'
       }</span>
     </button>
   `).join('');
@@ -238,11 +253,11 @@ function renderAddressSuggestions(input, results) {
           item = await detailsResponse.json();
         }
       }
-      if (item.latitude === null || item.latitude === undefined || item.longitude === null || item.longitude === undefined) {
+      if (item.provider !== 'philippine_dataset' && (item.latitude === null || item.latitude === undefined || item.longitude === null || item.longitude === undefined)) {
         alert('Could not get coordinates for the selected address. Please choose another suggestion.');
         return;
       }
-      setAddressSelection(input, item.full_address, item.latitude, item.longitude);
+      setAddressSelection(input, item.full_address, item.latitude, item.longitude, item.place_id || '', item);
       box.style.display = 'none';
       input.setAttribute('aria-expanded', 'false');
       Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
@@ -297,6 +312,9 @@ function setupAddressInput(inputId) {
 }
 
 function initializeEmployeeAddressAutocomplete(scope = document) {
+  if (window.initializePhilippineAddressForms) {
+    window.initializePhilippineAddressForms(scope);
+  }
   Object.values(ADDRESS_FORM_CONFIGS).forEach(config => {
     if (!scope.querySelector?.(`#${config.home.input}`) && !document.getElementById(config.home.input)) return;
     setupAddressInput(config.home.input);
@@ -348,6 +366,11 @@ function collectEmployeeAddressPayload(mode = 'emp') {
   if (home?.value.trim() && !selected(home)) errors.push('Home Address must be selected from address suggestions.');
   if (current?.value.trim() && !selected(current)) errors.push('Current Address must be selected from address suggestions.');
   if (mailing?.value.trim() && !selected(mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+  const phInputIds = [...new Set([config.home.input, currentSame ? config.home.input : config.current.input, mailingSame ? config.home.input : config.mailing.input])];
+  const phAddress = window.collectPhilippineAddressPayload
+    ? window.collectPhilippineAddressPayload(phInputIds)
+    : { errors: [], payload: {} };
+  errors.push(...phAddress.errors);
 
   return {
     errors,
@@ -362,7 +385,8 @@ function collectEmployeeAddressPayload(mode = 'emp') {
       mailing_address: mailingSame ? home?.value || null : mailing?.value || null,
       mailing_address_lat: mailingSame ? home?.dataset.latitude || null : mailing?.dataset.latitude || null,
       mailing_address_lng: mailingSame ? home?.dataset.longitude || null : mailing?.dataset.longitude || null,
-      mailing_address_same_as_home: mailingSame ? 1 : 0
+      mailing_address_same_as_home: mailingSame ? 1 : 0,
+      ...phAddress.payload
     }
   };
 }
@@ -631,12 +655,15 @@ function loadEmployeeData() {
   
   const addressInput = document.getElementById('emp-address');
   if (addressInput) setAddressSelection(addressInput, emp.residential_address || '', emp.residential_address_lat, emp.residential_address_lng);
+  if (window.setPhilippineAddressValues) window.setPhilippineAddressValues('emp-address', emp);
 
   const currentAddressInput = document.getElementById('emp-current-address');
   if (currentAddressInput) setAddressSelection(currentAddressInput, emp.current_address || '', emp.current_address_lat, emp.current_address_lng);
+  if (window.setPhilippineAddressValues) window.setPhilippineAddressValues('emp-current-address', emp);
 
   const mailingAddressInput = document.getElementById('emp-mailing-address');
   if (mailingAddressInput) setAddressSelection(mailingAddressInput, emp.mailing_address || '', emp.mailing_address_lat, emp.mailing_address_lng);
+  if (window.setPhilippineAddressValues) window.setPhilippineAddressValues('emp-mailing-address', emp);
 
   const currentSameInput = document.getElementById('emp-current-same-home');
   if (currentSameInput) currentSameInput.checked = Number(emp.current_address_same_as_home) === 1;
