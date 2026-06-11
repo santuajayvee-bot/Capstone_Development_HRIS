@@ -45,8 +45,8 @@ async function migrateHrManagerRole() {
   try {
     const includeAccessLevel = await hasColumn(connection, 'roles', 'access_level');
     const roles = [
-      { name: 'hr_admin', label: 'HR Admin (Level 2)', access_level: 'Level 2' },
-      { name: 'hr_manager', label: 'HR Manager (Level 3)', access_level: 'Level 3' },
+      { name: 'hr_admin', label: 'HR Manager (Level 2)', access_level: 'Level 2' },
+      { name: 'hr_manager', label: 'HR Manager (Level 2)', access_level: 'Level 2' },
     ];
 
     for (const role of roles) {

@@ -186,10 +186,10 @@ async function loadRolesGrid() {
   });
 
   const levelDescriptions = {
-    'Level 1': 'Basic access. Can view own records, file leave, and submit requests.',
-    'Level 2': 'Operational access. Can manage employees, leave, attendance, and 201 files.',
-    'Level 3': 'Supervisory access. Can approve payroll and review financial reports.',
-    'Level 4': 'Full system access. Can manage accounts, roles, and view all audit logs.',
+    'Level 1': 'Employee self-service, attendance view, leave request, and payslip view.',
+    'Level 2': 'Operational access for HR management or payroll processing, depending on role.',
+    'Level 3': 'Payroll approval, final reports, and financial summary reporting.',
+    'Level 4': 'System accounts, RBAC, audit logs, blockchain audit, backup, and health monitoring.',
   };
 
   grid.innerHTML = sysAllRoles.map(r => {

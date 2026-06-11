@@ -1,0 +1,17 @@
+{
+  "name": "lgsv-payroll-audit-chaincode",
+  "version": "1.0.0",
+  "description": "Hyperledger Fabric chaincode for LGSV HR finalized payroll hash audit records",
+  "main": "index.js",
+  "scripts": {
+    "start": "fabric-chaincode-node start",
+    "lint": "node --check index.js && node --check lib/payrollAuditContract.js"
+  },
+  "dependencies": {
+    "fabric-contract-api": "^2.5.8",
+    "fabric-shim": "^2.5.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

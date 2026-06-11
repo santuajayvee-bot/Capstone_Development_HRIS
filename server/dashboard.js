@@ -13,12 +13,13 @@ const DASHBOARD_CACHE_TTL_MS = 15000;
 const dashboardCache = new Map();
 
 const FALLBACK_PERMISSIONS = {
-  system_admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
-  admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
-  hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
-  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view'],
+  system_admin: ['settings.manage', 'system.audit.view', 'blockchain.audit.view'],
+  admin: ['settings.manage', 'system.audit.view', 'blockchain.audit.view'],
+  hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
+  hr_manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
+  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view'],
   payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view'],
-  manager: ['attendance.view', 'leave.request.approve', 'report.view'],
+  manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
   employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'payroll.view'],
 };
 
@@ -28,6 +29,7 @@ function hasPermission(permissions, key) {
 
 function normalizeRole(role) {
   if (role === 'admin') return 'system_admin';
+  if (role === 'hr_admin' || role === 'manager') return 'hr_manager';
   return role || 'employee';
 }
 
@@ -224,9 +226,10 @@ async function hrDashboard(profile, permissions) {
     ],
     actions: [
       action('Add Employee', 'register', 'Register a new employee record'),
-      action('Create User Account', 'employees', 'Provision HRIS access'),
+      action('Onboarding', 'onboarding', 'Track applicants and onboarding'),
+      action('Verify Attendance', 'attendance', 'Review attendance records'),
       action('Review Leave Requests', 'leave', 'Open leave inbox'),
-      action('View Reports', 'reports', 'Open reports'),
+      action('201-File Management', '201file', 'Manage employee files'),
     ],
   };
 }
@@ -391,7 +394,7 @@ async function employeeDashboard(profile, permissions) {
 
   const actions = [
     action('Time In / Time Out', 'attendance', 'Open attendance'),
-    action('View Payslip', 'payroll', 'Open payslips'),
+    action('View Payslip', 'employee-dashboard', 'Open payslips'),
     action('Update Profile', 'employee-profile', 'Review employee profile'),
   ];
   if (leaveAllowed) actions.splice(1, 0, action('File Leave Request', 'leave', 'Submit leave through portal'));
@@ -435,7 +438,6 @@ async function systemAdminDashboard(profile, permissions) {
     ],
     actions: [
       action('System Admin', 'system-admin', 'Manage users and roles'),
-      action('Employees', 'employees', 'Open employee management'),
       action('Audit Log', 'blockchain', 'Review audit activity'),
     ],
   };
@@ -459,7 +461,7 @@ router.get('/', async (req, res) => {
     let rolePayload;
     if (role === 'system_admin') {
       rolePayload = await systemAdminDashboard(profile, permissions);
-    } else if (role === 'hr_admin') {
+    } else if (role === 'hr_admin' || role === 'hr_manager') {
       rolePayload = await hrDashboard(profile, permissions);
     } else if (role === 'payroll_officer' || role === 'payroll_manager') {
       rolePayload = await payrollDashboard(profile, permissions);

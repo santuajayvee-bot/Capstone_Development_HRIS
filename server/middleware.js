@@ -9,28 +9,28 @@ const JWT_SECRET = process.env.JWT_SECRET;
 // ── Role hierarchy ───────────────────────────────────────────
 // Support both old role names (for backward compatibility with existing tokens) and new names
 const ROLE_ALIASES = {
-  'admin': 'hr_admin',      // Map old 'admin' to new 'hr_admin'
+  'admin': 'system_admin',
   'system_admin': 'system_admin',
-  'hr_admin': 'hr_admin',
+  'hr_admin': 'hr_manager',
   'hr_manager': 'hr_manager',
   'payroll_officer': 'payroll_officer',
   'payroll_manager': 'payroll_manager',
-  'manager': 'manager',
+  'manager': 'hr_manager',
   'employee': 'employee'
 };
 
 const ROLES = {
-  system_admin:    ['system_admin', 'hr_admin', 'admin'],  // Accept system_admin, hr_admin, or old admin
-  hr_admin:        ['hr_admin', 'admin'],                  // Accept hr_admin or old admin
-  hr_manager:      ['hr_manager', 'admin'],
+  system_admin:    ['system_admin', 'admin'],
+  hr_admin:        ['hr_manager', 'hr_admin'],
+  hr_manager:      ['hr_manager', 'hr_admin'],
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
-  payroll_any:     ['payroll_officer', 'payroll_manager', 'admin', 'hr_admin', 'hr_manager'],
-  hr_ops:          ['hr_admin', 'hr_manager', 'admin'],
-  hr_final_approval: ['hr_manager'],
-  staff_management: ['hr_admin', 'hr_manager', 'admin'],
-  admin_any:       ['hr_admin', 'hr_manager', 'system_admin', 'admin'],
-  staff_any:       ['hr_admin', 'hr_manager', 'admin', 'payroll_officer', 'payroll_manager'],
+  payroll_any:     ['payroll_officer', 'payroll_manager'],
+  hr_ops:          ['hr_manager', 'hr_admin'],
+  hr_final_approval: ['hr_manager', 'hr_admin'],
+  staff_management: ['hr_manager', 'hr_admin'],
+  admin_any:       ['system_admin', 'admin'],
+  staff_any:       ['hr_manager', 'hr_admin', 'payroll_officer', 'payroll_manager'],
   any:             ['hr_admin', 'hr_manager', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
 };
 
@@ -54,6 +54,7 @@ function requireAuth(req, res, next) {
 
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    req.user.role = ROLE_ALIASES[req.user.role] || req.user.role;
     console.log('[requireAuth] Token verified successfully for user:', req.user.username);
     next();
   } catch (err) {

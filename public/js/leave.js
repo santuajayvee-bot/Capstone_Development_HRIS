@@ -59,7 +59,7 @@ function populateLeaveTypeSelects() {
 }
 
 function isLeaveApprover() {
-  return CURRENT_USER && CURRENT_USER.role === 'hr_manager';
+  return CURRENT_USER && ['hr_manager', 'hr_admin'].includes(CURRENT_USER.role);
 }
 
 // Check if employee is eligible to file leave requests based on wage type
@@ -678,8 +678,7 @@ async function submitManualLeave(event) {
     if (!CURRENT_USER) { alert('Error: Not authenticated.'); return; }
   }
 
-  // Check if user is HR Admin or payroll staff
-  if (!['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager'].includes(CURRENT_USER.role)) {
+  if (!['hr_admin', 'hr_manager'].includes(CURRENT_USER.role)) {
     alert('Error: You do not have permission to manually encode leaves.');
     return;
   }

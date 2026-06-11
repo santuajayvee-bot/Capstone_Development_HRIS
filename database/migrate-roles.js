@@ -1,6 +1,6 @@
 /* ============================================================
    database/migrate-roles.js
-   Migrates roles table to include HR Admin, HR Manager, and System Admin.
+   Migrates roles table to include HR Manager, payroll roles, and System Admin.
    Run once to update role definitions.
    ============================================================ */
 
@@ -27,8 +27,8 @@ async function migrateRoles() {
     // Ensure new roles exist
     const roles = [
       { name: 'employee', label: 'Employee (Level 1)' },
-      { name: 'hr_admin', label: 'HR Admin (Level 2)' },
-      { name: 'hr_manager', label: 'HR Manager (Level 3)' },
+      { name: 'hr_admin', label: 'HR Manager (Level 2)' },
+      { name: 'hr_manager', label: 'HR Manager (Level 2)' },
       { name: 'payroll_officer', label: 'Payroll Officer (Level 2)' },
       { name: 'payroll_manager', label: 'Payroll Manager (Level 3)' },
       { name: 'system_admin', label: 'System Administrator (Level 4)' },
@@ -66,8 +66,8 @@ async function migrateRoles() {
 
     console.log('\nNew Role Structure:');
     console.log('  Level 1: employee');
-    console.log('  Level 2: hr_admin, payroll_officer');
-    console.log('  Level 3: hr_manager, payroll_manager');
+    console.log('  Level 2: hr_manager, payroll_officer');
+    console.log('  Level 3: payroll_manager');
     console.log('  Level 4: system_admin\n');
 
   } catch (err) {

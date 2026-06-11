@@ -2377,14 +2377,14 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
 });
 
 const LEAVE_PERMISSION_ROLES = {
-  'leave.request.create': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin'],
-  'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.manual.create': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.request.create': ['employee', 'hr_admin', 'hr_manager'],
+  'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager'],
+  'leave.manual.create': ['hr_admin', 'hr_manager'],
   'leave.request.approve': ROLES.hr_final_approval,
-  'leave.request.view_all': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.balance.manage': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
-  'leave.report.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager'],
-  'leave.audit.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_manager']
+  'leave.request.view_all': ['hr_admin', 'hr_manager'],
+  'leave.balance.manage': ['hr_admin', 'hr_manager'],
+  'leave.report.view': ['hr_admin', 'hr_manager'],
+  'leave.audit.view': ['hr_admin', 'hr_manager']
 };
 
 function hasLeavePermission(user, permission) {
@@ -3069,7 +3069,7 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
 });
 
 // Blockchain — admin only
-app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin_any, ...ROLES.payroll_any]), async (req, res) => {
+app.get('/api/blockchain', requireAuth, requireRole(ROLES.admin_any), async (req, res) => {
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(

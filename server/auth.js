@@ -116,11 +116,15 @@ async function login(req, res) {
     const employeeProfile = await getLinkedEmployeeProfile(user.employee_id);
 
     // 6. Sign JWT
-    const effectiveRole = user.username === 'hr.admin' && user.role === 'hr_admin'
+    const effectiveRole = user.role === 'hr_admin' || user.role === 'manager'
       ? 'hr_manager'
-      : user.role;
+      : user.role === 'admin'
+        ? 'system_admin'
+        : user.role;
     const effectiveRoleLabel = effectiveRole === 'hr_manager'
-      ? 'HR Manager (Level 3)'
+      ? 'HR Manager (Level 2)'
+      : effectiveRole === 'system_admin'
+        ? 'System Administrator (Level 4)'
       : user.role_label;
 
     const payload = {

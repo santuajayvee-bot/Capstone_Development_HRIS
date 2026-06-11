@@ -33,9 +33,9 @@ async function migrateRBACModule() {
     // ── 2. Set access levels for existing roles ────────────────
     const roleDefinitions = [
       { name: 'employee',        label: 'Employee (Level 1)',             level: 'Level 1' },
-      { name: 'hr_admin',        label: 'HR Admin (Level 2)',             level: 'Level 2' },
+      { name: 'hr_admin',        label: 'HR Manager (Level 2)',           level: 'Level 2' },
       { name: 'payroll_officer', label: 'Payroll Officer (Level 2)',      level: 'Level 2' },
-      { name: 'hr_manager',      label: 'HR Manager (Level 3)',           level: 'Level 3' },
+      { name: 'hr_manager',      label: 'HR Manager (Level 2)',           level: 'Level 2' },
       { name: 'payroll_manager', label: 'Payroll Manager (Level 3)',      level: 'Level 3' },
       { name: 'system_admin',    label: 'System Administrator (Level 4)', level: 'Level 4' },
     ];
@@ -58,10 +58,10 @@ async function migrateRBACModule() {
       { name: 'employee',        level: 'Level 1' },
       { name: 'hr_admin',        level: 'Level 2' },
       { name: 'payroll_officer', level: 'Level 2' },
-      { name: 'hr_manager',      level: 'Level 3' },
+      { name: 'hr_manager',      level: 'Level 2' },
       { name: 'payroll_manager', level: 'Level 3' },
       { name: 'system_admin',    level: 'Level 4' },
-      { name: 'admin',           level: 'Level 4' },  // Legacy admin gets Level 4
+      { name: 'admin',           level: 'Level 4' },
     ];
 
     for (const rl of roleLevels) {
