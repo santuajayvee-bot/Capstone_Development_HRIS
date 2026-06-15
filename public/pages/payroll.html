@@ -20,6 +20,7 @@
   <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece-Rate Config</button>
   <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deduction Settings</button>
   <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowance Settings</button>
+  <button class="payroll-tab" data-payroll-tab="policies" onclick="switchPayrollTab('policies')">Policy Settings</button>
   <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
 </div>
 
@@ -231,7 +232,10 @@
       <div class="section-title small">Piece-Rate Payroll Configuration</div>
       <div class="section-sub">Configure sew codes, size ranges, rates, sharing rules, production output, and incentives.</div>
     </div>
-    <button class="btn btn-outline" onclick="loadPieceRateConfig()">Refresh</button>
+    <div class="button-row">
+      <button class="btn btn-outline" onclick="generatePiecePayrollRegister()">Generate Register</button>
+      <button class="btn btn-outline" onclick="loadPieceRateConfig()">Refresh</button>
+    </div>
   </div>
 
   <div class="payroll-form-page">
@@ -273,6 +277,19 @@
         <label>Effective Date<input name="effective_date" type="date" required /></label>
         <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
         <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Rate</button></div>
+      </form>
+    </fieldset>
+
+    <fieldset>
+      <legend>Production Split Configuration</legend>
+      <form id="production-split-form" class="payroll-field-row" onsubmit="saveProductionSplit(event)">
+        <input type="hidden" name="id" />
+        <label>Split Name<input name="split_name" required value="SEWING" placeholder="SEWING" /></label>
+        <label>Sewer Percentage<input name="sewer_percentage" type="number" min="0.01" max="100" step="0.01" value="55" required /></label>
+        <label>Fixer Percentage<input name="fixer_percentage" type="number" min="0.01" max="100" step="0.01" value="45" required /></label>
+        <label>Effective Date<input name="effective_date" type="date" required /></label>
+        <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
+        <div class="payroll-form-actions"><span id="production-split-status" class="payroll-form-status"></span><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Split</button></div>
       </form>
     </fieldset>
 
@@ -411,32 +428,68 @@
   <div class="table-wrap"><div id="allowance-settings-grid"></div></div>
 </section>
 
+<section class="payroll-panel" id="payroll-tab-policies">
+  <details class="payroll-collapsible" open>
+    <summary>Daily Rate and Per-Hour Payroll Rules</summary>
+    <form id="payroll-policy-form" class="form-grid" onsubmit="savePayrollPolicySettings(event)">
+      <div class="form-group"><label>Daily: Require HR Validation</label><select name="daily_require_hr_validation"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Daily: Payroll Ready Only</label><select name="daily_use_payroll_ready_only"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Daily: Count Late</label><select name="daily_count_late"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Daily: Count Undertime</label><select name="daily_count_undertime"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Daily: Allow Half Day</label><select name="daily_allow_half_day"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Half Day Threshold Hours</label><input name="daily_half_day_threshold_hours" type="number" min="0" step="0.25" /></div>
+      <div class="form-group"><label>Hourly: Standard Hours Per Day</label><input name="hourly_standard_hours_per_day" type="number" min="0" step="0.25" /></div>
+      <div class="form-group"><label>Hourly: Break Deduction Hours</label><input name="hourly_break_deduction_hours" type="number" min="0" step="0.25" /></div>
+      <div class="form-group"><label>Hourly: Overtime Threshold</label><input name="hourly_overtime_threshold" type="number" min="0" step="0.25" /></div>
+      <div class="form-group"><label>Hourly: Maximum Regular Hours</label><input name="hourly_maximum_regular_hours" type="number" min="0" step="0.25" /></div>
+      <div class="form-group"><label>Hourly: Round Off Rule</label><select name="hourly_round_off_rule"><option value="none">None</option><option value="nearest_quarter">Nearest Quarter</option><option value="nearest_half">Nearest Half</option></select></div>
+      <div class="form-group"><label>Hourly: Require HR Validation</label><select name="hourly_require_hr_validation"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-group"><label>Hourly: Payroll Ready Required</label><select name="hourly_require_payroll_ready_attendance"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-actions">
+        <span class="payroll-form-status" id="payroll-policy-save-status" aria-live="polite"></span>
+        <button class="btn btn-outline" type="button" onclick="loadPayrollPolicySettings()">Reload</button>
+        <button class="btn btn-primary" type="submit">Save Policy</button>
+      </div>
+    </form>
+  </details>
+</section>
+
 <section class="payroll-panel" id="payroll-tab-reports">
-  <div class="payroll-report-grid">
-    <div class="payroll-card">
-      <h4>Payroll Summary Report</h4>
-      <p>Totals by period, employee count, deductions, and net pay.</p>
-      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('summary','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('summary','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('summary','pdf')">PDF</button></div>
+  <div class="report-library">
+    <div class="report-library-head">
+      <div>
+        <h3>Payroll Reports</h3>
+        <p>Search, filter, and generate payroll reports from one library.</p>
+      </div>
     </div>
-    <div class="payroll-card">
-      <h4>Deduction Report</h4>
-      <p>Configured deductions and deduction totals.</p>
-      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('deductions','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('deductions','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('deductions','pdf')">PDF</button></div>
+    <div class="report-filter-grid">
+      <label>Search Reports<input id="report-search" type="search" placeholder="Search report name or description" oninput="renderPayrollReportLibrary()" /></label>
+      <label>Category<select id="report-category" onchange="renderPayrollReportLibrary()"><option value="">All</option></select></label>
+      <label>Payroll Period<input id="report-period" type="month" onchange="syncReportPeriod()" /></label>
+      <label>Department<select id="report-department" onchange="renderPayrollReportLibrary()"><option value="">All</option></select></label>
+      <label>Wage Type<select id="report-wage-type" onchange="renderPayrollReportLibrary()"><option value="">All</option></select></label>
+      <label>Employee<input id="report-employee" type="search" placeholder="Employee name or code" onchange="renderPayrollReportLibrary()" /></label>
+      <div class="report-filter-actions">
+        <button class="btn btn-primary" type="button" onclick="renderPayrollReportLibrary()">Search</button>
+        <button class="btn btn-outline" type="button" onclick="resetPayrollReportFilters()">Reset Filters</button>
+      </div>
     </div>
-    <div class="payroll-card">
-      <h4>Government Contribution Report</h4>
-      <p>SSS, PhilHealth, Pag-IBIG, and withholding tax summary.</p>
-      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('government','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('government','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('government','pdf')">PDF</button></div>
-    </div>
-    <div class="payroll-card">
-      <h4>Employee Payroll Report</h4>
-      <p>Employee-level wage type, gross pay, deductions, and net pay.</p>
-      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('employee','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('employee','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('employee','pdf')">PDF</button></div>
-    </div>
-    <div class="payroll-card">
-      <h4>Monthly Payroll Report</h4>
-      <p>Monthly payroll records based on the selected period filter.</p>
-      <div class="button-row"><button class="btn btn-outline" onclick="exportPayrollReport('monthly','csv')">CSV</button><button class="btn btn-outline" onclick="exportPayrollReport('monthly','excel')">Excel</button><button class="btn btn-outline" onclick="exportPayrollReport('monthly','pdf')">PDF</button></div>
+    <div class="table-wrap report-library-table-wrap">
+      <div class="report-library-title">Report Library</div>
+      <table class="report-library-table">
+        <thead>
+          <tr>
+            <th>Favorites</th>
+            <th>Report Name</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Export Formats</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="payroll-report-library-body"></tbody>
+      </table>
+      <div class="report-pagination" id="payroll-report-pagination"></div>
     </div>
   </div>
   <div class="table-wrap" style="margin-top:18px;">

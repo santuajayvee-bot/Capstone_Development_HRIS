@@ -4,12 +4,15 @@ let currentSalaryEmployee = null;
 let salaryEmpList = [];
 let sewingTypes = [];
 let logisticsRegions = [];
+let logisticsRates = [];
 let payrollDeductionSettings = [];
 let salaryPageInitialized = false;
 let salarySearchListenerAttached = false;
 let salaryPartnerSearchListenerAttached = false;
 let salaryInputListenersAttached = false;
 let salaryPieceRowCounter = 0;
+let salaryPayrollValidation = null;
+let salaryAgencyList = [];
 
 function salaryEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -141,6 +144,83 @@ function updatePieceDetailView() {
 
 function salaryMoney(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function salaryValidationBox() {
+  let box = document.getElementById('salary-payroll-validation');
+  if (box) return box;
+  box = document.createElement('div');
+  box.id = 'salary-payroll-validation';
+  box.style.cssText = 'display:none;margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);font-size:12px;line-height:1.5;';
+  const daily = document.getElementById('daily-section');
+  const hourly = document.getElementById('hourly-section');
+  if (daily?.parentNode) daily.parentNode.insertBefore(box, daily.nextSibling);
+  else if (hourly?.parentNode) hourly.parentNode.insertBefore(box, hourly.nextSibling);
+  return box;
+}
+
+function renderSalaryPayrollValidation(validation) {
+  const box = salaryValidationBox();
+  if (!box) return;
+  if (!validation || validation.skipped) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  const ok = !!validation.ok;
+  box.style.display = 'block';
+  box.style.borderColor = ok ? 'rgba(16,185,129,.45)' : 'rgba(244,63,94,.55)';
+  const errors = (validation.errors || []).map(item => `<li>${salaryEscape(item)}</li>`).join('');
+  const warnings = (validation.warnings || []).map(item => `<li>${salaryEscape(item)}</li>`).join('');
+  const metric = validation.wage_type === 'Hourly'
+    ? `Hours Worked: ${Number(validation.hours_worked || 0).toFixed(2)}`
+    : `Days Worked: ${Number(validation.days_worked || 0).toFixed(2)}`;
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+      <div>
+        <div style="color:${ok ? '#34d399' : '#fb7185'};font-size:12px;">${ok ? 'Payroll validation ready' : 'Payroll validation blocked'}</div>
+        <div style="color:var(--muted);margin-top:4px;">${salaryEscape(validation.date_from)} to ${salaryEscape(validation.date_to)} · ${metric} · Rate: ₱${Number(validation.rate || 0).toFixed(2)}</div>
+      </div>
+      <div style="color:var(--muted);white-space:nowrap;">${salaryEscape(validation.validation_status || '-')}</div>
+    </div>
+    ${errors ? `<ul style="margin:8px 0 0 18px;color:#fb7185;">${errors}</ul>` : ''}
+    ${warnings ? `<ul style="margin:8px 0 0 18px;color:#fbbf24;">${warnings}</ul>` : ''}
+  `;
+}
+
+async function loadSalaryPayrollValidation() {
+  if (!currentSalaryEmployee || !['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+    salaryPayrollValidation = null;
+    renderSalaryPayrollValidation(null);
+    return null;
+  }
+  const period = document.getElementById('salary-payroll-period')?.value || new Date().toISOString().slice(0, 7);
+  try {
+    const res = await apiFetch(`/api/payroll/employees/${currentSalaryEmployee.id}/payroll-validation?payroll_period=${encodeURIComponent(period)}`);
+    const validation = await res.json();
+    if (!res.ok) throw new Error(validation.error || 'Failed to validate payroll attendance.');
+    salaryPayrollValidation = validation;
+    renderSalaryPayrollValidation(validation);
+    if (validation.ok) {
+      currentSalaryEmployee.rate = Number(validation.rate || currentSalaryEmployee.rate || 0);
+      const rateEl = document.getElementById('salary-rate');
+      if (rateEl) rateEl.textContent = `₱${currentSalaryEmployee.rate.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+      if (currentSalaryEmployee.wageType === 'Daily') {
+        const input = document.getElementById('salary-days-worked');
+        if (input) input.value = Number(validation.days_worked || 0).toFixed(2);
+      }
+      if (currentSalaryEmployee.wageType === 'Hourly') {
+        const input = document.getElementById('salary-hours-worked');
+        if (input) input.value = Number(validation.hours_worked || 0).toFixed(2);
+      }
+      calculateSalaryNow();
+    }
+    return validation;
+  } catch (err) {
+    salaryPayrollValidation = { ok: false, errors: [err.message], warnings: [] };
+    renderSalaryPayrollValidation(salaryPayrollValidation);
+    return salaryPayrollValidation;
+  }
 }
 
 function getActivePairRule(pairingType) {
@@ -322,12 +402,21 @@ async function fetchWageTypes() {
       logisticsRegions = await logRes.json();
       console.log(`✅ Loaded ${logisticsRegions.length} logistics regions:`, logisticsRegions);
     }
+
+    try {
+      const rateRes = await apiFetch('/api/payroll/logistics-rates');
+      logisticsRates = rateRes.ok ? await rateRes.json() : [];
+    } catch (rateErr) {
+      console.warn('Failed to fetch logistics rates:', rateErr.message);
+      logisticsRates = [];
+    }
     
     return { sewingTypes, logisticsRegions };
   } catch (e) {
     console.error('❌ Error loading wage types:', e);
     sewingTypes = [];
     logisticsRegions = [];
+    logisticsRates = [];
     return { sewingTypes: [], logisticsRegions: [] };
   }
 }
@@ -341,6 +430,7 @@ async function fetchSalaryEmpList() {
     }
     salaryEmpList = await res.json();
     console.log(`✅ Got ${salaryEmpList.length} employees for salary page`);
+    await fetchSalaryAgencies();
     populateSalaryAgencyOptions();
     attachSearchListener();
     attachPartnerSearchListener();
@@ -349,17 +439,36 @@ async function fetchSalaryEmpList() {
   }
 }
 
+async function fetchSalaryAgencies() {
+  try {
+    const res = await apiFetch('/api/payroll/agencies');
+    if (!res || !res.ok) throw new Error(res ? `HTTP ${res.status}` : 'No response from agency API');
+    const rows = await res.json();
+    salaryAgencyList = (Array.isArray(rows) ? rows : [])
+      .map(row => String(row.name || row.agency_name || '').trim())
+      .filter(Boolean);
+  } catch (err) {
+    console.warn('Failed to fetch payroll agencies, using employee agency names only:', err.message);
+    salaryAgencyList = [];
+  }
+}
+
 function populateSalaryAgencyOptions(preferredAgency = '') {
   const select = document.getElementById('salary-agency');
   if (!select) return;
 
   const current = preferredAgency || select.value || '';
-  const agencies = [...new Set((salaryEmpList || [])
+  const employeeAgencies = (salaryEmpList || [])
     .map(emp => String(emp.agency_name || '').trim())
-    .filter(Boolean))]
+    .filter(Boolean);
+  const agencies = [...new Set([...salaryAgencyList, ...employeeAgencies])]
     .sort((a, b) => a.localeCompare(b));
 
-  select.innerHTML = '<option value="">Direct / No agency</option>' + agencies
+  const noAgencyHint = agencies.length
+    ? ''
+    : '<option value="" disabled>No agencies configured</option>';
+
+  select.innerHTML = '<option value="">Direct / No agency</option>' + noAgencyHint + agencies
     .map(agency => `<option value="${salaryEscape(agency)}">${salaryEscape(agency)}</option>`)
     .join('');
 
@@ -561,6 +670,102 @@ function selectSalaryPiecePartner(emp) {
   calculateSalaryNow();
 }
 
+function salaryPositionKind(position) {
+  const value = String(position || '').toLowerCase();
+  if (value.includes('driver')) return 'Driver';
+  if (value.includes('helper')) return 'Helper';
+  return '';
+}
+
+function populateLogisticsCrewSelects(selectedEmployee = null) {
+  const driverSelect = document.getElementById('salary-driver-employee');
+  const helper1Select = document.getElementById('salary-helper1-employee');
+  const helper2Select = document.getElementById('salary-helper2-employee');
+  if (!driverSelect || !helper1Select || !helper2Select) return;
+
+  const option = emp => `<option value="${emp.id}">${salaryEscape(emp.employee_code || 'EMP')} - ${salaryEscape(`${emp.first_name || ''} ${emp.last_name || ''}`.trim())}</option>`;
+  const drivers = salaryEmpList.filter(emp => salaryPositionKind(emp.position) === 'Driver');
+  const helpers = salaryEmpList.filter(emp => salaryPositionKind(emp.position) === 'Helper');
+  driverSelect.innerHTML = '<option value="">Select driver</option>' + drivers.map(option).join('');
+  helper1Select.innerHTML = '<option value="">Select helper 1</option>' + helpers.map(option).join('');
+  helper2Select.innerHTML = '<option value="">No helper 2 / incomplete crew</option>' + helpers.map(option).join('');
+
+  if (selectedEmployee) {
+    const kind = salaryPositionKind(selectedEmployee.pos || selectedEmployee.position);
+    if (kind === 'Driver') driverSelect.value = selectedEmployee.id;
+    if (kind === 'Helper') helper1Select.value = selectedEmployee.id;
+  }
+}
+
+function getActiveLogisticsRate(regionId, truckType, position) {
+  const truck = String(truckType || 'Standard Truck').trim().toLowerCase();
+  const role = position === 'Driver' ? 'Driver' : 'Helper';
+  const rows = logisticsRates
+    .filter(row => Number(row.is_active) === 1)
+    .filter(row => String(row.logistics_region_id) === String(regionId))
+    .filter(row => String(row.position || '').toLowerCase() === role.toLowerCase())
+    .filter(row => String(row.truck_type || 'Standard Truck').toLowerCase() === truck)
+    .sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')));
+  if (rows.length) return Number(rows[0].rate || 0);
+  return 0;
+}
+
+function getLogisticsPreview() {
+  const tripCount = Math.max(1, Number(document.getElementById('salary-trips')?.value || 1));
+  const regionId = document.getElementById('salary-region')?.value || '';
+  const truckType = document.getElementById('salary-truck-type')?.value || 'Standard Truck';
+  const driverId = document.getElementById('salary-driver-employee')?.value || '';
+  const helper1Id = document.getElementById('salary-helper1-employee')?.value || '';
+  const helper2Id = document.getElementById('salary-helper2-employee')?.value || '';
+  const driverRate = regionId ? getActiveLogisticsRate(regionId, truckType, 'Driver') : 0;
+  const helperRate = regionId ? getActiveLogisticsRate(regionId, truckType, 'Helper') : 0;
+  const crewStatus = helper2Id ? 'Complete' : helper1Id ? 'Incomplete' : '-';
+  const missingHelperShare = crewStatus === 'Incomplete' ? helperRate / 2 : 0;
+  const driverGross = driverId ? (driverRate + missingHelperShare) * tripCount : 0;
+  const helper1Gross = helper1Id ? (helperRate + missingHelperShare) * tripCount : 0;
+  const helper2Gross = helper2Id ? helperRate * tripCount : 0;
+  const selectedId = String(currentSalaryEmployee?.id || '');
+  const selectedGross = selectedId === String(driverId) ? driverGross
+    : selectedId === String(helper1Id) ? helper1Gross
+      : selectedId === String(helper2Id) ? helper2Gross
+        : 0;
+
+  return {
+    tripCount,
+    regionId,
+    truckType,
+    driverId,
+    helper1Id,
+    helper2Id,
+    driverRate,
+    helperRate,
+    crewStatus,
+    missingHelperShare,
+    driverGross,
+    helper1Gross,
+    helper2Gross,
+    selectedGross
+  };
+}
+
+function updateLogisticsPreview() {
+  const preview = getLogisticsPreview();
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  set('salary-driver-rate-view', salaryMoney(preview.driverRate));
+  set('salary-helper-rate-view', salaryMoney(preview.helperRate));
+  set('salary-crew-status-view', preview.crewStatus);
+  set('salary-missing-helper-share-view', salaryMoney(preview.missingHelperShare));
+  set('salary-driver-gross-view', salaryMoney(preview.driverGross));
+  set('salary-helper1-gross-view', salaryMoney(preview.helper1Gross));
+  set('salary-helper2-gross-view', preview.helper2Id ? salaryMoney(preview.helper2Gross) : '-');
+  set('salary-logistics-note', preview.crewStatus === 'Incomplete'
+    ? `Missing helper share: ${salaryMoney(preview.helperRate)} / 2 added to Driver and Helper 1.`
+    : preview.crewStatus === 'Complete'
+      ? 'Complete crew: Driver receives Driver Rate; each Helper receives Helper Rate.'
+      : 'Select crew and region.');
+  return preview;
+}
+
 // Handle employee selection
 async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   console.log(`\n=== Employee Selection ===`);
@@ -625,6 +830,9 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       rate: parseFloat(config.current_rate) || 0,
       agencyName: config.employee?.agency_name || ''
     };
+    salaryPayrollValidation = null;
+    renderSalaryPayrollValidation(null);
+    populateLogisticsCrewSelects(currentSalaryEmployee);
     
     console.log('✅ Current salary employee set:', currentSalaryEmployee);
     
@@ -663,15 +871,21 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     if (pieceProductionDate && !pieceProductionDate.value) pieceProductionDate.value = new Date().toISOString().split('T')[0];
     const pieceSewer = document.getElementById('salary-piece-sewer');
     if (pieceSewer) pieceSewer.textContent = `${code} - ${first} ${last}`;
-    document.getElementById('salary-trips').value = '';
+    const tripDate = document.getElementById('salary-trip-date');
+    if (tripDate && !tripDate.value) tripDate.value = new Date().toISOString().split('T')[0];
+    document.getElementById('salary-trips').value = normalizedWageType === 'Per-Trip' ? '1' : '';
     document.getElementById('salary-region').value = '';
     document.getElementById('salary-housing').value = '0';
     document.getElementById('salary-meal').value = '0';
     document.getElementById('salary-transport').value = '0';
     document.getElementById('salary-bonus').value = '0';
     document.getElementById('salary-ot-hours').value = '0';
-    
-    calculateSalaryNow();
+
+    if (['Daily', 'Hourly'].includes(normalizedWageType)) {
+      await loadSalaryPayrollValidation();
+    } else {
+      calculateSalaryNow();
+    }
     
   } catch (e) {
     console.error('❌ Error loading wage config:', e);
@@ -757,6 +971,7 @@ function showWageStructureForm(wageType) {
     }
     
     console.log('✅ Per-Trip form ready with', logisticsRegions.length, 'regions');
+    populateLogisticsCrewSelects(currentSalaryEmployee);
   } else if (wageType === 'Hourly') {
     console.log('✅ Showing form for Hourly wage type');
     perPieceSection.style.display = 'none';
@@ -865,20 +1080,12 @@ function calculateSalaryNow() {
     calculationNote = `${pieces} pieces @ ₱${currentSalaryEmployee.rate}/piece`;
     
   } else if (currentSalaryEmployee.wageType === 'Per-Trip') {
-    const trips = parseFloat(document.getElementById('salary-trips').value) || 0;
-    const regionId = document.getElementById('salary-region').value;
-    
-    qty = trips;
-    
-    // Check if region has different rate
-    if (regionId) {
-      const region = logisticsRegions.find(r => r.id == regionId);
-      if (region) {
-        actualRate = parseFloat(region.default_rate) || currentSalaryEmployee.rate;
-        console.log(`📊 Per-Trip: ${trips} trips in ${region.name} @ ₱${actualRate.toFixed(2)}/trip`);
-        calculationNote = `${trips} trips @ ₱${actualRate}/trip (${region.name})`;
-      }
-    }
+    const logistics = updateLogisticsPreview();
+    qty = logistics.tripCount;
+    actualRate = logistics.selectedGross || logistics.driverRate || currentSalaryEmployee.rate;
+    calculationNote = logistics.crewStatus === 'Incomplete'
+      ? `Incomplete crew: missing helper share ${salaryMoney(logistics.missingHelperShare)}`
+      : 'Complete logistics crew';
     
   } else if (currentSalaryEmployee.wageType === 'Hourly') {
     // For Hourly: hours worked × hourly rate
@@ -915,6 +1122,8 @@ function calculateSalaryNow() {
   
   const base = currentSalaryEmployee.wageType === 'Per-Piece' && currentSalaryEmployee.piecePreview
     ? currentSalaryEmployee.piecePreview.final_gross_pay
+    : currentSalaryEmployee.wageType === 'Per-Trip'
+      ? actualRate
     : qty * actualRate;
   const allowances = housing + meal + transport + bonus;
   const gross = base + allowances;
@@ -979,7 +1188,7 @@ function calculateConfiguredDeductions(gross) {
 function attachSalaryInputListeners() {
   if (salaryInputListenersAttached) return;
 
-  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trips', 'salary-region', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked', 'salary-agency'];
+  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trip-date', 'salary-trips', 'salary-region', 'salary-truck-type', 'salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked', 'salary-agency'];
   let attachedAny = false;
   ids.forEach(id => {
     const elem = document.getElementById(id);
@@ -990,6 +1199,15 @@ function attachSalaryInputListeners() {
       attachedAny = true;
     }
   });
+  const periodInput = document.getElementById('salary-payroll-period');
+  if (periodInput && !periodInput.dataset.validationListenerAttached) {
+    periodInput.dataset.validationListenerAttached = '1';
+    periodInput.addEventListener('change', () => {
+      if (currentSalaryEmployee && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+        loadSalaryPayrollValidation();
+      }
+    });
+  }
   salaryInputListenersAttached = attachedAny;
 }
 
@@ -1177,6 +1395,15 @@ async function saveLogisticsTransaction() {
 // Save salary record for all wage types
 async function saveSalaryRecord(status = 'Submitted') {
   console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
+
+  if (status !== 'Draft' && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+    const validation = await loadSalaryPayrollValidation();
+    if (!validation?.ok) {
+      const message = (validation?.errors || ['Payroll validation failed.']).join('\n');
+      await showAlert(message, 'Payroll Validation Blocked', 'warning');
+      return;
+    }
+  }
   
   // Collect all calculation data
   const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
@@ -1192,7 +1419,7 @@ async function saveSalaryRecord(status = 'Submitted') {
   
   // Handle different wage types
   if (currentSalaryEmployee.wageType === 'Hourly') {
-    hoursWorked = parseFloat(document.getElementById('salary-hours-worked').value) || 0;
+    hoursWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.hours_worked || 0) : parseFloat(document.getElementById('salary-hours-worked').value) || 0;
     basePayAmount = (hoursWorked + otHours) * currentSalaryEmployee.rate;
     
     if (hoursWorked === 0) {
@@ -1200,7 +1427,7 @@ async function saveSalaryRecord(status = 'Submitted') {
       return;
     }
   } else if (currentSalaryEmployee.wageType === 'Daily') {
-    daysWorked = parseFloat(document.getElementById('salary-days-worked').value) || 0;
+    daysWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.days_worked || 0) : parseFloat(document.getElementById('salary-days-worked').value) || 0;
     basePayAmount = daysWorked * currentSalaryEmployee.rate;
     
     if (daysWorked === 0) {
@@ -1233,14 +1460,24 @@ async function saveSalaryRecord(status = 'Submitted') {
       return;
     }
   } else if (currentSalaryEmployee.wageType === 'Per-Trip') {
-    quantity = parseFloat(document.getElementById('salary-trips').value) || 0;
-    const regionId = document.getElementById('salary-region').value;
-    const region = logisticsRegions.find(r => r.id == regionId);
-    const tripRate = region ? (parseFloat(region.default_rate) || currentSalaryEmployee.rate) : currentSalaryEmployee.rate;
-    basePayAmount = quantity * tripRate;
-
-    if (quantity === 0) {
-      await showAlert('Please enter trips completed', 'Warning', 'warning');
+    const logistics = updateLogisticsPreview();
+    quantity = logistics.tripCount;
+    basePayAmount = logistics.selectedGross;
+    if (!logistics.regionId) {
+      await showAlert('Please select a logistics region.', 'Warning', 'warning');
+      return;
+    }
+    if (!logistics.driverId || !logistics.helper1Id) {
+      await showAlert('A logistics transaction requires 1 Driver and at least 1 Helper.', 'Warning', 'warning');
+      return;
+    }
+    const crewIds = [logistics.driverId, logistics.helper1Id, logistics.helper2Id].filter(Boolean);
+    if (new Set(crewIds).size !== crewIds.length) {
+      await showAlert('Driver and helpers cannot be the same employee.', 'Warning', 'warning');
+      return;
+    }
+    if (!(basePayAmount > 0)) {
+      await showAlert('The selected employee must be part of the logistics crew and rates must be configured.', 'Warning', 'warning');
       return;
     }
   }
@@ -1291,6 +1528,32 @@ async function saveSalaryRecord(status = 'Submitted') {
     agency_name: document.getElementById('salary-agency')?.value || '',
     status
   };
+  if (currentSalaryEmployee.wageType === 'Per-Trip') {
+    const logistics = updateLogisticsPreview();
+    const logisticsPayload = {
+      logistics_region_id: logistics.regionId,
+      truck_type: logistics.truckType,
+      trip_count: logistics.tripCount,
+      transaction_date: document.getElementById('salary-trip-date')?.value || payload.calculation_date,
+      driver_employee_id: logistics.driverId,
+      helper1_employee_id: logistics.helper1Id,
+      helper2_employee_id: logistics.helper2Id || null,
+      driver_rate: logistics.driverRate,
+      helper_rate: logistics.helperRate,
+      trip_reference: `Trip-${Date.now()}`
+    };
+    const logisticsRes = await apiFetch('/api/payroll/transactions/logistics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logisticsPayload)
+    });
+    const logisticsResult = await logisticsRes.json().catch(() => ({}));
+    if (!logisticsRes.ok) throw new Error(logisticsResult.error || 'Failed to save logistics crew transaction');
+    await showAlert(`${logisticsResult.message}\n\nCrew Status: ${logisticsResult.crew_status}\nMissing Helper Share: ${salaryMoney(logisticsResult.missing_helper_share)}`, 'Success', 'success');
+    resetCalculationForm();
+    if (typeof loadSalaryCalculations === 'function') loadSalaryCalculations();
+    return;
+  }
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
     payload.base_rate = 0;
     payload.product_type = currentSalaryEmployee.piecePreview?.product_type || document.getElementById('salary-piece-product')?.value || null;
@@ -1363,6 +1626,14 @@ function resetCalculationForm() {
   if (isSunday) isSunday.checked = false;
   document.getElementById('salary-trips').value = '';
   document.getElementById('salary-region').value = '';
+  const tripDate = document.getElementById('salary-trip-date');
+  if (tripDate) tripDate.value = '';
+  const truckType = document.getElementById('salary-truck-type');
+  if (truckType) truckType.value = 'Standard Truck';
+  ['salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select) select.value = '';
+  });
   document.getElementById('salary-hours-worked').value = '';
   document.getElementById('salary-days-worked').value = '';
   document.getElementById('salary-housing').value = '0';
@@ -1383,6 +1654,7 @@ function resetCalculationForm() {
   document.getElementById('summary-net').textContent = '₱0.00';
   if (currentSalaryEmployee) currentSalaryEmployee.piecePreview = null;
   updatePieceDetailView();
+  updateLogisticsPreview();
   
   currentSalaryEmployee = null;
   console.log('✅ Form reset');

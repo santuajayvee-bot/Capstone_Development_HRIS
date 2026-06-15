@@ -45,6 +45,10 @@ async function doLogin() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display          = 'block';
 
+    if (typeof initAttendanceRealtime === 'function') {
+      initAttendanceRealtime();
+    }
+
     navigate('dashboard', null);
 
   } catch (err) {

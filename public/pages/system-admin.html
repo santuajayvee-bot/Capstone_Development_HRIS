@@ -14,6 +14,9 @@
   <button class="sysadmin-tab" data-tab="audit" onclick="switchSysAdminTab('audit', this)">
     <span class="tab-icon">📋</span> Audit Trail
   </button>
+  <button class="sysadmin-tab" data-tab="biometric-settings" onclick="switchSysAdminTab('biometric-settings', this)">
+    <span class="tab-icon">BS</span> Biometric Settings
+  </button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════
@@ -121,6 +124,89 @@
       </thead>
       <tbody id="audit-tbody">
         <tr><td colspan="6" class="table-empty">Loading audit trail...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TAB 4: BIOMETRIC SETTINGS
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="sysadmin-panel" id="panel-biometric-settings">
+  <div class="sysadmin-action-bar">
+    <div>
+      <h3 style="margin:0 0 4px;">Biometric Device Configuration</h3>
+      <small class="input-hint">For system administrators only. HR users see the simplified enrollment screen in Attendance.</small>
+    </div>
+    <button class="btn-sysadmin-outline" onclick="loadBiometricSettings()">Refresh</button>
+  </div>
+
+  <div class="sysadmin-settings-card">
+    <div class="sysadmin-form-grid">
+      <div>
+        <label class="sysadmin-label">Device Reference</label>
+        <input id="sys-bio-reference" class="sysadmin-input" placeholder="ZK9500-LOCAL-001" />
+      </div>
+      <div>
+        <label class="sysadmin-label">Device Name</label>
+        <input id="sys-bio-name" class="sysadmin-input" placeholder="Main Gate Fingerprint Scanner" />
+      </div>
+      <div>
+        <label class="sysadmin-label">Vendor</label>
+        <input id="sys-bio-vendor" class="sysadmin-input" placeholder="ZKTeco" />
+      </div>
+      <div>
+        <label class="sysadmin-label">API Base URL</label>
+        <input id="sys-bio-url" class="sysadmin-input" placeholder="https://biometric.example/api/" />
+      </div>
+      <div>
+        <label class="sysadmin-label">Logs Endpoint</label>
+        <input id="sys-bio-endpoint" class="sysadmin-input" placeholder="/attendance/logs" />
+      </div>
+      <div>
+        <label class="sysadmin-label">Authentication Type</label>
+        <select id="sys-bio-auth" class="sysadmin-input">
+          <option value="NONE">None</option>
+          <option value="API_KEY">API Key</option>
+          <option value="BEARER">Bearer Token</option>
+          <option value="HMAC">HMAC</option>
+          <option value="OAUTH2">OAuth2</option>
+          <option value="MTLS">mTLS</option>
+        </select>
+      </div>
+      <div>
+        <label class="sysadmin-label">Secret Token</label>
+        <input id="sys-bio-secret" class="sysadmin-input" type="password" placeholder="Stored encrypted" />
+      </div>
+      <div>
+        <label class="sysadmin-label">Status</label>
+        <select id="sys-bio-active" class="sysadmin-input">
+          <option value="1">Active</option>
+          <option value="0">Inactive</option>
+        </select>
+      </div>
+    </div>
+    <input type="hidden" id="sys-bio-device-id" />
+    <div class="modal-footer" style="padding:16px 0 0;">
+      <button class="btn-sysadmin-outline" onclick="clearBiometricSettingsForm()">Clear</button>
+      <button class="btn-sysadmin-primary" onclick="saveBiometricSettings()">Save Device</button>
+    </div>
+  </div>
+
+  <div class="sysadmin-table-wrapper" style="margin-top:20px;">
+    <table class="sysadmin-table">
+      <thead>
+        <tr>
+          <th>Device</th>
+          <th>Vendor</th>
+          <th>Status</th>
+          <th>Last Successful Sync</th>
+          <th>Last Error</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sys-bio-devices-tbody">
+        <tr><td colspan="6" class="table-empty">No biometric devices loaded.</td></tr>
       </tbody>
     </table>
   </div>

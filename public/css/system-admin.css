@@ -589,6 +589,19 @@
   flex-direction: column;
 }
 
+.sysadmin-settings-card {
+  padding: 18px;
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 12px;
+  background: var(--card2, #1a1d23);
+}
+
+.sysadmin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
 /* ── Password Field ─────────────────────────────────────────── */
 .password-field {
   position: relative;
@@ -712,7 +725,8 @@
   .sysadmin-tabs {
     flex-direction: column;
   }
-  .form-row {
+  .form-row,
+  .sysadmin-form-grid {
     grid-template-columns: 1fr;
   }
   .sysadmin-modal {

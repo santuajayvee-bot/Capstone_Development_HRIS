@@ -6,22 +6,22 @@
 
 /* ---- CSS VARIABLES ---- */
 :root {
-  --bg: #0f1117;
-  --sidebar: #161822;
-  --card: #1e2030;
-  --card2: #252840;
-  --border: #2a2d45;
-  --accent: #4f7cff;
-  --accent2: #22d3a5;
-  --accent3: #f5a623;
-  --accent4: #e05c7a;
-  --text: #e8eaf6;
-  --muted: #7a7e9a;
-  --green: #22d3a5;
-  --yellow: #f5a623;
-  --red: #e05c7a;
-  --blue: #4f7cff;
-  --purple: #7c5cfc;
+  --bg: #f7f8fb;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --card2: #f1f3f7;
+  --border: #dde2ea;
+  --accent: #e73737;
+  --accent2: #b91c1c;
+  --accent3: #d97706;
+  --accent4: #ef4444;
+  --text: #1d2433;
+  --muted: #667085;
+  --green: #168a55;
+  --yellow: #b7791f;
+  --red: #d92d20;
+  --blue: #e73737;
+  --purple: #9f1239;
   --font-main: 'Poppins', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -167,6 +167,35 @@ body *:not(code):not(pre) {
 .btn-green { background: var(--green); color: #0f1117; }
 .btn-sm { padding: 6px 14px; font-size: 12px; }
 
+.action-dots-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-width: 34px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #171b2d;
+  color: #f8fbff;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.action-dots-button:hover,
+.action-dots-button:focus-visible {
+  border-color: var(--accent);
+  color: #ffffff;
+  background: rgba(79,124,255,.12);
+  outline: none;
+}
+.action-dots-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
+
 /* ---- BADGES ---- */
 .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
 .badge-green { background: rgba(34,211,165,0.15); color: var(--green); }
@@ -174,6 +203,34 @@ body *:not(code):not(pre) {
 .badge-red { background: rgba(224,92,122,0.15); color: var(--red); }
 .badge-blue { background: rgba(79,124,255,0.15); color: var(--blue); }
 .badge-active { background: rgba(34,211,165,0.15); color: var(--green); font-size: 10px; padding: 2px 8px; }
+
+#realtime-toast-host {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10050;
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+.realtime-toast {
+  min-width: 260px;
+  max-width: 360px;
+  padding: 12px 14px;
+  border: 1px solid rgba(34, 211, 165, .28);
+  border-radius: 8px;
+  background: #171b2d;
+  color: #f8fbff;
+  box-shadow: 0 12px 30px rgba(0,0,0,.24);
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.realtime-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
 
 /* ---- TABLES ---- */
 .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
@@ -792,6 +849,181 @@ input.lgsv-date-native[type="date"] {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+}
+.report-library { display: grid; gap: 14px; }
+.report-library-head,
+.report-filter-grid,
+.report-library-table-wrap {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 8px;
+}
+.report-library-head { padding: 16px; }
+.report-library-head h3,
+.report-library-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 500;
+}
+.report-library-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.report-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(5, minmax(140px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  align-items: end;
+}
+.report-filter-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.report-filter-grid input,
+.report-filter-grid select {
+  min-height: 40px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.report-filter-actions { display: flex; gap: 8px; align-items: center; }
+.report-library-table-wrap { overflow: auto; }
+.report-library-title {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.report-library-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+.report-library-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #252944;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .05em;
+  text-align: left;
+  text-transform: uppercase;
+}
+.report-library-table th,
+.report-library-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+  vertical-align: middle;
+}
+.report-library-table tbody tr:hover { background: rgba(79, 124, 255, .08); }
+.report-star {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+.report-star.active { border-color: #f5c542; color: #f5c542; }
+.report-category-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 12px;
+}
+.report-pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.report-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, .62);
+}
+.report-modal {
+  width: min(520px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}
+.report-modal-header,
+.report-modal-body,
+.report-modal-footer {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.report-modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.report-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+.report-modal-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.report-modal-close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.report-format-list { display: grid; gap: 10px; margin-top: 10px; }
+.report-format-list label { display: flex; align-items: center; gap: 10px; }
+.report-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-bottom: 0;
+}
+@media (max-width: 1100px) {
+  .report-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-filter-actions { grid-column: 1 / -1; }
+}
+@media (max-width: 640px) {
+  .report-filter-grid { grid-template-columns: 1fr; }
+  .report-filter-actions,
+  .report-modal-footer { flex-direction: column; align-items: stretch; }
+  .report-filter-actions .btn,
+  .report-modal-footer .btn { width: 100%; }
 }
 .page-header.compact { margin-bottom: 16px; }
 .section-title.small { font-size: 18px; }
@@ -1948,4 +2180,809 @@ video {
     display: grid;
     grid-template-columns: 1fr;
   }
+}
+
+/* ============================================================
+   ERP-STYLE GLOBAL SYSTEM LAYER
+   Compact, table-first interface for scalable internal HRIS use.
+   ============================================================ */
+
+:root {
+  --erp-panel: #181b2a;
+  --erp-panel-2: #20243a;
+  --erp-row: #171a28;
+  --erp-row-hover: rgba(79, 124, 255, .08);
+  --erp-border: #2b3048;
+  --erp-label: #9aa6ce;
+  --erp-heading: #f5f7ff;
+}
+
+.page-body {
+  padding: 22px 24px;
+}
+
+.page-header,
+.dashboard-header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--erp-border);
+}
+
+.section-title,
+.topbar-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--erp-heading);
+}
+
+.section-sub {
+  margin-bottom: 0;
+  color: var(--erp-label);
+}
+
+.card,
+.leave-card,
+.dashboard-panel,
+.att-overview-panel,
+.payroll-panel,
+.payroll-form-page,
+.salary-form,
+.table-wrap,
+.leave-table-wrap,
+.report-library-head,
+.report-filter-grid,
+.report-library-table-wrap {
+  border-color: var(--erp-border) !important;
+  border-radius: 8px !important;
+  background: var(--erp-panel) !important;
+  box-shadow: none !important;
+}
+
+.card,
+.leave-card,
+.dashboard-panel,
+.salary-form,
+.payroll-form-page {
+  padding: 14px 16px;
+}
+
+.tabs,
+.payroll-tabs,
+.leave-tabs,
+.attendance-tabs {
+  border: 1px solid var(--erp-border);
+  border-radius: 8px;
+  background: var(--erp-panel);
+  padding: 4px;
+}
+
+.tab,
+.payroll-tab,
+.leave-tab {
+  min-height: 34px;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+.tab.active,
+.payroll-tab.active,
+.leave-tab.active {
+  background: rgba(79, 124, 255, .18) !important;
+  color: #fff !important;
+}
+
+.btn {
+  min-height: 34px;
+  padding: 7px 13px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.btn-sm {
+  min-height: 30px;
+  padding: 5px 10px;
+}
+
+input,
+select,
+textarea,
+.form-control,
+.search-input,
+.filter-select,
+.form-select {
+  min-height: 36px;
+  border-radius: 6px !important;
+  border-color: var(--erp-border) !important;
+  background: #101624 !important;
+  color: var(--text) !important;
+  font-size: 13px;
+}
+
+label,
+.leave-field label,
+.att-toolbar label,
+.att-form-grid label,
+.report-filter-grid label {
+  color: var(--erp-label) !important;
+  font-weight: 500 !important;
+  letter-spacing: .02em !important;
+}
+
+.filter-bar,
+.payroll-filter-bar,
+.leave-filter-bar,
+.att-toolbar,
+.report-filter-grid {
+  margin-bottom: 14px !important;
+  padding: 12px !important;
+  border: 1px solid var(--erp-border);
+  border-radius: 8px;
+  background: var(--erp-panel);
+}
+
+.table-wrap,
+.leave-table-wrap,
+.dashboard-table-wrap,
+.report-library-table-wrap {
+  overflow: auto;
+}
+
+table,
+.leave-table,
+.dashboard-table,
+.report-library-table,
+.emp-table,
+.salary-work-table,
+.salary-summary-table,
+.payroll-simple-table {
+  background: var(--erp-panel);
+}
+
+th,
+.leave-table th,
+.dashboard-table th,
+.report-library-table thead th,
+.emp-table th,
+.salary-work-table th,
+.salary-summary-table th,
+.payroll-simple-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 12px !important;
+  background: var(--erp-panel-2) !important;
+  color: var(--erp-label) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
+}
+
+td,
+.leave-table td,
+.dashboard-table td,
+.report-library-table td,
+.emp-table td,
+.salary-work-table td,
+.salary-summary-table td,
+.payroll-simple-table td {
+  padding: 10px 12px !important;
+  border-top: 1px solid var(--erp-border) !important;
+  color: var(--text);
+  font-size: 13px;
+}
+
+tr:hover td,
+.leave-table tbody tr:hover td,
+.dashboard-table tbody tr:hover td,
+.report-library-table tbody tr:hover td,
+.emp-table tbody tr:hover td {
+  background: var(--erp-row-hover) !important;
+}
+
+.stat-grid,
+.payroll-stat-grid,
+.leave-summary-grid {
+  gap: 0 !important;
+  margin-bottom: 14px !important;
+  border: 1px solid var(--erp-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--erp-panel);
+}
+
+.stat-card,
+.leave-summary-grid .leave-card {
+  min-height: 78px;
+  border: 0 !important;
+  border-right: 1px solid var(--erp-border) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 12px 14px !important;
+}
+
+.stat-card:last-child,
+.leave-summary-grid .leave-card:last-child {
+  border-right: 0 !important;
+}
+
+.stat-label,
+.leave-card-label {
+  color: var(--erp-label);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.stat-val,
+.leave-card-value {
+  margin-top: 4px;
+  font-size: 22px !important;
+  font-weight: 500 !important;
+}
+
+.stat-sub {
+  color: var(--erp-label);
+  font-size: 11px;
+}
+
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+}
+
+.dashboard-main,
+.dashboard-side,
+.dashboard-shell {
+  gap: 14px;
+}
+
+.dashboard-actions {
+  gap: 0;
+  border: 1px solid var(--erp-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.dashboard-action-btn {
+  border: 0;
+  border-bottom: 1px solid var(--erp-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-action-btn:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-list {
+  gap: 0;
+  border: 1px solid var(--erp-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.dashboard-list-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--erp-border);
+}
+
+.dashboard-list-item:last-child {
+  border-bottom: 0;
+}
+
+.payroll-card-header-row,
+.report-library-title {
+  padding: 12px 14px !important;
+  border-bottom: 1px solid var(--erp-border);
+  background: var(--erp-panel);
+}
+
+.payroll-card-header-row h3,
+.dashboard-panel-title,
+.leave-section-title,
+.att-card-heading h3,
+.report-library-head h3,
+.report-library-title {
+  color: var(--erp-heading);
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+
+.payroll-card-header-row p,
+.att-card-heading p,
+.report-library-head p {
+  color: var(--erp-label);
+}
+
+.action-card {
+  min-height: auto !important;
+  border: 1px solid var(--erp-border) !important;
+  border-radius: 8px !important;
+  background: var(--erp-panel) !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 980px) {
+  .stat-grid,
+  .payroll-stat-grid,
+  .leave-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .stat-card,
+  .leave-summary-grid .leave-card {
+    border-right: 1px solid var(--erp-border) !important;
+    border-bottom: 1px solid var(--erp-border) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-body {
+    padding: 12px;
+  }
+
+  .stat-grid,
+  .payroll-stat-grid,
+  .leave-summary-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .stat-card,
+  .leave-summary-grid .leave-card {
+    border-right: 0 !important;
+  }
+}
+
+/* ============================================================
+   CLIENT LIGHT THEME - WHITE / RED PALETTE
+   Brand-forward theme override for LGSV client presentation.
+   ============================================================ */
+
+:root {
+  --bg: #f7f8fb;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --card2: #f2f4f8;
+  --border: #dfe3eb;
+  --accent: #e73737;
+  --accent2: #b91c1c;
+  --accent3: #f59e0b;
+  --accent4: #ef4444;
+  --text: #1f2937;
+  --muted: #667085;
+  --green: #168a55;
+  --yellow: #b7791f;
+  --red: #d92d20;
+  --blue: #e73737;
+  --purple: #be123c;
+  --erp-panel: #ffffff;
+  --erp-panel-2: #f2f4f8;
+  --erp-row: #ffffff;
+  --erp-row-hover: #fff1f1;
+  --erp-border: #dfe3eb;
+  --erp-label: #667085;
+  --erp-heading: #111827;
+}
+
+body,
+.main-content,
+.topbar,
+.page-body,
+#app {
+  background: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+.sidebar {
+  background: #ffffff !important;
+  border-right-color: var(--border) !important;
+}
+
+.sidebar-logo {
+  border-bottom-color: var(--border) !important;
+}
+
+.sidebar-logo span {
+  color: var(--accent) !important;
+}
+
+.logo-icon,
+.user-avatar {
+  background: linear-gradient(135deg, #ef4444, #b91c1c) !important;
+  color: #ffffff !important;
+}
+
+.nav-item {
+  color: #667085 !important;
+}
+
+.nav-item:hover {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+}
+
+.nav-item.active {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+  border-left-color: var(--accent) !important;
+}
+
+.sidebar-user,
+.topbar,
+.page-header,
+.dashboard-header {
+  border-color: var(--border) !important;
+}
+
+.topbar-title,
+.section-title,
+.dashboard-panel-title,
+.leave-section-title,
+.att-card-heading h3,
+.payroll-card-header-row h3,
+.report-library-head h3,
+.report-library-title,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #111827 !important;
+}
+
+.topbar-date,
+.section-sub,
+.stat-label,
+.stat-sub,
+.leave-card-label,
+.dashboard-list-item span,
+.dashboard-list-item small,
+.dashboard-empty,
+.att-muted,
+.att-section-label,
+.att-panel-sub,
+.att-card-heading p,
+.report-library-head p,
+.payroll-card-header-row p {
+  color: #667085 !important;
+}
+
+.card,
+.leave-card,
+.dashboard-panel,
+.att-overview-panel,
+.payroll-panel,
+.payroll-form-page,
+.salary-form,
+.table-wrap,
+.leave-table-wrap,
+.report-library-head,
+.report-filter-grid,
+.report-library-table-wrap,
+.employee-setup-panel,
+.profile-page,
+.profile-field,
+.profile-record,
+.profile-family-surface,
+.profile-doc-card,
+.profile-stat,
+.dashboard-action-btn,
+.dashboard-list,
+.dashboard-actions {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+
+.stat-grid,
+.payroll-stat-grid,
+.leave-summary-grid,
+.tabs,
+.payroll-tabs,
+.leave-tabs,
+.attendance-tabs,
+.filter-bar,
+.payroll-filter-bar,
+.leave-filter-bar,
+.att-toolbar,
+.report-filter-grid {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+}
+
+.stat-card,
+.leave-summary-grid .leave-card {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+}
+
+.stat-val,
+.leave-card-value,
+.att-metric strong,
+.att-detail-grid strong,
+.att-panel-title,
+.dashboard-list-item strong,
+.dashboard-action-btn span,
+.emp-table .emp-name,
+.emp-table .emp-id {
+  color: #111827 !important;
+}
+
+.tab,
+.payroll-tab,
+.leave-tab,
+.form-tab,
+.profile-tab {
+  color: #667085 !important;
+}
+
+.tab.active,
+.payroll-tab.active,
+.leave-tab.active,
+.form-tab.active,
+.profile-tab.active {
+  background: var(--accent) !important;
+  color: #ffffff !important;
+  border-color: var(--accent) !important;
+}
+
+.btn-primary {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #ffffff !important;
+}
+
+.btn-primary:hover {
+  background: #c82727 !important;
+  border-color: #c82727 !important;
+}
+
+.btn-outline,
+.btn-secondary,
+.action-dots-button,
+.att-menu-trigger,
+.employee-setup-action,
+.report-star {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: #344054 !important;
+}
+
+.btn-outline:hover,
+.action-dots-button:hover,
+.att-menu-trigger:hover,
+.employee-setup-action:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: #fff1f1 !important;
+}
+
+input,
+select,
+textarea,
+.form-control,
+.search-input,
+.filter-select,
+.form-select,
+.file-input,
+.salary-readonly,
+.profile-form-grid input,
+.profile-form-grid select,
+.profile-form-grid textarea,
+.profile-family-form input,
+.profile-family-form select,
+.employee-setup-form input,
+.employee-setup-form select,
+.att-toolbar input,
+.att-form-grid input,
+.att-form-grid select,
+.att-modal input,
+.att-modal select,
+.att-modal textarea,
+.report-filter-grid input,
+.report-filter-grid select {
+  background: #ffffff !important;
+  border-color: #cfd6e1 !important;
+  color: #111827 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #98a2b3 !important;
+}
+
+select option {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+table,
+.leave-table,
+.dashboard-table,
+.report-library-table,
+.emp-table,
+.salary-work-table,
+.salary-summary-table,
+.payroll-simple-table,
+.profile-family-table {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+th,
+.leave-table th,
+.dashboard-table th,
+.report-library-table thead th,
+.emp-table th,
+.salary-work-table th,
+.salary-summary-table th,
+.payroll-simple-table th,
+.profile-family-table th {
+  background: #f2f4f8 !important;
+  color: #667085 !important;
+  border-color: var(--border) !important;
+}
+
+td,
+.leave-table td,
+.dashboard-table td,
+.report-library-table td,
+.emp-table td,
+.salary-work-table td,
+.salary-summary-table td,
+.payroll-simple-table td,
+.profile-family-table td,
+#page-attendance .table-wrap table td,
+#biometric-attendance-card table td,
+#att-biometric table td {
+  color: #1f2937 !important;
+  border-color: var(--border) !important;
+}
+
+tr:hover td,
+.leave-table tbody tr:hover td,
+.dashboard-table tbody tr:hover td,
+.report-library-table tbody tr:hover td,
+.emp-table tbody tr:hover td {
+  background: #fff1f1 !important;
+}
+
+.badge-green,
+.badge-active,
+.emp-status.active,
+.leave-badge.approved,
+.bio-success {
+  background: #ecfdf3 !important;
+  color: #067647 !important;
+  border-color: #abefc6 !important;
+}
+
+.badge-yellow,
+.leave-badge.pending,
+.bio-warning {
+  background: #fffaeb !important;
+  color: #b54708 !important;
+  border-color: #fedf89 !important;
+}
+
+.badge-red,
+.emp-status.inactive,
+.leave-badge.rejected,
+.bio-danger,
+.bio-error {
+  background: #fef3f2 !important;
+  color: #b42318 !important;
+  border-color: #fecdca !important;
+}
+
+.badge-blue,
+.leave-badge.portal,
+.leave-badge.manual,
+.report-category-badge,
+.role-badge {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+  border-color: #fecaca !important;
+}
+
+.att-note,
+.att-detail-grid > div,
+.att-metric,
+.bio-status-grid > div,
+.bio-steps,
+.bio-step,
+.dashboard-action-btn,
+.profile-field,
+.profile-record,
+.profile-family-surface,
+.profile-doc-card,
+.profile-stat,
+.salary-selected-strip,
+.payroll-deduction-note,
+.summary-deductions,
+.summary-net,
+.att-menu-panel,
+.report-modal,
+.att-modal-card,
+.leave-modal-card,
+.modal-content,
+.lgsv-modal .modal-content {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: #1f2937 !important;
+  box-shadow: none !important;
+}
+
+.att-note,
+.att-metric small,
+.att-detail-grid span,
+.att-metric span,
+.bio-status-grid label,
+.bio-step,
+.profile-address-field,
+.profile-form-grid label,
+.employee-setup-form label {
+  color: #667085 !important;
+}
+
+#bio-device-status,
+#bio-scan-employee,
+#bio-scan-employee-id,
+#bio-scan-type,
+#bio-scan-time,
+#bio-verification-result,
+#bio-attendance-result,
+#att-biometric table td {
+  color: #1f2937 !important;
+}
+
+.att-menu-panel button {
+  color: #1f2937 !important;
+}
+
+.att-menu-panel button:hover {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+}
+
+.report-star.active {
+  border-color: #e73737 !important;
+  color: #e73737 !important;
+  background: #fff1f1 !important;
+}
+
+.lgsv-modal .modal-header,
+.lgsv-modal .modal-body,
+.lgsv-modal .modal-footer,
+.report-modal-header,
+.report-modal-body,
+.report-modal-footer,
+.leave-modal-head {
+  border-color: var(--border) !important;
+}
+
+.modal-backdrop,
+.report-modal-backdrop,
+.att-modal,
+.leave-modal,
+.emp-detail-modal {
+  background: rgba(17, 24, 39, .38) !important;
+}
+
+.btn-close {
+  filter: none !important;
+}
+
+.realtime-toast,
+.draft-restore-banner {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  border-color: var(--border) !important;
+  box-shadow: 0 12px 30px rgba(16, 24, 40, .12) !important;
 }

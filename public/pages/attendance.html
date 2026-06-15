@@ -3,75 +3,42 @@
      ============================================================ -->
 <div class="page-header">
   <div>
-    <div class="section-title">Attendance Management</div>
-    <div class="section-sub">Fingerprint biometric integration, verified payroll inputs, and audit-ready corrections</div>
+    <div class="section-title" id="att-page-title">Attendance Management</div>
+    <div class="section-sub" id="att-page-subtitle">Fingerprint biometric integration, verified payroll inputs, and audit-ready corrections</div>
   </div>
   <div class="page-header-right">
     <div class="tabs attendance-tabs" style="margin-bottom:0;">
       <div class="tab active" data-att-tab="overview" onclick="switchAttTab('overview', this)">Overview</div>
-      <div class="tab" data-att-tab="records" onclick="switchAttTab('records', this)">Records</div>
+      <div class="tab" data-att-tab="records" onclick="switchAttTab('records', this)">Attendance Records</div>
       <div class="tab" id="att-tab-overtime" data-att-tab="overtime" onclick="switchAttTab('overtime', this)">Overtime</div>
-      <div class="tab" id="att-tab-exceptions" data-att-tab="exceptions" onclick="switchAttTab('exceptions', this)">Exceptions</div>
-      <div class="tab" id="att-tab-biometric" data-att-tab="biometric" onclick="switchAttTab('biometric', this)">Biometric Sync</div>
+      <div class="tab" id="att-tab-exceptions" data-att-tab="exceptions" onclick="switchAttTab('exceptions', this)">Attendance Exceptions</div>
+      <div class="tab" id="att-tab-biometric" data-att-tab="biometric" onclick="switchAttTab('biometric', this)">Biometrics</div>
+      <div class="tab" id="att-tab-policies" data-att-tab="policies" onclick="switchAttTab('policies', this)">Attendance Policies</div>
       <div class="tab" id="att-tab-audit" data-att-tab="audit" onclick="switchAttTab('audit', this)">Audit Log</div>
     </div>
   </div>
 </div>
 
 <div id="att-overview">
-  <div class="att-security-banner">
-    <strong>Privacy-preserving biometric attendance</strong>
-    <span>LGSV HR stores encrypted biometric reference IDs and scan metadata only. Raw fingerprints and fingerprint images are not stored.</span>
-  </div>
-
-  <div class="card" id="qr-attendance-card" style="margin-bottom:20px;overflow:hidden;">
-    <div class="att-card-heading">
+  <div class="att-overview-panel">
+    <div class="att-overview-row att-overview-head">
       <div>
-        <h3>QR Geofence Fallback</h3>
-        <p id="att-clock-status">Checking your attendance status...</p>
+        <div class="att-panel-title" id="att-banner-title">Attendance Overview</div>
+        <div class="att-panel-sub" id="att-banner-copy">Daily attendance summary only. Manage validation inside Attendance Records.</div>
       </div>
-      <div class="att-actions" id="att-clock-buttons">
-        <button class="btn btn-green" id="btn-clock-in" onclick="startClockIn()" disabled>Clock In</button>
-        <button class="btn btn-outline" id="btn-clock-out" onclick="startClockOut()" disabled style="display:none;">Clock Out</button>
-      </div>
+      <div class="att-section-label" id="att-date-label">Loading attendance overview...</div>
     </div>
-    <div class="att-note">Use this fallback only when the biometric device is unavailable or HR instructs you to do so.</div>
-    <div id="qr-scanner-container" class="att-scanner" style="display:none;">
-      <div class="att-card-heading">
-        <strong>Scan Site QR Code</strong>
-        <button class="btn btn-outline btn-sm" onclick="cancelQrScan()">Cancel</button>
-      </div>
-      <div id="qr-reader"></div>
-      <div id="qr-scan-status" class="att-muted"></div>
-    </div>
-    <div id="gps-status" class="att-success" style="display:none;"></div>
-  </div>
 
-  <div class="card" id="qr-generate-card" style="display:none;margin-bottom:20px;">
-    <div class="att-card-heading">
-      <div>
-        <h3>Static QR Attendance Code</h3>
-        <p>Generate the permanent QR code that points employees to /attendance/scan.</p>
+    <div class="att-overview-row">
+      <div class="att-metric-grid">
+        <div class="att-metric"><span class="status-ok">OK</span><strong id="stat-present">-</strong><small>Present</small></div>
+        <div class="att-metric"><span class="status-warn">L</span><strong id="stat-late">-</strong><small>Late</small></div>
+        <div class="att-metric"><span class="status-info">LV</span><strong id="stat-leave">-</strong><small>On Leave</small></div>
+        <div class="att-metric"><span class="status-bad">A</span><strong id="stat-absent">-</strong><small>Absent</small></div>
+        <div class="att-metric att-metric-wide"><span>HRS</span><strong id="stat-total-hours">-</strong><small>Verified regular hours</small></div>
+        <div class="att-metric att-metric-wide"><span>OT</span><strong id="stat-overtime">-</strong><small>Approved overtime hours</small></div>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="generateSiteQR()">Generate QR</button>
     </div>
-    <div id="site-qr-display" style="display:none;margin-top:16px;text-align:center;padding:20px;background:white;border-radius:12px;">
-      <img id="site-qr-img" src="" alt="Site QR" style="width:250px;height:250px;" />
-      <div id="site-qr-name" style="margin-top:8px;font-weight:600;color:#333;"></div>
-      <div id="site-qr-url" style="margin-top:6px;font-size:12px;color:#555;word-break:break-all;"></div>
-    </div>
-  </div>
-
-  <div class="att-section-label" id="att-date-label">Loading attendance overview...</div>
-  <div class="att-stats">
-    <div class="att-stat"><div class="att-icon status-ok">OK</div><div><div class="att-num" id="stat-present">-</div><div class="att-label">Present</div></div></div>
-    <div class="att-stat"><div class="att-icon status-warn">L</div><div><div class="att-num" id="stat-late">-</div><div class="att-label">Late</div></div></div>
-    <div class="att-stat"><div class="att-icon status-info">LV</div><div><div class="att-num" id="stat-leave">-</div><div class="att-label">On Leave</div></div></div>
-    <div class="att-stat"><div class="att-icon status-bad">A</div><div><div class="att-num" id="stat-absent">-</div><div class="att-label">Absent</div></div></div>
-  </div>
-  <div class="att-bottom">
-    <div class="att-big blue"><div class="ab-val" id="stat-total-hours">-</div><div class="ab-label">Verified regular hours</div></div>
-    <div class="att-big green"><div class="ab-val" id="stat-overtime">-</div><div class="ab-label">Approved overtime hours</div></div>
   </div>
 
   <div id="emp-summary-card" class="card" style="display:none;margin-top:20px;">
@@ -85,29 +52,80 @@
 </div>
 
 <div id="att-records" style="display:none;">
+  <div class="att-records-actionbar">
+    <div>
+      <h3 class="att-title">Attendance Records</h3>
+      <p class="att-muted">Review biometric scans, validate records, reject invalid entries, correct punches, and prepare payroll-ready attendance.</p>
+    </div>
+    <div class="att-actions">
+      <button class="btn btn-primary btn-sm" onclick="bulkValidateAttendance()">Validate</button>
+      <button class="btn btn-outline btn-sm" onclick="bulkRejectAttendance()">Reject</button>
+      <button class="btn btn-outline btn-sm" onclick="bulkCorrectAttendance()">Correct</button>
+      <button class="btn btn-outline btn-sm" onclick="exportAttendanceRecords()">Export</button>
+      <button class="btn btn-primary btn-sm" id="btn-manual-attendance" onclick="openManualModal()" style="display:none;">Add Manual Attendance</button>
+    </div>
+  </div>
   <div class="att-toolbar">
     <div>
-      <label>Search Employee</label>
+      <label>Employee</label>
       <input type="text" id="att-search" placeholder="Name..." onkeyup="loadAttRecords()" />
     </div>
     <div>
-      <label>Date</label>
-      <input type="date" id="att-date-filter" onchange="loadAttRecords()" />
+      <label>Department</label>
+      <select id="att-department-filter" onchange="loadAttRecords()"><option value="">All Departments</option></select>
+    </div>
+    <div>
+      <label>Date From</label>
+      <input type="date" id="att-date-from-filter" onchange="loadAttRecords()" />
+    </div>
+    <div>
+      <label>Date To</label>
+      <input type="date" id="att-date-to-filter" onchange="loadAttRecords()" />
+    </div>
+    <div>
+      <label>Attendance Status</label>
+      <select id="att-status-filter" onchange="loadAttRecords()">
+        <option value="">All</option>
+        <option value="Present">Present</option>
+        <option value="Late">Late</option>
+        <option value="Absent">Absent</option>
+        <option value="Incomplete">Incomplete</option>
+      </select>
+    </div>
+    <div>
+      <label>Validation Status</label>
+      <select id="att-validation-filter" onchange="loadAttRecords()">
+        <option value="">All</option>
+        <option value="PENDING_VALIDATION">Pending Validation</option>
+        <option value="PAYROLL_READY">Validated</option>
+        <option value="REJECTED">Rejected</option>
+        <option value="PAYROLL_READY">Payroll Ready</option>
+        <option value="NEEDS_REVIEW">Needs Review</option>
+        <option value="CORRECTED_BY_HR">Corrected by HR</option>
+      </select>
+    </div>
+    <div>
+      <label>Payroll Ready</label>
+      <select id="att-payroll-ready-filter" onchange="loadAttRecords()">
+        <option value="">All</option>
+        <option value="1">Ready</option>
+        <option value="0">Not Ready</option>
+      </select>
     </div>
     <button class="btn btn-outline btn-sm" onclick="clearAttFilters()">Clear Filters</button>
-    <button class="btn btn-primary btn-sm" id="btn-manual-attendance" onclick="openManualModal()" style="display:none;">Add Manual Attendance</button>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Employee</th><th>Date</th><th>Time In</th><th>Time Out</th>
-          <th>Hours</th><th>OT</th><th>Status</th><th>Verification</th><th>Source</th>
+          <th><input type="checkbox" id="att-select-all" onchange="toggleAllAttendanceRows(this.checked)" /></th>
+          <th>Employee</th><th>Department</th><th>Date</th><th>Time In</th><th>Time Out</th>
+          <th>Hours Worked</th><th>Attendance Status</th><th>Validation Status</th><th>Payroll Ready</th>
           <th id="att-action-col">Actions</th>
         </tr>
       </thead>
       <tbody id="att-records-tbody">
-        <tr><td colspan="10" class="att-empty">Loading...</td></tr>
+        <tr><td colspan="11" class="att-empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -130,8 +148,15 @@
 <div id="att-exceptions" style="display:none;">
   <div class="card">
     <div class="att-card-heading">
-      <div><h3>Biometric Exceptions</h3><p>Review unmapped or malformed device scans before manual recovery.</p></div>
+      <div><h3>Attendance Exceptions</h3><p>Review missing time out, duplicate scans, forgotten scans, rejected attendance, and HR corrections.</p></div>
       <button class="btn btn-outline btn-sm" onclick="loadBiometricExceptions()">Refresh</button>
+    </div>
+    <div class="att-exception-types">
+      <span>Missing Time Out</span>
+      <span>Duplicate Scans</span>
+      <span>Forgot to Scan</span>
+      <span>Rejected Attendance</span>
+      <span>Attendance Corrections</span>
     </div>
     <div class="table-wrap">
       <table>
@@ -143,59 +168,78 @@
 </div>
 
 <div id="att-biometric" style="display:none;">
-  <div class="att-sync-layout">
-    <div class="card">
-      <h3 class="att-title">Register Biometric Device</h3>
-      <p class="att-muted">Store vendor credentials encrypted with AES-256-GCM. Use an HTTPS API endpoint in deployed environments.</p>
-      <div class="att-form-grid">
-        <div><label>Reference</label><input id="bio-device-reference" placeholder="MARULAS-BIO-01" /></div>
-        <div><label>Device Name</label><input id="bio-device-name" placeholder="Main Gate Fingerprint Scanner" /></div>
-        <div><label>Vendor</label><input id="bio-device-vendor" placeholder="Vendor name" /></div>
-        <div><label>API Base URL</label><input id="bio-device-url" placeholder="https://biometric.example/api/" /></div>
-        <div><label>Logs Endpoint</label><input id="bio-device-endpoint" value="/attendance/logs" /></div>
-        <div><label>Authentication</label>
-          <select id="bio-device-auth"><option>API_KEY</option><option>BEARER</option><option>HMAC</option><option>OAUTH2</option><option>MTLS</option></select>
-        </div>
-        <div><label>Secret / Token</label><input id="bio-device-secret" type="password" autocomplete="new-password" placeholder="Stored encrypted" /></div>
+  <div class="card">
+    <div class="att-card-heading">
+      <div>
+        <h3>Scanner Status</h3>
+        <p>Current fingerprint scanner availability.</p>
       </div>
-      <button class="btn btn-primary" onclick="saveBiometricDevice()">Register Device</button>
+      <button class="btn btn-outline btn-sm" onclick="loadBiometricWorkspace()">Refresh</button>
     </div>
-    <div class="card">
-      <h3 class="att-title">Map Employee Reference</h3>
-      <p class="att-muted">Only the encrypted vendor reference and a one-way lookup hash are stored.</p>
-      <div class="att-form-grid">
-        <div><label>Device</label><select id="bio-map-device"><option value="">Select device</option></select></div>
-        <div><label>Employee</label><select id="bio-map-employee"><option value="">Select employee</option></select></div>
-        <div><label>Biometric User ID</label><input id="bio-map-user-id" placeholder="Vendor reference ID" /></div>
-      </div>
-      <button class="btn btn-primary" onclick="saveBiometricMapping()">Save Encrypted Mapping</button>
+    <div class="bio-status-grid">
+      <div><label>Status</label><div id="bio-hr-status" class="bio-pill bio-warning">Checking</div></div>
+      <div><label>Device Name</label><div id="bio-hr-device-name">-</div></div>
+      <div><label>Last Successful Sync</label><div id="bio-hr-last-sync">-</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <h3 class="att-title">Fingerprint Enrollment</h3>
+    <p class="att-muted">Enroll, verify, or remove an employee fingerprint.</p>
+    <input type="hidden" id="bio-map-device" />
+    <input type="hidden" id="bio-map-user-id" />
+    <div class="att-form-grid">
+      <div><label>Employee</label><select id="bio-map-employee" onchange="updateFingerprintEnrollmentView()"><option value="">Select employee</option></select></div>
+      <div><label>Fingerprint Status</label><div id="bio-fingerprint-status" class="bio-pill bio-warning">Select employee</div></div>
+      <div><label>Enrollment Date</label><div id="bio-enrollment-date">-</div></div>
+    </div>
+    <div class="bio-steps">
+      <div id="bio-step-1" class="bio-step active">1. Select Employee</div>
+      <div id="bio-step-2" class="bio-step">2. Place Finger on Scanner</div>
+      <div id="bio-step-3" class="bio-step">3. Capture Fingerprint</div>
+      <div id="bio-step-4" class="bio-step">4. Confirm Enrollment</div>
+    </div>
+    <div class="att-actions">
+      <button class="btn btn-primary" onclick="enrollFingerprintFromBridge()">Enroll Fingerprint</button>
+      <button class="btn btn-outline" onclick="verifyBiometricEnrollment()">Verify Fingerprint</button>
+      <button class="btn btn-outline" onclick="removeSelectedFingerprint()">Remove Fingerprint</button>
     </div>
   </div>
 
   <div class="card" style="margin-top:20px;">
     <div class="att-card-heading">
-      <div><h3>Device Health</h3><p>Synchronization state, mapped employees, and rejected scan counts.</p></div>
-      <div class="att-actions">
-        <button class="btn btn-outline btn-sm" onclick="loadBiometricHealth()">Refresh</button>
-        <button class="btn btn-primary btn-sm" onclick="anchorPendingIntegrity()">Anchor Integrity Queue</button>
-      </div>
+      <div><h3>Attendance Monitoring</h3><p>Recent fingerprint attendance activity.</p></div>
+      <button class="btn btn-outline btn-sm" onclick="loadBiometricEvents()">Refresh</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Device</th><th>Vendor</th><th>Mappings</th><th>Exceptions</th><th>Last Success</th><th>Last Error</th><th>Action</th></tr></thead>
-        <tbody id="bio-health-tbody"><tr><td colspan="7" class="att-empty">No devices configured.</td></tr></tbody>
+        <thead><tr><th>Employee</th><th>Time</th><th>Attendance Type</th><th>Result</th></tr></thead>
+        <tbody id="bio-events-tbody"><tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr></tbody>
       </table>
     </div>
   </div>
+</div>
 
-  <div class="card" style="margin-top:20px;">
-    <h3 class="att-title">Encrypted Employee Mappings</h3>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Device</th><th>Employee</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody id="bio-mapping-tbody"><tr><td colspan="5" class="att-empty">No mappings configured.</td></tr></tbody>
-      </table>
+<div id="att-policies" style="display:none;">
+  <div class="card">
+    <div class="att-card-heading">
+      <div>
+        <h3>Attendance Policies</h3>
+        <p>Configure attendance lifecycle rules used for validation and payroll readiness.</p>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="loadAttendancePolicies()">Refresh</button>
     </div>
+    <form id="attendance-policy-form" class="att-form-grid" onsubmit="saveAttendancePolicies(event)">
+      <div><label>Work Schedule</label><input id="policy-work-schedule" placeholder="08:00-17:00" /></div>
+      <div><label>Grace Period</label><input id="policy-grace-period" type="number" min="0" step="1" /></div>
+      <div><label>Duplicate Scan Window</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
+      <div><label>HR Validation Required</label><select id="policy-hr-validation"><option value="1">Yes</option><option value="0">No</option></select></div>
+      <div><label>Overtime Threshold</label><input id="policy-overtime-threshold" type="number" min="0" step="0.25" /></div>
+      <div><label>Missing Timeout Handling</label><select id="policy-missing-timeout"><option>Needs Review</option><option>Auto Reject</option><option>Manual Correction Required</option></select></div>
+      <div><label>Payroll Ready Rules</label><select id="policy-payroll-ready"><option>Validated attendance only</option><option>Validated or corrected attendance</option></select></div>
+      <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save Policies</button></div>
+    </form>
+    <div id="attendance-policy-status" class="att-muted" style="margin-top:10px;"></div>
   </div>
 </div>
 
@@ -214,10 +258,28 @@
   </div>
 </div>
 
+<div id="attendance-detail-modal" class="att-modal" style="display:none;">
+  <div class="att-modal-card att-detail-modal-card">
+    <div class="att-card-heading">
+      <div>
+        <h3>Attendance Details</h3>
+        <p>Employee information, biometric scan metadata, validation history, and audit history.</p>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="closeAttendanceDetailModal()">Close</button>
+    </div>
+    <div id="attendance-detail-content" class="att-detail-sections"></div>
+    <div class="att-modal-actions">
+      <button class="btn btn-primary" onclick="detailValidateAttendance()">Validate Attendance</button>
+      <button class="btn btn-outline" onclick="detailRejectAttendance()">Reject Attendance</button>
+      <button class="btn btn-outline" onclick="detailCorrectAttendance()">Correct Attendance</button>
+    </div>
+  </div>
+</div>
+
 <div id="override-modal" class="att-modal" style="display:none;">
   <div class="att-modal-card">
     <h3>Correct Attendance</h3>
-    <p>Every correction requires a reason and is permanently audited.</p>
+    <p>Correction reason is required. The change is permanently audited.</p>
     <input type="hidden" id="override-att-id" />
     <div id="override-emp-info" class="att-note"></div>
     <div class="att-form-grid">

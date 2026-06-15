@@ -6,9 +6,9 @@ let ATT_USER = null;
 let ATT_RECORDS = [];
 let ATT_EMPLOYEES = [];
 let ATT_DEVICES = [];
-let QR_SCAN_MODE = null;
-let DEVICE_FP = null;
-let html5QrScanner = null;
+let ATT_BIOMETRIC_MAPPINGS = [];
+let BIOMETRIC_EXPECTED_SCAN = null;
+let ATT_SELECTED_DETAIL_ID = null;
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -21,10 +21,16 @@ function isSystemAdmin() { return ['system_admin', 'admin'].includes(ATT_USER?.r
 function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
 function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }
 function isEmployee() { return ATT_USER?.role === 'employee'; }
+function canManageBiometrics() { return isHr() || isSystemAdmin(); }
 
 function setVisible(id, visible) {
   const element = document.getElementById(id);
   if (element) element.style.display = visible ? '' : 'none';
+}
+
+function setText(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value;
 }
 
 function formatDate(value) {
@@ -50,33 +56,30 @@ function badge(value) {
   return `<span class="badge badge-${color}">${esc(text)}</span>`;
 }
 
+function actionDotsIcon() {
+  if (typeof window.renderActionDotsIcon === 'function') return window.renderActionDotsIcon();
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="action-dots-icon bi bi-three-dots-vertical" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+  </svg>`;
+}
+
 function calculateHours(timeIn, timeOut) {
   if (!timeIn || !timeOut) return '-';
   const milliseconds = new Date(`1970-01-01T${timeOut}`) - new Date(`1970-01-01T${timeIn}`);
   return `${Math.max(0, milliseconds / 3600000).toFixed(1)}h`;
 }
 
-function getDeviceFingerprint() {
-  if (DEVICE_FP) return DEVICE_FP;
-  const raw = [
-    navigator.userAgent,
-    `${screen.width}x${screen.height}`,
-    screen.colorDepth,
-    navigator.language,
-    navigator.hardwareConcurrency,
-    new Date().getTimezoneOffset()
-  ].join('|');
-  let hash = 0;
-  for (let index = 0; index < raw.length; index += 1) {
-    hash = ((hash << 5) - hash) + raw.charCodeAt(index);
-    hash |= 0;
-  }
-  DEVICE_FP = `DFP-${Math.abs(hash).toString(36)}`;
-  return DEVICE_FP;
-}
-
 function switchAttTab(tab, element) {
-  ['overview', 'records', 'overtime', 'exceptions', 'biometric', 'audit'].forEach(name => {
+  ATT_USER = ATT_USER || getUser();
+  if (['overtime', 'exceptions', 'biometric', 'policies', 'audit'].includes(tab) && !canManageBiometrics()) {
+    tab = 'overview';
+    element = document.querySelector('[data-att-tab="overview"]');
+  }
+  if (tab === 'overtime' && !isHr()) {
+    tab = 'overview';
+    element = document.querySelector('[data-att-tab="overview"]');
+  }
+  ['overview', 'records', 'overtime', 'exceptions', 'biometric', 'policies', 'audit'].forEach(name => {
     const panel = document.getElementById(`att-${name}`);
     if (panel) panel.style.display = name === tab ? 'block' : 'none';
   });
@@ -87,6 +90,7 @@ function switchAttTab(tab, element) {
   if (tab === 'overtime') loadEmployees();
   if (tab === 'exceptions') loadBiometricExceptions();
   if (tab === 'biometric') loadBiometricWorkspace();
+  if (tab === 'policies') loadAttendancePolicies();
   if (tab === 'audit') loadAuditLog();
 }
 
@@ -94,17 +98,32 @@ async function initAttendance() {
   ATT_USER = getUser();
   if (!ATT_USER) return;
 
-  setVisible('qr-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
-  setVisible('qr-generate-card', isHr());
+  setVisible('biometric-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
   setVisible('emp-summary-card', isEmployee() && !!ATT_USER.employeeId);
   setVisible('att-tab-overtime', isHr());
   setVisible('att-tab-exceptions', isHr());
-  setVisible('att-tab-biometric', isSystemAdmin());
-  setVisible('att-tab-audit', isHr() || isSystemAdmin());
+  setVisible('att-tab-biometric', canManageBiometrics());
+  setVisible('att-tab-policies', canManageBiometrics());
+  setVisible('att-tab-audit', canManageBiometrics());
   setVisible('btn-manual-attendance', isHr());
 
   const controls = document.querySelector('.att-toolbar');
   if (controls) controls.style.display = isEmployee() ? 'none' : 'flex';
+  const recordActions = document.querySelector('#att-records .att-records-actionbar .att-actions');
+  if (recordActions) recordActions.style.display = isEmployee() ? 'none' : 'flex';
+
+  if (!canManageBiometrics()) {
+    setText('att-page-title', 'My Attendance');
+    setText('att-page-subtitle', 'Use fingerprint time in/out and monitor your attendance hours.');
+    setText('att-banner-title', 'Fingerprint attendance');
+    setText('att-banner-copy', 'Use the registered fingerprint scanner to record your time in and time out.');
+    switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
+  } else {
+    setText('att-page-title', 'Attendance Management');
+    setText('att-page-subtitle', 'ERP-style attendance records, validation, exceptions, biometric enrollment, policies, and audit trail.');
+    setText('att-banner-title', 'Attendance Overview');
+    setText('att-banner-copy', 'Summary metrics only. Validate and correct attendance from Attendance Records.');
+  }
 
   if (isSystemAdmin() && !isHr()) {
     const biometricTab = document.getElementById('att-tab-biometric');
@@ -114,6 +133,7 @@ async function initAttendance() {
 
   if (ATT_USER.employeeId) {
     loadClockStatus();
+    loadBiometricAttendanceStatus();
     loadMySummary();
   }
   loadOverviewStats();
@@ -125,27 +145,44 @@ async function loadClockStatus() {
     if (!res?.ok) return;
     const data = await res.json();
     const label = document.getElementById('att-clock-status');
-    const clockIn = document.getElementById('btn-clock-in');
-    const clockOut = document.getElementById('btn-clock-out');
-    if (!label || !clockIn || !clockOut) return;
+    if (!label) return;
 
     if (!data.clocked_in) {
-      label.textContent = 'No attendance recorded yet today.';
-      clockIn.disabled = false;
-      clockIn.style.display = '';
-      clockOut.style.display = 'none';
+      label.textContent = 'No attendance recorded yet today. Use the Attendance Station to scan your fingerprint.';
     } else if (!data.clocked_out) {
-      label.innerHTML = `Time-in recorded at <strong>${esc(data.record.time_in)}</strong>. Waiting for time-out.`;
-      clockIn.style.display = 'none';
-      clockOut.style.display = '';
-      clockOut.disabled = false;
+      label.textContent = `Time-in recorded at ${data.record?.time_in || '-'}. Use the Attendance Station again for time-out.`;
     } else {
-      label.innerHTML = `Completed: <strong>${esc(data.record.time_in)}</strong> to <strong>${esc(data.record.time_out)}</strong> via ${esc(data.record.source)}.`;
-      clockIn.style.display = 'none';
-      clockOut.style.display = 'none';
+      label.textContent = `Completed: ${data.record?.time_in || '-'} to ${data.record?.time_out || '-'}.`;
     }
   } catch (err) {
     console.error('Attendance status error:', err);
+  }
+}
+
+async function loadBiometricAttendanceStatus() {
+  try {
+    const res = await apiFetch('/api/biometric/status');
+    if (!res?.ok) return;
+    const data = await res.json();
+    const device = data.device;
+    const latest = data.latest_scan;
+    const setText = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) element.textContent = value ?? '-';
+    };
+    setText('bio-device-status', device
+      ? `${device.device_name} (${device.device_reference}) - ${device.is_active ? 'Active' : 'Inactive'}`
+      : 'No active ZK9500 device registered');
+    setText('bio-scan-employee', latest?.employee_name || '-');
+    setText('bio-scan-employee-id', latest?.employee_code || ATT_USER?.employeeCode || '-');
+    setText('bio-scan-type', latest?.attendance_type || BIOMETRIC_EXPECTED_SCAN || '-');
+    setText('bio-scan-time', latest?.scan_timestamp ? formatDateTime(latest.scan_timestamp) : '-');
+    setText('bio-verification-result', latest?.verification_status || '-');
+    setText('bio-attendance-result', latest?.error_message || (latest ? 'Attendance scan received.' : '-'));
+  } catch (err) {
+    const status = document.getElementById('bio-device-status');
+    if (status) status.textContent = 'Biometric status unavailable.';
+    console.error('Biometric status error:', err);
   }
 }
 
@@ -182,35 +219,69 @@ async function loadMySummary() {
 async function loadAttRecords() {
   try {
     const params = new URLSearchParams();
-    const date = document.getElementById('att-date-filter')?.value;
     const search = document.getElementById('att-search')?.value;
-    if (date) params.set('date', date);
-    if (search && !isPayrollManager()) params.set('search', search);
+    const department = document.getElementById('att-department-filter')?.value;
+    const dateFrom = document.getElementById('att-date-from-filter')?.value;
+    const dateTo = document.getElementById('att-date-to-filter')?.value;
+    const status = document.getElementById('att-status-filter')?.value;
+    const validation = document.getElementById('att-validation-filter')?.value;
+    const payrollReady = document.getElementById('att-payroll-ready-filter')?.value;
+    if (search) params.set('search', search);
+    if (department) params.set('department', department);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    if (status) params.set('status', status);
+    if (validation) params.set('validation_status', validation);
+    if (payrollReady !== undefined && payrollReady !== '') params.set('payroll_ready', payrollReady);
 
     const endpoint = isEmployee()
       ? '/api/attendance/my-records'
-      : isPayrollManager()
-        ? '/api/attendance/summaries'
-        : '/api/attendance/all';
+      : '/api/attendance/all';
     const res = await apiFetch(`${endpoint}${params.toString() ? `?${params}` : ''}`);
     if (!res?.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Failed to load attendance records.');
     }
     ATT_RECORDS = await res.json();
+    console.log('[ATTENDANCE_REALTIME] Attendance API returned records', {
+      endpoint,
+      count: ATT_RECORDS.length,
+      first: ATT_RECORDS[0] || null,
+    });
     renderAttRecords();
+    populateAttendanceDepartmentFilter();
   } catch (err) {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="11" class="att-empty">${esc(err.message)}</td></tr>`;
   }
+}
+
+function normalizeValidationStatus(value) {
+  const raw = String(value || '').toUpperCase();
+  if (raw === 'VALIDATED') return 'PAYROLL_READY';
+  return raw || '-';
+}
+
+function isPayrollReadyRecord(record) {
+  const status = normalizeValidationStatus(record.verification_status);
+  return status === 'PAYROLL_READY' || Number(record.payroll_ready || record.payroll_eligible || 0) === 1;
+}
+
+function populateAttendanceDepartmentFilter() {
+  const select = document.getElementById('att-department-filter');
+  if (!select || select.dataset.loaded === '1') return;
+  const departments = [...new Set(ATT_RECORDS.map(record => record.department).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  select.innerHTML = '<option value="">All Departments</option>' + departments.map(dept => `<option value="${esc(dept)}">${esc(dept)}</option>`).join('');
+  if (departments.length) select.dataset.loaded = '1';
 }
 
 function renderAttRecords() {
   const tbody = document.getElementById('att-records-tbody');
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="att-empty">No attendance records found.</td></tr>';
     return;
   }
 
@@ -220,40 +291,202 @@ function renderAttRecords() {
     const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out);
     const overtime = isSummary ? `${(Number(record.overtime_minutes || 0) / 60).toFixed(1)}h` : `${Number(record.overtime_hours || 0).toFixed(1)}h`;
     const status = record.attendance_status || record.status;
-    const verification = record.verification_status || '-';
+    const verification = normalizeValidationStatus(record.verification_status);
+    const payrollReady = isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready';
     const actions = isHr() && attendanceId
-      ? `<div class="att-actions">
-           <button class="btn btn-outline btn-sm" onclick="openOverrideModal(${Number(attendanceId)})">Correct</button>
-           <button class="btn btn-outline btn-sm" onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')">Verify</button>
+      ? `<div class="att-row-menu">
+           <button class="att-menu-trigger action-dots-button" onclick="toggleAttendanceActionMenu(event, ${Number(attendanceId)})" aria-label="Attendance actions">${actionDotsIcon()}</button>
+           <div class="att-menu-panel" id="att-menu-${Number(attendanceId)}">
+             <button onclick="openAttendanceDetail(${Number(attendanceId)})"><span>View</span> View</button>
+             <button onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')"><span class="status-ok">✓</span> Validate</button>
+             <button onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')"><span class="status-bad">×</span> Reject</button>
+             <button onclick="openOverrideModal(${Number(attendanceId)})"><span>Edit</span> Correct</button>
+           </div>
          </div>`
       : attendanceId
-        ? `<button class="btn btn-outline btn-sm" onclick="verifyIntegrity(${Number(attendanceId)})">Integrity</button>`
+        ? `<button class="btn btn-outline btn-sm" onclick="openAttendanceDetail(${Number(attendanceId)})">View</button>`
         : '-';
 
     return `<tr>
+      <td>${attendanceId && isHr() ? `<input type="checkbox" class="att-row-select" value="${Number(attendanceId)}" />` : ''}</td>
       <td><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<br><small>${esc(record.employee_code)}</small>` : ''}</td>
+      <td>${esc(record.department || '-')}</td>
       <td>${esc(formatDate(record.attendance_date || record.date))}</td>
       <td>${esc(record.time_in || '-')}</td>
       <td>${esc(record.time_out || '-')}</td>
       <td>${esc(hours)}</td>
-      <td>${esc(overtime)}</td>
       <td>${badge(status)}</td>
       <td>${badge(verification)}</td>
-      <td>${esc(record.source || (isSummary ? 'Validated Summary' : '-'))}</td>
+      <td>${badge(payrollReady)}</td>
       <td>${actions}</td>
     </tr>`;
   }).join('');
 }
 
+function closeAttendanceActionMenus() {
+  document.querySelectorAll('.att-menu-panel.open').forEach(menu => menu.classList.remove('open'));
+}
+
+function toggleAttendanceActionMenu(event, attendanceId) {
+  event.stopPropagation();
+  const menu = document.getElementById(`att-menu-${attendanceId}`);
+  if (!menu) return;
+  const isOpen = menu.classList.contains('open');
+  closeAttendanceActionMenus();
+  if (!isOpen) menu.classList.add('open');
+}
+
 function clearAttFilters() {
-  const search = document.getElementById('att-search');
-  const date = document.getElementById('att-date-filter');
-  if (search) search.value = '';
-  if (date) date.value = '';
+  ['att-search', 'att-department-filter', 'att-date-from-filter', 'att-date-to-filter', 'att-status-filter', 'att-validation-filter', 'att-payroll-ready-filter']
+    .forEach(id => {
+      const element = document.getElementById(id);
+      if (element) element.value = '';
+    });
   loadAttRecords();
 }
 
+function selectedAttendanceIds() {
+  return [...document.querySelectorAll('.att-row-select:checked')]
+    .map(input => Number(input.value))
+    .filter(Boolean);
+}
+
+function toggleAllAttendanceRows(checked) {
+  document.querySelectorAll('.att-row-select').forEach(input => {
+    input.checked = checked;
+  });
+}
+
+function firstSelectedAttendanceId() {
+  const selected = selectedAttendanceIds();
+  if (!selected.length) {
+    alert('Select at least one attendance record first.');
+    return null;
+  }
+  return selected[0];
+}
+
+async function bulkValidateAttendance() {
+  const ids = selectedAttendanceIds();
+  if (!ids.length) return alert('Select at least one attendance record to validate.');
+  for (const id of ids) await verifyAttendance(id, 'VALIDATED', { silent: true });
+  alert(`${ids.length} attendance record(s) validated.`);
+  loadAttRecords();
+  loadOverviewStats();
+}
+
+async function bulkRejectAttendance() {
+  const ids = selectedAttendanceIds();
+  if (!ids.length) return alert('Select at least one attendance record to reject.');
+  const reason = prompt('Reason for rejecting selected attendance record(s):');
+  if (!reason) return;
+  for (const id of ids) await verifyAttendance(id, 'REJECTED', { reason, silent: true });
+  alert(`${ids.length} attendance record(s) rejected.`);
+  loadAttRecords();
+  loadOverviewStats();
+}
+
+function bulkCorrectAttendance() {
+  const id = firstSelectedAttendanceId();
+  if (id) openOverrideModal(id);
+}
+
+function exportAttendanceRecords() {
+  if (!ATT_RECORDS.length) return alert('No attendance records to export.');
+  const headers = ['Employee', 'Department', 'Date', 'Time In', 'Time Out', 'Hours Worked', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
+  const rows = ATT_RECORDS.map(record => [
+    record.employee_name || 'You',
+    record.department || '',
+    formatDate(record.attendance_date || record.date),
+    record.time_in || '',
+    record.time_out || '',
+    Object.prototype.hasOwnProperty.call(record, 'regular_minutes') ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out),
+    record.attendance_status || record.status || '',
+    normalizeValidationStatus(record.verification_status),
+    isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready'
+  ]);
+  const csv = [headers, ...rows]
+    .map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `attendance-records-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function openAttendanceDetail(attendanceId) {
+  closeAttendanceActionMenus();
+  const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(attendanceId));
+  if (!record) return;
+  ATT_SELECTED_DETAIL_ID = Number(attendanceId);
+  const content = document.getElementById('attendance-detail-content');
+  if (!content) return;
+  const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
+    ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
+    : calculateHours(record.time_in, record.time_out);
+  content.innerHTML = `
+    <section>
+      <h4>Employee Information</h4>
+      <table><tbody>
+        <tr><th>Employee</th><td>${esc(record.employee_name || 'You')}</td><th>Employee ID</th><td>${esc(record.employee_code || '-')}</td></tr>
+        <tr><th>Department</th><td>${esc(record.department || '-')}</td><th>Position</th><td>${esc(record.position || '-')}</td></tr>
+      </tbody></table>
+    </section>
+    <section>
+      <h4>Attendance Details</h4>
+      <table><tbody>
+        <tr><th>Date</th><td>${esc(formatDate(record.attendance_date || record.date))}</td><th>Hours Worked</th><td>${esc(hours)}</td></tr>
+        <tr><th>Time In</th><td>${esc(record.time_in || '-')}</td><th>Time Out</th><td>${esc(record.time_out || '-')}</td></tr>
+        <tr><th>Status</th><td>${badge(record.attendance_status || record.status)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
+      </tbody></table>
+    </section>
+    <section>
+      <h4>Biometric Scan Information</h4>
+      <table><tbody>
+        <tr><th>Source</th><td>${esc(record.source || '-')}</td><th>Device</th><td>${esc(record.device_id || '-')}</td></tr>
+        <tr><th>Integrity Hash</th><td colspan="3">${esc(record.integrity_hash || '-')}</td></tr>
+      </tbody></table>
+    </section>
+    <section>
+      <h4>Validation History</h4>
+      <table><tbody>
+        <tr><th>Validation Status</th><td>${badge(normalizeValidationStatus(record.verification_status))}</td><th>Latest Action</th><td>${esc(record.source || '-')}</td></tr>
+      </tbody></table>
+    </section>
+    <section>
+      <h4>Audit History</h4>
+      <div class="att-muted">Open the Audit Log tab for complete immutable audit entries for this attendance record.</div>
+    </section>
+  `;
+  document.getElementById('attendance-detail-modal').style.display = 'flex';
+}
+
+function closeAttendanceDetailModal() {
+  document.getElementById('attendance-detail-modal').style.display = 'none';
+  ATT_SELECTED_DETAIL_ID = null;
+}
+
+function detailValidateAttendance() {
+  if (ATT_SELECTED_DETAIL_ID) verifyAttendance(ATT_SELECTED_DETAIL_ID, 'VALIDATED');
+  closeAttendanceDetailModal();
+}
+
+function detailRejectAttendance() {
+  if (ATT_SELECTED_DETAIL_ID) verifyAttendance(ATT_SELECTED_DETAIL_ID, 'REJECTED');
+  closeAttendanceDetailModal();
+}
+
+function detailCorrectAttendance() {
+  const id = ATT_SELECTED_DETAIL_ID;
+  closeAttendanceDetailModal();
+  if (id) openOverrideModal(id);
+}
+
 function openOverrideModal(attendanceId) {
+  closeAttendanceActionMenus();
   const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(attendanceId));
   if (!record) return;
   document.getElementById('override-att-id').value = attendanceId;
@@ -270,12 +503,16 @@ function closeOverrideModal() {
 
 async function submitOverride() {
   const attendanceId = document.getElementById('override-att-id').value;
+  const reason = document.getElementById('override-reason').value.trim();
+  if (reason.length < 8) {
+    alert('Provide a correction reason of at least 8 characters.');
+    return;
+  }
   const body = {
     time_in: document.getElementById('override-time-in').value,
     time_out: document.getElementById('override-time-out').value,
-    reason: document.getElementById('override-reason').value,
+    reason,
   };
-  if (body.reason.trim().length < 8) return alert('Provide a clear correction reason of at least 8 characters.');
   try {
     const res = await apiFetch(`/api/attendance/${attendanceId}/override`, { method: 'PATCH', body: JSON.stringify(body) });
     const data = await res.json();
@@ -289,9 +526,13 @@ async function submitOverride() {
   }
 }
 
-async function verifyAttendance(attendanceId, verificationStatus) {
-  const reason = prompt(`Reason for marking this record ${verificationStatus}:`);
-  if (!reason) return;
+async function verifyAttendance(attendanceId, verificationStatus, options = {}) {
+  closeAttendanceActionMenus();
+  let reason = options.reason || '';
+  if (verificationStatus !== 'VALIDATED') {
+    reason = reason || prompt(`Reason for marking this record ${verificationStatus}:`);
+    if (!reason) return;
+  }
   try {
     const res = await apiFetch(`/api/attendance/${attendanceId}/verify`, {
       method: 'PATCH',
@@ -299,10 +540,14 @@ async function verifyAttendance(attendanceId, verificationStatus) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    alert(data.message);
-    loadAttRecords();
+    if (!options.silent) {
+      alert(data.message);
+      loadAttRecords();
+      loadOverviewStats();
+    }
   } catch (err) {
-    alert(err.message);
+    if (!options.silent) alert(err.message);
+    else console.error(err);
   }
 }
 
@@ -421,7 +666,13 @@ async function loadBiometricExceptions() {
 }
 
 async function loadBiometricWorkspace() {
-  await Promise.all([loadEmployees(), loadBiometricHealth(), loadBiometricMappings()]);
+  ATT_USER = ATT_USER || getUser();
+  if (!canManageBiometrics()) {
+    switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
+    return;
+  }
+  await Promise.all([loadEmployees(), loadBiometricHealth(), loadBiometricMappings(), loadBiometricEvents()]);
+  updateFingerprintEnrollmentView();
 }
 
 async function loadBiometricHealth() {
@@ -430,28 +681,38 @@ async function loadBiometricHealth() {
     if (!res?.ok) return;
     const data = await res.json();
     ATT_DEVICES = data.devices || [];
-    const tbody = document.getElementById('bio-health-tbody');
-    tbody.innerHTML = ATT_DEVICES.length ? ATT_DEVICES.map(device => `<tr>
-      <td><strong>${esc(device.device_name)}</strong><br><small>${esc(device.device_reference)}</small></td>
-      <td>${esc(device.vendor || '-')}</td>
-      <td>${Number(device.mapped_employees || 0)}</td>
-      <td>${Number(device.exceptions || 0)}</td>
-      <td>${esc(formatDateTime(device.last_success_at))}</td>
-      <td>${esc(device.last_error_message || '-')}</td>
-      <td><button class="btn btn-outline btn-sm" onclick="syncBiometricDevice(${Number(device.device_id)})">Sync Now</button></td>
-    </tr>`).join('') : '<tr><td colspan="7" class="att-empty">No biometric devices configured.</td></tr>';
+    renderScannerStatus();
     populateDeviceSelect();
   } catch (err) {
     console.error(err);
   }
 }
 
+function renderScannerStatus() {
+  const device = ATT_DEVICES[0] || null;
+  const status = document.getElementById('bio-hr-status');
+  const name = document.getElementById('bio-hr-device-name');
+  const sync = document.getElementById('bio-hr-last-sync');
+  if (!status || !name || !sync) return;
+
+  if (!device || !device.is_active) {
+    status.className = 'bio-pill bio-danger';
+    status.textContent = 'Disconnected';
+    name.textContent = device?.device_name || '-';
+    sync.textContent = '-';
+    return;
+  }
+
+  status.className = device.last_error_message ? 'bio-pill bio-warning' : 'bio-pill bio-success';
+  status.textContent = device.last_error_message ? 'Warning' : 'Connected';
+  name.textContent = device.device_name || 'Fingerprint Scanner';
+  sync.textContent = formatDateTime(device.last_success_at) || '-';
+}
+
 function populateDeviceSelect() {
   const select = document.getElementById('bio-map-device');
   if (!select) return;
-  select.innerHTML = '<option value="">Select device</option>' + ATT_DEVICES
-    .map(device => `<option value="${Number(device.device_id)}">${esc(device.device_name)}</option>`)
-    .join('');
+  select.value = ATT_DEVICES[0]?.device_id || '';
 }
 
 async function saveBiometricDevice() {
@@ -482,17 +743,62 @@ async function loadBiometricMappings() {
   try {
     const res = await apiFetch('/api/attendance/biometric/mappings');
     if (!res?.ok) return;
-    const rows = await res.json();
-    const tbody = document.getElementById('bio-mapping-tbody');
-    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
-      <td>${esc(row.device_name)}</td>
-      <td>${esc(row.employee_name)}<br><small>${esc(row.employee_code)}</small></td>
-      <td>${esc(row.biometric_user_reference)}</td>
-      <td>${badge(row.is_active ? 'Active' : 'Disabled')}</td>
-      <td>${row.is_active ? `<button class="btn btn-outline btn-sm" onclick="disableBiometricMapping(${Number(row.mapping_id)})">Disable</button>` : '-'}</td>
-    </tr>`).join('') : '<tr><td colspan="5" class="att-empty">No encrypted mappings configured.</td></tr>';
+    ATT_BIOMETRIC_MAPPINGS = await res.json();
+    updateFingerprintEnrollmentView();
   } catch (err) {
     console.error(err);
+  }
+}
+
+async function loadBiometricEvents() {
+  try {
+    const res = await apiFetch('/api/attendance/biometric/events');
+    if (!res?.ok) return;
+    const rows = await res.json();
+    const tbody = document.getElementById('bio-events-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
+      <td>${esc(row.employee_name || 'Unmapped')}<br><small>${esc(row.employee_code || '')}</small></td>
+      <td>${esc(formatDateTime(row.scan_timestamp || row.created_at))}</td>
+      <td>${esc((row.attendance_type || '-').replace('_', ' '))}</td>
+      <td>${badge(row.verification_status || '-')}</td>
+    </tr>`).join('') : '<tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr>';
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function updateFingerprintEnrollmentView() {
+  const employeeId = document.getElementById('bio-map-employee')?.value;
+  const status = document.getElementById('bio-fingerprint-status');
+  const date = document.getElementById('bio-enrollment-date');
+  if (!status || !date) return;
+  const mapping = ATT_BIOMETRIC_MAPPINGS.find(item => String(item.employee_id) === String(employeeId) && item.is_active);
+
+  if (!employeeId) {
+    status.className = 'bio-pill bio-warning';
+    status.textContent = 'Select employee';
+    date.textContent = '-';
+    setBiometricStep(1);
+  } else if (mapping) {
+    status.className = 'bio-pill bio-success';
+    status.textContent = 'Enrolled';
+    date.textContent = formatDate(mapping.created_at);
+    setBiometricStep(4);
+  } else {
+    status.className = 'bio-pill bio-danger';
+    status.textContent = 'Not enrolled';
+    date.textContent = '-';
+    setBiometricStep(1);
+  }
+}
+
+function setBiometricStep(step) {
+  for (let index = 1; index <= 4; index += 1) {
+    const element = document.getElementById(`bio-step-${index}`);
+    if (!element) continue;
+    element.classList.toggle('active', index === step);
+    element.classList.toggle('done', index < step);
   }
 }
 
@@ -506,10 +812,11 @@ async function saveBiometricMapping() {
     const res = await apiFetch('/api/attendance/biometric/mappings', { method: 'POST', body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    alert(data.message);
     document.getElementById('bio-map-user-id').value = '';
-    loadBiometricMappings();
-    loadBiometricHealth();
+    await loadBiometricMappings();
+    await loadBiometricHealth();
+    updateFingerprintEnrollmentView();
+    alert('Fingerprint enrollment saved.');
   } catch (err) {
     alert(err.message);
   }
@@ -524,9 +831,17 @@ async function disableBiometricMapping(mappingId) {
     alert(data.message);
     loadBiometricMappings();
     loadBiometricHealth();
+    updateFingerprintEnrollmentView();
   } catch (err) {
     alert(err.message);
   }
+}
+
+function removeSelectedFingerprint() {
+  const employeeId = document.getElementById('bio-map-employee')?.value;
+  const mapping = ATT_BIOMETRIC_MAPPINGS.find(item => String(item.employee_id) === String(employeeId) && item.is_active);
+  if (!mapping) return alert('No active fingerprint enrollment found for the selected employee.');
+  return disableBiometricMapping(mapping.mapping_id);
 }
 
 async function syncBiometricDevice(deviceId) {
@@ -572,91 +887,98 @@ async function loadAuditLog() {
   }
 }
 
-function startClockIn() {
-  QR_SCAN_MODE = 'clock-in';
-  openQrScanner();
-}
+async function enrollFingerprintFromBridge() {
+  const employeeSelect = document.getElementById('bio-map-employee');
+  const deviceId = document.getElementById('bio-map-device')?.value;
+  const employeeId = employeeSelect?.value;
+  if (!deviceId || !employeeId) return alert('Select an employee first. Make sure the scanner is connected.');
 
-function startClockOut() {
-  QR_SCAN_MODE = 'clock-out';
-  openQrScanner();
-}
+  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
+  const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
+  const codeMatch = selectedText.match(/\(([^)]+)\)/);
 
-function openQrScanner() {
-  document.getElementById('qr-scanner-container').style.display = 'block';
-  document.getElementById('qr-scan-status').textContent = 'Point the camera at the HR fallback QR code.';
-  if (typeof Html5Qrcode !== 'undefined') return startHtml5QrScanner();
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-  script.onload = startHtml5QrScanner;
-  script.onerror = showManualQrInput;
-  document.head.appendChild(script);
-}
-
-function startHtml5QrScanner() {
-  document.getElementById('qr-reader').innerHTML = '';
-  html5QrScanner = new Html5Qrcode('qr-reader');
-  html5QrScanner.start(
-    { facingMode: 'environment' },
-    { fps: 10, qrbox: { width: 250, height: 250 } },
-    decoded => html5QrScanner.stop().then(() => processQrScan(decoded)),
-    () => {}
-  ).catch(showManualQrInput);
-}
-
-function showManualQrInput() {
-  document.getElementById('qr-reader').innerHTML = `
-    <div class="att-note">
-      <p>Camera unavailable. Enter the HR-issued fallback QR token.</p>
-      <input type="text" id="manual-qr-input" placeholder="LGSV_ATT:..." />
-      <button class="btn btn-primary btn-sm" onclick="processQrScan(document.getElementById('manual-qr-input').value)">Submit</button>
-    </div>`;
-}
-
-function cancelQrScan() {
-  if (html5QrScanner) html5QrScanner.stop().catch(() => {});
-  html5QrScanner = null;
-  QR_SCAN_MODE = null;
-  document.getElementById('qr-scanner-container').style.display = 'none';
-}
-
-function processQrScan(qrToken) {
-  if (!navigator.geolocation) return alert('Geolocation is unavailable in this browser.');
-  navigator.geolocation.getCurrentPosition(async position => {
-    const body = {
-      qr_token: qrToken,
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-      device_fingerprint: getDeviceFingerprint(),
-    };
-    try {
-      const endpoint = QR_SCAN_MODE === 'clock-in' ? '/api/attendance/clock-in' : '/api/attendance/clock-out';
-      const res = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      alert(data.message);
-      cancelQrScan();
-      loadClockStatus();
-      loadOverviewStats();
-    } catch (err) {
-      alert(err.message);
-    }
-  }, error => alert(`GPS error: ${error.message}`), { enableHighAccuracy: true, timeout: 15000 });
-}
-
-async function generateSiteQR() {
   try {
-    const res = await apiFetch('/api/attendance/static-qr');
+    setBiometricStep(2);
+    const res = await fetch(`${bridgeUrl}/enroll`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        employee_id: Number(employeeId),
+        employee_code: codeMatch ? codeMatch[1] : '',
+        employee_name: selectedText.replace(/\s*\([^)]+\)\s*$/, ''),
+      }),
+    });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    document.getElementById('site-qr-img').src = data.qr;
-    document.getElementById('site-qr-name').textContent = data.location?.location_name || 'Static QR Attendance';
-    const urlEl = document.getElementById('site-qr-url');
-    if (urlEl) urlEl.textContent = data.scan_url || '/attendance/scan';
-    document.getElementById('site-qr-display').style.display = 'block';
+    if (!res.ok) throw new Error(data.error || 'Fingerprint enrollment failed.');
+    setBiometricStep(3);
+    document.getElementById('bio-map-user-id').value = data.reference_id;
+    await saveBiometricMapping();
+    setBiometricStep(4);
   } catch (err) {
-    alert(err.message);
+    updateFingerprintEnrollmentView();
+    alert(`Bridge enrollment failed: ${err.message}\n\nStart the LGSV ZK9500 bridge as Administrator, then try again.`);
   }
+}
+
+async function verifyBiometricEnrollment() {
+  const employeeSelect = document.getElementById('bio-map-employee');
+  const employeeId = employeeSelect?.value;
+  const deviceId = document.getElementById('bio-map-device')?.value;
+  if (!employeeId || !deviceId) return alert('Select an employee first. Make sure the scanner is connected.');
+
+  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
+  const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
+  try {
+    const res = await fetch(`${bridgeUrl}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_id: Number(employeeId) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Fingerprint verification failed.');
+    if (!data.matched) {
+      return alert(`Fingerprint matched a different employee.\n\nSelected: ${selectedText}\nMatched: ${data.employee_name || data.employee_id}\nScore: ${data.score}`);
+    }
+    alert(`Fingerprint verified successfully.\n\nEmployee: ${selectedText}\nScore: ${data.score}`);
+  } catch (err) {
+    alert(`Bridge verification failed: ${err.message}\n\nMake sure the bridge is running and the employee fingerprint is enrolled.`);
+  }
+}
+
+async function requestBiometricScan(scanType) {
+  BIOMETRIC_EXPECTED_SCAN = scanType;
+  const status = document.getElementById('bio-action-status');
+  if (status) status.textContent = `Waiting for ${scanType.replace('_', ' ').toLowerCase()} fingerprint scan from the ZK9500 bridge...`;
+
+  const employeeId = ATT_USER?.employeeId;
+  if (!employeeId) {
+    if (status) status.textContent = 'Your account is not linked to an employee record.';
+    return alert('Your account is not linked to an employee record.');
+  }
+
+  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787/scan';
+  try {
+    await fetch(bridgeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        employee_id: employeeId,
+        scan_type: scanType,
+        hris_api_url: `${window.location.origin}/api/biometric/attendance`,
+        auth_token: typeof getToken === 'function' ? getToken() : '',
+      }),
+    });
+    if (status) status.textContent = 'Scan request sent. Place finger on the ZK9500 scanner.';
+  } catch (err) {
+    if (status) status.textContent = 'Local biometric bridge is not reachable. Start the C# ZK9500 bridge, then try again.';
+  }
+
+  setTimeout(async () => {
+    await loadClockStatus();
+    await loadBiometricAttendanceStatus();
+    await loadOverviewStats();
+    await loadMySummary();
+  }, 2500);
 }
 
 function watchAttendanceActivation() {
@@ -673,16 +995,68 @@ function watchAttendanceActivation() {
   initializeIfActive();
 }
 
+async function loadAttendancePolicies() {
+  try {
+    const res = await apiFetch('/api/attendance/policies');
+    if (!res?.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to load attendance policies.');
+    }
+    const data = await res.json();
+    document.getElementById('policy-work-schedule').value = data.work_schedule || '08:00-17:00';
+    document.getElementById('policy-grace-period').value = data.grace_period_minutes ?? 10;
+    document.getElementById('policy-duplicate-window').value = data.duplicate_scan_window_seconds ?? 60;
+    document.getElementById('policy-hr-validation').value = data.hr_validation_required ? '1' : '0';
+    document.getElementById('policy-overtime-threshold').value = data.overtime_threshold_hours ?? 8;
+    document.getElementById('policy-missing-timeout').value = data.missing_timeout_handling || 'Needs Review';
+    document.getElementById('policy-payroll-ready').value = data.payroll_ready_rules || 'Validated attendance only';
+    setText('attendance-policy-status', data.updated_at ? `Last updated ${formatDateTime(data.updated_at)}` : 'Default policy loaded.');
+  } catch (err) {
+    setText('attendance-policy-status', err.message);
+  }
+}
+
+async function saveAttendancePolicies(event) {
+  event?.preventDefault?.();
+  const body = {
+    work_schedule: document.getElementById('policy-work-schedule')?.value,
+    grace_period_minutes: Number(document.getElementById('policy-grace-period')?.value || 0),
+    duplicate_scan_window_seconds: Number(document.getElementById('policy-duplicate-window')?.value || 0),
+    hr_validation_required: document.getElementById('policy-hr-validation')?.value === '1',
+    overtime_threshold_hours: Number(document.getElementById('policy-overtime-threshold')?.value || 0),
+    missing_timeout_handling: document.getElementById('policy-missing-timeout')?.value,
+    payroll_ready_rules: document.getElementById('policy-payroll-ready')?.value,
+  };
+  try {
+    const res = await apiFetch('/api/attendance/policies', { method: 'PUT', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save attendance policies.');
+    setText('attendance-policy-status', data.message || 'Attendance policies saved.');
+  } catch (err) {
+    setText('attendance-policy-status', err.message);
+  }
+}
+
 window.addEventListener('DOMContentLoaded', watchAttendanceActivation);
 window.initAttendance = initAttendance;
 window.switchAttTab = switchAttTab;
-window.startClockIn = startClockIn;
-window.startClockOut = startClockOut;
-window.cancelQrScan = cancelQrScan;
-window.processQrScan = processQrScan;
-window.generateSiteQR = generateSiteQR;
+window.requestBiometricScan = requestBiometricScan;
+window.loadClockStatus = loadClockStatus;
+window.loadOverviewStats = loadOverviewStats;
+window.loadMySummary = loadMySummary;
 window.loadAttRecords = loadAttRecords;
 window.clearAttFilters = clearAttFilters;
+window.toggleAllAttendanceRows = toggleAllAttendanceRows;
+window.bulkValidateAttendance = bulkValidateAttendance;
+window.bulkRejectAttendance = bulkRejectAttendance;
+window.bulkCorrectAttendance = bulkCorrectAttendance;
+window.exportAttendanceRecords = exportAttendanceRecords;
+window.openAttendanceDetail = openAttendanceDetail;
+window.closeAttendanceDetailModal = closeAttendanceDetailModal;
+window.detailValidateAttendance = detailValidateAttendance;
+window.detailRejectAttendance = detailRejectAttendance;
+window.detailCorrectAttendance = detailCorrectAttendance;
+window.toggleAttendanceActionMenu = toggleAttendanceActionMenu;
 window.openOverrideModal = openOverrideModal;
 window.closeOverrideModal = closeOverrideModal;
 window.submitOverride = submitOverride;
@@ -694,9 +1068,19 @@ window.closeManualModal = closeManualModal;
 window.submitManualAttendance = submitManualAttendance;
 window.loadBiometricExceptions = loadBiometricExceptions;
 window.loadBiometricHealth = loadBiometricHealth;
+window.loadBiometricWorkspace = loadBiometricWorkspace;
+window.loadBiometricEvents = loadBiometricEvents;
+window.updateFingerprintEnrollmentView = updateFingerprintEnrollmentView;
+window.removeSelectedFingerprint = removeSelectedFingerprint;
+window.loadBiometricAttendanceStatus = loadBiometricAttendanceStatus;
 window.saveBiometricDevice = saveBiometricDevice;
 window.saveBiometricMapping = saveBiometricMapping;
+window.enrollFingerprintFromBridge = enrollFingerprintFromBridge;
+window.verifyBiometricEnrollment = verifyBiometricEnrollment;
 window.disableBiometricMapping = disableBiometricMapping;
 window.syncBiometricDevice = syncBiometricDevice;
 window.anchorPendingIntegrity = anchorPendingIntegrity;
 window.loadAuditLog = loadAuditLog;
+window.loadAttendancePolicies = loadAttendancePolicies;
+window.saveAttendancePolicies = saveAttendancePolicies;
+document.addEventListener('click', closeAttendanceActionMenus);

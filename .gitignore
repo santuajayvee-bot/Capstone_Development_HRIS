@@ -10,6 +10,7 @@ yarn-error.log*
 Thumbs.db
 public/uploads/*
 !public/uploads/.gitkeep
+secure_uploads/
 .vscode/settings.json
 dist/
 build/

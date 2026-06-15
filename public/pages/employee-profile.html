@@ -245,9 +245,18 @@
             <label>Department<select id="profile-edit-department"><option value="">Select department</option><option>HR</option><option>Accounting</option><option>Production</option><option>Logistics</option><option>Personnel</option></select></label>
             <label>Job Title / Position<select id="profile-edit-position"><option value="">Select department first</option></select></label>
             <label>Employee Type<select id="profile-edit-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></label>
+            <label>Hiring Classification<select id="profile-edit-hiring-type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
             <label>Employment Status<select id="profile-edit-status"><option>Active</option><option>Inactive</option></select></label>
             <label>Date Hired<input id="profile-edit-hired" type="date"></label>
             <label>End of Contract<input id="profile-edit-end-contract" type="date"></label>
+            <div id="profile-edit-agency-fields" class="profile-form-grid" style="grid-column:1 / -1; display:none;">
+              <label>Agency Name<input id="profile-edit-agency-name" type="text" placeholder="Agency name"></label>
+              <label>Agency Contact Person<input id="profile-edit-agency-contact-person" type="text" placeholder="Contact person"></label>
+              <label>Agency Contact Number<input id="profile-edit-agency-contact-number" type="text" placeholder="+63 9XX XXX XXXX"></label>
+              <label>Deployment Status<select id="profile-edit-deployment-status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></label>
+              <label>Contract Start<input id="profile-edit-contract-start-date" type="date"></label>
+              <label>Contract End<input id="profile-edit-contract-end-date" type="date"></label>
+            </div>
             <label>Immediate Supervisor<input id="profile-edit-supervisor" type="text"></label>
             <label>Work Location<input id="profile-edit-location" type="text"></label>
             <label>Shift Schedule<select id="profile-edit-shift-schedule"><option value="">Select shift</option><option>Day Shift (8:00 AM - 5:00 PM)</option><option>Morning Shift (6:00 AM - 2:00 PM)</option><option>Afternoon Shift (2:00 PM - 10:00 PM)</option><option>Night Shift (10:00 PM - 6:00 AM)</option><option>Rotating Shift</option><option>Flexible</option></select></label>

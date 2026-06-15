@@ -4,10 +4,14 @@
 
 let currentPayrollData = [];
 let currentMonthYear = null;
+let currentSalaryCalculationRecords = [];
+let payrollReportPage = 1;
+let selectedPayrollReport = null;
 let pieceRateConfig = {
   sew_types: [],
   size_ranges: [],
   piece_rates: [],
+  production_split_configs: [],
   production_shares: [],
   production_share_rules: [],
   incentives: [],
@@ -540,7 +544,9 @@ async function loadSalaryCalculations() {
     }
 
     const data = await response.json();
-    renderSalaryCalculations(data.records || []);
+    currentSalaryCalculationRecords = data.records || [];
+    populatePayrollReportFilters();
+    renderSalaryCalculations(currentSalaryCalculationRecords);
   } catch (err) {
     console.error('Error loading salary calculations:', err);
     const grid = document.getElementById('salary-calculations-grid');
@@ -880,7 +886,11 @@ function switchPayrollTab(tab) {
   if (tab === 'piece-config') loadPieceRateConfig();
   if (tab === 'deductions') loadPayrollSettings('deduction');
   if (tab === 'allowances') loadPayrollSettings('allowance');
-  if (tab === 'reports') loadPayrollAudit();
+  if (tab === 'policies') loadPayrollPolicySettings();
+  if (tab === 'reports') {
+    loadPayrollAudit();
+    renderPayrollReportLibrary();
+  }
   if (tab === 'records' || tab === 'payslips') loadSalaryCalculations();
 }
 
@@ -1003,11 +1013,13 @@ function populatePieceRateDropdowns() {
 function renderPieceRateConfig(config) {
   const views = [
     ['rates', 'Piece Rates'],
+    ['splits', 'Production Splits'],
     ['sew', 'Type of Sew'],
     ['sizes', 'Size Ranges'],
     ['rules', 'Sharing Rules'],
     ['incentives', 'Incentive Rules'],
     ['production', 'Production Encodings'],
+    ['register', 'SWR-FXR-SUM Register'],
     ['entries', 'Incentive Encodings']
   ];
   return `
@@ -1052,6 +1064,15 @@ function renderPieceRateRecordTable(config, view) {
       <table><thead><tr><th>Pairing Type</th><th>Worker 1</th><th>Worker 2</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${rows.map(row => `<tr><td>${row.pairing_type}</td><td>${Number(row.worker1_share || 0)}%</td><td>${Number(row.worker2_share || 0)}%</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editProductionShareRule(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No sharing rules configured.</td></tr>'}</tbody></table>`;
   }
+  if (view === 'splits') {
+    const rows = (config.production_split_configs || []).slice(0, limit);
+    return `
+      <table><thead><tr><th>Split Name</th><th>Sewer %</th><th>Fixer %</th><th>Total</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows.map(row => {
+        const total = Number(row.sewer_percentage || 0) + Number(row.fixer_percentage || 0);
+        return `<tr><td>${row.split_name}</td><td>${Number(row.sewer_percentage || 0)}%</td><td>${Number(row.fixer_percentage || 0)}%</td><td>${total}%</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editProductionSplit(${JSON.stringify(row)})'>Edit</button></td></tr>`;
+      }).join('') || '<tr><td colspan="7">No production split configured.</td></tr>'}</tbody></table>`;
+  }
   if (view === 'incentives') {
     const rows = (config.incentives || []).slice(0, limit);
     return `
@@ -1063,6 +1084,23 @@ function renderPieceRateRecordTable(config, view) {
     return `
       <table><thead><tr><th>Date</th><th>Pairing</th><th>Sewer</th><th>Partner</th><th>Sew / Size</th><th>Qty</th><th>Raw Earnings</th></tr></thead>
       <tbody>${rows.map(row => `<tr><td>${(row.production_date || '').slice(0, 10)}</td><td>${row.pairing_type}</td><td>${row.worker1_name || row.worker1_employee_id}</td><td>${row.worker2_name || row.worker2_employee_id}</td><td>${row.sew_type_code || row.product_type} / ${row.size_range || row.product_category || '-'}</td><td>${row.quantity_produced}</td><td>${money(row.production_value)}</td></tr>`).join('') || '<tr><td colspan="7">No production encodings yet.</td></tr>'}</tbody></table>`;
+  }
+  if (view === 'register') {
+    const totals = new Map();
+    (config.production_pairs || []).forEach(row => {
+      const sewerName = row.worker1_name || row.worker1_employee_id;
+      const fixerName = row.worker2_name || row.worker2_employee_id;
+      const sewerKey = `${sewerName}:Sewer`;
+      const fixerKey = `${fixerName}:Fixer`;
+      totals.set(sewerKey, { employee: sewerName, role: 'Sewer', amount: (totals.get(sewerKey)?.amount || 0) + Number(row.worker1_earnings || 0) });
+      totals.set(fixerKey, { employee: fixerName, role: 'Fixer', amount: (totals.get(fixerKey)?.amount || 0) + Number(row.worker2_earnings || 0) });
+    });
+    const rows = [...totals.values()].sort((a, b) => String(a.employee).localeCompare(String(b.employee)));
+    const grandTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+    return `
+      <table><thead><tr><th>Employee</th><th>Role</th><th>Payroll Amount</th></tr></thead>
+      <tbody>${rows.map(row => `<tr><td>${row.employee}</td><td>${row.role}</td><td>${money(row.amount)}</td></tr>`).join('') || '<tr><td colspan="3">No register data yet.</td></tr>'}
+      ${rows.length ? `<tr><th colspan="2">Total</th><th>${money(grandTotal)}</th></tr>` : ''}</tbody></table>`;
   }
   if (view === 'entries') {
     const rows = (config.incentive_entries || []).slice(0, limit);
@@ -1153,6 +1191,11 @@ function editPieceIncentive(row) {
 function editProductionShareRule(row) {
   setFormValues('production-share-rule-form', row);
   document.getElementById('production-share-rule-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+function editProductionSplit(row) {
+  setFormValues('production-split-form', row);
+  document.getElementById('production-split-form')?.scrollIntoView({ block: 'nearest' });
 }
 
 function applyPairingTypeDefaults() {
@@ -1295,6 +1338,47 @@ async function saveProductionShares(event) {
   }
 }
 
+async function saveProductionSplit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('production-split-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  const total = Number(data.sewer_percentage || 0) + Number(data.fixer_percentage || 0);
+  if (status) {
+    status.className = 'payroll-form-status';
+    status.textContent = 'Saving...';
+  }
+  if (Math.abs(total - 100) > 0.001) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = 'Total percentage must equal 100%.';
+    }
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/payroll/production-splits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to save production split');
+    form.reset();
+    if (status) {
+      status.className = 'payroll-form-status success';
+      status.textContent = 'Production split saved.';
+    }
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert('Production split configuration saved.', 'Saved', 'success');
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+  }
+}
+
 async function saveProductionShareRule(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1412,6 +1496,27 @@ async function encodeProductionPair(event) {
     await loadPieceRateConfig();
   } catch (err) {
     if (status) status.textContent = err.message;
+  }
+}
+
+async function generatePiecePayrollRegister() {
+  const month = document.getElementById('payroll-filter-month')?.value || new Date().toISOString().slice(0, 7);
+  try {
+    const res = await apiFetch('/api/payroll/piece-payroll-register/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month_year: month })
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to generate per-piece payroll register.');
+    pieceRateRecordsView = 'register';
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') {
+      await showAlert(`Per-piece payroll register generated for ${month}. Total: ${money(result.totals?.combined_payroll || 0)}`, 'Generated', 'success');
+    }
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
   }
 }
 
@@ -1545,6 +1650,67 @@ function toggleDeductionNameField() {
   if (customName) customName.required = !isGovernment;
 }
 
+async function loadPayrollPolicySettings() {
+  const form = document.getElementById('payroll-policy-form');
+  const status = document.getElementById('payroll-policy-save-status');
+  if (!form) return;
+  if (status) {
+    status.className = 'payroll-form-status';
+    status.textContent = 'Loading...';
+  }
+  try {
+    const res = await apiFetch('/api/payroll/policy-settings');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load payroll policies.');
+    const values = (data.settings || []).reduce((acc, item) => {
+      acc[item.setting_key] = item.setting_value;
+      return acc;
+    }, {});
+    [...form.elements].forEach(field => {
+      if (field.name && Object.prototype.hasOwnProperty.call(values, field.name)) {
+        field.value = values[field.name];
+      }
+    });
+    if (status) status.textContent = 'Loaded.';
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+  }
+}
+
+async function savePayrollPolicySettings(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('payroll-policy-save-status');
+  const settings = Object.fromEntries(new FormData(form).entries());
+  if (status) {
+    status.className = 'payroll-form-status';
+    status.textContent = 'Saving...';
+  }
+  try {
+    const res = await apiFetch('/api/payroll/policy-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to save payroll policies.');
+    if (status) {
+      status.className = 'payroll-form-status success';
+      status.textContent = 'Payroll policy saved.';
+    }
+    if (typeof showAlert === 'function') await showAlert('Payroll policy settings saved.', 'Saved', 'success');
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+  }
+}
+
 async function loadPayrollAudit() {
   const grid = document.getElementById('payroll-audit-grid');
   if (!grid) return;
@@ -1577,9 +1743,204 @@ async function loadPayrollAudit() {
   }
 }
 
+const PAYROLL_REPORTS = [
+  { id: 'summary', name: 'Payroll Summary Report', category: 'General', description: 'Payroll totals, employee count, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'employee', name: 'Employee Payroll Report', category: 'General', description: 'Employee-level wage type, gross pay, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'monthly', name: 'Monthly Payroll Report', category: 'General', description: 'Monthly payroll records based on the selected payroll period.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'daily-rate-register', name: 'Daily Rate Payroll Register', category: 'Attendance', description: 'Daily-rate calculations with days worked and payroll-ready attendance validation.', formats: ['CSV', 'Excel'] },
+  { id: 'per-hour-register', name: 'Per-Hour Payroll Register', category: 'Attendance', description: 'Hourly calculations with hours worked, overtime, and attendance validation.', formats: ['CSV', 'Excel'] },
+  { id: 'attendance-payroll-validation', name: 'Attendance-to-Payroll Validation', category: 'Attendance', description: 'Validation status, excluded attendance, warnings, and blocking errors.', formats: ['CSV', 'Excel'] },
+  { id: 'piece-production-register', name: 'Production Register', category: 'Production', description: 'Production date, sewer, fixer, quantity, rate and production amount.', formats: ['CSV', 'Excel'] },
+  { id: 'piece-sewer-register', name: 'Sewer Payroll Register', category: 'Production', description: 'Sewer production amount and payroll share.', formats: ['CSV', 'Excel'] },
+  { id: 'piece-fixer-register', name: 'Fixer Payroll Register', category: 'Production', description: 'Fixer production amount and payroll share.', formats: ['CSV', 'Excel'] },
+  { id: 'piece-combined-register', name: 'SWR-FXR-SUM', category: 'Production', description: 'Combined per-piece payroll register by employee and role.', formats: ['CSV', 'Excel'] },
+  { id: 'deductions', name: 'Deduction Report', category: 'Government', description: 'Configured deductions and deduction totals.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'government', name: 'Government Contribution Report', category: 'Government', description: 'SSS, PhilHealth, Pag-IBIG and withholding tax summary.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'audit', name: 'Audit Trail', category: 'Audit', description: 'Salary calculations, approvals, releases, settings updates and report activity.', formats: ['CSV'] }
+];
+
+function getReportFavorites() {
+  try {
+    return JSON.parse(localStorage.getItem('payrollReportFavorites') || '[]');
+  } catch (_) {
+    return [];
+  }
+}
+
+function setReportFavorites(favorites) {
+  localStorage.setItem('payrollReportFavorites', JSON.stringify([...new Set(favorites)]));
+}
+
+function populateSelectOptions(selectId, values, fallback = 'All') {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const current = select.value;
+  const unique = [...new Set(values.filter(Boolean).map(value => String(value).trim()).filter(Boolean))].sort();
+  select.innerHTML = `<option value="">${fallback}</option>${unique.map(value => `<option value="${value}">${value}</option>`).join('')}`;
+  if (unique.includes(current)) select.value = current;
+}
+
+function populatePayrollReportFilters() {
+  populateSelectOptions('report-category', PAYROLL_REPORTS.map(report => report.category));
+  populateSelectOptions('report-department', [
+    ...currentPayrollData.map(row => row.department),
+    ...currentSalaryCalculationRecords.map(row => row.department)
+  ]);
+  populateSelectOptions('report-wage-type', [
+    ...currentPayrollData.map(row => row.wage_type),
+    ...currentSalaryCalculationRecords.map(row => row.wage_type)
+  ]);
+  const period = document.getElementById('report-period');
+  const payrollPeriod = document.getElementById('payroll-filter-month')?.value;
+  if (period && payrollPeriod && !period.value) period.value = payrollPeriod;
+}
+
+function filteredPayrollReports() {
+  const search = String(document.getElementById('report-search')?.value || '').trim().toLowerCase();
+  const category = document.getElementById('report-category')?.value || '';
+  const favorites = getReportFavorites();
+  return PAYROLL_REPORTS
+    .filter(report => !category || report.category === category)
+    .filter(report => !search || `${report.name} ${report.description}`.toLowerCase().includes(search))
+    .sort((a, b) => {
+      const favDiff = Number(favorites.includes(b.id)) - Number(favorites.includes(a.id));
+      return favDiff || a.category.localeCompare(b.category) || a.name.localeCompare(b.name);
+    });
+}
+
+function renderPayrollReportLibrary() {
+  populatePayrollReportFilters();
+  const body = document.getElementById('payroll-report-library-body');
+  if (!body) return;
+  const reports = filteredPayrollReports();
+  const pageSize = 10;
+  const pages = Math.max(1, Math.ceil(reports.length / pageSize));
+  payrollReportPage = Math.min(Math.max(1, payrollReportPage), pages);
+  const pageRows = reports.slice((payrollReportPage - 1) * pageSize, payrollReportPage * pageSize);
+  const favorites = getReportFavorites();
+  body.innerHTML = pageRows.map(report => `
+    <tr>
+      <td><button class="report-star ${favorites.includes(report.id) ? 'active' : ''}" type="button" onclick="togglePayrollReportFavorite('${report.id}')" aria-label="Favorite ${report.name}">★</button></td>
+      <td>${report.name}</td>
+      <td><span class="report-category-badge">${report.category}</span></td>
+      <td>${report.description}</td>
+      <td>${report.formats.join(' | ')}</td>
+      <td><button class="btn btn-outline btn-sm" type="button" onclick="openPayrollReportModal('${report.id}')">Generate</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No reports match your filters.</td></tr>';
+  const pagination = document.getElementById('payroll-report-pagination');
+  if (pagination) {
+    pagination.innerHTML = `
+      <span>Showing ${reports.length ? (payrollReportPage - 1) * pageSize + 1 : 0}-${Math.min(payrollReportPage * pageSize, reports.length)} of ${reports.length}</span>
+      <button class="btn btn-outline btn-sm" type="button" ${payrollReportPage <= 1 ? 'disabled' : ''} onclick="changePayrollReportPage(-1)">Previous</button>
+      <button class="btn btn-outline btn-sm" type="button" ${payrollReportPage >= pages ? 'disabled' : ''} onclick="changePayrollReportPage(1)">Next</button>
+    `;
+  }
+}
+
+function changePayrollReportPage(delta) {
+  payrollReportPage += delta;
+  renderPayrollReportLibrary();
+}
+
+function togglePayrollReportFavorite(reportId) {
+  const favorites = getReportFavorites();
+  const next = favorites.includes(reportId)
+    ? favorites.filter(id => id !== reportId)
+    : [...favorites, reportId];
+  setReportFavorites(next);
+  renderPayrollReportLibrary();
+}
+
+function resetPayrollReportFilters() {
+  ['report-search', 'report-employee'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  ['report-category', 'report-department', 'report-wage-type'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const period = document.getElementById('report-period');
+  const payrollPeriod = document.getElementById('payroll-filter-month')?.value || '';
+  if (period) period.value = payrollPeriod;
+  payrollReportPage = 1;
+  renderPayrollReportLibrary();
+}
+
+function syncReportPeriod() {
+  const period = document.getElementById('report-period')?.value;
+  const payrollPeriod = document.getElementById('payroll-filter-month');
+  if (period && payrollPeriod) payrollPeriod.value = period;
+}
+
+function openPayrollReportModal(reportId) {
+  selectedPayrollReport = PAYROLL_REPORTS.find(report => report.id === reportId);
+  if (!selectedPayrollReport) return;
+  document.getElementById('payroll-report-export-modal')?.remove();
+  const defaultFormat = selectedPayrollReport.formats[0].toLowerCase();
+  const modal = document.createElement('div');
+  modal.id = 'payroll-report-export-modal';
+  modal.className = 'report-modal-backdrop';
+  modal.innerHTML = `
+    <div class="report-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-report-modal-title">
+      <div class="report-modal-header">
+        <div>
+          <h3 id="payroll-report-modal-title">${selectedPayrollReport.name}</h3>
+          <p>${selectedPayrollReport.description}</p>
+        </div>
+        <button type="button" class="report-modal-close" onclick="closePayrollReportModal()">×</button>
+      </div>
+      <div class="report-modal-body">
+        <label>Export Format</label>
+        <div class="report-format-list">
+          ${selectedPayrollReport.formats.map(format => {
+            const value = format.toLowerCase();
+            return `<label><input type="radio" name="payroll-report-format" value="${value}" ${value === defaultFormat ? 'checked' : ''} /> ${format}</label>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="report-modal-footer">
+        <button class="btn btn-outline" type="button" onclick="closePayrollReportModal()">Cancel</button>
+        <button class="btn btn-primary" type="button" onclick="generateSelectedPayrollReport()">Generate Report</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function closePayrollReportModal() {
+  document.getElementById('payroll-report-export-modal')?.remove();
+}
+
+function getPayrollReportQuery() {
+  const params = new URLSearchParams();
+  const month = document.getElementById('report-period')?.value || document.getElementById('payroll-filter-month')?.value || '';
+  const department = document.getElementById('report-department')?.value || '';
+  const wageType = document.getElementById('report-wage-type')?.value || '';
+  const employee = document.getElementById('report-employee')?.value || '';
+  if (month) params.set('month_year', month);
+  if (department) params.set('department', department);
+  if (wageType) params.set('wage_type', wageType);
+  if (employee) params.set('employee', employee);
+  return params;
+}
+
+function generateSelectedPayrollReport() {
+  if (!selectedPayrollReport) return;
+  const format = document.querySelector('input[name="payroll-report-format"]:checked')?.value || 'csv';
+  exportPayrollReport(selectedPayrollReport.id, format);
+  closePayrollReportModal();
+}
+
 function exportPayrollReport(type, format) {
-  const month = document.getElementById('payroll-filter-month')?.value || '';
-  const url = `/api/payroll/reports/${encodeURIComponent(type)}.${encodeURIComponent(format)}${month ? `?month_year=${encodeURIComponent(month)}` : ''}`;
+  const params = getPayrollReportQuery();
+  if (!params.has('month_year')) {
+    const month = document.getElementById('payroll-filter-month')?.value || '';
+    if (month) params.set('month_year', month);
+  }
+  const query = params.toString();
+  const url = `/api/payroll/reports/${encodeURIComponent(type)}.${encodeURIComponent(format)}${query ? `?${query}` : ''}`;
   window.open(url, '_blank');
 }
 
@@ -1592,9 +1953,11 @@ function initializePayrollModule() {
 
   const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
   const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
+  const splitDate = document.querySelector('#production-split-form [name="effective_date"]');
   const today = new Date().toISOString().split('T')[0];
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
   if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
+  if (splitDate && !splitDate.value) splitDate.value = today;
   toggleDeductionNameField();
 }
 
@@ -1612,9 +1975,22 @@ window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;
 window.toggleDeductionNameField = toggleDeductionNameField;
+window.loadPayrollPolicySettings = loadPayrollPolicySettings;
+window.savePayrollPolicySettings = savePayrollPolicySettings;
 window.loadPayrollAudit = loadPayrollAudit;
 window.exportPayrollReport = exportPayrollReport;
+window.renderPayrollReportLibrary = renderPayrollReportLibrary;
+window.changePayrollReportPage = changePayrollReportPage;
+window.togglePayrollReportFavorite = togglePayrollReportFavorite;
+window.resetPayrollReportFilters = resetPayrollReportFilters;
+window.syncReportPeriod = syncReportPeriod;
+window.openPayrollReportModal = openPayrollReportModal;
+window.closePayrollReportModal = closePayrollReportModal;
+window.generateSelectedPayrollReport = generateSelectedPayrollReport;
 window.initializePayrollModule = initializePayrollModule;
+window.saveProductionSplit = saveProductionSplit;
+window.editProductionSplit = editProductionSplit;
+window.generatePiecePayrollRegister = generatePiecePayrollRegister;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {

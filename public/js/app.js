@@ -9,7 +9,6 @@ const PAGE_TITLES = {
   leave:      'Leave Management',
   requests:   'Requests',
   attendance: 'Attendance Tracking',
-  '201file':  '201-File Management',
   payroll:    'Payroll',
   reports:    'Reports',
   onboarding: 'HR - Onboarding Management',
@@ -17,6 +16,12 @@ const PAGE_TITLES = {
   'system-admin': 'System Administration',
   'employee-dashboard': 'Employee Dashboard',
   'employee-profile': 'Employee Profile',
+};
+
+window.renderActionDotsIcon = function renderActionDotsIcon() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="action-dots-icon bi bi-three-dots-vertical" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+  </svg>`;
 };
 
 function enhanceResponsiveTables(root = document) {
@@ -95,11 +100,6 @@ function navigate(pageId, navEl, params = null) {
 
   if (pageId === 'onboarding' && typeof initOnboarding === 'function') {
     initOnboarding();
-  }
-
-  // When navigating to 201-file, load list
-  if (pageId === '201file' && typeof load201FileList === 'function') {
-    load201FileList();
   }
 
   // When navigating to requests, load all requests

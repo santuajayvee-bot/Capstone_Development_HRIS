@@ -30,15 +30,16 @@ function renderDashboardEmpty(target, message) {
   if (target) target.innerHTML = `<div class="dashboard-empty">${dashEscape(message)}</div>`;
 }
 
-async function loadDashboard() {
+async function loadDashboard(options = {}) {
+  const force = options === true || options.force === true;
   if (dashboardLoading) return;
   const root = document.getElementById('dashboard-root');
   if (!root) return;
-  if (Date.now() - dashboardLoadedAt < DASHBOARD_CLIENT_CACHE_MS) return;
+  if (!force && Date.now() - dashboardLoadedAt < DASHBOARD_CLIENT_CACHE_MS) return;
 
   dashboardLoading = true;
   try {
-    const response = await apiFetch('/api/dashboard');
+    const response = await apiFetch(force ? '/api/dashboard?refresh=1' : '/api/dashboard');
     if (!response || !response.ok) {
       const error = await response?.json?.().catch(() => ({}));
       throw new Error(error?.error || 'Failed to load dashboard.');

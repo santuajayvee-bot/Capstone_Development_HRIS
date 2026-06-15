@@ -1,0 +1,433 @@
+/* ============================================================
+   LGSV CLIENT THEME - WHITE / RED
+   Loaded last so legacy module styles inherit the client palette.
+   ============================================================ */
+
+:root {
+  --bg: #f7f8fb;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --card2: #f2f4f8;
+  --border: #dfe3eb;
+  --accent: #e73737;
+  --accent2: #b91c1c;
+  --accent3: #f59e0b;
+  --accent4: #ef4444;
+  --text: #1f2937;
+  --muted: #667085;
+  --green: #168a55;
+  --yellow: #b7791f;
+  --red: #d92d20;
+  --blue: #e73737;
+  --purple: #be123c;
+  --erp-panel: #ffffff;
+  --erp-panel-2: #f2f4f8;
+  --erp-row-hover: #fff1f1;
+  --erp-border: #dfe3eb;
+  --erp-label: #667085;
+  --erp-heading: #111827;
+}
+
+body,
+#app,
+.main-content,
+.topbar,
+.page-body {
+  background: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+.sidebar,
+.card,
+.leave-card,
+.dashboard-panel,
+.att-overview-panel,
+.payroll-panel,
+.payroll-form-page,
+.salary-form,
+.table-wrap,
+.leave-table-wrap,
+.report-library-head,
+.report-filter-grid,
+.report-library-table-wrap,
+.employee-setup-panel,
+.profile-page,
+.profile-field,
+.profile-record,
+.profile-family-surface,
+.profile-doc-card,
+.profile-stat,
+.dashboard-action-btn,
+.dashboard-list,
+.dashboard-actions,
+.emp-table,
+.emp-card,
+.onb-card,
+.sysadmin-card {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+}
+
+.topbar,
+.sidebar,
+.sidebar-logo,
+.sidebar-user,
+.page-header,
+.dashboard-header {
+  border-color: var(--border) !important;
+}
+
+.logo-icon,
+.user-avatar {
+  background: linear-gradient(135deg, #ef4444, #b91c1c) !important;
+  color: #ffffff !important;
+}
+
+.sidebar-logo span,
+.nav-item.active,
+.nav-item:hover {
+  color: #b91c1c !important;
+}
+
+.nav-item {
+  color: #667085 !important;
+}
+
+.nav-item.active,
+.nav-item:hover {
+  background: #fff1f1 !important;
+  border-left-color: var(--accent) !important;
+}
+
+.section-title,
+.topbar-title,
+.dashboard-panel-title,
+.leave-section-title,
+.att-card-heading h3,
+.payroll-card-header-row h3,
+.report-library-head h3,
+.report-library-title,
+.emp-name,
+.emp-id,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: #111827 !important;
+}
+
+.topbar-date,
+.section-sub,
+.stat-label,
+.stat-sub,
+.leave-card-label,
+.dashboard-list-item span,
+.dashboard-list-item small,
+.dashboard-empty,
+.att-muted,
+.att-section-label,
+.att-panel-sub,
+.att-card-heading p,
+.report-library-head p,
+.payroll-card-header-row p,
+.emp-email,
+.emp-phone,
+label {
+  color: #667085 !important;
+}
+
+.stat-grid,
+.payroll-stat-grid,
+.leave-summary-grid,
+.tabs,
+.payroll-tabs,
+.leave-tabs,
+.attendance-tabs,
+.filter-bar,
+.payroll-filter-bar,
+.leave-filter-bar,
+.att-toolbar,
+.report-filter-grid {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+}
+
+.stat-card,
+.leave-summary-grid .leave-card,
+.att-note,
+.att-detail-grid > div,
+.att-metric,
+.bio-status-grid > div,
+.bio-steps,
+.bio-step,
+.salary-selected-strip,
+.payroll-deduction-note,
+.summary-deductions,
+.summary-net,
+.att-menu-panel,
+.report-modal,
+.att-modal-card,
+.leave-modal-card,
+.modal-content,
+.lgsv-modal .modal-content,
+.onb-modal-card,
+.sysadmin-modal {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: #1f2937 !important;
+  box-shadow: none !important;
+}
+
+.stat-val,
+.leave-card-value,
+.att-metric strong,
+.att-detail-grid strong,
+.att-panel-title,
+.dashboard-list-item strong,
+.dashboard-action-btn span,
+#bio-device-status,
+#bio-scan-employee,
+#bio-scan-employee-id,
+#bio-scan-type,
+#bio-scan-time,
+#bio-verification-result,
+#bio-attendance-result {
+  color: #111827 !important;
+}
+
+.tab,
+.payroll-tab,
+.leave-tab,
+.form-tab,
+.profile-tab,
+.emp-tab,
+.onb-tab {
+  color: #667085 !important;
+}
+
+.tab.active,
+.payroll-tab.active,
+.leave-tab.active,
+.form-tab.active,
+.profile-tab.active,
+.emp-tab.active,
+.onb-tab.active {
+  background: var(--accent) !important;
+  color: #ffffff !important;
+  border-color: var(--accent) !important;
+}
+
+.btn-primary,
+.btn-login,
+.profile-upload,
+.profile-edit-btn,
+.profile-doc-upload,
+.profile-family-add,
+.profile-family-save {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #ffffff !important;
+}
+
+.btn-primary:hover,
+.btn-login:hover {
+  background: #c82727 !important;
+  border-color: #c82727 !important;
+}
+
+.btn-outline,
+.btn-secondary,
+.action-dots-button,
+.att-menu-trigger,
+.employee-setup-action,
+.report-star {
+  background: #ffffff !important;
+  border-color: var(--border) !important;
+  color: #344054 !important;
+}
+
+.btn-outline:hover,
+.action-dots-button:hover,
+.att-menu-trigger:hover,
+.employee-setup-action:hover {
+  background: #fff1f1 !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+input,
+select,
+textarea,
+.form-control,
+.search-input,
+.filter-select,
+.form-select,
+.file-input,
+.salary-readonly,
+.profile-form-grid input,
+.profile-form-grid select,
+.profile-form-grid textarea,
+.profile-family-form input,
+.profile-family-form select,
+.employee-setup-form input,
+.employee-setup-form select,
+.att-toolbar input,
+.att-form-grid input,
+.att-form-grid select,
+.att-modal input,
+.att-modal select,
+.att-modal textarea,
+.report-filter-grid input,
+.report-filter-grid select {
+  background: #ffffff !important;
+  border-color: #cfd6e1 !important;
+  color: #111827 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #98a2b3 !important;
+}
+
+select option {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+table,
+.leave-table,
+.dashboard-table,
+.report-library-table,
+.emp-table,
+.salary-work-table,
+.salary-summary-table,
+.payroll-simple-table,
+.profile-family-table {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+th,
+.leave-table th,
+.dashboard-table th,
+.report-library-table thead th,
+.emp-table th,
+.salary-work-table th,
+.salary-summary-table th,
+.payroll-simple-table th,
+.profile-family-table th {
+  background: #f2f4f8 !important;
+  color: #667085 !important;
+  border-color: var(--border) !important;
+}
+
+td,
+.leave-table td,
+.dashboard-table td,
+.report-library-table td,
+.emp-table td,
+.salary-work-table td,
+.salary-summary-table td,
+.payroll-simple-table td,
+.profile-family-table td,
+#page-attendance .table-wrap table td,
+#biometric-attendance-card table td,
+#att-biometric table td {
+  color: #1f2937 !important;
+  border-color: var(--border) !important;
+}
+
+tr:hover td,
+.leave-table tbody tr:hover td,
+.dashboard-table tbody tr:hover td,
+.report-library-table tbody tr:hover td,
+.emp-table tbody tr:hover td {
+  background: #fff1f1 !important;
+}
+
+.badge-green,
+.badge-active,
+.emp-status.active,
+.leave-badge.approved,
+.bio-success {
+  background: #ecfdf3 !important;
+  color: #067647 !important;
+  border-color: #abefc6 !important;
+}
+
+.badge-yellow,
+.leave-badge.pending,
+.bio-warning {
+  background: #fffaeb !important;
+  color: #b54708 !important;
+  border-color: #fedf89 !important;
+}
+
+.badge-red,
+.emp-status.inactive,
+.leave-badge.rejected,
+.bio-danger,
+.bio-error {
+  background: #fef3f2 !important;
+  color: #b42318 !important;
+  border-color: #fecdca !important;
+}
+
+.badge-blue,
+.leave-badge.portal,
+.leave-badge.manual,
+.report-category-badge,
+.role-badge {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+  border-color: #fecaca !important;
+}
+
+.att-menu-panel button {
+  color: #1f2937 !important;
+}
+
+.att-menu-panel button:hover {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+}
+
+.report-star.active {
+  background: #fff1f1 !important;
+  border-color: #e73737 !important;
+  color: #e73737 !important;
+}
+
+.lgsv-modal .modal-header,
+.lgsv-modal .modal-body,
+.lgsv-modal .modal-footer,
+.report-modal-header,
+.report-modal-body,
+.report-modal-footer,
+.leave-modal-head {
+  border-color: var(--border) !important;
+}
+
+.modal-backdrop,
+.report-modal-backdrop,
+.att-modal,
+.leave-modal,
+.emp-detail-modal {
+  background: rgba(17, 24, 39, .38) !important;
+}
+
+.btn-close {
+  filter: none !important;
+}
+
+.realtime-toast,
+.draft-restore-banner {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  border-color: var(--border) !important;
+  box-shadow: 0 12px 30px rgba(16, 24, 40, .12) !important;
+}

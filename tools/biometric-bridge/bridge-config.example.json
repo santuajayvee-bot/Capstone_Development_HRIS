@@ -1,0 +1,10 @@
+{
+  "device_reference": "ZK9500-LOCAL-001",
+  "hris_attendance_url": "http://localhost:3000/api/biometric/station-attendance",
+  "auth_header_name": "x-biometric-api-key",
+  "auth_secret": "",
+  "background_scanner_enabled": true,
+  "duplicate_local_cooldown_seconds": 60,
+  "scanner_idle_delay_ms": 600,
+  "listener_prefix": "http://localhost:8787/"
+}

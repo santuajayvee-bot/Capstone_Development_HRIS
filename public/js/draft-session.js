@@ -14,7 +14,7 @@ const DraftSession = (() => {
     { module: 'Payroll', form: 'Payroll Processing', selector: '#payroll-tab-dashboard', record: () => document.getElementById('payroll-filter-month')?.value || 'new', clearFns: ['generatePayroll', 'createPayrollRun'] },
     { module: 'Attendance', form: 'Manual Correction', selector: '#override-modal, #att-overtime', record: () => document.getElementById('override-att-id')?.value || document.getElementById('ot-employee')?.value || 'new', clearFns: ['submitOverride', 'encodeOvertime'] },
     { module: 'Onboarding', form: 'Checklist', selector: '#onboarding-checklist-form, #onboarding-form, #onboarding-checklist', record: () => document.getElementById('onboarding-employee-id')?.value || 'new', clearFns: ['saveOnboardingChecklist', 'submitOnboardingChecklist'] },
-    { module: '201 File', form: 'Document Uploads', selector: '#201file-upload-form, #sensitive-data-form, #profile-documents-list, #documents-list, #file-upload-form', record: () => window.currentProfileEmployee?.id || window.EDIT_EMPLOYEE_ID || document.getElementById('201file-detail-title')?.textContent || 'new', clearFns: ['upload201Document', 'updateSensitiveData', 'uploadProfileDocument', 'uploadEmployeeDocument'] }
+    { module: 'Employees', form: 'Document Uploads', selector: '#sensitive-data-form, #profile-documents-list, #documents-list, #file-upload-form', record: () => window.currentProfileEmployee?.id || window.EDIT_EMPLOYEE_ID || 'new', clearFns: ['updateSensitiveData', 'uploadProfileDocument', 'uploadEmployeeDocument'] }
   ];
 
   function key(config) {

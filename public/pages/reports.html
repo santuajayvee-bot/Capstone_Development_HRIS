@@ -43,15 +43,63 @@
 
 
 
-<!-- Single Master Report Generation -->
-<div class="action-card blue" style="display: flex; align-items: center; justify-content: space-between; padding: 24px; margin-bottom: 24px; flex-direction: row; text-align: left; min-height: auto;">
-  <div style="display: flex; align-items: center; gap: 16px;">
-    <div class="ac-title" style="margin: 0; font-size: 18px;">Master Report</div>
+<!-- ERP Report Library -->
+<div class="table-wrap" style="margin-bottom:24px;">
+  <div class="payroll-card-header-row">
+    <div>
+      <h3>Report Library</h3>
+      <p>Generate operational, payroll, attendance, production, and audit reports from one searchable library.</p>
+    </div>
   </div>
-  <div style="display: flex; gap: 12px;">
-    <button class="btn btn-outline" onclick="previewMasterReport()" style="padding: 8px 16px; font-weight: 600;">Show Preview</button>
-    <button class="btn btn-primary" onclick="generateMasterReport()" style="padding: 8px 16px; font-weight: 600;">Download Report</button>
-  </div>
+  <table class="responsive-scroll-table">
+    <thead>
+      <tr>
+        <th style="width:52px;">Fav</th>
+        <th>Report Name</th>
+        <th>Category</th>
+        <th>Description</th>
+        <th>Export Formats</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><button class="report-star active" type="button" title="Favorite">★</button></td>
+        <td>Master Payroll Report</td>
+        <td><span class="report-category-badge">General</span></td>
+        <td>Payroll totals, employee earnings, deductions, and net pay for the selected period.</td>
+        <td>CSV | Excel | PDF</td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="previewMasterReport()">Preview</button>
+          <button class="btn btn-primary btn-sm" onclick="generateMasterReport()">Generate</button>
+        </td>
+      </tr>
+      <tr>
+        <td><button class="report-star" type="button" title="Favorite">☆</button></td>
+        <td>Attendance Validation Report</td>
+        <td><span class="report-category-badge">Attendance</span></td>
+        <td>Validated attendance, exceptions, missing time out, and payroll readiness.</td>
+        <td>CSV | Excel</td>
+        <td><button class="btn btn-outline btn-sm" onclick="navigate('attendance', document.querySelector('[data-page=attendance]'))">Open Module</button></td>
+      </tr>
+      <tr>
+        <td><button class="report-star" type="button" title="Favorite">☆</button></td>
+        <td>Payroll Report Library</td>
+        <td><span class="report-category-badge">Payroll</span></td>
+        <td>Payroll summary, employee payroll, government deductions, production payroll, and audit reports.</td>
+        <td>CSV | Excel | PDF</td>
+        <td><button class="btn btn-outline btn-sm" onclick="navigate('payroll', document.querySelector('[data-page=payroll]')); setTimeout(() => window.switchPayrollTab && switchPayrollTab('reports'), 250);">Open Library</button></td>
+      </tr>
+      <tr>
+        <td><button class="report-star" type="button" title="Favorite">☆</button></td>
+        <td>Employee Directory Report</td>
+        <td><span class="report-category-badge">HR</span></td>
+        <td>Employee list by department, position, status, employment type, and wage type.</td>
+        <td>CSV | Excel</td>
+        <td><button class="btn btn-outline btn-sm" onclick="navigate('employees', document.querySelector('[data-page=employees]'))">Open Module</button></td>
+      </tr>
+    </tbody>
+  </table>
 </div>
 <!-- Report Preview Modal mapped perfectly to existing modal classes -->
 <div id="reportPreviewModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">

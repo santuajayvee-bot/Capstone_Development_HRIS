@@ -57,6 +57,13 @@ function employeeSetupEscape(value) {
   }[char]));
 }
 
+function employeeActionDotsIcon() {
+  if (typeof window.renderActionDotsIcon === 'function') return window.renderActionDotsIcon();
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="action-dots-icon bi bi-three-dots-vertical" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+  </svg>`;
+}
+
 async function refreshEmployeeSetupUI() {
   if (typeof loadEmployeePositionOptions !== 'function') return;
   await loadEmployeePositionOptions();
@@ -367,7 +374,7 @@ function renderEmployees(list) {
       <td><span class="emp-status ${statusClass}">${statusDisplay}</span></td>
       <td class="emp-action" onclick="event.stopPropagation();">
         <div class="emp-action-menu">
-          <button class="emp-action-trigger" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${e.id}')"><span class="dot"></span><span class="dot"></span><span class="dot"></span></button>
+          <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${e.id}')">${employeeActionDotsIcon()}</button>
           <div class="emp-action-dropdown" id="emp-action-menu-${e.id}">
             <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${e.id}', 'personal')">View Profile</button>
             <button class="emp-menu-item activate" type="button" onclick="setEmployeeStatus('${e.id}', 'Active')" ${e.status === 'Active' ? 'disabled' : ''}>Activate</button>
@@ -1872,6 +1879,9 @@ function renderProfileTabs(employee) {
           ${field('Employment Status', employee.status)}
           ${field('Job Title / Position', employee.position)}
           ${field('Employee Type', employee.employment_type)}
+          ${field('Hiring Classification', employee.hiring_type || 'Direct Hire')}
+          ${field('Agency Name', employee.agency_name)}
+          ${field('Deployment Status', employee.deployment_status)}
           ${field('Date Hired', employee.date_hired)}
           ${field('End of Contract', employee.end_of_contract)}
           ${field('Immediate Supervisor', employee.supervisor)}
@@ -2648,6 +2658,13 @@ function populateProfileEditForm(employee) {
     'profile-edit-department': employee.department,
     'profile-edit-position': employee.position,
     'profile-edit-type': employee.employment_type || 'Full-time',
+    'profile-edit-hiring-type': employee.hiring_type || 'Direct Hire',
+    'profile-edit-agency-name': employee.agency_name,
+    'profile-edit-agency-contact-person': employee.agency_contact_person,
+    'profile-edit-agency-contact-number': employee.agency_contact_number,
+    'profile-edit-deployment-status': employee.deployment_status || 'Pending Deployment',
+    'profile-edit-contract-start-date': formatValue(employee.contract_start_date) === '-' ? '' : formatValue(employee.contract_start_date),
+    'profile-edit-contract-end-date': formatValue(employee.contract_end_date) === '-' ? '' : formatValue(employee.contract_end_date),
     'profile-edit-hired': formatValue(employee.date_hired) === '-' ? '' : formatValue(employee.date_hired),
     'profile-edit-end-contract': formatValue(employee.end_of_contract) === '-' ? '' : formatValue(employee.end_of_contract),
     'profile-edit-supervisor': employee.supervisor,
@@ -2702,6 +2719,9 @@ function populateProfileEditForm(employee) {
     if (input) input.value = value || '';
   });
 
+  bindProfileAgencyFields();
+  toggleProfileAgencyFields();
+
   if (typeof bindDepartmentPositionDropdown === 'function') {
     bindDepartmentPositionDropdown('profile-edit-department', 'profile-edit-position', employee.position || '');
   }
@@ -2728,6 +2748,36 @@ function populateProfileEditForm(employee) {
   }
   currentSame?.dispatchEvent(new Event('change'));
   mailingSame?.dispatchEvent(new Event('change'));
+}
+
+function toggleProfileAgencyFields() {
+  const hiringType = document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire';
+  const employmentType = document.getElementById('profile-edit-type')?.value || '';
+  const isAgency = hiringType === 'Agency-Hired' || employmentType === 'Contractual';
+  const fields = document.getElementById('profile-edit-agency-fields');
+  if (!fields) return;
+
+  fields.style.display = isAgency ? 'grid' : 'none';
+  fields.querySelectorAll('input, select').forEach(field => {
+    field.required = isAgency && ['profile-edit-agency-name', 'profile-edit-agency-contact-person', 'profile-edit-agency-contact-number'].includes(field.id);
+    if (!isAgency) field.required = false;
+  });
+}
+
+function bindProfileAgencyFields() {
+  const hiringType = document.getElementById('profile-edit-hiring-type');
+  const employmentType = document.getElementById('profile-edit-type');
+  if (hiringType && !hiringType.dataset.agencyListenerAttached) {
+    hiringType.dataset.agencyListenerAttached = '1';
+    hiringType.addEventListener('change', () => {
+      if (hiringType.value === 'Agency-Hired' && employmentType) employmentType.value = 'Contractual';
+      toggleProfileAgencyFields();
+    });
+  }
+  if (employmentType && !employmentType.dataset.agencyListenerAttached) {
+    employmentType.dataset.agencyListenerAttached = '1';
+    employmentType.addEventListener('change', toggleProfileAgencyFields);
+  }
 }
 
 function toggleProfileEditMode(forceState = null, skipTabSync = false) {
@@ -2776,6 +2826,13 @@ async function saveProfilePageChanges() {
     ...addressResult.payload,
     position: document.getElementById('profile-edit-position')?.value || null,
     employment_type: document.getElementById('profile-edit-type')?.value || 'Full-time',
+    hiring_type: document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire',
+    agency_name: document.getElementById('profile-edit-agency-name')?.value || null,
+    agency_contact_person: document.getElementById('profile-edit-agency-contact-person')?.value || null,
+    agency_contact_number: document.getElementById('profile-edit-agency-contact-number')?.value || null,
+    deployment_status: document.getElementById('profile-edit-deployment-status')?.value || null,
+    contract_start_date: document.getElementById('profile-edit-contract-start-date')?.value || null,
+    contract_end_date: document.getElementById('profile-edit-contract-end-date')?.value || null,
     date_hired: document.getElementById('profile-edit-hired')?.value || null,
     end_of_contract: document.getElementById('profile-edit-end-contract')?.value || null,
     supervisor: document.getElementById('profile-edit-supervisor')?.value || null,

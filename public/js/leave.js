@@ -1398,11 +1398,16 @@ function requestedLeaveDays(prefix = 'req') {
   return Math.max(Math.ceil((new Date(end) - new Date(start)) / 86400000) + 1, 1);
 }
 
-function renderBalancePreview(targetId, balance, requestedDays, label = 'Balance After Request') {
+function renderBalancePreview(targetId, balance, requestedDays, label = 'Balance After Request', options = {}) {
   const target = document.getElementById(targetId);
   if (!target) return;
   if (!balance) {
-    target.innerHTML = '<div style="color:var(--red);font-size:12px;">No leave balance configured for this leave type/year.</div>';
+    const isManual = options.mode === 'manual';
+    target.innerHTML = `<div style="color:${isManual ? 'var(--muted)' : 'var(--red)'};font-size:12px;">
+      ${isManual
+        ? 'No leave balance configured for this leave type/year. Manual records can be saved, but approval will require a configured balance.'
+        : 'No leave balance configured for this leave type/year.'}
+    </div>`;
     return;
   }
   const total = Number(balance.total_days ?? balance.balance ?? 0);
@@ -1445,7 +1450,7 @@ async function updateManualBalancePreview() {
   const year = new Date(document.getElementById('manual-start-date')?.value || Date.now()).getFullYear();
   const balances = employeeId ? await loadEmployeeLeaveBalances(employeeId, year) : [];
   const balance = balances.find(row => String(row.leave_type_id) === String(leaveTypeId));
-  renderBalancePreview(targetId, balance, requestedLeaveDays('manual'), 'Balance After Save');
+  renderBalancePreview(targetId, balance, requestedLeaveDays('manual'), 'Balance After Save', { mode: 'manual' });
 }
 
 function initializeLeaveBalancePreviews() {
@@ -1639,7 +1644,9 @@ function watchPageActivation() {
       leavePage.dataset.loaded = '1';
       fetchCurrentUser(() => {
         loadLeaveRequests();
-        loadGeneralRequests();
+        if (currentUser?.role === 'employee' && document.getElementById('general-requests-card')) {
+          loadGeneralRequests();
+        }
       });
     }
     if (requestsPage && !requestsPage.dataset.loaded) {

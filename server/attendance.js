@@ -12,7 +12,6 @@
 
 const crypto = require('crypto');
 const express = require('express');
-const QRCode = require('qrcode');
 const pool = require('../config/db');
 const { encryptAES256 } = require('./crypto');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
@@ -26,6 +25,7 @@ const {
   sha256,
   timingSafeEqualText,
 } = require('./attendance-service');
+const { emitAttendanceCreated } = require('./realtime');
 
 const router = express.Router();
 
@@ -33,6 +33,7 @@ const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
 const SYSTEM_ADMIN_ROLES = ['system_admin', 'admin'];
 const PAYROLL_OFFICER_ROLES = ['payroll_officer'];
 const PAYROLL_MANAGER_ROLES = ['payroll_manager'];
+const BIOMETRIC_ADMIN_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
 const SUMMARY_ROLES = [...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES];
 const AUDIT_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
 
@@ -69,6 +70,34 @@ function requireReason(value) {
   const reason = cleanText(value, 500);
   if (reason.length < 8) throw new Error('A correction reason of at least 8 characters is required.');
   return reason;
+}
+
+let attendancePolicyTableReady = false;
+
+async function ensureAttendancePolicyTable() {
+  if (attendancePolicyTableReady) return;
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS attendance_policies (
+      id INT PRIMARY KEY DEFAULT 1,
+      work_schedule VARCHAR(50) NOT NULL DEFAULT '08:00-17:00',
+      grace_period_minutes INT NOT NULL DEFAULT 10,
+      duplicate_scan_window_seconds INT NOT NULL DEFAULT 60,
+      hr_validation_required TINYINT(1) NOT NULL DEFAULT 1,
+      overtime_threshold_hours DECIMAL(5,2) NOT NULL DEFAULT 8.00,
+      missing_timeout_handling VARCHAR(80) NOT NULL DEFAULT 'Needs Review',
+      payroll_ready_rules VARCHAR(120) NOT NULL DEFAULT 'Validated attendance only',
+      updated_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.execute(`
+    INSERT IGNORE INTO attendance_policies
+      (id, work_schedule, grace_period_minutes, duplicate_scan_window_seconds,
+       hr_validation_required, overtime_threshold_hours, missing_timeout_handling, payroll_ready_rules)
+    VALUES (1, '08:00-17:00', 10, 60, 1, 8.00, 'Needs Review', 'Validated attendance only')
+  `);
+  attendancePolicyTableReady = true;
 }
 
 function safeJson(value) {
@@ -111,131 +140,38 @@ async function writeAuditLog(userId, employeeId, action, oldValue, newValue, req
   );
 }
 
-function haversineDistance(lat1, lng1, lat2, lng2) {
-  const radius = 6371000;
-  const toRadians = value => (value * Math.PI) / 180;
-  const deltaLat = toRadians(lat2 - lat1);
-  const deltaLng = toRadians(lng2 - lng1);
-  const a = Math.sin(deltaLat / 2) ** 2
-    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(deltaLng / 2) ** 2;
-  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-async function ensureStaticQrAttendanceSchema() {
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS attendance_locations (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      location_name VARCHAR(160) NOT NULL,
-      latitude DECIMAL(10,8) NOT NULL,
-      longitude DECIMAL(11,8) NOT NULL,
-      allowed_radius_meters INT NOT NULL DEFAULT 200,
-      is_active TINYINT(1) NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      employee_id INT NOT NULL,
-      attendance_date DATE NOT NULL,
-      time_in DATETIME NULL,
-      time_out DATETIME NULL,
-      time_in_latitude DECIMAL(10,8) NULL,
-      time_in_longitude DECIMAL(11,8) NULL,
-      time_out_latitude DECIMAL(10,8) NULL,
-      time_out_longitude DECIMAL(11,8) NULL,
-      time_in_distance_meters DECIMAL(10,2) NULL,
-      time_out_distance_meters DECIMAL(10,2) NULL,
-      location_id INT NULL,
-      source VARCHAR(40) NOT NULL DEFAULT 'STATIC_QR',
-      status ENUM('Timed In','Completed') NOT NULL DEFAULT 'Timed In',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY unique_employee_attendance_date (employee_id, attendance_date),
-      INDEX idx_attendance_employee_date (employee_id, attendance_date),
-      CONSTRAINT fk_static_attendance_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
-      CONSTRAINT fk_static_attendance_location FOREIGN KEY (location_id) REFERENCES attendance_locations(id) ON DELETE SET NULL
-    )
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS attendance_scan_logs (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NULL,
-      employee_id INT NULL,
-      location_id INT NULL,
-      scan_type ENUM('TIME_IN','TIME_OUT','AUTO','GPS_DENIED','DUPLICATE','OUTSIDE_RADIUS','UNAUTHENTICATED','ERROR') NOT NULL DEFAULT 'AUTO',
-      result ENUM('SUCCESS','REJECTED') NOT NULL,
-      reason VARCHAR(255) NULL,
-      latitude DECIMAL(10,8) NULL,
-      longitude DECIMAL(11,8) NULL,
-      distance_meters DECIMAL(10,2) NULL,
-      allowed_radius_meters INT NULL,
-      ip_address VARCHAR(45) NULL,
-      user_agent VARCHAR(500) NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_att_scan_employee_created (employee_id, created_at),
-      INDEX idx_att_scan_result_created (result, created_at)
-    )
-  `);
-
-  const [locations] = await pool.execute('SELECT id FROM attendance_locations LIMIT 1');
-  if (!locations.length) {
-    let geofences = [];
-    try {
-      [geofences] = await pool.execute('SELECT site_name, latitude, longitude, radius_meters FROM geofence_config WHERE is_active = 1 LIMIT 1');
-    } catch (err) {
-      if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
-    }
-    const source = geofences[0] || {
-      site_name: 'LGSV Main Factory',
-      latitude: 14.5995,
-      longitude: 120.9842,
-      radius_meters: 200,
-    };
-    await pool.execute(
-      `INSERT INTO attendance_locations (location_name, latitude, longitude, allowed_radius_meters)
-       VALUES (?, ?, ?, ?)`,
-      [source.site_name, source.latitude, source.longitude, source.radius_meters]
+async function emitAttendanceRealtimeById(attendanceId, scanType = 'AUTO') {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT al.employee_id, al.date, al.time_in, al.time_out, al.verification_status,
+              al.device_id, ats.payroll_eligible,
+              e.employee_code, e.department_id,
+              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              bd.device_reference
+         FROM attendance_log al
+         JOIN employees e ON e.id = al.employee_id
+         LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
+         LEFT JOIN biometric_device bd ON bd.device_id = al.device_id
+        WHERE al.attendance_id = ?
+        LIMIT 1`,
+      [attendanceId]
     );
+    if (!rows.length) return;
+    const row = rows[0];
+    emitAttendanceCreated({
+      employee_id: row.employee_id,
+      employee_name: row.employee_name,
+      employee_code: row.employee_code,
+      department_id: row.department_id,
+      scan_type: scanType,
+      scan_time: `${row.date} ${row.time_out || row.time_in || ''}`.trim(),
+      attendance_status: row.verification_status,
+      payroll_ready: Number(row.payroll_eligible || 0) === 1,
+      device_id: row.device_reference || row.device_id || null,
+    });
+  } catch (err) {
+    console.warn('[attendance/realtime]', err.message);
   }
-}
-
-async function logStaticQrScan(req, {
-  employeeId = null,
-  locationId = null,
-  scanType = 'AUTO',
-  result = 'REJECTED',
-  reason = null,
-  latitude = null,
-  longitude = null,
-  distanceMeters = null,
-  allowedRadiusMeters = null,
-} = {}) {
-  await ensureStaticQrAttendanceSchema();
-  await pool.execute(
-    `INSERT INTO attendance_scan_logs
-       (user_id, employee_id, location_id, scan_type, result, reason,
-        latitude, longitude, distance_meters, allowed_radius_meters,
-        ip_address, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      req.user?.id || null,
-      employeeId,
-      locationId,
-      scanType,
-      result,
-      cleanText(reason, 255) || null,
-      latitude,
-      longitude,
-      distanceMeters,
-      allowedRadiusMeters,
-      clientIp(req),
-      cleanText(req.headers['user-agent'], 500),
-    ]
-  );
 }
 
 async function authenticateBiometricWebhook(req, res, next) {
@@ -325,20 +261,6 @@ async function finishSyncLog(syncLogId, deviceId, summary, error = null) {
   );
 }
 
-async function recordQrIntegrity(attendanceId, eventType) {
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-    await appendIntegrityEntry(conn, attendanceId, eventType);
-    await conn.commit();
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
-}
-
 /* ============================================================
    Biometric webhook and synchronization
    ============================================================ */
@@ -386,7 +308,7 @@ router.post('/biometric/sync/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN_R
   }
 });
 
-router.get('/biometric/devices', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (_req, res) => {
+router.get('/biometric/devices', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
     const [rows] = await pool.execute(
       `SELECT device_id, device_reference, device_name, vendor, api_base_url, logs_endpoint,
@@ -475,7 +397,7 @@ router.put('/biometric/devices/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN
   }
 });
 
-router.get('/biometric/mappings', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
+router.get('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
   try {
     const deviceId = req.query.device_id ? positiveInteger(req.query.device_id, 'device_id') : null;
     const [rows] = await pool.execute(
@@ -499,7 +421,7 @@ router.get('/biometric/mappings', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), 
   }
 });
 
-router.post('/biometric/mappings', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
+router.post('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
   try {
     const deviceId = positiveInteger(req.body.device_id, 'device_id');
     const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
@@ -536,7 +458,7 @@ router.post('/biometric/mappings', requireAuth, requireRole(SYSTEM_ADMIN_ROLES),
   }
 });
 
-router.delete('/biometric/mappings/:mappingId', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
+router.delete('/biometric/mappings/:mappingId', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
   try {
     const mappingId = positiveInteger(req.params.mappingId, 'mappingId');
     const [rows] = await pool.execute('SELECT employee_id FROM biometric_employee_mapping WHERE mapping_id = ?', [mappingId]);
@@ -549,7 +471,7 @@ router.delete('/biometric/mappings/:mappingId', requireAuth, requireRole(SYSTEM_
   }
 });
 
-router.get('/biometric/health', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (_req, res) => {
+router.get('/biometric/health', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
     const [devices] = await pool.execute(
       `SELECT bd.device_id, bd.device_reference, bd.device_name, bd.vendor, bd.is_active,
@@ -593,313 +515,54 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
 });
 
 /* ============================================================
-   QR geofence fallback
+   Disabled legacy QR/geofence endpoints
    ============================================================ */
 
 router.get('/qr/generate', requireAuth, requireRole(HR_ROLES), async (_req, res) => {
+  res.status(410).json({ error: 'QR attendance has been disabled. Please use biometric attendance.' });
+});
+
+router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
-    const [sites] = await pool.execute('SELECT * FROM geofence_config WHERE is_active = 1 LIMIT 1');
-    if (!sites.length) return res.status(404).json({ error: 'No active geofence configured.' });
-    const site = sites[0];
-    const qr = await QRCode.toDataURL(`LGSV_ATT:${site.id}:${site.site_secret}`, { width: 400, margin: 2 });
-    res.json({ qr, site_name: site.site_name, site_id: site.id });
+    const [rows] = await pool.execute(
+      `SELECT bse.scan_event_id, bse.employee_id, e.employee_code,
+              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              bse.scan_timestamp, bse.attendance_type, bse.verification_status,
+              bse.error_message, bse.created_at
+         FROM biometric_scan_event bse
+         LEFT JOIN employees e ON e.id = bse.employee_id
+        ORDER BY bse.created_at DESC
+        LIMIT 50`
+    );
+    res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to generate QR code.' });
+    console.error('[attendance/biometric-events]', err.message);
+    res.status(500).json({ error: 'Failed to fetch recent fingerprint attendance activity.' });
   }
 });
 
-async function validateQrRequest(req) {
-  const { qr_token: qrToken, latitude, longitude, device_fingerprint: fingerprint } = req.body;
-  if (!qrToken || latitude == null || longitude == null || !fingerprint) {
-    throw Object.assign(new Error('Missing QR token, location, or device fingerprint.'), { status: 400 });
-  }
-  if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
-    throw Object.assign(new Error('Latitude and longitude must be valid numbers.'), { status: 400 });
-  }
-
-  const parts = String(qrToken).split(':');
-  if (parts.length !== 3 || parts[0] !== 'LGSV_ATT') {
-    throw Object.assign(new Error('Invalid QR code format.'), { status: 400 });
-  }
-  const [sites] = await pool.execute(
-    'SELECT * FROM geofence_config WHERE id = ? AND site_secret = ? AND is_active = 1',
-    [parts[1], parts[2]]
-  );
-  if (!sites.length) throw Object.assign(new Error('Invalid or expired QR code.'), { status: 403 });
-
-  const site = sites[0];
-  const distance = haversineDistance(Number(latitude), Number(longitude), Number(site.latitude), Number(site.longitude));
-  if (process.env.DISABLE_GEOFENCE !== 'true' && distance > site.radius_meters) {
-    throw Object.assign(new Error(`Outside the ${site.site_name} geofence (${Math.round(distance)}m away).`), { status: 403 });
-  }
-
-  return { latitude, longitude, fingerprint: cleanText(fingerprint, 255), site };
-}
-
 router.post('/clock-in', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  try {
-    const employeeId = req.user.employeeId;
-    if (!employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
-    const validated = await validateQrRequest(req);
-    const today = new Date().toISOString().slice(0, 10);
-    const now = new Date();
-    const time = now.toTimeString().slice(0, 8);
-
-    const [bindings] = await pool.execute('SELECT * FROM device_bindings WHERE employee_id = ? AND date = ?', [employeeId, today]);
-    if (bindings.length && bindings[0].device_fingerprint !== validated.fingerprint) {
-      return res.status(403).json({ error: 'Device mismatch. Attendance is bound to another device today.' });
-    }
-    if (!bindings.length) {
-      await pool.execute('INSERT INTO device_bindings (employee_id, date, device_fingerprint) VALUES (?, ?, ?)', [employeeId, today, validated.fingerprint]);
-    }
-
-    const [existing] = await pool.execute('SELECT * FROM attendance_log WHERE employee_id = ? AND date = ?', [employeeId, today]);
-    if (existing.length) return res.status(409).json({ error: 'A time-in record already exists for today.' });
-
-    const [result] = await pool.execute(
-      `INSERT INTO attendance_log
-         (employee_id, date, time_in, status, device_fingerprint, clock_in_lat,
-          clock_in_lng, verification_status, source, first_scan_at, last_scan_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'INCOMPLETE', 'QR_GEOFENCE', NOW(), NOW())`,
-      [employeeId, today, time, now.getHours() >= 9 ? 'Late' : 'Present', validated.fingerprint, validated.latitude, validated.longitude]
-    );
-    await recordQrIntegrity(result.insertId, 'QR_TIME_IN');
-    res.json({ message: `Clock-in recorded at ${time}`, attendance_id: result.insertId, time_in: time });
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.status ? err.message : 'Clock-in failed.' });
-  }
+  res.status(410).json({ error: 'QR/geofence clock-in has been disabled. Please use biometric attendance.' });
 });
 
 router.post('/clock-out', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  try {
-    const employeeId = req.user.employeeId;
-    if (!employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
-    const validated = await validateQrRequest(req);
-    const today = new Date().toISOString().slice(0, 10);
-    const [bindings] = await pool.execute('SELECT * FROM device_bindings WHERE employee_id = ? AND date = ?', [employeeId, today]);
-    if (bindings.length && bindings[0].device_fingerprint !== validated.fingerprint) {
-      return res.status(403).json({ error: 'Device mismatch.' });
-    }
-
-    const [existing] = await pool.execute(
-      'SELECT * FROM attendance_log WHERE employee_id = ? AND date = ? AND time_in IS NOT NULL AND time_out IS NULL',
-      [employeeId, today]
-    );
-    if (!existing.length) return res.status(404).json({ error: 'No open clock-in session exists for today.' });
-
-    const time = new Date().toTimeString().slice(0, 8);
-    await pool.execute(
-      `UPDATE attendance_log
-          SET time_out = ?, clock_out_lat = ?, clock_out_lng = ?,
-              verification_status = 'VALIDATED', last_scan_at = NOW()
-        WHERE attendance_id = ?`,
-      [time, validated.latitude, validated.longitude, existing[0].attendance_id]
-    );
-    await recordQrIntegrity(existing[0].attendance_id, 'QR_TIME_OUT');
-    res.json({ message: `Clock-out recorded at ${time}`, time_out: time });
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.status ? err.message : 'Clock-out failed.' });
-  }
+  res.status(410).json({ error: 'QR/geofence clock-out has been disabled. Please use biometric attendance.' });
 });
 
-/* ============================================================
-   Static permanent QR attendance
-   ============================================================ */
-
 router.get('/static-qr', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
-  try {
-    await ensureStaticQrAttendanceSchema();
-    const [locations] = await pool.execute(
-      `SELECT id, location_name, latitude, longitude, allowed_radius_meters
-         FROM attendance_locations
-        WHERE is_active = 1
-        ORDER BY id
-        LIMIT 1`
-    );
-    if (!locations.length) return res.status(404).json({ error: 'No active attendance location configured.' });
-
-    const publicBaseUrl = String(process.env.APP_PUBLIC_URL || '').trim().replace(/\/+$/, '');
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
-    const scanUrl = `${publicBaseUrl || requestBaseUrl}/attendance/scan`;
-    const qr = await QRCode.toDataURL(scanUrl, { width: 420, margin: 2 });
-    res.json({ qr, scan_url: scanUrl, location: locations[0] });
-  } catch (err) {
-    console.error('[attendance/static-qr]', err.message);
-    res.status(500).json({ error: 'Failed to generate static attendance QR code.' });
-  }
+  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
 });
 
 router.get('/static-qr/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  try {
-    await ensureStaticQrAttendanceSchema();
-    if (!req.user.employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
-
-    const [rows] = await pool.execute(
-      `SELECT id, attendance_date, time_in, time_out, status
-         FROM attendance
-        WHERE employee_id = ? AND attendance_date = CURDATE()
-        LIMIT 1`,
-      [req.user.employeeId]
-    );
-
-    if (!rows.length) return res.json({ has_record: false, next_action: 'time_in' });
-    if (!rows[0].time_out) return res.json({ has_record: true, next_action: 'time_out', record: rows[0] });
-    return res.json({ has_record: true, next_action: 'completed', record: rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to get static QR attendance status.' });
-  }
+  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
 });
 
 router.post('/static-qr/gps-denied', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  try {
-    await logStaticQrScan(req, {
-      employeeId: req.user.employeeId || null,
-      scanType: 'GPS_DENIED',
-      result: 'REJECTED',
-      reason: cleanText(req.body?.reason || 'GPS permission denied by browser.', 255),
-    });
-    res.status(400).json({ error: 'GPS permission is required to record attendance.' });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to log GPS denial.' });
-  }
+  res.status(410).json({ error: 'GPS/QR attendance has been disabled. Please use biometric attendance.' });
 });
 
 router.post('/static-qr/scan', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  const conn = await pool.getConnection();
-  try {
-    await ensureStaticQrAttendanceSchema();
-
-    const employeeId = req.user.employeeId;
-    if (!employeeId) {
-      await logStaticQrScan(req, { scanType: 'UNAUTHENTICATED', result: 'REJECTED', reason: 'User account is not linked to an employee record.' });
-      return res.status(400).json({ error: 'Account is not linked to an employee record.' });
-    }
-
-    const latitude = Number(req.body?.latitude);
-    const longitude = Number(req.body?.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      await logStaticQrScan(req, { employeeId, scanType: 'ERROR', result: 'REJECTED', reason: 'Latitude and longitude are required.' });
-      return res.status(400).json({ error: 'Latitude and longitude are required.' });
-    }
-
-    const [employees] = await pool.execute(
-      'SELECT id, status FROM employees WHERE id = ? LIMIT 1',
-      [employeeId]
-    );
-    if (!employees.length || String(employees[0].status || '').toLowerCase() !== 'active') {
-      await logStaticQrScan(req, { employeeId, scanType: 'ERROR', result: 'REJECTED', reason: 'Employee is not active.', latitude, longitude });
-      return res.status(403).json({ error: 'Only active employees can record attendance.' });
-    }
-
-    const [locations] = await pool.execute(
-      `SELECT id, location_name, latitude, longitude, allowed_radius_meters
-         FROM attendance_locations
-        WHERE is_active = 1
-        ORDER BY id
-        LIMIT 1`
-    );
-    if (!locations.length) return res.status(404).json({ error: 'No active attendance location configured.' });
-
-    const location = locations[0];
-    const distance = haversineDistance(latitude, longitude, Number(location.latitude), Number(location.longitude));
-    if (process.env.DISABLE_GEOFENCE !== 'true' && distance > Number(location.allowed_radius_meters)) {
-      await logStaticQrScan(req, {
-        employeeId,
-        locationId: location.id,
-        scanType: 'OUTSIDE_RADIUS',
-        result: 'REJECTED',
-        reason: `Outside allowed radius. Distance: ${Math.round(distance)}m.`,
-        latitude,
-        longitude,
-        distanceMeters: distance,
-        allowedRadiusMeters: location.allowed_radius_meters,
-      });
-      return res.status(403).json({
-        error: `You are outside the allowed attendance radius (${Math.round(distance)}m away).`,
-        distance_meters: Math.round(distance),
-        allowed_radius_meters: location.allowed_radius_meters,
-      });
-    }
-
-    await conn.beginTransaction();
-    const [existing] = await conn.execute(
-      `SELECT * FROM attendance
-        WHERE employee_id = ? AND attendance_date = CURDATE()
-        FOR UPDATE`,
-      [employeeId]
-    );
-
-    if (!existing.length) {
-      const [result] = await conn.execute(
-        `INSERT INTO attendance
-           (employee_id, attendance_date, time_in, time_in_latitude, time_in_longitude,
-            time_in_distance_meters, location_id, source, status)
-         VALUES (?, CURDATE(), NOW(), ?, ?, ?, ?, 'STATIC_QR', 'Timed In')`,
-        [employeeId, latitude, longitude, distance, location.id]
-      );
-      await conn.commit();
-      await logStaticQrScan(req, {
-        employeeId,
-        locationId: location.id,
-        scanType: 'TIME_IN',
-        result: 'SUCCESS',
-        reason: 'Time-in recorded.',
-        latitude,
-        longitude,
-        distanceMeters: distance,
-        allowedRadiusMeters: location.allowed_radius_meters,
-      });
-      return res.json({ message: 'Time-in recorded successfully.', action: 'time_in', attendance_id: result.insertId });
-    }
-
-    const record = existing[0];
-    if (record.time_in && !record.time_out) {
-      await conn.execute(
-        `UPDATE attendance
-            SET time_out = NOW(),
-                time_out_latitude = ?,
-                time_out_longitude = ?,
-                time_out_distance_meters = ?,
-                location_id = ?,
-                status = 'Completed'
-          WHERE id = ?`,
-        [latitude, longitude, distance, location.id, record.id]
-      );
-      await conn.commit();
-      await logStaticQrScan(req, {
-        employeeId,
-        locationId: location.id,
-        scanType: 'TIME_OUT',
-        result: 'SUCCESS',
-        reason: 'Time-out recorded.',
-        latitude,
-        longitude,
-        distanceMeters: distance,
-        allowedRadiusMeters: location.allowed_radius_meters,
-      });
-      return res.json({ message: 'Time-out recorded successfully.', action: 'time_out', attendance_id: record.id });
-    }
-
-    await conn.rollback();
-    await logStaticQrScan(req, {
-      employeeId,
-      locationId: location.id,
-      scanType: 'DUPLICATE',
-      result: 'REJECTED',
-      reason: 'Duplicate scan. Employee already has time-in and time-out today.',
-      latitude,
-      longitude,
-      distanceMeters: distance,
-      allowedRadiusMeters: location.allowed_radius_meters,
-    });
-    return res.status(409).json({ error: 'Attendance already has time-in and time-out for today.' });
-  } catch (err) {
-    try { await conn.rollback(); } catch (_) {}
-    console.error('[attendance/static-qr/scan]', err.message);
-    res.status(500).json({ error: 'Static QR attendance scan failed.' });
-  } finally {
-    conn.release();
-  }
+  res.status(410).json({ error: 'Static QR attendance scan has been disabled. Please use biometric attendance.' });
 });
 
 /* ============================================================
@@ -963,17 +626,32 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
   }
 });
 
-router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES]), async (req, res) => {
+router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
   try {
     const { date, month, year } = req.query;
     const search = cleanText(req.query.search, 80);
+    const department = cleanText(req.query.department, 80);
+    const status = cleanText(req.query.status, 40);
+    const validationStatus = cleanText(req.query.validation_status, 40).toUpperCase();
+    const payrollReady = cleanText(req.query.payroll_ready, 1);
+    const dateFrom = cleanText(req.query.date_from, 10);
+    const dateTo = cleanText(req.query.date_to, 10);
     const conditions = [];
     const values = [];
-    if (includesRole(PAYROLL_OFFICER_ROLES, req)) conditions.push("al.verification_status = 'VALIDATED'");
     if (date) {
       if (!isDate(date)) return res.status(400).json({ error: 'date must use YYYY-MM-DD format.' });
       conditions.push('al.date = ?');
       values.push(date);
+    }
+    if (dateFrom) {
+      if (!isDate(dateFrom)) return res.status(400).json({ error: 'date_from must use YYYY-MM-DD format.' });
+      conditions.push('al.date >= ?');
+      values.push(dateFrom);
+    }
+    if (dateTo) {
+      if (!isDate(dateTo)) return res.status(400).json({ error: 'date_to must use YYYY-MM-DD format.' });
+      conditions.push('al.date <= ?');
+      values.push(dateTo);
     }
     if (month && year) {
       conditions.push('MONTH(al.date) = ? AND YEAR(al.date) = ?');
@@ -983,6 +661,20 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
       conditions.push("CONCAT(e.first_name, ' ', e.last_name) LIKE ?");
       values.push(`%${search}%`);
     }
+    if (department) {
+      conditions.push('d.name = ?');
+      values.push(department);
+    }
+    if (status) {
+      conditions.push('al.status = ?');
+      values.push(status);
+    }
+    if (validationStatus) {
+      conditions.push('al.verification_status = ?');
+      values.push(validationStatus === 'VALIDATED' ? 'PAYROLL_READY' : validationStatus);
+    }
+    if (payrollReady === '1') conditions.push("al.verification_status = 'PAYROLL_READY'");
+    if (payrollReady === '0') conditions.push("COALESCE(al.verification_status, '') <> 'PAYROLL_READY'");
 
     const [rows] = await pool.execute(
       `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
@@ -1001,6 +693,53 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch attendance records.' });
+  }
+});
+
+router.get('/policies', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_MANAGER_ROLES]), async (_req, res) => {
+  try {
+    await ensureAttendancePolicyTable();
+    const [rows] = await pool.execute('SELECT * FROM attendance_policies WHERE id = 1 LIMIT 1');
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch attendance policies.' });
+  }
+});
+
+router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
+  try {
+    await ensureAttendancePolicyTable();
+    const body = req.body || {};
+    const workSchedule = cleanText(body.work_schedule, 50) || '08:00-17:00';
+    const gracePeriod = Math.max(0, Number(body.grace_period_minutes || 0));
+    const duplicateWindow = Math.max(0, Number(body.duplicate_scan_window_seconds || 0));
+    const hrValidation = body.hr_validation_required ? 1 : 0;
+    const overtimeThreshold = Math.max(0, Number(body.overtime_threshold_hours || 0));
+    const missingTimeout = cleanText(body.missing_timeout_handling, 80) || 'Needs Review';
+    const payrollReadyRules = cleanText(body.payroll_ready_rules, 120) || 'Validated attendance only';
+    if (!Number.isFinite(gracePeriod) || !Number.isFinite(duplicateWindow) || !Number.isFinite(overtimeThreshold)) {
+      return res.status(400).json({ error: 'Numeric policy values are invalid.' });
+    }
+    const [oldRows] = await pool.execute('SELECT * FROM attendance_policies WHERE id = 1 LIMIT 1');
+    await pool.execute(
+      `UPDATE attendance_policies
+          SET work_schedule = ?, grace_period_minutes = ?, duplicate_scan_window_seconds = ?,
+              hr_validation_required = ?, overtime_threshold_hours = ?, missing_timeout_handling = ?,
+              payroll_ready_rules = ?, updated_by = ?
+        WHERE id = 1`,
+      [workSchedule, gracePeriod, duplicateWindow, hrValidation, overtimeThreshold, missingTimeout, payrollReadyRules, req.user.id]
+    );
+    await writeAuditLog(
+      req.user.id,
+      req.user.employeeId || null,
+      'ATTENDANCE POLICY UPDATED',
+      safeJson(oldRows[0] || null),
+      safeJson({ workSchedule, gracePeriod, duplicateWindow, hrValidation, overtimeThreshold, missingTimeout, payrollReadyRules }),
+      req
+    );
+    res.json({ message: 'Attendance policies saved.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save attendance policies.' });
   }
 });
 
@@ -1038,31 +777,55 @@ router.get('/summaries', requireAuth, requireRole(SUMMARY_ROLES), async (req, re
 
 router.get('/overview', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const [[todayRow]] = await pool.execute("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+    const today = todayRow?.today || new Date().toISOString().slice(0, 10);
     const conditions = ['attendance_date = ?'];
     const values = [today];
+    const leaveSummaryConditions = ['attendance_date = ?', "attendance_status = 'On Leave'"];
+    const leaveSummaryValues = [today];
+    const leaveRequestConditions = ["status = 'Approved'", '? BETWEEN date_from AND date_to'];
+    const leaveRequestValues = [today];
     if (req.user.role === 'employee') {
       if (!req.user.employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
       conditions.push('employee_id = ?');
       values.push(req.user.employeeId);
+      leaveSummaryConditions.push('employee_id = ?');
+      leaveSummaryValues.push(req.user.employeeId);
+      leaveRequestConditions.push('employee_id = ?');
+      leaveRequestValues.push(req.user.employeeId);
     } else if (!SUMMARY_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: 'Attendance overview is not available for this role.' });
     }
 
-    const [stats] = await pool.execute(
+    const [[stats], [leaveRows]] = await Promise.all([
+      pool.execute(
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN attendance_status = 'Present' THEN 1 ELSE 0 END) AS present,
               SUM(CASE WHEN attendance_status = 'Late' THEN 1 ELSE 0 END) AS late,
               SUM(CASE WHEN attendance_status = 'Absent' THEN 1 ELSE 0 END) AS absent,
-              SUM(CASE WHEN attendance_status = 'On Leave' THEN 1 ELSE 0 END) AS on_leave,
               COALESCE(SUM(regular_minutes), 0) / 60 AS total_hours,
               COALESCE(SUM(overtime_minutes), 0) / 60 AS total_overtime
          FROM attendance_summary
         WHERE ${conditions.join(' AND ')}`,
       values
-    );
-    res.json({ date: today, ...stats[0] });
+      ),
+      pool.execute(
+        `SELECT COUNT(DISTINCT employee_id) AS approved_on_leave
+           FROM (
+             SELECT employee_id
+               FROM attendance_summary
+              WHERE ${leaveSummaryConditions.join(' AND ')}
+             UNION
+             SELECT employee_id
+               FROM leave_requests
+              WHERE ${leaveRequestConditions.join(' AND ')}
+           ) leave_today`,
+        [...leaveSummaryValues, ...leaveRequestValues]
+      ),
+    ]);
+    res.json({ date: today, ...stats[0], on_leave: leaveRows[0]?.approved_on_leave || 0 });
   } catch (err) {
+    console.error('[attendance/overview]', err);
     res.status(500).json({ error: 'Failed to fetch attendance overview.' });
   }
 });
@@ -1091,7 +854,7 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
       return res.status(409).json({ error: 'Attendance already exists. Use correction instead.' });
     }
 
-    const verificationStatus = timeIn && timeOut ? 'VALIDATED' : 'NEEDS_REVIEW';
+    const verificationStatus = timeIn && timeOut ? 'PAYROLL_READY' : 'NEEDS_REVIEW';
     const status = timeIn && timeOut ? 'Present' : 'Incomplete';
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
@@ -1109,6 +872,7 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
     await appendIntegrityEntry(conn, result.insertId, 'HR_MANUAL_ATTENDANCE');
     await conn.commit();
     await writeAuditLog(req.user.id, employeeId, `MANUAL ATTENDANCE CREATED [ID:${result.insertId}] Reason:${reason}`, null, safeJson({ date, timeIn, timeOut }), req);
+    await emitAttendanceRealtimeById(result.insertId, timeOut ? 'TIME_OUT' : 'TIME_IN');
     res.status(201).json({ message: 'Manual attendance created and audited.', attendance_id: result.insertId });
   } catch (err) {
     await conn.rollback();
@@ -1141,7 +905,7 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
     const newTimeIn = timeIn || record.time_in;
     const newTimeOut = timeOut || record.time_out;
     const status = newTimeIn && newTimeOut && record.status === 'Incomplete' ? 'Present' : record.status;
-    const verificationStatus = newTimeIn && newTimeOut ? 'VALIDATED' : 'NEEDS_REVIEW';
+    const verificationStatus = newTimeIn && newTimeOut ? 'CORRECTED_BY_HR' : 'NEEDS_REVIEW';
 
     await conn.execute(
       `UPDATE attendance_log
@@ -1161,7 +925,8 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
     await appendIntegrityEntry(conn, attendanceId, 'HR_MANUAL_CORRECTION');
     await conn.commit();
     await writeAuditLog(req.user.id, record.employee_id, `ATTENDANCE CORRECTED [ID:${attendanceId}] Reason:${reason}`, safeJson(oldValue), safeJson(newValue), req);
-    res.json({ message: 'Attendance correction saved with reason and audit trail.' });
+    await emitAttendanceRealtimeById(attendanceId, 'CORRECTED_BY_HR');
+    res.json({ message: 'Attendance correction saved and audited.' });
   } catch (err) {
     await conn.rollback();
     res.status(400).json({ error: err.message });
@@ -1174,11 +939,14 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
   const conn = await pool.getConnection();
   try {
     const attendanceId = positiveInteger(req.params.id, 'id');
-    const reason = requireReason(req.body.reason);
-    const verificationStatus = cleanText(req.body.verification_status, 30).toUpperCase();
-    if (!['VALIDATED', 'REJECTED', 'NEEDS_REVIEW'].includes(verificationStatus)) {
-      return res.status(400).json({ error: 'verification_status must be VALIDATED, REJECTED, or NEEDS_REVIEW.' });
+    const requestedStatus = cleanText(req.body.verification_status, 30).toUpperCase();
+    if (!['VALIDATED', 'PAYROLL_READY', 'REJECTED', 'NEEDS_REVIEW'].includes(requestedStatus)) {
+      return res.status(400).json({ error: 'verification_status must be PAYROLL_READY, REJECTED, or NEEDS_REVIEW.' });
     }
+    const verificationStatus = requestedStatus === 'VALIDATED' ? 'PAYROLL_READY' : requestedStatus;
+    const reason = verificationStatus === 'PAYROLL_READY'
+      ? (cleanText(req.body.reason, 500) || 'Attendance validated by HR.')
+      : requireReason(req.body.reason);
 
     await conn.beginTransaction();
     const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);
@@ -1187,7 +955,7 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
       return res.status(404).json({ error: 'Attendance record not found.' });
     }
     const record = rows[0];
-    if (verificationStatus === 'VALIDATED' && (!record.time_in || !record.time_out)) {
+    if (verificationStatus === 'PAYROLL_READY' && (!record.time_in || !record.time_out)) {
       await conn.rollback();
       return res.status(400).json({ error: 'Incomplete attendance cannot be validated until both punches exist.' });
     }
@@ -1202,6 +970,7 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     await appendIntegrityEntry(conn, attendanceId, `HR_VERIFICATION_${verificationStatus}`);
     await conn.commit();
     await writeAuditLog(req.user.id, record.employee_id, `ATTENDANCE ${verificationStatus} [ID:${attendanceId}] Reason:${reason}`, record.verification_status, verificationStatus, req);
+    await emitAttendanceRealtimeById(attendanceId, verificationStatus);
     res.json({ message: `Attendance marked ${verificationStatus}.` });
   } catch (err) {
     await conn.rollback();

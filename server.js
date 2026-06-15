@@ -9,17 +9,20 @@ const os         = require('os');
 const path       = require('path');
 const multer     = require('multer');
 const fs         = require('fs');
+const http       = require('http');
 
 const { login, me }                          = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
+const biometricRoutes                        = require('./server/biometric');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
 const dashboardRoutes                        = require('./server/dashboard');
+const { initRealtime }                       = require('./server/realtime');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -156,7 +159,11 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/attendance/scan', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'attendance', 'scan.html'));
+  res.status(410).type('text/plain').send('QR attendance has been disabled. Please use fingerprint biometric attendance.');
+});
+
+app.get('/attendance/station', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'attendance-station.html'));
 });
 
 app.get('/health', (_req, res) => {
@@ -470,8 +477,11 @@ app.use('/api/dashboard', dashboardRoutes);
 // 201-File Management (Auth required, role-based per endpoint)
 app.use('/api/201-files', requireAuth, fileManagementRoutes);
 
-// Attendance Module (QR, Geofence, Device Binding, Audit)
+// Attendance Module (biometric attendance, records, manual correction, audit)
 app.use('/api/attendance', attendanceRoutes);
+
+// Local biometric bridge endpoint for ZKTeco ZK9500 attendance scans
+app.use('/api/biometric', biometricRoutes);
 
 // Onboarding Module (pre-employment lifecycle, secure document vault, transfer)
 app.use('/api/onboarding', onboardingRoutes);
@@ -1546,9 +1556,10 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
+    await ensureEmployeeLifecycleColumns(pool);
     await ensurePhilippineAddressColumns(pool);
     const { id } = req.params; // numeric employee id
-    const { first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const { first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
     console.log('Employee ID:', id);
@@ -1566,7 +1577,16 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
       return res.status(400).json({ error: addressErrors.join(' ') });
     }
 
-    console.log('Executing UPDATE for:', { id, first_name, last_name, email, department_id, position, supervisor, work_location });
+    const normalizedHiringType = hiring_type === 'Agency-Hired' ? 'Agency-Hired' : 'Direct Hire';
+    const agencyNameValue = normalizedHiringType === 'Agency-Hired' ? agency_name || null : null;
+    const agencyContactPersonValue = normalizedHiringType === 'Agency-Hired' ? agency_contact_person || null : null;
+    const agencyContactNumberValue = normalizedHiringType === 'Agency-Hired' ? agency_contact_number || null : null;
+    const deploymentStatusValue = normalizedHiringType === 'Agency-Hired' ? deployment_status || 'Pending Deployment' : null;
+    const contractStartValue = normalizedHiringType === 'Agency-Hired' ? contract_start_date || null : null;
+    const contractEndValue = normalizedHiringType === 'Agency-Hired' ? contract_end_date || end_of_contract || null : null;
+    const directoryEndOfContract = contractEndValue || end_of_contract || null;
+
+    console.log('Executing UPDATE for:', { id, first_name, last_name, email, department_id, position, supervisor, work_location, hiring_type: normalizedHiringType, agency_name: agencyNameValue });
 
     const [result] = await pool.execute(
       `UPDATE employees SET 
@@ -1579,7 +1599,8 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
         education_jhs_from=?, education_jhs_to=?, education_shs_from=?, education_shs_to=?,
         education_vocational_school=?, education_vocational_attainment=?, education_vocational_units=?, education_vocational_from=?, education_vocational_to=?, education_vocational_year_graduated=?,
         education_college_school=?, education_college_attainment=?, education_college_units=?, education_college_from=?, education_college_to=?, education_college_year_graduated=?,
-        department_id=?, position=?, employment_type=?, date_hired=?, end_of_contract=?, supervisor=?, work_location=?, shift_schedule=?, employee_level=?, employment_history=?, status=?,
+        department_id=?, position=?, employment_type=?, hiring_type=?, agency_name=?, agency_contact_person=?, agency_contact_number=?, deployment_status=?, contract_start_date=?, contract_end_date=?,
+        date_hired=?, end_of_contract=?, supervisor=?, work_location=?, shift_schedule=?, employee_level=?, employment_history=?, status=?,
         salary_grade=?, allowances=?, payroll_schedule=?,
         sss_number=?, philhealth_number=?, pagibig_number=?, tin=?, tax_status=?, bank_name=?, bank_account=?
        WHERE id=? OR employee_code=?`,
@@ -1593,7 +1614,8 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
        education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null,
        education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null,
        department_id || null, position || null,
-       employment_type || 'Regular', date_hired || null, end_of_contract || null, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active',
+       employment_type || 'Regular', normalizedHiringType, agencyNameValue, agencyContactPersonValue, agencyContactNumberValue, deploymentStatusValue, contractStartValue, contractEndValue,
+       date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active',
        salary_grade || null, allowances || null, payroll_schedule || null,
        sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, id, id]
     );
@@ -2377,14 +2399,14 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
 });
 
 const LEAVE_PERMISSION_ROLES = {
-  'leave.request.create': ['employee', 'hr_admin', 'hr_manager'],
-  'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager'],
-  'leave.manual.create': ['hr_admin', 'hr_manager'],
+  'leave.request.create': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
+  'leave.manual.create': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
   'leave.request.approve': ROLES.hr_final_approval,
-  'leave.request.view_all': ['hr_admin', 'hr_manager'],
-  'leave.balance.manage': ['hr_admin', 'hr_manager'],
-  'leave.report.view': ['hr_admin', 'hr_manager'],
-  'leave.audit.view': ['hr_admin', 'hr_manager']
+  'leave.request.view_all': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
+  'leave.balance.manage': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.report.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
+  'leave.audit.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager']
 };
 
 function hasLeavePermission(user, permission) {
@@ -2790,14 +2812,16 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     }
 
     const balance = await getConfiguredLeaveBalance(pool, empId, leaveType, year);
-    if (!balance) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
-    }
-    const remaining = decimalValue(balance.remaining_days_value);
-    if (requestedDays > remaining) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'Requested duration exceeds the available leave balance.' });
+    if (source === 'Portal') {
+      if (!balance) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
+      }
+      const remaining = decimalValue(balance.remaining_days_value);
+      if (requestedDays > remaining) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ error: 'Requested duration exceeds the available leave balance.' });
+      }
     }
 
     const [annualRows] = await pool.execute(
@@ -2974,32 +2998,34 @@ app.get('/api/leave/reports/:reportType', requireAuth, requireLeavePermission('l
 
 // Attendance — now handled by /api/attendance router (server/attendance.js)
 
-// General Requests (COE, COS, Exit)
-app.get('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) => {
+const employeeOnlyRequestAccess = (req, res, next) => {
+  if (req.user?.role !== 'employee') {
+    return res.status(403).json({ error: 'Requests are available only to employee accounts.' });
+  }
+  next();
+};
+
+// General Requests (COE, COS, Exit) — employee self-service only.
+app.get('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
   try {
     const pool = require('./config/db');
     let q = `SELECT gr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
              FROM general_requests gr JOIN employees e ON e.id = gr.employee_id`;
     const p = [];
-    if (req.user.role === 'employee') { q += ' WHERE gr.employee_id = ?'; p.push(req.user.employeeId); }
+    q += ' WHERE gr.employee_id = ?';
+    p.push(req.user.employeeId);
     q += ' ORDER BY gr.created_at DESC';
     const [rows] = await pool.execute(q, p);
     res.json(rows);
   } catch (err) { res.status(500).json({ error: 'Failed to fetch requests.' }); }
 });
 
-app.post('/api/requests', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
   try {
     const pool = require('./config/db');
-    const { type, reason, employee_id } = req.body;
-    // For employees, use token ID. For admins, prefer body, fall back to token.
-    let empId;
-    if (req.user.role === 'employee') {
-      empId = req.user.employeeId;
-    } else {
-      empId = employee_id ? parseInt(employee_id) : req.user.employeeId;
-    }
-    if (!empId) return res.status(400).json({ error: 'Your admin account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
+    const { type, reason } = req.body;
+    const empId = req.user.employeeId;
+    if (!empId) return res.status(400).json({ error: 'Your account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
     if (!['COE','COS','Request Exit'].includes(type)) return res.status(400).json({ error: 'Invalid request type.' });
     const [result] = await pool.execute(
       `INSERT INTO general_requests (employee_id, type, reason) VALUES (?,?,?)`,
@@ -3147,12 +3173,16 @@ if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
     ca: process.env.TLS_CA_PATH ? fs.readFileSync(process.env.TLS_CA_PATH) : undefined,
     minVersion: 'TLSv1.3',
   };
-  https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
+  const server = https.createServer(tlsOptions, app);
+  initRealtime(server);
+  server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR running with TLS 1.3 on ${HOST}:${PORT}`);
     logServerUrls('https');
   });
 } else {
-  app.listen(PORT, HOST, () => {
+  const server = http.createServer(app);
+  initRealtime(server);
+  server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR local development server listening on ${HOST}:${PORT}`);
     logServerUrls('http');
     if (process.env.NODE_ENV === 'production') {

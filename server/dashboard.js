@@ -13,13 +13,13 @@ const DASHBOARD_CACHE_TTL_MS = 15000;
 const dashboardCache = new Map();
 
 const FALLBACK_PERMISSIONS = {
-  system_admin: ['settings.manage', 'system.audit.view', 'blockchain.audit.view'],
-  admin: ['settings.manage', 'system.audit.view', 'blockchain.audit.view'],
-  hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
-  hr_manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
-  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view'],
-  payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view'],
-  manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create'],
+  system_admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
+  admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
+  hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
+  hr_manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
+  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
+  payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
+  manager: ['attendance.view', 'leave.request.approve', 'report.view'],
   employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'payroll.view'],
 };
 
@@ -29,7 +29,7 @@ function hasPermission(permissions, key) {
 
 function normalizeRole(role) {
   if (role === 'admin') return 'system_admin';
-  if (role === 'hr_admin' || role === 'manager') return 'hr_manager';
+  if (role === 'hr_manager') return 'hr_manager';
   return role || 'employee';
 }
 
@@ -176,9 +176,11 @@ async function hrDashboard(profile, permissions) {
     employeesOnLeave,
     pendingLeaveRequests,
     pendingOnboarding,
+    pendingAttendanceValidation,
     leaveRows,
     newHireRows,
     onboardingRows,
+    attendanceRows,
   ] = await Promise.all([
     scalar('SELECT COUNT(*) FROM employees'),
     scalar("SELECT COUNT(*) FROM employees WHERE status = 'Active'"),
@@ -186,6 +188,7 @@ async function hrDashboard(profile, permissions) {
     scalar("SELECT COUNT(DISTINCT employee_id) FROM leave_requests WHERE status = 'Approved' AND CURDATE() BETWEEN date_from AND date_to"),
     scalar("SELECT COUNT(*) FROM leave_requests WHERE status = 'Pending'"),
     scalar("SELECT COUNT(*) FROM employees WHERE onboarding_status = 'active'"),
+    scalar("SELECT COUNT(*) FROM attendance_log WHERE verification_status IN ('PENDING_VALIDATION','INCOMPLETE','NEEDS_REVIEW')"),
     rows(
       `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee, lr.type, lr.date_from, lr.date_to, lr.status
          FROM leave_requests lr
@@ -206,6 +209,15 @@ async function hrDashboard(profile, permissions) {
         ORDER BY date_hired DESC
         LIMIT 5`
     ),
+    rows(
+      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee,
+              e.employee_code, al.date, al.time_in, al.time_out, al.status, al.verification_status
+         FROM attendance_log al
+         JOIN employees e ON e.id = al.employee_id
+        WHERE al.verification_status IN ('PENDING_VALIDATION','INCOMPLETE','NEEDS_REVIEW','REJECTED','CORRECTED_BY_HR','PAYROLL_READY','VALIDATED')
+        ORDER BY al.updated_at DESC, al.attendance_id DESC
+        LIMIT 8`
+    ),
   ]);
 
   const stats = [
@@ -215,21 +227,22 @@ async function hrDashboard(profile, permissions) {
     card('Employees On Leave', employeesOnLeave),
     card('Pending Leave Requests', pendingLeaveRequests),
     card('Pending Onboarding', pendingOnboarding),
+    card('Attendance Validation Queue', pendingAttendanceValidation),
   ];
 
   return {
     stats,
     tables: [
+      table('Attendance Validation Queue', ['Employee', 'Date', 'Time In', 'Time Out', 'Attendance', 'Validation'], attendanceRows.map(r => [r.employee, dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-', r.verification_status || '-'])),
       table('Recent Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [r.employee, r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
       table('New Employee Registrations', ['Employee ID', 'Employee', 'Position', 'Date Hired'], newHireRows.map(r => [r.employee_code, r.employee, r.position || '-', dateLabel(r.date_hired)])),
       table('Pending Onboarding Tracking', ['Employee ID', 'Employee', 'Status', 'Date Hired'], onboardingRows.map(r => [r.employee_code, r.employee, r.onboarding_status || '-', dateLabel(r.date_hired)])),
     ],
     actions: [
       action('Add Employee', 'register', 'Register a new employee record'),
-      action('Onboarding', 'onboarding', 'Track applicants and onboarding'),
-      action('Verify Attendance', 'attendance', 'Review attendance records'),
+      action('Create User Account', 'employees', 'Provision HRIS access'),
       action('Review Leave Requests', 'leave', 'Open leave inbox'),
-      action('201-File Management', '201file', 'Manage employee files'),
+      action('View Reports', 'reports', 'Open reports'),
     ],
   };
 }
@@ -241,14 +254,17 @@ async function payrollDashboard(profile, permissions) {
     pendingApproval,
     payslipsGenerated,
     contributionsDue,
+    payrollReadyAttendance,
     payrollRuns,
     salaryRows,
+    attendanceRows,
   ] = await Promise.all([
     scalar("SELECT COUNT(*) FROM payroll_runs WHERE status IN ('Draft','Pending','Submitted') AND run_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)"),
     scalar("SELECT COUNT(*) FROM salary_calculations WHERE status = 'Draft'"),
     scalar("SELECT COUNT(*) FROM salary_calculations WHERE status = 'Submitted'"),
     scalar('SELECT COUNT(*) FROM payslips'),
     scalar("SELECT COUNT(*) FROM payroll_deduction_settings WHERE category = 'Government' AND is_active = 1"),
+    scalar("SELECT COUNT(*) FROM attendance_summary WHERE payroll_eligible = 1 AND attendance_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)"),
     rows(
       `SELECT id, month_year, run_date, status, created_at
          FROM payroll_runs
@@ -262,6 +278,16 @@ async function payrollDashboard(profile, permissions) {
         ORDER BY sc.calculation_date DESC, sc.id DESC
         LIMIT 5`
     ),
+    rows(
+      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee,
+              ats.attendance_date, ats.regular_minutes, ats.overtime_minutes,
+              ats.attendance_status, ats.verification_status
+         FROM attendance_summary ats
+         JOIN employees e ON e.id = ats.employee_id
+        WHERE ats.payroll_eligible = 1
+        ORDER BY ats.attendance_date DESC, ats.updated_at DESC
+        LIMIT 8`
+    ),
   ]);
 
   const stats = [
@@ -270,12 +296,14 @@ async function payrollDashboard(profile, permissions) {
     card('Pending Payroll Approval', pendingApproval),
     card('Payslips Generated', payslipsGenerated),
     card('Government Contributions Due', contributionsDue),
+    card('Payroll Ready Attendance', payrollReadyAttendance, 'Last 7 days'),
   ];
 
   return {
     stats,
     tables: [
       table('Recent Payroll Runs', ['Run ID', 'Period', 'Run Date', 'Status'], payrollRuns.map(r => [r.id, r.month_year || '-', dateLabel(r.run_date), r.status || '-'])),
+      table('Payroll Ready Attendance', ['Employee', 'Date', 'Regular Hours', 'OT Hours', 'Status'], attendanceRows.map(r => [r.employee, dateLabel(r.attendance_date), (Number(r.regular_minutes || 0) / 60).toFixed(1), (Number(r.overtime_minutes || 0) / 60).toFixed(1), r.verification_status || r.attendance_status || '-'])),
       table('Pending Salary Calculations', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [r.employee, r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
       table('Payroll Processing Queue', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [r.employee, r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
     ],
@@ -394,7 +422,7 @@ async function employeeDashboard(profile, permissions) {
 
   const actions = [
     action('Time In / Time Out', 'attendance', 'Open attendance'),
-    action('View Payslip', 'employee-dashboard', 'Open payslips'),
+    action('View Payslip', 'payroll', 'Open payslips'),
     action('Update Profile', 'employee-profile', 'Review employee profile'),
   ];
   if (leaveAllowed) actions.splice(1, 0, action('File Leave Request', 'leave', 'Submit leave through portal'));
@@ -438,6 +466,7 @@ async function systemAdminDashboard(profile, permissions) {
     ],
     actions: [
       action('System Admin', 'system-admin', 'Manage users and roles'),
+      action('Employees', 'employees', 'Open employee management'),
       action('Audit Log', 'blockchain', 'Review audit activity'),
     ],
   };
@@ -445,7 +474,8 @@ async function systemAdminDashboard(profile, permissions) {
 
 router.get('/', async (req, res) => {
   try {
-    const cached = getCachedDashboard(req.user);
+    const bypassCache = req.query.refresh === '1' || req.headers['x-dashboard-refresh'] === '1';
+    const cached = bypassCache ? null : getCachedDashboard(req.user);
     if (cached) {
       auditDashboardAccess(req);
       return res.json({ ...cached, cached: true });

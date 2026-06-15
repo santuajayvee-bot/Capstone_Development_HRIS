@@ -14,6 +14,7 @@ const { requestJson } = require('./secure-http');
 
 const GENESIS_HASH = '0'.repeat(64);
 const VALID_TYPES = new Set(['TIME_IN', 'TIME_OUT', 'AUTO']);
+const PAYROLL_READY_STATUSES = new Set(['VALIDATED', 'PAYROLL_READY']);
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -230,7 +231,7 @@ async function refreshSummary(conn, attendanceId) {
 
   const regularMinutes = Number(minutesRows[0]?.regular_minutes || 0);
   const overtimeMinutes = Math.round(Number(row.overtime_hours || 0) * 60);
-  const payrollEligible = row.verification_status === 'VALIDATED' && !!row.time_in && !!row.time_out ? 1 : 0;
+  const payrollEligible = PAYROLL_READY_STATUSES.has(row.verification_status) && !!row.time_in && !!row.time_out ? 1 : 0;
 
   await conn.execute(
     `INSERT INTO attendance_summary
@@ -357,7 +358,7 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
   if (!record) {
     const isTimeIn = attendanceType === 'TIME_IN';
     const status = isTimeIn ? (manila.hour >= 9 ? 'Late' : 'Present') : 'Incomplete';
-    const verificationStatus = isTimeIn ? 'INCOMPLETE' : 'NEEDS_REVIEW';
+    const verificationStatus = 'PENDING_VALIDATION';
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
          (employee_id, date, time_in, time_out, status, biometric_user_hash,
@@ -384,7 +385,7 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
       `UPDATE attendance_log
           SET time_in = ?, status = ?, biometric_user_hash = ?,
               biometric_user_id_encrypted = ?, device_id = ?, source = 'BIOMETRIC_API',
-              verification_status = CASE WHEN time_out IS NULL THEN 'INCOMPLETE' ELSE 'VALIDATED' END,
+              verification_status = 'PENDING_VALIDATION',
               first_scan_at = COALESCE(first_scan_at, ?), last_scan_at = ?
         WHERE attendance_id = ?`,
       [
@@ -402,7 +403,7 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
     await conn.execute(
       `UPDATE attendance_log
           SET time_out = ?, device_id = ?, source = 'BIOMETRIC_API',
-              verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE 'VALIDATED' END,
+              verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE 'PENDING_VALIDATION' END,
               status = CASE WHEN time_in IS NULL THEN 'Incomplete' ELSE status END,
               last_scan_at = ?
         WHERE attendance_id = ?`,

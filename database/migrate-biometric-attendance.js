@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 
 const GENESIS_HASH = '0'.repeat(64);
+const BIOMETRIC_ATTENDANCE_STATUSES = "ENUM('PENDING_VALIDATION','VALIDATED','REJECTED','CORRECTED_BY_HR','NEEDS_REVIEW','PAYROLL_READY','INCOMPLETE') NOT NULL DEFAULT 'PENDING_VALIDATION'";
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -181,6 +182,26 @@ async function migrate() {
     `);
 
     await conn.execute(`
+      CREATE TABLE IF NOT EXISTS attendance_policy_settings (
+        setting_key VARCHAR(100) PRIMARY KEY,
+        setting_value VARCHAR(255) NOT NULL,
+        description VARCHAR(255) NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+
+    await conn.execute(`
+      INSERT INTO attendance_policy_settings (setting_key, setting_value, description)
+      VALUES
+        ('duplicate_scan_window_seconds', '60', 'Seconds to ignore repeated fingerprint scans for the same employee/device.'),
+        ('hr_validation_required', 'true', 'Biometric attendance requires HR validation before payroll readiness.'),
+        ('multiple_scan_handling', 'reject_after_time_out', 'Policy after time-in and time-out are already recorded.'),
+        ('missing_timeout_handling', 'needs_review', 'Policy for missing time-out records.'),
+        ('overtime_handling', 'manual_approval', 'Policy for overtime approval.')
+      ON DUPLICATE KEY UPDATE setting_value = setting_value
+    `);
+
+    await conn.execute(`
       CREATE TABLE IF NOT EXISTS biometric_sync_log (
         sync_log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
         device_id INT NOT NULL,
@@ -225,7 +246,7 @@ async function migrate() {
       conn,
       'attendance_log',
       'verification_status',
-      "ENUM('VALIDATED','INCOMPLETE','NEEDS_REVIEW','REJECTED') NOT NULL DEFAULT 'VALIDATED'"
+      BIOMETRIC_ATTENDANCE_STATUSES
     );
     await ensureColumn(
       conn,
@@ -240,6 +261,12 @@ async function migrate() {
     await conn.execute(`
       ALTER TABLE biometric_scan_event
       MODIFY COLUMN scan_timestamp DATETIME NULL
+    `);
+
+    await conn.execute(`
+      ALTER TABLE attendance_log
+      MODIFY COLUMN verification_status
+      ${BIOMETRIC_ATTENDANCE_STATUSES}
     `);
 
     await conn.execute(`
@@ -303,7 +330,7 @@ async function migrate() {
                   THEN GREATEST(0, FLOOR(TIME_TO_SEC(TIMEDIFF(time_in, '09:00:00')) / 60))
                   ELSE 0 END,
              status, verification_status,
-             CASE WHEN verification_status = 'VALIDATED' AND time_in IS NOT NULL AND time_out IS NOT NULL
+             CASE WHEN verification_status IN ('VALIDATED','PAYROLL_READY') AND time_in IS NOT NULL AND time_out IS NOT NULL
                   THEN 1 ELSE 0 END,
              integrity_hash
         FROM attendance_log
