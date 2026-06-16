@@ -1,0 +1,9 @@
+{
+  "dev": {
+    "driver": "mysql",
+    "user": "root",
+    "password": "",
+    "host": "127.0.0.1",
+    "database": "lgsv_hr_db"
+  }
+}
