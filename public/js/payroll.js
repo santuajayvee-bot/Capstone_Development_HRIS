@@ -395,8 +395,8 @@ function renderPayroll() {
   `;
 
   grid.innerHTML = table;
-  renderPayrollRecords(records);
-  renderPayslipManagement(records);
+  renderPayrollRecords(currentSalaryCalculationRecords || []);
+  renderPayslipManagement(currentSalaryCalculationRecords || []);
 }
 
 function renderPayrollRecords(records) {
@@ -974,7 +974,15 @@ function getConfiguredPairRule(pairingType) {
 }
 
 function populatePieceRateDropdowns() {
-  const sewOptions = activeRows(pieceRateConfig.sew_types)
+  const sewRows = activeRows(pieceRateConfig.sew_types);
+  const sewFromRates = activeRows(pieceRateConfig.piece_rates)
+    .map(row => ({
+      code: row.sew_type_code || row.product_type,
+      description: row.description || ''
+    }))
+    .filter(row => row.code);
+  const uniqueSewRows = [...new Map([...sewRows, ...sewFromRates].map(row => [row.code, row])).values()];
+  const sewOptions = uniqueSewRows
     .map(row => `<option value="${row.code}">${row.code}${row.description ? ` - ${row.description}` : ''}</option>`)
     .join('');
   const sizeOptions = activeRows(pieceRateConfig.size_ranges)
@@ -993,7 +1001,11 @@ function populatePieceRateDropdowns() {
 
   ['rate-sew-type', 'output-sew-type', 'pair-sew-type'].forEach(id => {
     const select = document.getElementById(id);
-    if (select) select.innerHTML = `<option value="">Select type</option>${sewOptions}`;
+    if (select) {
+      select.innerHTML = sewOptions
+        ? `<option value="">Select type</option>${sewOptions}`
+        : '<option value="">No active type configured</option>';
+    }
   });
   ['rate-size-range', 'salary-piece-size-range', 'output-size-range', 'pair-size-range'].forEach(id => {
     const select = document.getElementById(id);

@@ -5,19 +5,19 @@
 
 const ROLE_PERMISSIONS = {
   admin: [
-    'dashboard', 'employees', 'register', 'leave',
+    'dashboard', 'employees', 'organization-setup', 'register', 'leave',
     'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile',
   ],
   hr_admin: [
-    'dashboard', 'employees', 'register', 'leave',
+    'dashboard', 'employees', 'organization-setup', 'register', 'leave',
     'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile',
   ],
   hr_manager: [
-    'dashboard', 'employees', 'register', 'leave',
+    'dashboard', 'employees', 'organization-setup', 'register', 'leave',
     'attendance', 'payroll', 'reports', 'onboarding', 'blockchain', 'employee-profile',
   ],
   system_admin: [
-    'dashboard', 'system-admin', 'attendance', 'blockchain',
+    'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain',
   ],
   payroll_officer: [
     'dashboard', 'attendance', 'leave', 'payroll', 'blockchain',
@@ -37,6 +37,7 @@ const NAV_CONFIG = {
   admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
     { page: 'employees', icon: 'EM', label: 'Employees' },
+    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'leave', icon: 'LV', label: 'Leave Management' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'payroll', icon: 'PR', label: 'Payroll' },
@@ -46,6 +47,7 @@ const NAV_CONFIG = {
   hr_admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
     { page: 'employees', icon: 'EM', label: 'Employees' },
+    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'leave', icon: 'LV', label: 'Leave Management' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'payroll', icon: 'PR', label: 'Payroll' },
@@ -55,6 +57,7 @@ const NAV_CONFIG = {
   hr_manager: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
     { page: 'employees', icon: 'EM', label: 'Employees' },
+    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'leave', icon: 'LV', label: 'Leave Management' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'payroll', icon: 'PR', label: 'Payroll' },
@@ -64,6 +67,7 @@ const NAV_CONFIG = {
   ],
   system_admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'system-admin', icon: 'SA', label: 'System Admin' },
     { page: 'attendance', icon: 'AT', label: 'Attendance Sync' },
     { page: 'blockchain', icon: 'BC', label: 'Audit Log' },
@@ -193,6 +197,7 @@ function canAccess(pageId) {
   if (pageId === '201file') return false;
   const permissionPageMap = {
     employees: ['employee.view', 'employee.manage'],
+    'organization-setup': ['employee.manage', 'settings.manage'],
     register: ['employee.manage'],
     'employee-profile': ['employee.view'],
     attendance: ['attendance.view', 'attendance.manage'],

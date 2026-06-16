@@ -9,6 +9,202 @@ let ATT_DEVICES = [];
 let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
 let ATT_SELECTED_DETAIL_ID = null;
+let ATT_ACTIVE_DATE_PICKER = null;
+
+const ATT_DATE_PICKER_MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+const ATT_DATE_PICKER_DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+function padDatePart(value) {
+  return String(value).padStart(2, '0');
+}
+
+function toIsoDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function parseIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return null;
+  const [year, month, day] = String(value).split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) return null;
+  return date;
+}
+
+function closeAttendanceDatePicker() {
+  if (!ATT_ACTIVE_DATE_PICKER) return;
+  ATT_ACTIVE_DATE_PICKER.remove();
+  ATT_ACTIVE_DATE_PICKER = null;
+}
+
+function positionAttendanceDatePicker(input, picker) {
+  const rect = input.getBoundingClientRect();
+  const top = window.scrollY + rect.bottom + 4;
+  let left = window.scrollX + rect.left;
+  picker.style.top = `${top}px`;
+  picker.style.left = `${left}px`;
+
+  const pickerRect = picker.getBoundingClientRect();
+  const maxLeft = Math.max(12, window.scrollX + window.innerWidth - pickerRect.width - 12);
+  if (left > maxLeft) {
+    left = maxLeft;
+    picker.style.left = `${left}px`;
+  }
+}
+
+function renderAttendanceDatePicker(input, state) {
+  if (!ATT_ACTIVE_DATE_PICKER) return;
+
+  const currentValue = parseIsoDate(input.value);
+  const today = new Date();
+  const displayYear = state.displayDate.getFullYear();
+  const displayMonth = state.displayDate.getMonth();
+  const firstDay = new Date(displayYear, displayMonth, 1);
+  const startDay = firstDay.getDay();
+  const daysInMonth = new Date(displayYear, displayMonth + 1, 0).getDate();
+  const monthOptions = ATT_DATE_PICKER_MONTHS.map((month, index) =>
+    `<option value="${index}" ${index === displayMonth ? 'selected' : ''}>${month}</option>`
+  ).join('');
+  const yearStart = today.getFullYear() - 10;
+  const yearEnd = today.getFullYear() + 10;
+  const yearOptions = Array.from({ length: yearEnd - yearStart + 1 }, (_, offset) => {
+    const year = yearStart + offset;
+    return `<option value="${year}" ${year === displayYear ? 'selected' : ''}>${year}</option>`;
+  }).join('');
+
+  const cells = [];
+  for (let index = 0; index < startDay; index += 1) {
+    cells.push('<button type="button" class="attendance-date-picker-day is-empty" tabindex="-1" aria-hidden="true"></button>');
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(displayYear, displayMonth, day);
+    const iso = toIsoDate(date);
+    const isSelected = currentValue && toIsoDate(currentValue) === iso;
+    const isToday = toIsoDate(today) === iso;
+    cells.push(
+      `<button type="button" class="attendance-date-picker-day${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}" data-date="${iso}">${day}</button>`
+    );
+  }
+
+  ATT_ACTIVE_DATE_PICKER.innerHTML = `
+    <div class="attendance-date-picker-header">
+      <button type="button" class="attendance-date-picker-nav" data-nav="-1" aria-label="Previous month">&lsaquo;</button>
+      <div class="attendance-date-picker-selects">
+        <select class="attendance-date-picker-select" data-select="month">${monthOptions}</select>
+        <select class="attendance-date-picker-select" data-select="year">${yearOptions}</select>
+      </div>
+      <button type="button" class="attendance-date-picker-nav" data-nav="1" aria-label="Next month">&rsaquo;</button>
+    </div>
+    <div class="attendance-date-picker-weekdays">
+      ${ATT_DATE_PICKER_DAYS.map(day => `<span>${day}</span>`).join('')}
+    </div>
+    <div class="attendance-date-picker-grid">
+      ${cells.join('')}
+    </div>
+    <div class="attendance-date-picker-actions">
+      <button type="button" class="attendance-date-picker-action" data-action="today">Today</button>
+      <button type="button" class="attendance-date-picker-action" data-action="clear">Clear</button>
+    </div>
+  `;
+
+  positionAttendanceDatePicker(input, ATT_ACTIVE_DATE_PICKER);
+
+  ATT_ACTIVE_DATE_PICKER.querySelectorAll('[data-nav]').forEach(button => {
+    button.onclick = () => {
+      state.displayDate = new Date(displayYear, displayMonth + Number(button.dataset.nav), 1);
+      renderAttendanceDatePicker(input, state);
+    };
+  });
+
+  ATT_ACTIVE_DATE_PICKER.querySelector('[data-select="month"]').onchange = event => {
+    state.displayDate = new Date(displayYear, Number(event.target.value), 1);
+    renderAttendanceDatePicker(input, state);
+  };
+
+  ATT_ACTIVE_DATE_PICKER.querySelector('[data-select="year"]').onchange = event => {
+    state.displayDate = new Date(Number(event.target.value), displayMonth, 1);
+    renderAttendanceDatePicker(input, state);
+  };
+
+  ATT_ACTIVE_DATE_PICKER.querySelectorAll('.attendance-date-picker-day[data-date]').forEach(button => {
+    button.onclick = () => {
+      input.value = button.dataset.date || '';
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      closeAttendanceDatePicker();
+    };
+  });
+
+  ATT_ACTIVE_DATE_PICKER.querySelector('[data-action="today"]').onclick = () => {
+    input.value = toIsoDate(today);
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    closeAttendanceDatePicker();
+  };
+
+  ATT_ACTIVE_DATE_PICKER.querySelector('[data-action="clear"]').onclick = () => {
+    input.value = '';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    closeAttendanceDatePicker();
+  };
+}
+
+function openAttendanceDatePicker(input) {
+  if (!input) return;
+  if (ATT_ACTIVE_DATE_PICKER?.dataset.inputId === input.id) {
+    closeAttendanceDatePicker();
+    return;
+  }
+
+  closeAttendanceDatePicker();
+
+  const selectedDate = parseIsoDate(input.value) || new Date();
+  const state = {
+    displayDate: new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
+  };
+  const picker = document.createElement('div');
+  picker.className = 'attendance-date-picker';
+  picker.dataset.inputId = input.id;
+  picker.addEventListener('mousedown', event => event.stopPropagation());
+  ATT_ACTIVE_DATE_PICKER = picker;
+  document.body.appendChild(picker);
+  renderAttendanceDatePicker(input, state);
+}
+
+function initAttendanceDatePickers() {
+  ['att-date-from-filter', 'att-date-to-filter', 'ot-date'].forEach(id => {
+    const input = document.getElementById(id);
+    if (!input || input.dataset.datePickerBound === '1') return;
+    input.setAttribute('autocomplete', 'off');
+    input.readOnly = true;
+    input.dataset.datePickerBound = '1';
+    input.addEventListener('click', event => {
+      event.stopPropagation();
+      if (ATT_ACTIVE_DATE_PICKER?.dataset.inputId !== input.id) {
+        openAttendanceDatePicker(input);
+      }
+    });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openAttendanceDatePicker(input);
+      }
+      if (event.key === 'Escape') closeAttendanceDatePicker();
+    });
+  });
+}
+
+document.addEventListener('click', closeAttendanceDatePicker);
+window.addEventListener('resize', closeAttendanceDatePicker);
+window.addEventListener('scroll', closeAttendanceDatePicker, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeAttendanceDatePicker();
+});
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -97,6 +293,7 @@ function switchAttTab(tab, element) {
 async function initAttendance() {
   ATT_USER = getUser();
   if (!ATT_USER) return;
+  initAttendanceDatePickers();
 
   setVisible('biometric-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
   setVisible('emp-summary-card', isEmployee() && !!ATT_USER.employeeId);

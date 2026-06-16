@@ -7,7 +7,7 @@ const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 
 const PAYROLL_PERMISSIONS = {
-  view: ROLES.payroll_any,
+  view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
   calculate: ROLES.payroll_any,
   approve: ['payroll_manager', 'hr_manager'],
   release: ['payroll_manager', 'hr_manager'],
@@ -2566,7 +2566,7 @@ router.get('/employees/:id/government-contributions', requireAuth, requireRole(R
 });
 
 // Get all payroll records for a specific month (table view)
-router.get('/payroll-records/:monthYear', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.get('/payroll-records/:monthYear', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const pool = require('../config/db');
     const { monthYear } = req.params;
@@ -2768,7 +2768,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
 });
 
 // Get all salary calculation records (for audit trail and record keeping)
-router.get('/salary-calculations', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);

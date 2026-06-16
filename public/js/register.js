@@ -37,6 +37,20 @@ const DEFAULT_DEPARTMENT_POSITIONS = {
 let EMPLOYEE_POSITION_ROUTES = [];
 let EMPLOYEE_DEPARTMENTS = [];
 let EMPLOYEE_POSITION_OPTIONS_PROMISE = null;
+let EMPLOYEE_ID_CONFIG = null;
+
+function canOverrideEmployeeId() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return ['hr_manager', 'hr_admin', 'admin', 'system_admin'].includes(user?.role);
+}
+
+function sanitizeEmployeeCode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function isValidManualEmployeeCode(value) {
+  return /^[A-Z0-9_-]+$/i.test(String(value || '').trim());
+}
 
 function employeeOptionEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -613,6 +627,16 @@ function loadEmployeeData() {
     empCodeInput.value = emp.employee_code || emp.id || '';
     empCodeInput.readOnly = true;
   }
+  const empIdMode = document.getElementById('emp-id-mode');
+  const empIdHint = document.getElementById('emp-id-hint');
+  if (empIdMode) {
+    empIdMode.value = 'manual';
+    empIdMode.disabled = true;
+  }
+  if (empIdHint) {
+    empIdHint.textContent = 'Employee ID is locked while editing an existing employee record.';
+    empIdHint.classList.remove('error');
+  }
   
   const firstNameInput = document.getElementById('emp-first-name');
   if (firstNameInput) firstNameInput.value = emp.first_name || '';
@@ -816,6 +840,16 @@ async function generateEmployeeID() {
     console.log('Skipping ID generation - in EDIT_MODE');
     return;
   }
+
+  const mode = document.getElementById('emp-id-mode')?.value || 'auto';
+  if (mode !== 'auto') {
+    const empCodeInput = document.getElementById('emp-id');
+    if (empCodeInput) {
+      empCodeInput.readOnly = false;
+      empCodeInput.disabled = false;
+    }
+    return null;
+  }
   
   try {
     const empCodeInput = document.getElementById('emp-id');
@@ -833,6 +867,7 @@ async function generateEmployeeID() {
     if (nextCodeResponse?.ok) {
       const data = await nextCodeResponse.json();
       if (data.employee_code) {
+        EMPLOYEE_ID_CONFIG = data.config || EMPLOYEE_ID_CONFIG;
         empCodeInput.value = data.employee_code;
         empCodeInput.readOnly = true;
         empCodeInput.disabled = false;
@@ -892,6 +927,121 @@ async function generateEmployeeID() {
     }
     return null;
   }
+}
+
+async function loadEmployeeIdConfig() {
+  try {
+    const response = await apiFetch('/api/employees/id-config');
+    if (!response?.ok) return null;
+    EMPLOYEE_ID_CONFIG = await response.json();
+    return EMPLOYEE_ID_CONFIG;
+  } catch (error) {
+    console.warn('Unable to load employee ID config:', error.message);
+    return null;
+  }
+}
+
+async function onEmployeeIdModeChange() {
+  const modeSelect = document.getElementById('emp-id-mode');
+  const empCodeInput = document.getElementById('emp-id');
+  const hint = document.getElementById('emp-id-hint');
+  if (!modeSelect || !empCodeInput) return;
+
+  if (!canOverrideEmployeeId()) {
+    modeSelect.value = 'auto';
+    modeSelect.disabled = true;
+  }
+
+  if (modeSelect.value === 'manual') {
+    empCodeInput.value = '';
+    empCodeInput.readOnly = false;
+    empCodeInput.disabled = false;
+    empCodeInput.placeholder = 'Existing company ID';
+    if (hint) {
+      hint.textContent = 'Allowed: letters, numbers, hyphens, and underscores. Employee ID must be unique.';
+      hint.classList.remove('error');
+    }
+    empCodeInput.focus();
+    return;
+  }
+
+  empCodeInput.placeholder = 'EMP000001';
+  if (hint) {
+    hint.textContent = 'The system will generate the next available employee ID.';
+    hint.classList.remove('error');
+  }
+  await generateEmployeeID();
+}
+
+async function checkManualEmployeeCodeAvailability() {
+  const modeSelect = document.getElementById('emp-id-mode');
+  const empCodeInput = document.getElementById('emp-id');
+  const hint = document.getElementById('emp-id-hint');
+  if (!modeSelect || !empCodeInput || modeSelect.value !== 'manual') return true;
+
+  const code = sanitizeEmployeeCode(empCodeInput.value);
+  empCodeInput.value = code;
+
+  if (!code) {
+    if (hint) {
+      hint.textContent = 'Employee ID is required when using an existing employee ID.';
+      hint.classList.add('error');
+    }
+    return false;
+  }
+
+  if (!isValidManualEmployeeCode(code)) {
+    if (hint) {
+      hint.textContent = 'Employee ID can only contain letters, numbers, hyphens, and underscores.';
+      hint.classList.add('error');
+    }
+    return false;
+  }
+
+  try {
+    const response = await apiFetch(`/api/employees/code-available/${encodeURIComponent(code)}`);
+    const data = await response.json();
+    if (!response.ok || data.available === false) {
+      if (hint) {
+        hint.textContent = data.error || 'Employee ID already exists.';
+        hint.classList.add('error');
+      }
+      return false;
+    }
+    if (hint) {
+      hint.textContent = 'Employee ID is available.';
+      hint.classList.remove('error');
+    }
+    return true;
+  } catch (error) {
+    if (hint) {
+      hint.textContent = 'Employee ID will be checked when you save.';
+      hint.classList.remove('error');
+    }
+    return true;
+  }
+}
+
+function initializeEmployeeIdControls() {
+  const modeSelect = document.getElementById('emp-id-mode');
+  const empCodeInput = document.getElementById('emp-id');
+  if (!modeSelect || !empCodeInput || modeSelect.dataset.ready === '1') return;
+  modeSelect.dataset.ready = '1';
+
+  if (!canOverrideEmployeeId()) {
+    modeSelect.value = 'auto';
+    modeSelect.disabled = true;
+  }
+
+  empCodeInput.addEventListener('input', () => {
+    if (modeSelect.value !== 'manual') return;
+    empCodeInput.value = sanitizeEmployeeCode(empCodeInput.value);
+  });
+  empCodeInput.addEventListener('blur', () => {
+    checkManualEmployeeCodeAvailability();
+  });
+
+  loadEmployeeIdConfig().then(() => onEmployeeIdModeChange());
 }
 
 function switchFormTab(tabOrEl) {
@@ -993,7 +1143,7 @@ function initializeEmployeeLifecycleControls() {
   toggleEmployeeLifecycleDecisionFields();
 }
 
-function saveEmployee() {
+async function saveEmployee() {
   // Prevent double submission
   if (IS_SAVING) {
     console.warn('⚠️ Save already in progress - ignoring duplicate click');
@@ -1003,7 +1153,8 @@ function saveEmployee() {
   
   // Collect form data from all sections using the new ID attributes
   const empIdInput = document.getElementById('emp-id');
-  const empId = empIdInput?.value;
+  const employeeIdMode = document.getElementById('emp-id-mode')?.value || 'auto';
+  let empId = sanitizeEmployeeCode(empIdInput?.value);
   
   // Check if we're editing by checking all relevant flags
   // EDIT_MODE is set during fresh loads
@@ -1023,12 +1174,27 @@ function saveEmployee() {
   console.log('Method will be:', isEditing ? 'PUT (UPDATE)' : 'POST (INSERT)');
   console.log('================================');
   
-  // Validation: Employee code is required
-  if (!empId || empId.trim() === '') {
+  // Validation: Employee code is required when HR uses an existing company ID.
+  if (employeeIdMode === 'manual' && (!empId || empId.trim() === '')) {
     IS_SAVING = false;  // Reset double-submit flag
-    alert('Employee ID is missing. Please wait for the ID to generate or refresh the page.');
+    alert('Employee ID is required when using an existing employee ID.');
     console.error('Employee code is empty!');
     return;
+  }
+
+  if (employeeIdMode === 'manual' && !isValidManualEmployeeCode(empId)) {
+    IS_SAVING = false;
+    alert('Employee ID can only contain letters, numbers, hyphens, and underscores.');
+    return;
+  }
+
+  if (employeeIdMode === 'manual' && !isEditing) {
+    const isEmployeeCodeAvailable = await checkManualEmployeeCodeAvailability();
+    if (!isEmployeeCodeAvailable) {
+      IS_SAVING = false;
+      alert('Employee ID already exists.');
+      return;
+    }
   }
   
   const departmentName = document.querySelector('#form-employment select#emp-dept')?.value || 'HR';
@@ -1057,7 +1223,8 @@ function saveEmployee() {
   
   const formData = {
     // Personal Info
-    employee_code: empId || null,
+    employee_id_mode: employeeIdMode,
+    employee_code: employeeIdMode === 'manual' ? empId : null,
     first_name: document.getElementById('emp-first-name')?.value || '',
     middle_name: document.getElementById('emp-middle-name')?.value || null,
     last_name: document.getElementById('emp-last-name')?.value || '',
@@ -1181,6 +1348,10 @@ function saveEmployee() {
   })
   .then(data => {
     console.log('Response data:', data);
+    if (data.employee_code) {
+      empId = data.employee_code;
+      if (empIdInput) empIdInput.value = data.employee_code;
+    }
     routedToOnboarding = data.routed_to === 'onboarding';
     savedEmployeeNumericId = routedToOnboarding ? null : (data.id || savedEmployeeNumericId);
     const message = routedToOnboarding
@@ -1294,11 +1465,14 @@ function saveEmployee() {
     console.error('Save error:', err);
     if (err.payload?.duplicate?.field === 'employee_code' && err.payload?.next_employee_code) {
       const empIdInput = document.getElementById('emp-id');
-      if (empIdInput) {
+      const mode = document.getElementById('emp-id-mode')?.value || 'auto';
+      if (empIdInput && mode === 'auto') {
         empIdInput.value = err.payload.next_employee_code;
         empIdInput.readOnly = true;
       }
-      alert(`${err.message}\n\nI generated a new available Employee ID: ${err.payload.next_employee_code}. Please review and save again.`);
+      alert(mode === 'auto'
+        ? `${err.message}\n\nI generated a new available Employee ID: ${err.payload.next_employee_code}. Please review and save again.`
+        : err.message);
       return;
     }
     alert('Failed to save employee: ' + err.message);
@@ -2001,7 +2175,7 @@ function initializeRegisterPage() {
   REGISTER_PAGE_INITIALIZED = true;
 
   loadEmployeeData();
-  generateEmployeeID();
+  initializeEmployeeIdControls();
   initializeFileUploads();
   initializeWageConfig();
   initializeEmployeeAddressAutocomplete();
@@ -2019,3 +2193,4 @@ function initializeRegisterPage() {
 document.addEventListener('DOMContentLoaded', initializeRegisterPage);
 document.addEventListener('partialsLoaded', initializeRegisterPage);
 window.initializeRegisterPage = initializeRegisterPage;
+window.onEmployeeIdModeChange = onEmployeeIdModeChange;

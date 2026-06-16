@@ -5,6 +5,7 @@
 const PAGE_TITLES = {
   dashboard:  'Dashboard',
   employees:  'Employee Management',
+  'organization-setup': 'Organization Setup',
   register:   'Register Employee',
   leave:      'Leave Management',
   requests:   'Requests',
@@ -17,6 +18,32 @@ const PAGE_TITLES = {
   'employee-dashboard': 'Employee Dashboard',
   'employee-profile': 'Employee Profile',
 };
+
+let topbarClockTimer = null;
+
+function formatTopbarDateTime(date = new Date()) {
+  return date.toLocaleString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
+function updateTopbarDateTime() {
+  const dateEl = document.getElementById('page-date');
+  if (dateEl) dateEl.textContent = formatTopbarDateTime();
+}
+
+function startTopbarClock() {
+  if (topbarClockTimer) clearInterval(topbarClockTimer);
+  updateTopbarDateTime();
+  topbarClockTimer = setInterval(updateTopbarDateTime, 1000);
+}
 
 window.renderActionDotsIcon = function renderActionDotsIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="action-dots-icon bi bi-three-dots-vertical" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -76,6 +103,10 @@ function navigate(pageId, navEl, params = null) {
 
   if (pageId === 'employees' && typeof initializeEmployeePage === 'function') {
     initializeEmployeePage();
+  }
+
+  if (pageId === 'organization-setup' && typeof initializeOrganizationSetupPage === 'function') {
+    initializeOrganizationSetupPage();
   }
   
   // When navigating to register, load employee data if editing
@@ -156,10 +187,16 @@ function showAccessDenied() {
 window.navigate         = navigate;
 window.showAccessDenied = showAccessDenied;
 window.enhanceResponsiveTables = enhanceResponsiveTables;
+window.startTopbarClock = startTopbarClock;
 
-document.addEventListener('partialsLoaded', () => enhanceResponsiveTables());
+document.addEventListener('partialsLoaded', () => {
+  enhanceResponsiveTables();
+  updateTopbarDateTime();
+});
 
 document.addEventListener('DOMContentLoaded', () => {
+  startTopbarClock();
+
   const pageBody = document.querySelector('.page-body');
   if (!pageBody) return;
   let tableEnhanceTimer = null;

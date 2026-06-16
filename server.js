@@ -27,6 +27,7 @@ const { initRealtime }                       = require('./server/realtime');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const EMPLOYEE_ID_ADMIN_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
 let philippineAddressCache = null;
@@ -626,27 +627,123 @@ function employeeCodeNumber(code) {
   return match ? Number(match[1]) : 0;
 }
 
-function formatEmployeeCode(number) {
-  return `EMP${String(Number(number || 0)).padStart(5, '0')}`;
+function formatEmployeeCode(number, config = {}) {
+  const prefix = String(config.prefix || 'EMP').trim().toUpperCase();
+  const padding = Math.min(Math.max(Number(config.number_padding || 6), 1), 12);
+  return `${prefix}${String(Number(number || 0)).padStart(padding, '0')}`;
+}
+
+function sanitizeEmployeeCode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function isValidEmployeeCode(value) {
+  return /^[A-Z0-9_-]+$/i.test(String(value || '').trim());
+}
+
+async function ensureEmployeeIdConfigSchema(executor) {
+  const [codeColumn] = await executor.execute("SHOW COLUMNS FROM employees LIKE 'employee_code'");
+  if (!codeColumn.length) {
+    await executor.execute('ALTER TABLE employees ADD COLUMN employee_code VARCHAR(20) NULL AFTER id');
+  }
+
+  const [duplicateRows] = await executor.execute(`
+    SELECT employee_code, COUNT(*) AS total
+      FROM employees
+     WHERE employee_code IS NOT NULL AND employee_code <> ''
+     GROUP BY employee_code
+    HAVING COUNT(*) > 1
+     LIMIT 1
+  `);
+  if (!duplicateRows.length) {
+    const [indexRows] = await executor.execute(`
+      SELECT COUNT(*) AS total
+        FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'employees'
+         AND INDEX_NAME = 'uq_employees_employee_code'
+    `);
+    if (!Number(indexRows[0]?.total || 0)) {
+      try {
+        await executor.execute('CREATE UNIQUE INDEX uq_employees_employee_code ON employees (employee_code)');
+      } catch (err) {
+        if (err.code !== 'ER_DUP_KEYNAME' && err.code !== 'ER_DUP_ENTRY') throw err;
+      }
+    }
+  } else {
+    console.warn('Employee code unique index skipped because duplicate employee_code values already exist.');
+  }
+
+  await executor.execute(`
+    CREATE TABLE IF NOT EXISTS employee_id_config (
+      id TINYINT PRIMARY KEY DEFAULT 1,
+      prefix VARCHAR(12) NOT NULL DEFAULT 'EMP',
+      starting_number INT NOT NULL DEFAULT 1,
+      number_padding TINYINT NOT NULL DEFAULT 6,
+      current_sequence INT NOT NULL DEFAULT 0,
+      auto_generate_enabled TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  const [rows] = await executor.execute('SELECT COUNT(*) AS total FROM employee_id_config WHERE id = 1');
+  if (!Number(rows[0]?.total || 0)) {
+    const [onboardingTables] = await executor.execute("SHOW TABLES LIKE 'onboarding_applicant'");
+    const [maxRows] = onboardingTables.length
+      ? await executor.execute(
+          `SELECT employee_code AS code FROM employees WHERE employee_code LIKE 'EMP%'
+           UNION ALL
+           SELECT intended_employee_code AS code
+             FROM onboarding_applicant
+            WHERE deleted_at IS NULL
+              AND intended_employee_code IS NOT NULL
+              AND intended_employee_code LIKE 'EMP%'`
+        )
+      : await executor.execute("SELECT employee_code AS code FROM employees WHERE employee_code LIKE 'EMP%'");
+    const maxSequence = maxRows.reduce((max, row) => Math.max(max, employeeCodeNumber(row.code)), 0);
+    await executor.execute(
+      `INSERT INTO employee_id_config
+         (id, prefix, starting_number, number_padding, current_sequence, auto_generate_enabled)
+       VALUES (1, 'EMP', 1, 6, ?, 1)`,
+      [maxSequence]
+    );
+  }
+}
+
+async function getEmployeeIdConfig(executor) {
+  await ensureEmployeeIdConfigSchema(executor);
+  const [[config]] = await executor.execute('SELECT * FROM employee_id_config WHERE id = 1');
+  return config || {
+    prefix: 'EMP',
+    starting_number: 1,
+    number_padding: 6,
+    current_sequence: 0,
+    auto_generate_enabled: 1,
+  };
+}
+
+async function generateNextEmployeeCode(executor, reserve = false) {
+  await ensureEmployeeIdConfigSchema(executor);
+
+  if (reserve) {
+    const [[config]] = await executor.execute('SELECT * FROM employee_id_config WHERE id = 1 FOR UPDATE');
+    if (!Number(config.auto_generate_enabled)) {
+      throw new Error('Employee ID auto-generation is disabled.');
+    }
+    const nextSequence = Math.max(Number(config.current_sequence || 0) + 1, Number(config.starting_number || 1));
+    await executor.execute('UPDATE employee_id_config SET current_sequence = ? WHERE id = 1', [nextSequence]);
+    return formatEmployeeCode(nextSequence, config);
+  }
+
+  const config = await getEmployeeIdConfig(executor);
+  const nextSequence = Math.max(Number(config.current_sequence || 0) + 1, Number(config.starting_number || 1));
+  return formatEmployeeCode(nextSequence, config);
 }
 
 function personLabel(row) {
   const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
   return name ? `${name} (${row.employee_code || row.applicant_code || 'no code'})` : (row.employee_code || row.applicant_code || 'existing record');
-}
-
-async function generateNextEmployeeCode(executor) {
-  const [rows] = await executor.execute(
-    `SELECT employee_code AS code FROM employees WHERE employee_code LIKE 'EMP%'
-     UNION ALL
-     SELECT intended_employee_code AS code
-       FROM onboarding_applicant
-      WHERE deleted_at IS NULL
-        AND intended_employee_code IS NOT NULL
-        AND intended_employee_code LIKE 'EMP%'`
-  );
-  const maxCode = rows.reduce((max, row) => Math.max(max, employeeCodeNumber(row.code)), 0);
-  return formatEmployeeCode(maxCode + 1);
 }
 
 async function findEmployeeIntakeDuplicate(executor, employeeCode, email) {
@@ -756,14 +853,79 @@ async function writeEmployeeLifecycleAudit(executor, req, action, targetEmployee
 }
 
 // Employees
-app.get('/api/employees/next-code', requireAuth, requireRole(ROLES.staff_management), async (_req, res) => {
+app.get('/api/employees/next-code', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (_req, res) => {
   try {
     const pool = require('./config/db');
+    const config = await getEmployeeIdConfig(pool);
+    if (!Number(config.auto_generate_enabled)) {
+      return res.status(400).json({ error: 'Employee ID auto-generation is disabled.', config });
+    }
     const employeeCode = await generateNextEmployeeCode(pool);
-    res.json({ employee_code: employeeCode });
+    res.json({ employee_code: employeeCode, config });
   } catch (err) {
     console.error('Error generating next employee code:', err);
     res.status(500).json({ error: 'Failed to generate employee code.' });
+  }
+});
+
+app.get('/api/employees/id-config', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_ROLES), async (_req, res) => {
+  try {
+    const pool = require('./config/db');
+    const config = await getEmployeeIdConfig(pool);
+    res.json(config);
+  } catch (err) {
+    console.error('Error loading employee ID config:', err);
+    res.status(500).json({ error: 'Failed to load employee ID configuration.' });
+  }
+});
+
+app.put('/api/employees/id-config', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_ROLES), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeIdConfigSchema(pool);
+
+    const prefix = sanitizeEmployeeCode(req.body.prefix || 'EMP');
+    const startingNumber = Number(req.body.starting_number || 1);
+    const numberPadding = Number(req.body.number_padding || 6);
+    const currentSequence = Number(req.body.current_sequence || 0);
+    const autoGenerateEnabled = req.body.auto_generate_enabled === false || req.body.auto_generate_enabled === '0' ? 0 : 1;
+
+    if (!prefix || !/^[A-Z0-9_-]+$/i.test(prefix)) {
+      return res.status(400).json({ error: 'Prefix can only contain letters, numbers, hyphens, and underscores.' });
+    }
+    if (prefix.length > 12) return res.status(400).json({ error: 'Prefix is too long.' });
+    if (!Number.isInteger(startingNumber) || startingNumber < 1) return res.status(400).json({ error: 'Starting number must be greater than zero.' });
+    if (!Number.isInteger(numberPadding) || numberPadding < 1 || numberPadding > 12) return res.status(400).json({ error: 'Number padding must be between 1 and 12.' });
+    if (!Number.isInteger(currentSequence) || currentSequence < 0) return res.status(400).json({ error: 'Current sequence must be zero or greater.' });
+
+    const [[oldConfig]] = await pool.execute('SELECT * FROM employee_id_config WHERE id = 1');
+    await pool.execute(
+      `UPDATE employee_id_config
+          SET prefix = ?, starting_number = ?, number_padding = ?, current_sequence = ?, auto_generate_enabled = ?
+        WHERE id = 1`,
+      [prefix, startingNumber, numberPadding, currentSequence, autoGenerateEnabled]
+    );
+    const config = await getEmployeeIdConfig(pool);
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_ID_CONFIGURATION_UPDATED', null, oldConfig, config);
+    res.json({ message: 'Employee ID configuration saved.', config });
+  } catch (err) {
+    console.error('Error saving employee ID config:', err);
+    res.status(500).json({ error: 'Failed to save employee ID configuration.' });
+  }
+});
+
+app.get('/api/employees/code-available/:code', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_ROLES), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const code = sanitizeEmployeeCode(req.params.code);
+    if (!code) return res.status(400).json({ error: 'Employee ID is required.' });
+    if (!isValidEmployeeCode(code)) return res.status(400).json({ error: 'Employee ID can only contain letters, numbers, hyphens, and underscores.' });
+    await ensureOnboardingLifecycleSchema(pool);
+    const duplicate = await findEmployeeIntakeDuplicate(pool, code, 'employee-code-check-placeholder@example.invalid');
+    res.json({ available: !duplicate || duplicate.field !== 'employee_code' });
+  } catch (err) {
+    console.error('Error checking employee code:', err);
+    res.status(500).json({ error: 'Failed to check employee ID.' });
   }
 });
 
@@ -1006,7 +1168,7 @@ app.get('/api/employee-setup/lookups', requireAuth, requireRole(ROLES.any), asyn
   }
 });
 
-app.post('/api/employee-setup/departments', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employee-setup/departments', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     const name = String(req.body.name || '').trim();
@@ -1028,7 +1190,7 @@ app.post('/api/employee-setup/departments', requireAuth, requireRole(ROLES.staff
   }
 });
 
-app.put('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.put('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -1048,7 +1210,7 @@ app.put('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.st
   }
 });
 
-app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -1064,7 +1226,7 @@ app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES
   }
 });
 
-app.post('/api/employee-setup/positions', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employee-setup/positions', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -1098,7 +1260,7 @@ app.post('/api/employee-setup/positions', requireAuth, requireRole(ROLES.staff_m
   }
 });
 
-app.put('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.put('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -1130,7 +1292,7 @@ app.put('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staf
   }
 });
 
-app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -1212,14 +1374,14 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
 });
 
 // Add new employee
-app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
     const pool = require('./config/db');
     await ensureOnboardingLifecycleSchema(pool);
     await ensurePhilippineAddressColumns(pool);
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
+    const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     
     console.log('\n=== POST /api/employees ===');
     console.log('User role:', req.user.role);
@@ -1231,9 +1393,16 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       return res.status(400).json({ error: 'First name, last name, and email are required.' });
     }
     
-    if (!employee_code) {
-      console.error('❌ Missing employee_code');
-      return res.status(400).json({ error: 'Employee code is required.' });
+    const employeeIdMode = employee_id_mode === 'manual' ? 'manual' : 'auto';
+    let finalEmployeeCode = sanitizeEmployeeCode(employee_code);
+    if (employeeIdMode === 'manual') {
+      if (!finalEmployeeCode) {
+        console.error('❌ Missing employee_code');
+        return res.status(400).json({ error: 'Employee ID is required when using an existing employee ID.' });
+      }
+      if (!isValidEmployeeCode(finalEmployeeCode)) {
+        return res.status(400).json({ error: 'Employee ID can only contain letters, numbers, hyphens, and underscores.' });
+      }
     }
 
     const { errors: addressErrors, addresses } = validateEmployeeAddresses(req.body);
@@ -1286,19 +1455,41 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
         && normalizedLifecycleAction === 'AUTO'
         && (lifecycleTruthy(requires_training) || Number(route.requires_training) === 1));
 
+    if (employeeIdMode === 'auto') {
+      const codeConnection = await pool.getConnection();
+      try {
+        await codeConnection.beginTransaction();
+        finalEmployeeCode = await generateNextEmployeeCode(codeConnection, true);
+        await codeConnection.commit();
+      } catch (error) {
+        await codeConnection.rollback();
+        throw error;
+      } finally {
+        codeConnection.release();
+      }
+    }
+
     if (shouldRouteToOnboarding) {
       const connection = await pool.getConnection();
       try {
         await connection.beginTransaction();
-        const duplicate = await findEmployeeIntakeDuplicate(connection, employee_code, email);
+        const duplicate = await findEmployeeIntakeDuplicate(connection, finalEmployeeCode, email);
         if (duplicate) {
           await connection.rollback();
+          if (duplicate.field === 'employee_code') {
+            await writeEmployeeLifecycleAudit(pool, req, `DUPLICATE_EMPLOYEE_ID_ATTEMPT [${finalEmployeeCode}]`, null, null, {
+              employee_code: finalEmployeeCode,
+              mode: employeeIdMode,
+              source: duplicate.source,
+            });
+            return res.status(409).json({ error: 'Employee ID already exists.', duplicate: { field: 'employee_code' } });
+          }
           return res.status(409).json(await employeeIntakeDuplicatePayload(connection, duplicate));
         }
 
         const onboardingResult = await onboardingRoutes.createOnboardingApplicantRecord(connection, req, {
           ...req.body,
-          employee_code,
+          employee_code: finalEmployeeCode,
           hiring_type: normalizedHiringType,
           employment_type: normalizedEmploymentType,
           applied_position: position,
@@ -1330,10 +1521,10 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
           lifecycle_note: normalizedLifecycleNote,
         }, {
           sourceModule: 'EMPLOYEE_MANAGEMENT',
-          intendedEmployeeCode: employee_code,
+          intendedEmployeeCode: finalEmployeeCode,
         });
-        await writeEmployeeLifecycleAudit(connection, req, `EMPLOYEE_RECORD_ROUTED_TO_ONBOARDING [${employee_code}]`, null, null, {
-          employee_code,
+        await writeEmployeeLifecycleAudit(connection, req, `EMPLOYEE_RECORD_ROUTED_TO_ONBOARDING [${finalEmployeeCode}]`, null, null, {
+          employee_code: finalEmployeeCode,
           applicant_id: onboardingResult.applicant_id,
           position,
           lifecycle_action: normalizedLifecycleAction,
@@ -1342,15 +1533,19 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
           route_source: route.source || 'position_route',
           workflow_status: onboardingResult.workflow_status,
         });
+        await writeEmployeeLifecycleAudit(connection, req, employeeIdMode === 'manual' ? 'EXISTING_EMPLOYEE_ID_ENTERED' : 'EMPLOYEE_ID_AUTO_GENERATED', null, null, {
+          employee_code: finalEmployeeCode,
+          mode: employeeIdMode,
+        });
         await connection.commit();
         return res.status(201).json({
           ...onboardingResult,
           id: null,
-          employee_code,
+          employee_code: finalEmployeeCode,
           routed_to: 'onboarding',
           message: normalizedLifecycleAction === 'ON_HOLD'
-            ? `${employee_code} placed on hold in onboarding for HR review.`
-            : `${employee_code} routed to onboarding for ${position}.`,
+            ? `${finalEmployeeCode} placed on hold in onboarding for HR review.`
+            : `${finalEmployeeCode} routed to onboarding for ${position}.`,
         });
       } catch (error) {
         await connection.rollback();
@@ -1360,17 +1555,25 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       }
     }
 
-    const duplicate = await findEmployeeIntakeDuplicate(pool, employee_code, email);
+    const duplicate = await findEmployeeIntakeDuplicate(pool, finalEmployeeCode, email);
     if (duplicate) {
+      if (duplicate.field === 'employee_code') {
+        await writeEmployeeLifecycleAudit(pool, req, `DUPLICATE_EMPLOYEE_ID_ATTEMPT [${finalEmployeeCode}]`, null, null, {
+          employee_code: finalEmployeeCode,
+          mode: employeeIdMode,
+          source: duplicate.source,
+        });
+        return res.status(409).json({ error: 'Employee ID already exists.', duplicate: { field: 'employee_code' } });
+      }
       return res.status(409).json(await employeeIntakeDuplicatePayload(pool, duplicate));
     }
 
-    console.log('Executing INSERT for:', { employee_code, first_name, last_name, email });
+    console.log('Executing INSERT for:', { employee_code: finalEmployeeCode, first_name, last_name, email });
     
     const [result] = await pool.execute(
       `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [employee_code, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
+      [finalEmployeeCode, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
     );
     
     const employee_id = result.insertId;
@@ -1460,8 +1663,8 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
         employee_id
       ]
     );
-    await writeEmployeeLifecycleAudit(pool, req, `EMPLOYEE_RECORD_CREATED_DIRECT [${employee_code}]`, employee_id, null, {
-      employee_code,
+    await writeEmployeeLifecycleAudit(pool, req, `EMPLOYEE_RECORD_CREATED_DIRECT [${finalEmployeeCode}]`, employee_id, null, {
+      employee_code: finalEmployeeCode,
       position,
       route_source: route.source || 'position_route',
       lifecycle_action: normalizedLifecycleAction,
@@ -1469,9 +1672,13 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
       hiring_type: normalizedHiringType,
       lifecycle_status: 'Active',
     });
+    await writeEmployeeLifecycleAudit(pool, req, employeeIdMode === 'manual' ? 'EXISTING_EMPLOYEE_ID_ENTERED' : 'EMPLOYEE_ID_AUTO_GENERATED', employee_id, null, {
+      employee_code: finalEmployeeCode,
+      mode: employeeIdMode,
+    });
     console.log('✅ Employee inserted successfully!');
     console.log('Insert result:', { insertId: employee_id, affectedRows: result.affectedRows });
-    console.log('Employee Code:', employee_code);
+    console.log('Employee Code:', finalEmployeeCode);
     
     // Save wage configuration if provided
     if (wage_type) {
@@ -1530,7 +1737,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     
     return res.status(201).json({ 
       id: employee_id, 
-      employee_code: employee_code, 
+      employee_code: finalEmployeeCode, 
       message: 'Employee added successfully with payroll configuration.' 
     });
   } catch (err) { 
@@ -1541,9 +1748,18 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
     console.error('Full error:', err);
     res.setHeader('Content-Type', 'application/json');
     if (err.code === 'ER_DUP_ENTRY') {
+      if (err.sqlMessage && err.sqlMessage.includes('employee_code')) {
+        return res.status(409).json({ error: 'Employee ID already exists.' });
+      }
+      let nextEmployeeCode = null;
+      try {
+        nextEmployeeCode = await generateNextEmployeeCode(require('./config/db'));
+      } catch (codeError) {
+        console.warn('Unable to include next employee code in duplicate response:', codeError.message);
+      }
       return res.status(409).json({
         error: 'Employee code or email was just used by another record. Please refresh the Employee ID and check the email address.',
-        next_employee_code: await generateNextEmployeeCode(require('./config/db')),
+        next_employee_code: nextEmployeeCode,
       });
     }
     return res.status(500).json({ error: 'Failed to add employee: ' + err.message }); 
@@ -1551,7 +1767,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), asy
 });
 
 // Update Employee
-app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -1559,7 +1775,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     await ensureEmployeeLifecycleColumns(pool);
     await ensurePhilippineAddressColumns(pool);
     const { id } = req.params; // numeric employee id
-    const { first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
     console.log('Employee ID:', id);
@@ -1577,7 +1793,40 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
       return res.status(400).json({ error: addressErrors.join(' ') });
     }
 
-    const normalizedHiringType = hiring_type === 'Agency-Hired' ? 'Agency-Hired' : 'Direct Hire';
+    const [existingEmployeeRows] = await pool.execute(
+      'SELECT id, employee_code FROM employees WHERE id = ? OR employee_code = ? LIMIT 1',
+      [id, id]
+    );
+    const existingEmployee = existingEmployeeRows[0] || null;
+    const requestedEmployeeCode = sanitizeEmployeeCode(employee_code);
+    const shouldChangeEmployeeCode = requestedEmployeeCode && existingEmployee && requestedEmployeeCode !== existingEmployee.employee_code;
+    if (shouldChangeEmployeeCode) {
+      if (!isValidEmployeeCode(requestedEmployeeCode)) {
+        return res.status(400).json({ error: 'Employee ID can only contain letters, numbers, hyphens, and underscores.' });
+      }
+      const [codeRows] = await pool.execute(
+        'SELECT id FROM employees WHERE employee_code = ? AND id <> ? LIMIT 1',
+        [requestedEmployeeCode, existingEmployee.id]
+      );
+      if (codeRows.length) {
+        await writeEmployeeLifecycleAudit(pool, req, `DUPLICATE_EMPLOYEE_ID_ATTEMPT [${requestedEmployeeCode}]`, existingEmployee.id, null, {
+          employee_code: requestedEmployeeCode,
+          mode: 'manual_update',
+        });
+        return res.status(409).json({ error: 'Employee ID already exists.', duplicate: { field: 'employee_code' } });
+      }
+    }
+
+    const hasAgencyDetails = !!(
+      String(agency_name || '').trim() ||
+      String(agency_contact_person || '').trim() ||
+      String(agency_contact_number || '').trim() ||
+      contract_start_date ||
+      contract_end_date ||
+      (deployment_status && deployment_status !== 'Pending Deployment') ||
+      employment_type === 'Contractual'
+    );
+    const normalizedHiringType = hiring_type === 'Agency-Hired' || hasAgencyDetails ? 'Agency-Hired' : 'Direct Hire';
     const agencyNameValue = normalizedHiringType === 'Agency-Hired' ? agency_name || null : null;
     const agencyContactPersonValue = normalizedHiringType === 'Agency-Hired' ? agency_contact_person || null : null;
     const agencyContactNumberValue = normalizedHiringType === 'Agency-Hired' ? agency_contact_number || null : null;
@@ -1653,6 +1902,15 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     if (result.affectedRows === 0) {
       console.error('❌ No rows updated! Employee ID might not exist:', id);
       return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    if (shouldChangeEmployeeCode) {
+      await pool.execute('UPDATE employees SET employee_code = ? WHERE id = ?', [requestedEmployeeCode, existingEmployee.id]);
+      await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_ID_CHANGED', existingEmployee.id, {
+        employee_code: existingEmployee.employee_code,
+      }, {
+        employee_code: requestedEmployeeCode,
+      });
     }
 
     // Save wage configuration if provided

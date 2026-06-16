@@ -51,6 +51,33 @@
     min-width: 190px;
   }
 
+  .employee-id-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .employee-id-controls select {
+    min-height: 36px;
+    background: #101720;
+    border: 1px solid var(--form-line);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .employee-id-hint {
+    color: var(--form-muted);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .employee-id-hint.error {
+    color: #ef4444;
+  }
+
   .employee-form-back {
     align-self: start;
     min-height: 32px;
@@ -302,7 +329,14 @@
       </div>
       <div class="form-group employee-form-id">
         <label>Employee ID</label>
-        <input id="emp-id" placeholder="EMP-00001" />
+        <div class="employee-id-controls">
+          <select id="emp-id-mode" onchange="onEmployeeIdModeChange()">
+            <option value="auto">Auto-generate new ID</option>
+            <option value="manual">Use existing employee ID</option>
+          </select>
+          <input id="emp-id" placeholder="EMP000001" />
+          <div class="employee-id-hint" id="emp-id-hint">The system will generate the next available employee ID.</div>
+        </div>
       </div>
     </div>
 

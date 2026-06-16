@@ -33,7 +33,7 @@
     letter-spacing: 0;
   }
   .profile-title-kicker {
-    display: block;
+    display: none;
     margin: 0 0 4px;
     color: var(--form-accent);
     font: 700 11px 'DM Sans', sans-serif;
@@ -129,7 +129,7 @@
 
 <div class="profile-page">
   <button class="profile-back" type="button" onclick="navigate('employees', null)">&lt;- Back to Directory</button>
-  <h1 class="profile-title"><span class="profile-title-kicker">02</span>Employee Profile</h1>
+  <h1 class="profile-title" id="profile-title-name">Employee</h1>
 
   <section class="profile-summary" aria-label="Employee summary">
     <div class="profile-photo-stack">
