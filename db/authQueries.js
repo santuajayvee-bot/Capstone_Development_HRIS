@@ -1,0 +1,500 @@
+const pool = require('../config/db');
+
+const DEFAULT_LOCK_MINUTES = 15;
+const DEFAULT_REVOCATION_REASON = 'revoked';
+const AUTH_QUERY_ERROR = 'Authentication database operation failed.';
+const AUTH_INPUT_ERROR = 'Invalid authentication query input.';
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function ensureEmployeeId(employeeId) {
+  if (employeeId === undefined || employeeId === null || employeeId === '') {
+    throw new Error(AUTH_INPUT_ERROR);
+  }
+}
+
+function ensureNonEmptyString(value) {
+  if (!isNonEmptyString(value)) {
+    throw new Error(AUTH_INPUT_ERROR);
+  }
+}
+
+function normalizeReason(reason) {
+  if (!isNonEmptyString(reason)) return DEFAULT_REVOCATION_REASON;
+  return reason.trim().slice(0, 100);
+}
+
+function normalizeLockMinutes(lockMinutes) {
+  const minutes = Number.parseInt(lockMinutes, 10);
+  if (!Number.isFinite(minutes) || minutes <= 0) return DEFAULT_LOCK_MINUTES;
+  return minutes;
+}
+
+function toNullable(value) {
+  return value === undefined ? null : value;
+}
+
+function logAndThrow(error, operation) {
+  console.error(`[authQueries] ${operation} failed:`, error.message);
+  throw new Error(AUTH_QUERY_ERROR);
+}
+
+const USER_SELECT_FIELDS = `
+  COALESCE(e.Employee_ID, e.id) AS Employee_ID,
+  u.id AS id,
+  e.id AS employee_table_id,
+  COALESCE(u.email, e.email) AS Email,
+  CASE
+    WHEN e.Password_Changed_At IS NOT NULL THEN e.Password_Hash
+    WHEN u.password_hash IS NOT NULL THEN u.password_hash
+    ELSE e.Password_Hash
+  END AS Password_Hash,
+  u.role_id AS Role_ID,
+  r.access_level AS Access_Level,
+  e.Failed_Login_Attempts,
+  e.Locked_Until,
+  e.MFA_Enabled,
+  e.Password_Changed_At,
+  e.Last_Login_At,
+  u.username,
+  u.is_active,
+  u.account_status,
+  r.name AS role_name,
+  r.label AS role_label
+`;
+
+async function findUserByEmail(email) {
+  if (!isNonEmptyString(email)) return null;
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT ${USER_SELECT_FIELDS}
+         FROM employees e
+         LEFT JOIN users u ON u.employee_id = e.id
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE LOWER(e.email) = LOWER(?)
+           OR LOWER(u.email) = LOWER(?)
+           OR LOWER(u.username) = LOWER(?)
+        LIMIT 1`,
+      [email.trim(), email.trim(), email.trim()]
+    );
+
+    return rows[0] || null;
+  } catch (error) {
+    logAndThrow(error, 'findUserByEmail');
+  }
+}
+
+async function findUserById(employeeId) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT ${USER_SELECT_FIELDS}
+         FROM employees e
+         LEFT JOIN users u ON u.employee_id = e.id
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE e.Employee_ID = ? OR e.id = ?
+        LIMIT 1`,
+      [employeeId, employeeId]
+    );
+
+    return rows[0] || null;
+  } catch (error) {
+    logAndThrow(error, 'findUserById');
+  }
+}
+
+async function getFailedLoginAttempts(employeeId) {
+  const [rows] = await pool.execute(
+    `SELECT Failed_Login_Attempts
+       FROM employees
+      WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)
+      LIMIT 1`,
+    [employeeId, employeeId]
+  );
+
+  const attempts = rows[0]?.Failed_Login_Attempts;
+  return attempts === undefined || attempts === null ? null : Number(attempts);
+}
+
+async function incrementFailedLoginAttempts(employeeId) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE employees
+          SET Failed_Login_Attempts = COALESCE(Failed_Login_Attempts, 0) + 1
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)`,
+      [employeeId, employeeId]
+    );
+
+    if (!result.affectedRows) return null;
+    return await getFailedLoginAttempts(employeeId);
+  } catch (error) {
+    logAndThrow(error, 'incrementFailedLoginAttempts');
+  }
+}
+
+async function resetFailedLoginAttempts(employeeId) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE employees
+          SET Failed_Login_Attempts = 0,
+              Locked_Until = NULL
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)`,
+      [employeeId, employeeId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'resetFailedLoginAttempts');
+  }
+}
+
+async function lockUserAccount(employeeId, lockMinutes = DEFAULT_LOCK_MINUTES) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE employees
+          SET Locked_Until = DATE_ADD(NOW(), INTERVAL ? MINUTE)
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)`,
+      [normalizeLockMinutes(lockMinutes), employeeId, employeeId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'lockUserAccount');
+  }
+}
+
+async function updateLastLogin(employeeId) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE employees
+          SET Last_Login_At = NOW()
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)`,
+      [employeeId, employeeId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'updateLastLogin');
+  }
+}
+
+async function updatePasswordHash(employeeId, passwordHash) {
+  ensureEmployeeId(employeeId);
+  ensureNonEmptyString(passwordHash);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE employees
+          SET Password_Hash = ?,
+              Password_Changed_At = NOW(),
+              Failed_Login_Attempts = 0,
+              Locked_Until = NULL
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)`,
+      [passwordHash, employeeId, employeeId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'updatePasswordHash');
+  }
+}
+
+async function createUserSession(sessionData) {
+  const {
+    Employee_ID,
+    Refresh_Token_Hash,
+    JWT_ID,
+    IP_Address,
+    User_Agent,
+    Expires_At,
+  } = sessionData || {};
+
+  ensureEmployeeId(Employee_ID);
+  ensureNonEmptyString(Refresh_Token_Hash);
+  ensureNonEmptyString(JWT_ID);
+
+  if (!Expires_At) {
+    throw new Error(AUTH_INPUT_ERROR);
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO USER_SESSION
+        (Employee_ID, Refresh_Token_Hash, JWT_ID, IP_Address, User_Agent, Expires_At)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        Employee_ID,
+        Refresh_Token_Hash,
+        JWT_ID,
+        toNullable(IP_Address),
+        toNullable(User_Agent),
+        Expires_At,
+      ]
+    );
+
+    return result.insertId;
+  } catch (error) {
+    logAndThrow(error, 'createUserSession');
+  }
+}
+
+async function findActiveSessionByRefreshTokenHash(refreshTokenHash) {
+  if (!isNonEmptyString(refreshTokenHash)) return null;
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+         s.Session_ID,
+         s.Employee_ID,
+         s.Refresh_Token_Hash,
+         s.JWT_ID,
+         s.IP_Address,
+         s.User_Agent,
+         s.Created_At,
+         s.Last_Activity,
+         s.Expires_At,
+         s.Revoked_At,
+         s.Revocation_Reason,
+         e.id AS employee_table_id,
+         e.email AS Email,
+         u.id AS id,
+         u.role_id AS Role_ID,
+         r.access_level AS Access_Level,
+         r.name AS role_name,
+         r.label AS role_label
+       FROM USER_SESSION s
+       LEFT JOIN employees e ON e.Employee_ID = s.Employee_ID
+       LEFT JOIN users u ON u.employee_id = e.id
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE s.Refresh_Token_Hash = ?
+         AND s.Revoked_At IS NULL
+         AND s.Expires_At > NOW()
+       LIMIT 1`,
+      [refreshTokenHash]
+    );
+
+    return rows[0] || null;
+  } catch (error) {
+    logAndThrow(error, 'findActiveSessionByRefreshTokenHash');
+  }
+}
+
+async function revokeSessionByJwtId(jwtId, reason) {
+  ensureNonEmptyString(jwtId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE USER_SESSION
+          SET Revoked_At = NOW(),
+              Revocation_Reason = ?
+        WHERE JWT_ID = ?
+          AND Revoked_At IS NULL`,
+      [normalizeReason(reason), jwtId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'revokeSessionByJwtId');
+  }
+}
+
+async function revokeSessionByRefreshTokenHash(refreshTokenHash, reason) {
+  ensureNonEmptyString(refreshTokenHash);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE USER_SESSION
+          SET Revoked_At = NOW(),
+              Revocation_Reason = ?
+        WHERE Refresh_Token_Hash = ?
+          AND Revoked_At IS NULL`,
+      [normalizeReason(reason), refreshTokenHash]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'revokeSessionByRefreshTokenHash');
+  }
+}
+
+async function revokeAllUserSessions(employeeId, reason) {
+  ensureEmployeeId(employeeId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE USER_SESSION
+          SET Revoked_At = NOW(),
+              Revocation_Reason = ?
+        WHERE Employee_ID = ?
+          AND Revoked_At IS NULL`,
+      [normalizeReason(reason), employeeId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'revokeAllUserSessions');
+  }
+}
+
+async function rotateRefreshToken(sessionId, newRefreshTokenHash, newJwtId, newExpiresAt) {
+  ensureEmployeeId(sessionId);
+  ensureNonEmptyString(newRefreshTokenHash);
+  ensureNonEmptyString(newJwtId);
+
+  if (!newExpiresAt) {
+    throw new Error(AUTH_INPUT_ERROR);
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE USER_SESSION
+          SET Refresh_Token_Hash = ?,
+              JWT_ID = ?,
+              Expires_At = ?,
+              Last_Activity = NOW()
+        WHERE Session_ID = ?
+          AND Revoked_At IS NULL`,
+      [newRefreshTokenHash, newJwtId, newExpiresAt, sessionId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'rotateRefreshToken');
+  }
+}
+
+async function createPasswordResetToken(employeeId, resetTokenHash, expiresAt, ipAddress) {
+  ensureEmployeeId(employeeId);
+  ensureNonEmptyString(resetTokenHash);
+
+  if (!expiresAt) {
+    throw new Error(AUTH_INPUT_ERROR);
+  }
+
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO PASSWORD_RESET_TOKEN
+        (Employee_ID, Reset_Token_Hash, Expires_At, IP_Address)
+       VALUES (?, ?, ?, ?)`,
+      [employeeId, resetTokenHash, expiresAt, toNullable(ipAddress)]
+    );
+
+    return result.insertId;
+  } catch (error) {
+    logAndThrow(error, 'createPasswordResetToken');
+  }
+}
+
+async function findValidPasswordResetToken(resetTokenHash) {
+  if (!isNonEmptyString(resetTokenHash)) return null;
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+         Reset_ID,
+         Employee_ID,
+         Reset_Token_Hash,
+         Created_At,
+         Expires_At,
+         Used_At,
+         IP_Address
+       FROM PASSWORD_RESET_TOKEN
+       WHERE Reset_Token_Hash = ?
+         AND Used_At IS NULL
+         AND Expires_At > NOW()
+       LIMIT 1`,
+      [resetTokenHash]
+    );
+
+    return rows[0] || null;
+  } catch (error) {
+    logAndThrow(error, 'findValidPasswordResetToken');
+  }
+}
+
+async function markPasswordResetTokenUsed(resetId) {
+  ensureEmployeeId(resetId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE PASSWORD_RESET_TOKEN
+          SET Used_At = NOW()
+        WHERE Reset_ID = ?
+          AND Used_At IS NULL`,
+      [resetId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'markPasswordResetTokenUsed');
+  }
+}
+
+async function createAuditLog(logData) {
+  const {
+    Employee_ID,
+    Action_Type,
+    Description,
+    IP_Address,
+    User_Agent,
+  } = logData || {};
+
+  ensureNonEmptyString(Action_Type);
+
+  const description = toNullable(Description);
+  const actionPerformed = (description || Action_Type).slice(0, 255);
+
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO system_audit_log
+        (employee_id, action_performed, module, ip_address, user_agent, timestamp,
+         Action_Type, Description, Created_At)
+       VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, NOW())`,
+      [
+        toNullable(Employee_ID),
+        actionPerformed,
+        'AUTH',
+        toNullable(IP_Address),
+        toNullable(User_Agent),
+        Action_Type,
+        description,
+      ]
+    );
+
+    return result.insertId;
+  } catch (error) {
+    logAndThrow(error, 'createAuditLog');
+  }
+}
+
+module.exports = {
+  findUserByEmail,
+  findUserById,
+  incrementFailedLoginAttempts,
+  resetFailedLoginAttempts,
+  lockUserAccount,
+  updateLastLogin,
+  updatePasswordHash,
+  createUserSession,
+  findActiveSessionByRefreshTokenHash,
+  revokeSessionByJwtId,
+  revokeSessionByRefreshTokenHash,
+  revokeAllUserSessions,
+  rotateRefreshToken,
+  createPasswordResetToken,
+  findValidPasswordResetToken,
+  markPasswordResetTokenUsed,
+  createAuditLog,
+};

@@ -8,6 +8,7 @@ async function doLogin() {
   const errEl    = document.getElementById('login-err');
   const btnEl    = document.querySelector('.btn-login');
 
+  errEl.className = 'login-err';
   errEl.style.display = 'none';
 
   if (!username || !password) {
@@ -30,13 +31,15 @@ async function doLogin() {
     const data = await res.json();
 
     if (!res.ok) {
-      errEl.textContent   = data.error || 'Login failed.';
+      const message = data.message || data.error || 'Login failed.';
+      errEl.textContent = message;
+      errEl.className = res.status === 423 ? 'login-err is-warning' : 'login-err';
       errEl.style.display = 'block';
       return;
     }
 
     // Store JWT + user in sessionStorage
-    saveAuth(data.token, data.user);
+    saveAuth(data.accessToken || data.token, data.user);
 
     // Build sidebar for this role
     buildSidebar(data.user);

@@ -11,8 +11,9 @@ const multer     = require('multer');
 const fs         = require('fs');
 const http       = require('http');
 
-const { login, me }                          = require('./server/auth');
+const { me }                                 = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
+const authRoutes                             = require('./routes/authRoutes');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
@@ -171,7 +172,7 @@ app.get('/health', (_req, res) => {
 });
 
 // ── PUBLIC ───────────────────────────────────────────────────
-app.post('/api/auth/login', login);
+app.use('/api/auth', authRoutes);
 
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);

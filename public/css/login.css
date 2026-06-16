@@ -58,6 +58,20 @@
 .btn-login:hover { opacity: .9; transform: translateY(-1px); }
 
 .login-err {
-  color: var(--red); font-size: 12px;
-  text-align: center; margin-top: 8px; display: none;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  margin-top: 12px;
+  display: none;
+  padding: 10px 12px;
+  border: 1px solid rgba(224,92,122,.34);
+  border-radius: 8px;
+  background: rgba(224,92,122,.1);
+}
+
+.login-err.is-warning {
+  color: #ffd166;
+  border-color: rgba(255,209,102,.4);
+  background: rgba(255,209,102,.12);
 }
