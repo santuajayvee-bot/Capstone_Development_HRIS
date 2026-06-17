@@ -14,7 +14,7 @@ const COMMON_WEAK_PASSWORDS = new Set([
   'welcome123!',
   'qwerty123!',
   'marulas123!',
-  'authentica123!',
+  'lgsvhr123!',
   'lgsv123!',
 ]);
 

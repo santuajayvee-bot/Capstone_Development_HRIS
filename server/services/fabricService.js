@@ -2,6 +2,19 @@ const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
 
+class FabricUnavailableError extends Error {
+  constructor(message, code = 'FABRIC_UNAVAILABLE') {
+    super(message);
+    this.name = 'FabricUnavailableError';
+    this.code = code;
+    this.fabricUnavailable = true;
+  }
+}
+
+function isFabricEnabled() {
+  return String(process.env.FABRIC_ENABLED || 'false').toLowerCase() === 'true';
+}
+
 async function loadFabricSdk() {
   try {
     const grpcModule = await import('@grpc/grpc-js');
@@ -11,50 +24,115 @@ async function loadFabricSdk() {
     const { connect, hash, signers } = gateway;
     return { grpc, connect, hash, signers };
   } catch (error) {
-    const wrapped = new Error(
-      'Hyperledger Fabric Gateway dependencies are not installed. Install @hyperledger/fabric-gateway and @grpc/grpc-js before using blockchain APIs.'
+    throw new FabricUnavailableError(
+      'Hyperledger Fabric Gateway dependencies are not installed. Install @hyperledger/fabric-gateway and @grpc/grpc-js before using blockchain APIs.',
+      'FABRIC_DEPENDENCIES_MISSING'
     );
-    wrapped.cause = error;
-    throw wrapped;
   }
+}
+
+function resolveConfigPath(value) {
+  if (!value) return null;
+  return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
 }
 
 function fabricConfig() {
   return {
-    channelName: process.env.FABRIC_CHANNEL_NAME || 'hrchannel',
+    enabled: isFabricEnabled(),
+    channelName: process.env.FABRIC_CHANNEL_NAME || 'lgsvhr-payroll-channel',
     chaincodeName: process.env.FABRIC_CHAINCODE_NAME || 'payroll-audit',
-    mspId: process.env.FABRIC_MSP_ID || 'Org1MSP',
+    mspId: process.env.FABRIC_MSP_ID || 'PayrollMSP',
     peerEndpoint: process.env.FABRIC_PEER_ENDPOINT || 'localhost:7051',
-    peerHostAlias: process.env.FABRIC_PEER_HOST_ALIAS || 'peer0.org1.example.com',
-    tlsCertPath: process.env.FABRIC_TLS_CERT_PATH,
-    certPath: process.env.FABRIC_CERT_PATH,
-    keyDirectoryPath: process.env.FABRIC_KEY_DIRECTORY_PATH,
+    peerHostAlias: process.env.FABRIC_PEER_HOST_ALIAS || 'peer0.payroll.lgsvhr.com',
+    tlsCertPath: resolveConfigPath(process.env.FABRIC_TLS_CERT_PATH),
+    certPath: resolveConfigPath(process.env.FABRIC_CERT_PATH),
+    keyDirectoryPath: resolveConfigPath(process.env.FABRIC_KEY_DIRECTORY_PATH),
   };
 }
 
+function getFabricConfigStatus() {
+  const config = fabricConfig();
+  return {
+    enabled: config.enabled,
+    channelName: config.channelName,
+    chaincodeName: config.chaincodeName,
+    mspId: config.mspId,
+    peerEndpoint: config.peerEndpoint,
+    peerHostAlias: config.peerHostAlias,
+    tlsCertConfigured: Boolean(config.tlsCertPath),
+    certConfigured: Boolean(config.certPath),
+    keyDirectoryConfigured: Boolean(config.keyDirectoryPath),
+    ready: Boolean(config.enabled && config.tlsCertPath && config.certPath && config.keyDirectoryPath),
+  };
+}
+
+function assertFabricReady(config) {
+  if (!config.enabled) {
+    throw new FabricUnavailableError(
+      'Blockchain network is not currently connected. Local audit records are available, but Fabric verification is disabled.',
+      'FABRIC_DISABLED'
+    );
+  }
+
+  const missing = [];
+  if (!config.tlsCertPath) missing.push('FABRIC_TLS_CERT_PATH');
+  if (!config.certPath) missing.push('FABRIC_CERT_PATH');
+  if (!config.keyDirectoryPath) missing.push('FABRIC_KEY_DIRECTORY_PATH');
+
+  if (missing.length) {
+    throw new FabricUnavailableError(
+      `Fabric identity configuration is incomplete. Set ${missing.join(', ')}.`,
+      'FABRIC_CONFIG_MISSING'
+    );
+  }
+}
+
+async function readFileOrUnavailable(filePath, label) {
+  try {
+    return await fs.readFile(filePath);
+  } catch (error) {
+    throw new FabricUnavailableError(
+      `Fabric ${label} file could not be read at ${filePath}.`,
+      'FABRIC_CREDENTIAL_FILE_MISSING'
+    );
+  }
+}
+
 async function readFirstPrivateKey(keyDirectoryPath) {
-  const files = await fs.readdir(keyDirectoryPath);
-  const keyFile = files.find(file => file.endsWith('_sk') || file.endsWith('.pem')) || files[0];
-  if (!keyFile) throw new Error(`No private key file found in ${keyDirectoryPath}`);
-  return fs.readFile(path.join(keyDirectoryPath, keyFile));
+  let files;
+  try {
+    files = await fs.readdir(keyDirectoryPath);
+  } catch (error) {
+    throw new FabricUnavailableError(
+      `Fabric private key directory could not be read at ${keyDirectoryPath}.`,
+      'FABRIC_KEY_DIRECTORY_MISSING'
+    );
+  }
+
+  const keyFile = files
+    .filter(file => file.endsWith('_sk') || file.endsWith('.pem') || file.endsWith('.key'))
+    .sort()[0] || files.sort()[0];
+
+  if (!keyFile) {
+    throw new FabricUnavailableError(`No private key file found in ${keyDirectoryPath}.`, 'FABRIC_KEY_MISSING');
+  }
+
+  return readFileOrUnavailable(path.join(keyDirectoryPath, keyFile), 'private key');
 }
 
 async function connectToFabricNetwork() {
-  const { grpc, connect, hash, signers } = await loadFabricSdk();
   const config = fabricConfig();
+  assertFabricReady(config);
 
-  if (!config.tlsCertPath || !config.certPath || !config.keyDirectoryPath) {
-    throw new Error('Fabric identity configuration is incomplete. Set FABRIC_TLS_CERT_PATH, FABRIC_CERT_PATH, and FABRIC_KEY_DIRECTORY_PATH.');
-  }
+  const { grpc, connect, hash, signers } = await loadFabricSdk();
+  const tlsRootCert = await readFileOrUnavailable(config.tlsCertPath, 'TLS certificate');
+  const credentials = await readFileOrUnavailable(config.certPath, 'identity certificate');
+  const privateKeyPem = await readFirstPrivateKey(config.keyDirectoryPath);
+  const privateKey = crypto.createPrivateKey(privateKeyPem);
 
-  const tlsRootCert = await fs.readFile(config.tlsCertPath);
   const client = new grpc.Client(config.peerEndpoint, grpc.credentials.createSsl(tlsRootCert), {
     'grpc.ssl_target_name_override': config.peerHostAlias,
   });
-
-  const credentials = await fs.readFile(config.certPath);
-  const privateKeyPem = await readFirstPrivateKey(config.keyDirectoryPath);
-  const privateKey = crypto.createPrivateKey(privateKeyPem);
 
   const gateway = connect({
     client,
@@ -69,6 +147,7 @@ async function connectToFabricNetwork() {
   return {
     contract,
     gateway,
+    client,
     close: () => {
       gateway.close();
       client.close();
@@ -86,6 +165,11 @@ async function withContract(work) {
   const connection = await connectToFabricNetwork();
   try {
     return await work(connection.contract);
+  } catch (error) {
+    if (error.fabricUnavailable) throw error;
+    const wrapped = new FabricUnavailableError(error.message || 'Fabric Gateway request failed.', 'FABRIC_GATEWAY_ERROR');
+    wrapped.cause = error;
+    throw wrapped;
   } finally {
     connection.close();
   }
@@ -98,7 +182,7 @@ async function submitPayrollRecord(ledgerRecord) {
   });
 }
 
-async function submitPayrollAdjustmentRecord(ledgerRecord) {
+async function createPayrollAdjustmentRecord(ledgerRecord) {
   return withContract(async contract => {
     const result = await contract.submitTransaction('CreatePayrollAdjustmentRecord', JSON.stringify(ledgerRecord));
     return parseResult(result);
@@ -127,10 +211,15 @@ async function getPayrollHistory(payrollId) {
 }
 
 module.exports = {
+  FabricUnavailableError,
   connectToFabricNetwork,
+  createPayrollAdjustmentRecord,
+  fabricConfig,
+  getFabricConfigStatus,
   getPayrollHistory,
+  isFabricEnabled,
   queryPayrollRecord,
-  submitPayrollAdjustmentRecord,
+  submitPayrollAdjustmentRecord: createPayrollAdjustmentRecord,
   submitPayrollRecord,
   verifyPayrollHash,
 };

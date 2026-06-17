@@ -4,7 +4,9 @@
 
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET;
+function getJwtSecret() {
+  return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+}
 
 // ── Role hierarchy ───────────────────────────────────────────
 // Support both old role names (for backward compatibility with existing tokens) and new names
@@ -48,12 +50,12 @@ function requireAuth(req, res, next) {
   }
 
   const token = authHeader.slice(7);
+  const jwtSecret = getJwtSecret();
   console.log('[requireAuth] Token received, length:', token.length);
-  console.log('[requireAuth] JWT_SECRET defined:', !!JWT_SECRET);
-  console.log('[requireAuth] JWT_SECRET value:', JWT_SECRET ? '***secret***' : 'NOT SET');
+  console.log('[requireAuth] JWT secret configured:', !!jwtSecret);
 
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    req.user = jwt.verify(token, jwtSecret);
     req.user.role = ROLE_ALIASES[req.user.role] || req.user.role;
     console.log('[requireAuth] Token verified successfully for user:', req.user.username);
     next();

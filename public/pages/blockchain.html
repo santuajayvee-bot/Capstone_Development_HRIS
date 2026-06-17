@@ -1,112 +1,86 @@
 <!-- ============================================================
-     pages/blockchain.html — Blockchain Records page content
+     pages/blockchain.html - Permissioned Payroll Blockchain
      ============================================================ -->
-<div class="section-title">Blockchain Records</div>
-<div class="section-sub">Immutable audit trail of HR and payroll transactions on-chain</div>
+<div class="section-title">Payroll Blockchain Audit</div>
+<div class="section-sub">Finalized payroll hashes, local pending anchors, Fabric receipts, and integrity verification</div>
+
+<div id="bc-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
 
 <div class="block-stats">
   <div class="stat-card">
-    <div class="stat-label">Total Records</div>
-    <div class="stat-val">7</div>
-    <div class="stat-sub">On-chain contracts</div>
+    <div class="stat-label">Finalized Records</div>
+    <div class="stat-val" id="bc-stat-total">-</div>
+    <div class="stat-sub">Payroll records</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">✓ Confirmed</div>
-    <div class="stat-val" style="color:var(--green)">6</div>
-    <div class="stat-sub">Finalized</div>
+    <div class="stat-label">Recorded</div>
+    <div class="stat-val" id="bc-stat-recorded" style="color:var(--green)">-</div>
+    <div class="stat-sub">Fabric receipts</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">⊖ Latest Block</div>
-    <div class="stat-val" style="font-size:18px">#18,294,325</div>
-    <div class="stat-sub">Most recent</div>
+    <div class="stat-label">Pending Anchor</div>
+    <div class="stat-val" id="bc-stat-pending" style="color:var(--yellow)">-</div>
+    <div class="stat-sub">Local fallback queue</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Total Value</div>
-    <div class="stat-val">145,000</div>
-    <div class="stat-sub">Settled Transactions</div>
+    <div class="stat-label">Critical Alerts</div>
+    <div class="stat-val" id="bc-stat-critical" style="color:var(--red)">-</div>
+    <div class="stat-sub">Tamper detections</div>
   </div>
 </div>
 
 <div class="card" style="margin-bottom:20px;">
-  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Block Chain</div>
-  <div class="block-chain-row">
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0x4A8f...</div>
-      <div class="bk-meta">Serjo Justine · GEN</div>
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Network Status</div>
+      <div id="bc-network-status" class="section-sub">Loading blockchain status...</div>
+      <div class="section-sub">Latest audit activity: <span id="bc-stat-latest">-</span></div>
     </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0xBf3c...</div>
-      <div class="bk-meta">Salary Comp. · GEN</div>
-    </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0x7D1a...</div>
-      <div class="bk-meta">Leave Req. · GEN</div>
-    </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item pending">
-      <div class="bk-label" style="color:var(--yellow)">PENDING</div>
-      <div class="bk-hash">0x2E9b...</div>
-      <div class="bk-meta">Emp Onboard · GEN</div>
-    </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0xC5f8...</div>
-      <div class="bk-meta">Payroll Run · GEN</div>
-    </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0xA3d2...</div>
-      <div class="bk-meta">OT Approval · GEN</div>
-    </div>
-    <div class="block-arrow">→</div>
-    <div class="block-item confirmed">
-      <div class="bk-label">VERIFIED</div>
-      <div class="bk-hash">0x8B6e...</div>
-      <div class="bk-meta">Deductions · GEN</div>
-    </div>
+    <button id="bc-refresh" class="btn btn-outline btn-sm" type="button">Refresh</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Finalized Payroll Ledger Records</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Payroll ID</th>
+          <th>Employee Ref</th>
+          <th>Gross Pay</th>
+          <th>Net Pay</th>
+          <th>Blockchain Status</th>
+          <th>Latest Audit</th>
+          <th>Receipt / Hash</th>
+          <th>Finalized At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tx-tbody">
+        <tr><td colspan="9" class="att-empty">Loading payroll blockchain records...</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div style="font-size:14px;font-weight:700;">Transaction Logs</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <input id="tx-search" class="search-input" style="width:180px;" placeholder="🔍 Search Transactions" />
-      <select id="tx-type" class="filter-select">
-        <option value="">All Types</option>
-        <option>Payroll Disbursement</option>
-        <option>Salary Computation</option>
-        <option>Employee Onboarding</option>
-      </select>
-      <select id="tx-status" class="filter-select">
-        <option value="">All Status</option>
-        <option>Confirmed</option>
-        <option>Pending</option>
-      </select>
-    </div>
+  <div id="bc-audit-title" style="font-size:14px;font-weight:700;margin-bottom:16px;">Audit Trail</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Event</th>
+          <th>Status</th>
+          <th>Payload Hash</th>
+          <th>Transaction Hash</th>
+          <th>Actor Role</th>
+        </tr>
+      </thead>
+      <tbody id="bc-audit-tbody">
+        <tr><td colspan="6" class="att-empty">Select a payroll record audit trail.</td></tr>
+      </tbody>
+    </table>
   </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Block</th>
-        <th>Transaction Hash</th>
-        <th>Type</th>
-        <th>Employee</th>
-        <th>Amount</th>
-        <th>Timestamp</th>
-        <th>Status</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody id="tx-tbody">
-      <!-- Rendered by blockchain.js -->
-    </tbody>
-  </table>
 </div>

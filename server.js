@@ -18,6 +18,7 @@ const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
 const biometricRoutes                        = require('./server/biometric');
+const blockchainPayrollRoutes                = require('./server/routes/blockchain-payroll');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
@@ -484,6 +485,9 @@ app.use('/api/attendance', attendanceRoutes);
 
 // Local biometric bridge endpoint for ZKTeco ZK9500 attendance scans
 app.use('/api/biometric', biometricRoutes);
+
+// Permissioned blockchain payroll audit layer
+app.use('/api/blockchain/payroll', blockchainPayrollRoutes);
 
 // Onboarding Module (pre-employment lifecycle, secure document vault, transfer)
 app.use('/api/onboarding', onboardingRoutes);
@@ -3354,16 +3358,36 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
 });
 
 // Blockchain — admin only
-app.get('/api/blockchain', requireAuth, requireRole(ROLES.admin_any), async (req, res) => {
+app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin_any, ...ROLES.payroll_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
-    const [rows] = await pool.execute(
-      `SELECT al.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
-       FROM audit_log al LEFT JOIN employees e ON e.id=al.employee_id
-       ORDER BY al.created_at DESC LIMIT 50`
+    const [tableRows] = await pool.execute(
+      `SELECT COUNT(*) AS exists_count
+         FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'BLOCKCHAIN_AUDIT_LOG'`
     );
-    res.json(rows);
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch audit log.' }); }
+    if (!tableRows[0]?.exists_count) {
+      return res.json({
+        message: 'Permissioned payroll blockchain audit log is not initialized. Run database/migrate-permissioned-blockchain-payroll.sql.',
+        records: [],
+      });
+    }
+
+    const [rows] = await pool.execute(
+      `SELECT bal.Audit_ID, bal.Payroll_ID, bal.Event_Type, bal.Actor_Role,
+              bal.Transaction_Hash, bal.Payload_Hash, bal.Status, bal.Created_At,
+              pr.Blockchain_Status, pr.Approval_Status
+         FROM BLOCKCHAIN_AUDIT_LOG bal
+         LEFT JOIN PAYROLL_RECORD pr ON pr.Payroll_ID = bal.Payroll_ID
+        ORDER BY bal.Created_At DESC, bal.Audit_ID DESC
+        LIMIT 50`
+    );
+    res.json({
+      message: 'Use /api/blockchain/payroll/finalized for payroll blockchain records.',
+      records: rows,
+    });
+  } catch (err) { res.status(500).json({ error: 'Failed to fetch blockchain audit summary.' }); }
 });
 
 // Error handling middleware (before SPA fallback)

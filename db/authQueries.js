@@ -71,8 +71,8 @@ async function findUserByEmail(email) {
   try {
     const [rows] = await pool.execute(
       `SELECT ${USER_SELECT_FIELDS}
-         FROM employees e
-         LEFT JOIN users u ON u.employee_id = e.id
+         FROM users u
+         LEFT JOIN employees e ON e.id = u.employee_id
          LEFT JOIN roles r ON r.id = u.role_id
         WHERE LOWER(e.email) = LOWER(?)
            OR LOWER(u.email) = LOWER(?)
@@ -93,12 +93,12 @@ async function findUserById(employeeId) {
   try {
     const [rows] = await pool.execute(
       `SELECT ${USER_SELECT_FIELDS}
-         FROM employees e
-         LEFT JOIN users u ON u.employee_id = e.id
+         FROM users u
+         LEFT JOIN employees e ON e.id = u.employee_id
          LEFT JOIN roles r ON r.id = u.role_id
-        WHERE e.Employee_ID = ? OR e.id = ?
+        WHERE e.Employee_ID = ? OR e.id = ? OR u.id = ?
         LIMIT 1`,
-      [employeeId, employeeId]
+      [employeeId, employeeId, employeeId]
     );
 
     return rows[0] || null;

@@ -17,6 +17,8 @@
     "test:onboarding": "node test-onboarding.js"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@hyperledger/fabric-gateway": "^1.11.0",
     "argon2": "^0.44.0",
     "bcrypt": "^5.1.1",
     "db-migrate": "^0.11.14",

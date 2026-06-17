@@ -32,6 +32,7 @@ const FALLBACK_ROLE_PERMISSIONS = {
   system_admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
   admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
   hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
+  hr_manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
   payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
   payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
   manager: ['attendance.view', 'leave.request.approve', 'report.view'],

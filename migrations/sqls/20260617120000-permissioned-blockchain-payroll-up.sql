@@ -1,9 +1,6 @@
--- Permissioned Blockchain Payroll Integrity Migration
--- LGSV HR
---
--- MySQL remains the source of operational payroll data. Hyperledger Fabric
--- stores only finalized payroll hashes, anonymized employee references,
--- approval metadata, timestamps, record type, and adjustment links.
+-- UP migration: permissioned blockchain payroll audit layer
+-- LGSV HR stores operational payroll data in MySQL and records only finalized
+-- payroll hashes plus audit metadata on Hyperledger Fabric.
 
 CREATE TABLE IF NOT EXISTS PAYROLL_RECORD (
   Payroll_ID BIGINT PRIMARY KEY,
@@ -42,8 +39,6 @@ CREATE INDEX IF NOT EXISTS idx_payroll_record_status
 CREATE INDEX IF NOT EXISTS idx_payroll_record_hash
   ON PAYROLL_RECORD (Transaction_Hash);
 
--- The project already uses lowercase system_audit_log. Extend that table
--- instead of creating a second SYSTEM_AUDIT_LOG table.
 CREATE TABLE IF NOT EXISTS system_audit_log (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NULL,

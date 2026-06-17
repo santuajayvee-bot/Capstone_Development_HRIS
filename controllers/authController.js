@@ -15,9 +15,14 @@ const {
   createUserSession,
   createAuditLog,
 } = require('../db/authQueries');
+const {
+  getUserPermissions,
+  getLinkedEmployeeProfile,
+} = require('../server/users');
 
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
+const MISCONFIGURED_ACCOUNT_MESSAGE = 'Account is not fully configured. Please contact your administrator.';
 const UNEXPECTED_LOGIN_MESSAGE = 'Unable to process login request.';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
@@ -52,7 +57,46 @@ function isInactiveUser(user) {
 }
 
 function getAuthEmployeeId(user) {
-  return user?.Employee_ID || user?.employee_table_id || user?.id || null;
+  return user?.Employee_ID || user?.employee_table_id || null;
+}
+
+function normalizeRoleName(roleName) {
+  if (roleName === 'admin') return 'system_admin';
+  if (roleName === 'manager') return 'hr_manager';
+  return roleName || 'employee';
+}
+
+function getDefaultRoleLabel(roleName) {
+  const labels = {
+    system_admin: 'System Administrator (Level 4)',
+    hr_admin: 'HR Admin (Level 2)',
+    hr_manager: 'HR Manager (Level 2)',
+    payroll_officer: 'Payroll Officer (Level 2)',
+    payroll_manager: 'Payroll Manager (Level 3)',
+    employee: 'Regular Employee (Level 1)',
+  };
+  return labels[roleName] || 'User';
+}
+
+async function buildAuthenticatedUser(user) {
+  const role = normalizeRoleName(user.role_name);
+  const employeeId = user.employee_table_id || user.Employee_ID;
+  const permissions = await getUserPermissions(user.id, role);
+  const employeeProfile = await getLinkedEmployeeProfile(employeeId);
+
+  return {
+    id: user.id,
+    username: user.username || user.Email,
+    role,
+    roleLabel: user.role_label || getDefaultRoleLabel(role),
+    employeeId,
+    Employee_ID: user.Employee_ID,
+    email: user.Email,
+    Role_ID: user.Role_ID,
+    Access_Level: user.Access_Level,
+    permissions,
+    employeeProfile,
+  };
 }
 
 async function safeCreateAuditLog(logData) {
@@ -99,6 +143,21 @@ async function login(req, res) {
 
     const employeeId = getAuthEmployeeId(user);
 
+    if (!employeeId) {
+      await safeCreateAuditLog({
+        Employee_ID: null,
+        Action_Type: 'LOGIN_FAILED',
+        Description: 'Login failed because the user account has no linked employee record.',
+        IP_Address: ipAddress,
+        User_Agent: userAgent,
+      });
+
+      return res.status(403).json({
+        success: false,
+        message: MISCONFIGURED_ACCOUNT_MESSAGE,
+      });
+    }
+
     if (isFutureDate(user.Locked_Until)) {
       await safeCreateAuditLog({
         Employee_ID: employeeId,
@@ -144,7 +203,8 @@ async function login(req, res) {
     await resetFailedLoginAttempts(employeeId);
     await updateLastLogin(employeeId);
 
-    const { token: accessToken, jwtId } = generateAccessToken(user);
+    const authenticatedUser = await buildAuthenticatedUser(user);
+    const { token: accessToken, jwtId } = generateAccessToken(authenticatedUser);
     const refreshToken = generateRefreshToken();
     const refreshTokenHash = hashRefreshToken(refreshToken);
     const refreshTokenExpiresAt = getRefreshTokenExpiryDate();
@@ -172,12 +232,8 @@ async function login(req, res) {
       success: true,
       message: 'Login successful.',
       accessToken,
-      user: {
-        Employee_ID: user.Employee_ID,
-        Email: user.Email,
-        Role_ID: user.Role_ID,
-        Access_Level: user.Access_Level,
-      },
+      token: accessToken,
+      user: authenticatedUser,
       mustChangePassword: !user.Password_Changed_At,
     });
   } catch (error) {

@@ -10,15 +10,17 @@ function isNonEmptyString(value) {
 }
 
 function getAccessSecret() {
-  if (!isNonEmptyString(process.env.JWT_ACCESS_SECRET)) {
+  const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+
+  if (!isNonEmptyString(secret)) {
     throw new Error('JWT access secret is not configured.');
   }
 
-  return process.env.JWT_ACCESS_SECRET;
+  return secret;
 }
 
 function getAccessExpiresIn() {
-  return process.env.JWT_ACCESS_EXPIRES_IN || DEFAULT_ACCESS_EXPIRES_IN;
+  return process.env.JWT_ACCESS_EXPIRES_IN || process.env.JWT_EXPIRES_IN || DEFAULT_ACCESS_EXPIRES_IN;
 }
 
 function getRefreshTokenExpiresDays() {
@@ -53,7 +55,7 @@ function generateJwtId() {
 }
 
 function generateAccessToken(user) {
-  const employeeId = getUserValue(user, 'Employee_ID', ['employee_id']);
+  const employeeId = getUserValue(user, 'employeeId', ['Employee_ID', 'employee_id', 'employee_table_id']);
 
   if (employeeId === undefined || employeeId === null || employeeId === '') {
     throw new Error('Invalid user payload.');
@@ -63,9 +65,17 @@ function generateAccessToken(user) {
   const expiresIn = getAccessExpiresIn();
   const payload = {
     sub: String(employeeId),
+    id: getUserValue(user, 'id', ['user_id']),
+    username: getUserValue(user, 'username', ['Username']),
+    role: getUserValue(user, 'role', ['role_name']),
+    roleLabel: getUserValue(user, 'roleLabel', ['role_label']),
+    employeeId,
+    Employee_ID: employeeId,
     roleId: getUserValue(user, 'Role_ID', ['role_id']),
     accessLevel: getUserValue(user, 'Access_Level', ['access_level']),
     email: getUserValue(user, 'Email', ['email']),
+    permissions: Array.isArray(user.permissions) ? user.permissions : [],
+    employeeProfile: user.employeeProfile || null,
     jti: jwtId,
   };
 
