@@ -7,71 +7,140 @@
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: radial-gradient(ellipse at 60% 50%, #1a2060 0%, #0f1117 70%);
+  padding: 48px clamp(24px, 8vw, 128px);
+  background:
+    linear-gradient(90deg, rgba(15, 18, 23, 0.58) 0%, rgba(15, 18, 23, 0.24) 42%, rgba(255, 255, 255, 0.72) 100%),
+    url("https://wallpapers.com/images/hd/industrial-background-1920-x-1080-c098arg81f5juqke.jpg") center / cover no-repeat;
   position: fixed;
   inset: 0;
   z-index: 100;
 }
 
+#login-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(237, 50, 55, 0.24), rgba(237, 50, 55, 0.05) 34%, rgba(18, 24, 32, 0.28)),
+    rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
 .login-card {
-  background: rgba(30,32,48,0.95);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 48px 44px;
-  width: 380px;
-  box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+  position: relative;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-top: 5px solid #ed3237;
+  border-radius: 12px;
+  padding: 42px 40px 38px;
+  width: min(420px, 100%);
+  box-shadow: 0 24px 70px rgba(20, 27, 38, 0.28);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   animation: fadeUp 0.5s ease;
 }
 
 .login-logo { text-align: center; margin-bottom: 28px; }
-.login-logo .logo-icon { width: 64px; height: 64px; margin: 0 auto 8px; font-size: 22px; }
+.login-logo .logo-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 10px;
+  font-size: 20px;
+  background: #ed3237;
+  color: #fff;
+  border-radius: 14px;
+  box-shadow: 0 12px 24px rgba(237, 50, 55, 0.28);
+}
+
 .login-brand {
-  font-family: 'Syne', sans-serif;
-  font-size: 18px; font-weight: 700;
-  letter-spacing: 4px; color: var(--accent);
+  font-family: 'Poppins', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 2.4px;
+  color: #ed3237;
+  text-transform: uppercase;
 }
 
 .login-welcome {
-  font-family: 'Syne', sans-serif;
-  font-size: 24px; font-weight: 700;
-  text-align: center; margin-bottom: 28px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #111827;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.login-subtitle {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  margin: 0 0 28px;
 }
 
 .login-field { margin-bottom: 16px; }
 .login-field input {
-  width: 100%; padding: 13px 16px;
-  background: var(--bg); border: 1.5px solid var(--border);
-  border-radius: 10px; color: var(--text);
-  font-family: 'DM Sans', sans-serif; font-size: 14px;
-  outline: none; transition: .2s;
+  width: 100%;
+  padding: 13px 16px;
+  background: #fff;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  color: #101828;
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: .2s;
 }
-.login-field input:focus { border-color: var(--accent); background: #161822; }
-.login-field input::placeholder { color: var(--muted); }
+
+.login-field input:focus {
+  border-color: #ed3237;
+  box-shadow: 0 0 0 4px rgba(237, 50, 55, 0.12);
+}
+
+.login-field input::placeholder { color: #98a2b3; }
 
 .btn-login {
-  width: 100%; padding: 13px; margin-top: 8px;
-  background: linear-gradient(135deg, #4f7cff, #22d3a5);
-  border: none; border-radius: 10px; color: #fff;
-  font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700;
-  cursor: pointer; letter-spacing: 1px; transition: .2s;
+  width: 100%;
+  min-height: 46px;
+  padding: 13px;
+  margin-top: 8px;
+  background: #ed3237;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-family: 'Poppins', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: .2s;
 }
-.btn-login:hover { opacity: .9; transform: translateY(-1px); }
+
+.btn-login:hover {
+  background: #cf252b;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(237, 50, 55, 0.24);
+}
 
 .login-err {
-  color: var(--red);
+  color: #c1121f;
   font-size: 12px;
-  line-height: 1.45;
   text-align: center;
-  margin-top: 12px;
+  margin-top: 10px;
   display: none;
-  padding: 10px 12px;
-  border: 1px solid rgba(224,92,122,.34);
-  border-radius: 8px;
-  background: rgba(224,92,122,.1);
 }
 
-.login-err.is-warning {
-  color: #ffd166;
-  border-color: rgba(255,209,102,.4);
-  background: rgba(255,209,102,.12);
+@media (max-width: 760px) {
+  #login-screen {
+    justify-content: center;
+    padding: 24px;
+    background:
+      linear-gradient(180deg, rgba(15, 18, 23, 0.38), rgba(255, 255, 255, 0.82)),
+      url("https://wallpapers.com/images/hd/industrial-background-1920-x-1080-c098arg81f5juqke.jpg") center / cover no-repeat;
+  }
+
+  .login-card {
+    padding: 34px 26px 30px;
+    background: rgba(255, 255, 255, 0.84);
+  }
 }

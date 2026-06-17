@@ -5,6 +5,11 @@
 let EMPLOYEES = []; // Will be populated from API
 let EMPLOYEES_RAW = []; // Store raw API data for editing
 let wageTypesForPayroll = [];
+const ORG_SETUP_DEFAULT_PAGE_SIZE = 10;
+const ORG_SETUP_PAGINATION = {
+  departments: 1,
+  positions: 1
+};
 
 function normalizeWageTypeName(value) {
   const name = String(value || '').trim();
@@ -70,9 +75,53 @@ async function refreshEmployeeSetupUI() {
   renderEmployeeDepartmentFilter();
   renderEmployeeSetupPositionDepartmentSelect();
   renderEmployeeSetupRows();
+  loadEmployeeIdConfigForSetup();
   if (typeof initializeEmployeePositionDropdowns === 'function') {
     initializeEmployeePositionDropdowns();
   }
+}
+
+async function loadEmployeeIdConfigForSetup() {
+  const prefixInput = document.getElementById('emp-code-prefix-config');
+  if (!prefixInput || prefixInput.dataset.loaded === '1') return;
+
+  try {
+    const response = await apiFetch('/api/employees/id-config');
+    if (!response?.ok) throw new Error('Unable to load employee ID configuration.');
+    const config = await response.json();
+    prefixInput.value = config.prefix || 'EMP';
+    document.getElementById('emp-code-start-config').value = config.starting_number ?? 1;
+    document.getElementById('emp-code-padding-config').value = config.number_padding ?? 6;
+    document.getElementById('emp-code-sequence-config').value = config.current_sequence ?? 0;
+    document.getElementById('emp-code-auto-config').value = String(Number(config.auto_generate_enabled ?? 1));
+    prefixInput.dataset.loaded = '1';
+  } catch (error) {
+    console.error('Employee ID config load error:', error);
+  }
+}
+
+async function saveEmployeeIdConfig(event) {
+  event.preventDefault();
+  const payload = {
+    prefix: document.getElementById('emp-code-prefix-config')?.value || 'EMP',
+    starting_number: Number(document.getElementById('emp-code-start-config')?.value || 1),
+    number_padding: Number(document.getElementById('emp-code-padding-config')?.value || 6),
+    current_sequence: Number(document.getElementById('emp-code-sequence-config')?.value || 0),
+    auto_generate_enabled: document.getElementById('emp-code-auto-config')?.value || '1'
+  };
+
+  const response = await apiFetch('/api/employees/id-config', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return showAlert?.(data.error || 'Failed to save Employee ID configuration.', 'Error', 'error') || alert(data.error || 'Failed to save Employee ID configuration.');
+  }
+
+  document.getElementById('emp-code-prefix-config').dataset.loaded = '';
+  await loadEmployeeIdConfigForSetup();
+  await showAlert?.(data.message || 'Employee ID configuration saved.', 'Saved', 'success');
 }
 
 function renderEmployeeDepartmentFilter() {
@@ -101,59 +150,154 @@ function renderEmployeeSetupPositionDepartmentSelect() {
   }
 }
 
-function renderEmployeeSetupRows() {
-  const body = document.getElementById('employee-setup-rows');
-  if (!body || typeof getEmployeeDepartments !== 'function' || typeof getEmployeePositions !== 'function') return;
+function renderOrganizationSetupPositionDepartmentFilter() {
+  const select = document.getElementById('org-setup-position-department-filter');
+  if (!select || typeof getEmployeeDepartments !== 'function') return;
+  const selected = select.value;
   const departments = getEmployeeDepartments();
-  const positions = getEmployeePositions();
-  const groups = departments.map(department => {
-    const departmentPositions = positions
-      .filter(position => Number(position.department_id) === Number(department.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    const positionRows = departmentPositions.length
-      ? departmentPositions.map(position => `
-          <div class="employee-setup-position-row">
-            <span>${employeeSetupEscape(position.name)}</span>
-            <div class="employee-setup-actions">
-              <button class="employee-setup-action" type="button" onclick="editEmployeeSetupPosition(${position.id})">Edit Position</button>
-              <button class="employee-setup-action danger" type="button" onclick="deleteEmployeeSetupPosition(${position.id})">Remove Position</button>
-            </div>
-          </div>
-        `).join('')
-      : '<div class="employee-setup-empty">No positions yet</div>';
-
-    return `
-      <details class="employee-setup-department">
-        <summary>
-          <span>${employeeSetupEscape(department.name)}</span>
-          <span class="employee-setup-count">${departmentPositions.length} position${departmentPositions.length === 1 ? '' : 's'}</span>
-          <span class="employee-setup-caret">></span>
-        </summary>
-        <div class="employee-setup-position-list">
-          <div class="employee-setup-position-row">
-            <span style="color:var(--muted);">Department actions</span>
-            <div class="employee-setup-actions">
-              <button class="employee-setup-action" type="button" onclick="editEmployeeSetupDepartment(${department.id})">Edit Department</button>
-              <button class="employee-setup-action danger" type="button" onclick="deleteEmployeeSetupDepartment(${department.id})">Remove Department</button>
-            </div>
-          </div>
-          ${positionRows}
-        </div>
-      </details>
-    `;
-  });
-
-  body.innerHTML = groups.length ? groups.join('') : '<div class="employee-setup-empty">No departments configured.</div>';
+  select.innerHTML = '<option value="">All Departments</option>' + departments
+    .map(department => `<option value="${department.id}">${employeeSetupEscape(department.name)}</option>`)
+    .join('');
+  if (selected && departments.some(department => String(department.id) === String(selected))) {
+    select.value = selected;
+  }
 }
 
-function toggleEmployeeSetupPanel() {
-  const panel = document.getElementById('employee-setup-panel');
-  const label = document.getElementById('employee-setup-toggle-label');
-  if (!panel) return;
-  panel.classList.toggle('open');
-  if (label) label.textContent = panel.classList.contains('open') ? 'Hide' : 'Show';
-  refreshEmployeeSetupUI();
+function getOrganizationSetupPositionFilters() {
+  return {
+    search: String(document.getElementById('org-setup-position-search')?.value || '').trim().toLowerCase(),
+    departmentId: String(document.getElementById('org-setup-position-department-filter')?.value || ''),
+    status: String(document.getElementById('org-setup-position-status-filter')?.value || '').toLowerCase()
+  };
+}
+
+function filterOrganizationSetupPositions(positions) {
+  const filters = getOrganizationSetupPositionFilters();
+  return positions.filter(position => {
+    const isActive = Number(position.is_active ?? 1) === 1;
+    if (filters.departmentId && String(position.department_id) !== filters.departmentId) return false;
+    if (filters.status === 'active' && !isActive) return false;
+    if (filters.status === 'inactive' && isActive) return false;
+    if (filters.search) {
+      const haystack = `${position.name || ''} ${position.department || ''}`.toLowerCase();
+      if (!haystack.includes(filters.search)) return false;
+    }
+    return true;
+  });
+}
+
+function getOrganizationSetupPageSize(type) {
+  if (type !== 'positions') return ORG_SETUP_DEFAULT_PAGE_SIZE;
+  const value = Number(document.getElementById('org-setup-position-page-size')?.value || ORG_SETUP_DEFAULT_PAGE_SIZE);
+  return Number.isFinite(value) && value > 0 ? value : ORG_SETUP_DEFAULT_PAGE_SIZE;
+}
+
+function applyOrganizationSetupPositionFilters() {
+  ORG_SETUP_PAGINATION.positions = 1;
+  renderEmployeeSetupRows();
+}
+
+function resetOrganizationSetupPositionFilters() {
+  const search = document.getElementById('org-setup-position-search');
+  const department = document.getElementById('org-setup-position-department-filter');
+  const status = document.getElementById('org-setup-position-status-filter');
+  const pageSize = document.getElementById('org-setup-position-page-size');
+  if (search) search.value = '';
+  if (department) department.value = '';
+  if (status) status.value = '';
+  if (pageSize) pageSize.value = String(ORG_SETUP_DEFAULT_PAGE_SIZE);
+  applyOrganizationSetupPositionFilters();
+}
+
+function renderEmployeeSetupRows() {
+  const departmentBody = document.getElementById('org-setup-departments-tbody');
+  const positionBody = document.getElementById('org-setup-positions-tbody');
+  if (!departmentBody || !positionBody || typeof getEmployeeDepartments !== 'function' || typeof getEmployeePositions !== 'function') return;
+  const departments = getEmployeeDepartments();
+  const positions = getEmployeePositions();
+  renderOrganizationSetupPositionDepartmentFilter();
+  const positionCountByDepartment = new Map();
+  positions.forEach(position => {
+    const key = Number(position.department_id);
+    positionCountByDepartment.set(key, (positionCountByDepartment.get(key) || 0) + 1);
+  });
+
+  const departmentPage = getOrganizationSetupPaginationMeta('departments', departments.length);
+  const pagedDepartments = departments.slice(departmentPage.startIndex, departmentPage.endIndex);
+
+  departmentBody.innerHTML = pagedDepartments.length
+    ? pagedDepartments.map(department => `
+        <tr>
+          <td>${employeeSetupEscape(department.name)}</td>
+          <td>${positionCountByDepartment.get(Number(department.id)) || 0}</td>
+          <td><span class="org-setup-status active">Active</span></td>
+          <td>
+            <div class="org-setup-row-actions">
+              <button class="btn btn-outline" type="button" onclick="editEmployeeSetupDepartment(${department.id})">Edit</button>
+              <button class="btn btn-outline" type="button" onclick="deleteEmployeeSetupDepartment(${department.id})">Deactivate</button>
+            </div>
+          </td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="4" class="table-empty">No departments configured.</td></tr>';
+  renderOrganizationSetupPagination('departments', departmentPage, departments.length, 'departments');
+
+  const filteredPositions = filterOrganizationSetupPositions(positions);
+  const sortedPositions = [...filteredPositions].sort((a, b) => {
+    const departmentCompare = String(a.department || '').localeCompare(String(b.department || ''));
+    return departmentCompare || String(a.name || '').localeCompare(String(b.name || ''));
+  });
+
+  const positionPage = getOrganizationSetupPaginationMeta('positions', sortedPositions.length);
+  const pagedPositions = sortedPositions.slice(positionPage.startIndex, positionPage.endIndex);
+
+  positionBody.innerHTML = pagedPositions.length
+    ? pagedPositions.map(position => `
+        <tr>
+          <td>${employeeSetupEscape(position.department || '—')}</td>
+          <td>${employeeSetupEscape(position.name)}</td>
+          <td><span class="org-setup-status ${Number(position.is_active ?? 1) === 1 ? 'active' : ''}">${Number(position.is_active ?? 1) === 1 ? 'Active' : 'Inactive'}</span></td>
+          <td>
+            <div class="org-setup-row-actions">
+              <button class="btn btn-outline" type="button" onclick="editEmployeeSetupPosition(${position.id})">Edit</button>
+              <button class="btn btn-outline" type="button" onclick="deleteEmployeeSetupPosition(${position.id})">Deactivate</button>
+            </div>
+          </td>
+        </tr>
+      `).join('')
+    : '<tr><td colspan="4" class="table-empty">No positions match the selected filters.</td></tr>';
+  renderOrganizationSetupPagination('positions', positionPage, sortedPositions.length, 'positions');
+}
+
+function getOrganizationSetupPaginationMeta(type, totalItems) {
+  const pageSize = getOrganizationSetupPageSize(type);
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  ORG_SETUP_PAGINATION[type] = Math.min(Math.max(ORG_SETUP_PAGINATION[type] || 1, 1), totalPages);
+  const currentPage = ORG_SETUP_PAGINATION[type];
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  return { currentPage, totalPages, startIndex, endIndex };
+}
+
+function renderOrganizationSetupPagination(type, meta, totalItems, label) {
+  const info = document.getElementById(`org-setup-${type}-info`);
+  const page = document.getElementById(`org-setup-${type}-page`);
+  const previousButton = document.getElementById(`org-setup-${type}-prev`);
+  const nextButton = document.getElementById(`org-setup-${type}-next`);
+
+  const from = totalItems ? meta.startIndex + 1 : 0;
+  const to = totalItems ? meta.endIndex : 0;
+
+  if (info) info.textContent = `Showing ${from} to ${to} of ${totalItems} ${label}`;
+  if (page) page.textContent = `Page ${meta.currentPage} of ${meta.totalPages}`;
+  if (previousButton) previousButton.disabled = meta.currentPage <= 1;
+  if (nextButton) nextButton.disabled = meta.currentPage >= meta.totalPages;
+}
+
+function changeOrganizationSetupPage(type, direction) {
+  if (!ORG_SETUP_PAGINATION[type]) ORG_SETUP_PAGINATION[type] = 1;
+  ORG_SETUP_PAGINATION[type] += direction;
+  renderEmployeeSetupRows();
 }
 
 async function saveEmployeeSetupDepartment(event) {
@@ -1210,11 +1354,21 @@ function initializeEmployeePage() {
   document.getElementById('emp-status') ?.addEventListener('change', filterEmployees);
 }
 
+function initializeOrganizationSetupPage() {
+  if (!document.getElementById('org-setup-departments-tbody')) return;
+  if (!document.getElementById('page-organization-setup')?.classList.contains('active')) return;
+  refreshEmployeeSetupUI();
+}
+
 document.addEventListener('DOMContentLoaded', initializeEmployeePage);
 document.addEventListener('partialsLoaded', initializeEmployeePage);
+document.addEventListener('DOMContentLoaded', initializeOrganizationSetupPage);
+document.addEventListener('partialsLoaded', initializeOrganizationSetupPage);
 
-window.toggleEmployeeSetupPanel = toggleEmployeeSetupPanel;
 window.initializeEmployeePage = initializeEmployeePage;
+window.initializeOrganizationSetupPage = initializeOrganizationSetupPage;
+window.changeOrganizationSetupPage = changeOrganizationSetupPage;
+window.saveEmployeeIdConfig = saveEmployeeIdConfig;
 window.saveEmployeeSetupDepartment = saveEmployeeSetupDepartment;
 window.saveEmployeeSetupPosition = saveEmployeeSetupPosition;
 window.editEmployeeSetupDepartment = editEmployeeSetupDepartment;
@@ -1825,7 +1979,9 @@ function getEmployeeFullName(employee) {
 
 function renderProfileSummary(employee) {
   const initials = `${employee.first_name?.[0] || ''}${employee.last_name?.[0] || ''}`.toUpperCase() || '--';
+  const employeeName = getEmployeeFullName(employee);
   setText('profile-initials', initials);
+  setText('profile-title-name', employeeName);
   setText('profile-company', 'Marulas Industrial Corp');
   setText('profile-emp-id', employee.employee_code || employee.id);
   setText('profile-dob', employee.date_of_birth);
@@ -1834,7 +1990,7 @@ function renderProfileSummary(employee) {
   setText('profile-joined', employee.date_hired);
 
   const pageTitle = document.getElementById('page-title');
-  if (pageTitle) pageTitle.textContent = getEmployeeFullName(employee);
+  if (pageTitle) pageTitle.textContent = 'Employee Profile';
 }
 
 function renderProfileTabs(employee) {
@@ -1881,7 +2037,11 @@ function renderProfileTabs(employee) {
           ${field('Employee Type', employee.employment_type)}
           ${field('Hiring Classification', employee.hiring_type || 'Direct Hire')}
           ${field('Agency Name', employee.agency_name)}
+          ${field('Agency Contact Person', employee.agency_contact_person)}
+          ${field('Agency Contact Number', employee.agency_contact_number)}
           ${field('Deployment Status', employee.deployment_status)}
+          ${field('Contract Start', employee.contract_start_date)}
+          ${field('Contract End', employee.contract_end_date || employee.end_of_contract)}
           ${field('Date Hired', employee.date_hired)}
           ${field('End of Contract', employee.end_of_contract)}
           ${field('Immediate Supervisor', employee.supervisor)}
@@ -2808,6 +2968,26 @@ async function saveProfilePageChanges() {
     return;
   }
 
+  const profileEmploymentType = document.getElementById('profile-edit-type')?.value || 'Full-time';
+  const profileAgencyName = document.getElementById('profile-edit-agency-name')?.value?.trim() || '';
+  const profileAgencyContactPerson = document.getElementById('profile-edit-agency-contact-person')?.value?.trim() || '';
+  const profileAgencyContactNumber = document.getElementById('profile-edit-agency-contact-number')?.value?.trim() || '';
+  const profileDeploymentStatus = document.getElementById('profile-edit-deployment-status')?.value || null;
+  const profileContractStart = document.getElementById('profile-edit-contract-start-date')?.value || null;
+  const profileContractEnd = document.getElementById('profile-edit-contract-end-date')?.value || null;
+  const hasProfileAgencyDetails = !!(
+    profileAgencyName ||
+    profileAgencyContactPerson ||
+    profileAgencyContactNumber ||
+    profileContractStart ||
+    profileContractEnd ||
+    (profileDeploymentStatus && profileDeploymentStatus !== 'Pending Deployment') ||
+    profileEmploymentType === 'Contractual'
+  );
+  const profileHiringType = hasProfileAgencyDetails
+    ? 'Agency-Hired'
+    : document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire';
+
   const payload = {
     first_name: document.getElementById('profile-edit-first-name')?.value || '',
     middle_name: document.getElementById('profile-edit-middle-name')?.value || null,
@@ -2825,14 +3005,14 @@ async function saveProfilePageChanges() {
     religion: document.getElementById('profile-edit-religion')?.value || null,
     ...addressResult.payload,
     position: document.getElementById('profile-edit-position')?.value || null,
-    employment_type: document.getElementById('profile-edit-type')?.value || 'Full-time',
-    hiring_type: document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire',
-    agency_name: document.getElementById('profile-edit-agency-name')?.value || null,
-    agency_contact_person: document.getElementById('profile-edit-agency-contact-person')?.value || null,
-    agency_contact_number: document.getElementById('profile-edit-agency-contact-number')?.value || null,
-    deployment_status: document.getElementById('profile-edit-deployment-status')?.value || null,
-    contract_start_date: document.getElementById('profile-edit-contract-start-date')?.value || null,
-    contract_end_date: document.getElementById('profile-edit-contract-end-date')?.value || null,
+    employment_type: profileEmploymentType,
+    hiring_type: profileHiringType,
+    agency_name: profileAgencyName || null,
+    agency_contact_person: profileAgencyContactPerson || null,
+    agency_contact_number: profileAgencyContactNumber || null,
+    deployment_status: profileDeploymentStatus,
+    contract_start_date: profileContractStart,
+    contract_end_date: profileContractEnd,
     date_hired: document.getElementById('profile-edit-hired')?.value || null,
     end_of_contract: document.getElementById('profile-edit-end-contract')?.value || null,
     supervisor: document.getElementById('profile-edit-supervisor')?.value || null,
@@ -3128,6 +3308,8 @@ window.deleteTraining = deleteTraining;
 window.refreshEmployees = fetchEmployees;
 window.fetchEmployees = fetchEmployees;
 window.switchRegisterView = switchRegisterView;
+window.applyOrganizationSetupPositionFilters = applyOrganizationSetupPositionFilters;
+window.resetOrganizationSetupPositionFilters = resetOrganizationSetupPositionFilters;
 window.openEmployeeDetail = openEmployeeDetail;
 window.toggleEmployeeActionMenu = toggleEmployeeActionMenu;
 window.setEmployeeStatus = setEmployeeStatus;

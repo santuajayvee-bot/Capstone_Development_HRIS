@@ -182,15 +182,29 @@
       <span>Rate: <strong id="summary-rate">PHP 0.00</strong></span>
       <span>Output: <strong id="summary-qty">0</strong></span>
     </div>
-    <table class="salary-summary-table">
-      <tbody>
-        <tr><th>Base Pay</th><td id="summary-base">PHP 0.00</td></tr>
-        <tr><th>Allowances</th><td id="summary-allowances">PHP 0.00</td></tr>
-        <tr><th>Gross Pay</th><td id="summary-gross">PHP 0.00</td></tr>
-        <tr><th>Deductions</th><td><span id="summary-total-deductions">PHP 0.00</span><div class="summary-deductions" id="summary-deductions"></div></td></tr>
-        <tr class="salary-summary-net"><th>Net Pay</th><td id="summary-net">PHP 0.00</td></tr>
-      </tbody>
-    </table>
+    <div class="salary-summary-form">
+      <label class="salary-summary-field">
+        <span>Base Pay</span>
+        <input id="summary-base" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
+      </label>
+      <label class="salary-summary-field">
+        <span>Allowances</span>
+        <input id="summary-allowances" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
+      </label>
+      <label class="salary-summary-field">
+        <span>Gross Pay</span>
+        <input id="summary-gross" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
+      </label>
+      <div class="salary-summary-field salary-summary-field-wide">
+        <span>Deductions</span>
+        <input id="summary-total-deductions" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
+        <div class="salary-summary-breakdown" id="summary-deductions"></div>
+      </div>
+      <label class="salary-summary-field salary-summary-field-wide salary-summary-field-net">
+        <span>Net Pay</span>
+        <input id="summary-net" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
+      </label>
+    </div>
     <div class="payroll-deduction-note" id="summary-deduction-note">No deduction applied yet.</div>
     <div class="salary-form-actions">
       <button class="btn btn-outline" onclick="saveSalaryAsDraft()">Save Draft</button>

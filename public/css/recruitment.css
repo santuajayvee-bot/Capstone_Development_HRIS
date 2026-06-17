@@ -98,12 +98,10 @@
   padding:9px 12px;
   border:1px solid var(--border);
   border-radius:7px;
-  background:
-    linear-gradient(90deg, rgba(79,124,255,.08), transparent 46%),
-    var(--bg);
-  color:var(--text);
+  background:#ffffff;
+  color:#1f2937;
   cursor:pointer;
-  font:700 13px 'DM Sans',sans-serif;
+  font:500 13px 'Poppins','DM Sans',sans-serif;
   text-align:left;
   transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
@@ -112,18 +110,18 @@
   width:18px;
   height:18px;
   flex:0 0 18px;
-  border:1px solid rgba(157,183,210,.75);
+  border:1px solid #cfd6e1;
   border-radius:5px;
   background:
-    linear-gradient(rgba(79,124,255,.85), rgba(79,124,255,.85)) 3px 4px / 12px 2px no-repeat,
-    linear-gradient(rgba(34,211,165,.65), rgba(34,211,165,.65)) 5px 8px / 3px 3px no-repeat,
-    linear-gradient(rgba(34,211,165,.55), rgba(34,211,165,.55)) 10px 8px / 3px 3px no-repeat,
-    rgba(255,255,255,.05);
+    linear-gradient(#e73737, #e73737) 3px 4px / 12px 2px no-repeat,
+    linear-gradient(#fca5a5, #fca5a5) 5px 8px / 3px 3px no-repeat,
+    linear-gradient(#fca5a5, #fca5a5) 10px 8px / 3px 3px no-repeat,
+    #ffffff;
 }
 .onb-date-trigger:hover,
 .onb-date-field.open .onb-date-trigger {
-  border-color:rgba(79,124,255,.65);
-  box-shadow:0 0 0 3px rgba(79,124,255,.12);
+  border-color:#e73737;
+  box-shadow:0 0 0 3px rgba(231,55,55,.12);
 }
 .onb-date-value.is-empty {
   color:var(--muted);
@@ -135,12 +133,12 @@
   top:calc(100% + 8px);
   z-index:10080;
   display:none;
-  width:min(318px, calc(100vw - 56px));
+  width:min(286px, calc(100vw - 56px));
   padding:12px;
-  border:1px solid rgba(79,124,255,.34);
-  border-radius:8px;
-  background:#171b26;
-  box-shadow:0 18px 48px rgba(0,0,0,.45);
+  border:1px solid #fecaca;
+  border-radius:12px;
+  background:#ffffff;
+  box-shadow:0 18px 42px rgba(16,24,40,.14);
 }
 .onb-date-field.open .onb-date-panel {
   display:block;
@@ -158,87 +156,94 @@
 .onb-date-jump {
   flex:1;
   display:grid;
-  grid-template-columns:1fr 86px;
-  gap:6px;
+  grid-template-columns:1fr 88px;
+  gap:8px;
   min-width:0;
 }
 .onb-date-jump select {
   width:100%;
-  min-height:31px;
-  padding:0 8px;
-  border:1px solid var(--border);
-  border-radius:6px;
-  background:#10141d;
-  color:var(--text);
+  min-height:36px;
+  padding:0 28px 0 10px;
+  border:1px solid #d0d5dd;
+  border-radius:8px;
+  background:#ffffff;
+  color:#1f2937;
   cursor:pointer;
-  font:800 12px 'DM Sans',sans-serif;
+  font:500 13px 'Poppins','DM Sans',sans-serif;
   outline:none;
 }
 .onb-date-jump select:hover,
 .onb-date-jump select:focus {
-  border-color:var(--accent);
-  box-shadow:0 0 0 3px rgba(79,124,255,.12);
+  border-color:#e73737;
+  box-shadow:0 0 0 3px rgba(231,55,55,.12);
 }
 .onb-date-nav,
 .onb-date-foot button {
-  border:1px solid var(--border);
-  border-radius:6px;
-  background:#10141d;
-  color:var(--text);
+  border:1px solid #d0d5dd;
+  border-radius:8px;
+  background:#ffffff;
+  color:#344054;
   cursor:pointer;
-  font:800 12px 'DM Sans',sans-serif;
+  font:500 13px 'Poppins','DM Sans',sans-serif;
 }
 .onb-date-nav {
-  width:31px;
-  height:31px;
+  width:36px;
+  height:36px;
 }
 .onb-date-nav:hover,
 .onb-date-foot button:hover {
-  border-color:var(--accent);
-  color:#fff;
+  border-color:#e73737;
+  background:#fff1f1;
+  color:#b91c1c;
 }
 .onb-date-weekdays,
 .onb-date-grid {
   display:grid;
   grid-template-columns:repeat(7, 1fr);
-  gap:5px;
+  gap:4px;
 }
 .onb-date-weekdays {
-  margin-bottom:6px;
-  color:var(--muted);
-  font:800 10px 'DM Sans',sans-serif;
+  margin:6px 0 4px;
+  color:#667085;
+  font:500 11px 'Poppins','DM Sans',sans-serif;
   text-align:center;
 }
 .onb-date-day {
   width:100%;
   aspect-ratio:1;
   border:1px solid transparent;
-  border-radius:6px;
+  border-radius:8px;
   background:transparent;
-  color:var(--text);
+  color:#1f2937;
   cursor:pointer;
-  font:800 12px 'DM Sans',sans-serif;
+  font:400 13px 'Poppins','DM Sans',sans-serif;
 }
 .onb-date-day:hover {
-  border-color:rgba(79,124,255,.48);
-  background:rgba(79,124,255,.12);
+  border-color:#fecaca;
+  background:#fff1f1;
+  color:#b91c1c;
 }
 .onb-date-day.is-outside {
-  color:rgba(122,126,154,.52);
+  color:#98a2b3;
 }
 .onb-date-day.is-today {
-  border-color:rgba(34,211,165,.55);
+  border-color:#fca5a5;
+  color:#b91c1c;
+  background:#fff7f7;
 }
 .onb-date-day.is-selected {
-  background:var(--accent);
-  border-color:var(--accent);
+  background:#e73737;
+  border-color:#e73737;
   color:#fff;
 }
 .onb-date-foot {
-  margin-top:10px;
+  margin-top:12px;
+  padding-top:10px;
+  border-top:1px solid #f2f4f7;
 }
 .onb-date-foot button {
-  min-height:30px;
+  flex:1;
+  min-height:34px;
   padding:0 10px;
 }
 .onb-route-form .onb-check { display:flex; align-items:center; gap:7px; height:34px; text-transform:none; }

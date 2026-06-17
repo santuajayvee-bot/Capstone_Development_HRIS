@@ -1,0 +1,452 @@
+<!-- ============================================================
+     pages/organization-setup.html — Department & Position Setup
+     ============================================================ -->
+<style>
+  .org-setup-page {
+    display: grid;
+    gap: 18px;
+  }
+
+  .org-setup-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .org-setup-form-block {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .org-setup-form-block h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .org-setup-form-block p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .org-setup-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .org-setup-form-grid.org-setup-form-grid-single {
+    grid-template-columns: 1fr;
+  }
+
+  .org-setup-field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .org-setup-field label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .org-setup-field input,
+  .org-setup-field select {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--input-bg, rgba(255,255,255,0.02));
+    color: var(--text);
+    padding: 10px 12px;
+    font: inherit;
+  }
+
+  .org-setup-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .org-setup-config {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 16px;
+    display: grid;
+    gap: 14px;
+  }
+
+  .org-setup-config h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .org-setup-config p {
+    margin: 3px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .org-setup-section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .org-setup-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .org-setup-section-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .org-setup-section-header p {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .org-setup-table-wrap {
+    overflow-x: auto;
+  }
+
+  .org-setup-filter-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.6fr) minmax(180px, 1fr) minmax(140px, 0.8fr) minmax(120px, 0.7fr) auto;
+    gap: 10px;
+    align-items: end;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .org-setup-filter-row label {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .org-setup-filter-row input,
+  .org-setup-filter-row select {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--input-bg, rgba(255,255,255,0.02));
+    color: var(--text);
+    padding: 8px 10px;
+    font: inherit;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .org-setup-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .org-setup-table th,
+  .org-setup-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .org-setup-table th {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .org-setup-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .org-setup-table .table-empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 18px 16px;
+  }
+
+  .org-setup-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .org-setup-pagination-info {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .org-setup-pagination-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .org-setup-pagination-actions button {
+    min-width: 84px;
+    min-height: 36px;
+  }
+
+  .org-setup-pagination-page {
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 84px;
+    text-align: center;
+  }
+
+  .org-setup-row-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .org-setup-row-actions button {
+    min-height: 36px;
+  }
+
+  .org-setup-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 78px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    border: 1px solid rgba(220, 38, 38, 0.18);
+    background: rgba(220, 38, 38, 0.08);
+    color: #c62828;
+  }
+
+  .org-setup-status.active {
+    border-color: rgba(16, 185, 129, 0.2);
+    background: rgba(16, 185, 129, 0.08);
+    color: #0f9f6e;
+  }
+
+  @media (max-width: 900px) {
+    .org-setup-toolbar,
+    .org-setup-form-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .org-setup-pagination {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .org-setup-filter-row {
+      grid-template-columns: 1fr;
+    }
+
+    .org-setup-pagination-actions {
+      justify-content: space-between;
+    }
+  }
+</style>
+
+<div class="org-setup-page">
+  <div class="page-header">
+    <div>
+      <div class="section-title">Organization Setup</div>
+      <div class="section-sub">Configure departments and job positions used by employee registration and profile forms.</div>
+    </div>
+  </div>
+
+  <div class="org-setup-toolbar">
+    <form class="org-setup-form-block" onsubmit="saveEmployeeSetupDepartment(event)">
+      <div>
+        <h3>Add Department</h3>
+        <p>Create or reactivate a department for HR records.</p>
+      </div>
+      <div class="org-setup-form-grid org-setup-form-grid-single">
+        <div class="org-setup-field">
+          <label for="setup-department-name">Department Name</label>
+          <input id="setup-department-name" placeholder="e.g. Quality Assurance" />
+        </div>
+      </div>
+      <div class="org-setup-actions">
+        <button class="btn btn-primary" type="submit">Add Department</button>
+      </div>
+    </form>
+
+    <form class="org-setup-form-block" onsubmit="saveEmployeeSetupPosition(event)">
+      <div>
+        <h3>Add Position</h3>
+        <p>Assign each job title to the correct department.</p>
+      </div>
+      <div class="org-setup-form-grid">
+        <div class="org-setup-field">
+          <label for="setup-position-department">Department</label>
+          <select id="setup-position-department">
+            <option value="">Select department</option>
+          </select>
+        </div>
+        <div class="org-setup-field">
+          <label for="setup-position-name">Position / Job Title</label>
+          <input id="setup-position-name" placeholder="e.g. QA Inspector" />
+        </div>
+      </div>
+      <div class="org-setup-actions">
+        <button class="btn btn-primary" type="submit">Add Position</button>
+      </div>
+    </form>
+  </div>
+
+  <section class="org-setup-config">
+    <div>
+      <h3>Employee ID Configuration</h3>
+      <p>Controls the visible employee ID used for new employee registration.</p>
+    </div>
+    <form class="org-setup-form-grid" onsubmit="saveEmployeeIdConfig(event)">
+      <div class="org-setup-field">
+        <label for="emp-code-prefix-config">Prefix</label>
+        <input id="emp-code-prefix-config" placeholder="EMP" />
+      </div>
+      <div class="org-setup-field">
+        <label for="emp-code-start-config">Starting Number</label>
+        <input id="emp-code-start-config" type="number" min="1" placeholder="1" />
+      </div>
+      <div class="org-setup-field">
+        <label for="emp-code-padding-config">Number Padding</label>
+        <input id="emp-code-padding-config" type="number" min="1" max="12" placeholder="6" />
+      </div>
+      <div class="org-setup-field">
+        <label for="emp-code-sequence-config">Current Sequence</label>
+        <input id="emp-code-sequence-config" type="number" min="0" placeholder="0" />
+      </div>
+      <div class="org-setup-field">
+        <label for="emp-code-auto-config">Auto-generate</label>
+        <select id="emp-code-auto-config">
+          <option value="1">Enabled</option>
+          <option value="0">Disabled</option>
+        </select>
+      </div>
+      <div class="org-setup-actions" style="align-self:end;">
+        <button class="btn btn-primary" type="submit">Save ID Configuration</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="org-setup-section">
+    <div class="org-setup-section-header">
+      <div>
+        <h3>Departments</h3>
+        <p>Configured departments available in employee forms.</p>
+      </div>
+    </div>
+    <div class="org-setup-table-wrap">
+      <table class="org-setup-table">
+        <thead>
+          <tr>
+            <th>Department Name</th>
+            <th>Number of Positions</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="org-setup-departments-tbody">
+          <tr><td colspan="4" class="table-empty">Loading departments...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="org-setup-pagination">
+      <div class="org-setup-pagination-info" id="org-setup-departments-info">Showing 0 to 0 of 0 departments</div>
+      <div class="org-setup-pagination-actions">
+        <button class="btn btn-outline" id="org-setup-departments-prev" type="button" onclick="changeOrganizationSetupPage('departments', -1)">Previous</button>
+        <span class="org-setup-pagination-page" id="org-setup-departments-page">Page 1 of 1</span>
+        <button class="btn btn-outline" id="org-setup-departments-next" type="button" onclick="changeOrganizationSetupPage('departments', 1)">Next</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="org-setup-section">
+    <div class="org-setup-section-header">
+      <div>
+        <h3>Positions</h3>
+        <p>Configured job titles mapped to their departments.</p>
+      </div>
+    </div>
+    <div class="org-setup-filter-row">
+      <label>Search
+        <input id="org-setup-position-search" type="search" placeholder="Search position or department" oninput="applyOrganizationSetupPositionFilters()" />
+      </label>
+      <label>Department
+        <select id="org-setup-position-department-filter" onchange="applyOrganizationSetupPositionFilters()">
+          <option value="">All Departments</option>
+        </select>
+      </label>
+      <label>Status
+        <select id="org-setup-position-status-filter" onchange="applyOrganizationSetupPositionFilters()">
+          <option value="">All Status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </label>
+      <label>Rows
+        <select id="org-setup-position-page-size" onchange="applyOrganizationSetupPositionFilters()">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+      <button class="btn btn-outline" type="button" onclick="resetOrganizationSetupPositionFilters()">Reset</button>
+    </div>
+    <div class="org-setup-table-wrap">
+      <table class="org-setup-table">
+        <thead>
+          <tr>
+            <th>Department</th>
+            <th>Position Name</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="org-setup-positions-tbody">
+          <tr><td colspan="4" class="table-empty">Loading positions...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="org-setup-pagination">
+      <div class="org-setup-pagination-info" id="org-setup-positions-info">Showing 0 to 0 of 0 positions</div>
+      <div class="org-setup-pagination-actions">
+        <button class="btn btn-outline" id="org-setup-positions-prev" type="button" onclick="changeOrganizationSetupPage('positions', -1)">Previous</button>
+        <span class="org-setup-pagination-page" id="org-setup-positions-page">Page 1 of 1</span>
+        <button class="btn btn-outline" id="org-setup-positions-next" type="button" onclick="changeOrganizationSetupPage('positions', 1)">Next</button>
+      </div>
+    </div>
+  </section>
+</div>

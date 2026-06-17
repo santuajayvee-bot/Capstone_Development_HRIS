@@ -631,9 +631,7 @@ input.lgsv-date-native[type="date"] {
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background:
-    linear-gradient(90deg, rgba(79,124,255,.08), transparent 46%),
-    var(--bg);
+  background: #ffffff;
   color: var(--text);
   cursor: pointer;
   font: 700 13px 'DM Sans', sans-serif;
@@ -645,18 +643,18 @@ input.lgsv-date-native[type="date"] {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
-  border: 1px solid rgba(157,183,210,.75);
+  border: 1px solid #cfd6e1;
   border-radius: 5px;
   background:
-    linear-gradient(rgba(79,124,255,.85), rgba(79,124,255,.85)) 3px 4px / 12px 2px no-repeat,
-    linear-gradient(rgba(34,211,165,.65), rgba(34,211,165,.65)) 5px 8px / 3px 3px no-repeat,
-    linear-gradient(rgba(34,211,165,.55), rgba(34,211,165,.55)) 10px 8px / 3px 3px no-repeat,
-    rgba(255,255,255,.05);
+    linear-gradient(#e73737, #e73737) 3px 4px / 12px 2px no-repeat,
+    linear-gradient(#fca5a5, #fca5a5) 5px 8px / 3px 3px no-repeat,
+    linear-gradient(#fca5a5, #fca5a5) 10px 8px / 3px 3px no-repeat,
+    #ffffff;
 }
 .lgsv-date-trigger:hover,
 .lgsv-date-field.open .lgsv-date-trigger {
-  border-color: rgba(79,124,255,.65);
-  box-shadow: 0 0 0 3px rgba(79,124,255,.12);
+  border-color: #e73737;
+  box-shadow: 0 0 0 3px rgba(231,55,55,.12);
 }
 .lgsv-date-value.is-empty {
   color: var(--muted);
@@ -668,12 +666,12 @@ input.lgsv-date-native[type="date"] {
   top: calc(100% + 8px);
   z-index: 10090;
   display: none;
-  width: min(318px, calc(100vw - 56px));
+  width: min(286px, calc(100vw - 56px));
   padding: 12px;
-  border: 1px solid rgba(79,124,255,.34);
-  border-radius: 8px;
-  background: #171b26;
-  box-shadow: 0 18px 48px rgba(0,0,0,.45);
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(16,24,40,.14);
 }
 .lgsv-date-field.open .lgsv-date-panel {
   display: block;
@@ -691,80 +689,84 @@ input.lgsv-date-native[type="date"] {
 .lgsv-date-jump {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 86px;
-  gap: 6px;
+  grid-template-columns: 1fr 88px;
+  gap: 8px;
   min-width: 0;
 }
 .lgsv-date-jump select {
   width: 100%;
-  min-height: 31px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #10141d;
-  color: var(--text);
+  min-height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background-color: #ffffff;
+  color: #1f2937;
   cursor: pointer;
-  font: 800 12px 'DM Sans', sans-serif;
+  font: 500 13px 'Poppins', 'DM Sans', sans-serif;
   outline: none;
 }
 .lgsv-date-jump select:hover,
 .lgsv-date-jump select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(79,124,255,.12);
+  border-color: #e73737;
+  box-shadow: 0 0 0 3px rgba(231,55,55,.12);
 }
 .lgsv-date-nav,
 .lgsv-date-foot button {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #10141d;
-  color: var(--text);
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
   cursor: pointer;
-  font: 800 12px 'DM Sans', sans-serif;
+  font: 500 13px 'Poppins', 'DM Sans', sans-serif;
 }
 .lgsv-date-nav {
-  width: 31px;
-  height: 31px;
+  width: 36px;
+  height: 36px;
 }
 .lgsv-date-nav:hover,
 .lgsv-date-foot button:hover {
-  border-color: var(--accent);
-  color: #fff;
+  border-color: #e73737;
+  background: #fff1f1;
+  color: #b91c1c;
 }
 .lgsv-date-weekdays,
 .lgsv-date-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 5px;
+  gap: 4px;
 }
 .lgsv-date-weekdays {
-  margin-bottom: 6px;
-  color: var(--muted);
-  font: 800 10px 'DM Sans', sans-serif;
+  margin: 6px 0 4px;
+  color: #667085;
+  font: 500 11px 'Poppins', 'DM Sans', sans-serif;
   text-align: center;
 }
 .lgsv-date-day {
   width: 100%;
   aspect-ratio: 1;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  color: var(--text);
+  color: #1f2937;
   cursor: pointer;
-  font: 800 12px 'DM Sans', sans-serif;
+  font: 400 13px 'Poppins', 'DM Sans', sans-serif;
 }
 .lgsv-date-day:hover {
-  border-color: rgba(79,124,255,.48);
-  background: rgba(79,124,255,.12);
+  border-color: #fecaca;
+  background: #fff1f1;
+  color: #b91c1c;
 }
 .lgsv-date-day.is-outside {
-  color: rgba(122,126,154,.52);
+  color: #98a2b3;
 }
 .lgsv-date-day.is-today {
-  border-color: rgba(34,211,165,.55);
+  border-color: #fca5a5;
+  color: #b91c1c;
+  background: #fff7f7;
 }
 .lgsv-date-day.is-selected {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: #e73737;
+  border-color: #e73737;
   color: #fff;
 }
 .lgsv-date-day:disabled {
@@ -772,10 +774,13 @@ input.lgsv-date-native[type="date"] {
   opacity: .32;
 }
 .lgsv-date-foot {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #f2f4f7;
 }
 .lgsv-date-foot button {
-  min-height: 30px;
+  flex: 1;
+  min-height: 34px;
   padding: 0 10px;
 }
 .form-group.full { grid-column: 1 / -1; }
@@ -1238,6 +1243,77 @@ input.lgsv-date-native[type="date"] {
 }
 .salary-selected-strip strong,
 .salary-summary-meta strong { color: var(--text); }
+.salary-summary-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.salary-summary-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.salary-summary-field-wide {
+  grid-column: 1 / -1;
+}
+.salary-summary-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px var(--font-main);
+  font-weight: 600;
+  outline: none;
+}
+.salary-summary-input[readonly] {
+  cursor: default;
+}
+.salary-summary-breakdown {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.salary-summary-breakdown-row,
+.salary-summary-breakdown-empty {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 8px 11px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+.salary-summary-breakdown-row:first-child,
+.salary-summary-breakdown-empty:first-child {
+  border-top: 0;
+}
+.salary-summary-breakdown-name {
+  color: var(--muted);
+  font-weight: 500;
+}
+.salary-summary-breakdown-amount {
+  color: var(--text);
+  font-weight: 600;
+}
+.salary-summary-breakdown-empty {
+  grid-template-columns: 1fr;
+  color: var(--muted);
+}
+.salary-summary-field-net .salary-summary-input {
+  border-color: rgba(34,211,165,0.28);
+  background: rgba(34,211,165,0.06);
+  color: var(--green);
+  font-weight: 700;
+}
 .salary-inline-label {
   margin-top: 10px;
   color: var(--muted);
@@ -1322,12 +1398,6 @@ input.lgsv-date-native[type="date"] {
 .salary-summary-net td {
   color: var(--green);
   background: rgba(34,211,165,0.06);
-}
-.salary-form .summary-deductions {
-  margin-top: 8px;
-  padding: 0;
-  border: 0;
-  background: transparent;
 }
 .salary-form-actions {
   display: flex;
@@ -1556,6 +1626,7 @@ input.lgsv-date-native[type="date"] {
   .payroll-field-row { grid-template-columns: 1fr; }
   .payroll-field-row .span-2 { grid-column: span 1; }
   .salary-form-wide { grid-column: span 1; }
+  .salary-summary-form { grid-template-columns: 1fr; }
   .salary-form-actions,
   .payroll-form-actions { justify-content: stretch; flex-direction: column; }
   .salary-form-actions .btn,

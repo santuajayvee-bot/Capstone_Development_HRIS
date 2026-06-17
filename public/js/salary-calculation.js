@@ -146,6 +146,26 @@ function salaryMoney(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function setSummaryField(id, value) {
+  const element = document.getElementById(id);
+  if (!element) return;
+  if (typeof element.value !== 'undefined') element.value = value;
+  else element.textContent = value;
+}
+
+function renderSummaryDeductions(appliedDeductions) {
+  const container = document.getElementById('summary-deductions');
+  if (!container) return;
+  container.innerHTML = appliedDeductions.length
+    ? appliedDeductions.map(item => `
+      <div class="salary-summary-breakdown-row">
+        <span class="salary-summary-breakdown-name">${salaryEscape(item.name)}</span>
+        <span class="salary-summary-breakdown-amount">₱${Number(item.amount || 0).toFixed(2)}</span>
+      </div>
+    `).join('')
+    : '<div class="salary-summary-breakdown-empty">No configured deductions for this payroll week.</div>';
+}
+
 function salaryValidationBox() {
   let box = document.getElementById('salary-payroll-validation');
   if (box) return box;
@@ -298,19 +318,12 @@ function getSalaryPieceRows() {
 
 function updateSalarySummary(qty, base, allowances, gross, appliedDeductions, deductions, net) {
   document.getElementById('summary-qty').textContent = Number(qty || 0).toFixed(2);
-  document.getElementById('summary-base').textContent = `₱${Number(base || 0).toFixed(2)}`;
-  document.getElementById('summary-allowances').textContent = `₱${Number(allowances || 0).toFixed(2)}`;
-  document.getElementById('summary-gross').textContent = `₱${Number(gross || 0).toFixed(2)}`;
-  document.getElementById('summary-deductions').innerHTML = appliedDeductions.length
-    ? appliedDeductions.map(item => `
-      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-        <span style="color:var(--muted);">${item.name}</span>
-        <span>₱${item.amount.toFixed(2)}</span>
-      </div>
-    `).join('')
-    : '<div style="color:var(--muted); font-size:11px;">No configured deductions for this payroll week.</div>';
-  document.getElementById('summary-total-deductions').textContent = `₱${Number(deductions || 0).toFixed(2)}`;
-  document.getElementById('summary-net').textContent = `₱${Number(net || 0).toFixed(2)}`;
+  setSummaryField('summary-base', `₱${Number(base || 0).toFixed(2)}`);
+  setSummaryField('summary-allowances', `₱${Number(allowances || 0).toFixed(2)}`);
+  setSummaryField('summary-gross', `₱${Number(gross || 0).toFixed(2)}`);
+  renderSummaryDeductions(appliedDeductions);
+  setSummaryField('summary-total-deductions', `₱${Number(deductions || 0).toFixed(2)}`);
+  setSummaryField('summary-net', `₱${Number(net || 0).toFixed(2)}`);
   const deductionNote = document.getElementById('summary-deduction-note');
   if (deductionNote) {
     deductionNote.classList.toggle('applied', deductions > 0);
@@ -1135,21 +1148,12 @@ function calculateSalaryNow() {
   
   // Update summary
   document.getElementById('summary-qty').textContent = qty.toFixed(2);
-  document.getElementById('summary-base').textContent = `₱${base.toFixed(2)}`;
-  document.getElementById('summary-allowances').textContent = `₱${allowances.toFixed(2)}`;
-  document.getElementById('summary-gross').textContent = `₱${gross.toFixed(2)}`;
-  
-  document.getElementById('summary-deductions').innerHTML = appliedDeductions.length
-    ? appliedDeductions.map(item => `
-      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-        <span style="color:var(--muted);">${item.name}</span>
-        <span>₱${item.amount.toFixed(2)}</span>
-      </div>
-    `).join('')
-    : '<div style="color:var(--muted); font-size:11px;">No configured deductions for this payroll week.</div>';
-  
-  document.getElementById('summary-total-deductions').textContent = `₱${deductions.toFixed(2)}`;
-  document.getElementById('summary-net').textContent = `₱${net.toFixed(2)}`;
+  setSummaryField('summary-base', `₱${base.toFixed(2)}`);
+  setSummaryField('summary-allowances', `₱${allowances.toFixed(2)}`);
+  setSummaryField('summary-gross', `₱${gross.toFixed(2)}`);
+  renderSummaryDeductions(appliedDeductions);
+  setSummaryField('summary-total-deductions', `₱${deductions.toFixed(2)}`);
+  setSummaryField('summary-net', `₱${net.toFixed(2)}`);
   const deductionNote = document.getElementById('summary-deduction-note');
   if (deductionNote) {
     deductionNote.classList.toggle('applied', deductions > 0);
@@ -1647,11 +1651,12 @@ function resetCalculationForm() {
   document.getElementById('summary-employee').textContent = '—';
   const summaryAgency = document.getElementById('summary-agency');
   if (summaryAgency) summaryAgency.textContent = '-';
-  document.getElementById('summary-base').textContent = '₱0.00';
-  document.getElementById('summary-allowances').textContent = '₱0.00';
-  document.getElementById('summary-gross').textContent = '₱0.00';
-  document.getElementById('summary-total-deductions').textContent = '₱0.00';
-  document.getElementById('summary-net').textContent = '₱0.00';
+  setSummaryField('summary-base', '₱0.00');
+  setSummaryField('summary-allowances', '₱0.00');
+  setSummaryField('summary-gross', '₱0.00');
+  setSummaryField('summary-total-deductions', '₱0.00');
+  setSummaryField('summary-net', '₱0.00');
+  renderSummaryDeductions([]);
   if (currentSalaryEmployee) currentSalaryEmployee.piecePreview = null;
   updatePieceDetailView();
   updateLogisticsPreview();
