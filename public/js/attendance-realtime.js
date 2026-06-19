@@ -1,10 +1,10 @@
 /* ============================================================
-   Realtime attendance updates
+   AJAX attendance refresh
    ============================================================ */
 
-let attendanceRealtimeSocket = null;
-let attendanceFallbackTimer = null;
-let attendanceLastRealtimeAt = 0;
+let attendanceAjaxRefreshTimer = null;
+let attendanceAjaxRefreshing = false;
+const ATTENDANCE_AJAX_REFRESH_MS = 5000;
 
 function currentPageId() {
   return window.ROUTE_PARAMS?.pageId || document.querySelector('.page.active')?.id?.replace(/^page-/, '') || 'dashboard';
@@ -16,18 +16,6 @@ function isPayrollRole(user) {
 
 function isManagerRole(user) {
   return user?.role === 'manager';
-}
-
-function canUseAttendanceEvent(data) {
-  const user = getUser?.();
-  if (!user) return false;
-  if (user.role === 'employee') return Number(data.employee_id) === Number(user.employeeId);
-  if (isPayrollRole(user)) return data.payroll_ready || ['PAYROLL_READY', 'VALIDATED'].includes(String(data.attendance_status || '').toUpperCase());
-  if (isManagerRole(user)) {
-    const departmentId = user.employeeProfile?.department_id || user.employeeProfile?.departmentId;
-    return !departmentId || Number(data.department_id) === Number(departmentId);
-  }
-  return ['hr_admin', 'hr_manager', 'admin', 'system_admin'].includes(user.role);
 }
 
 function attendanceRealtimeToast(message) {
@@ -51,81 +39,57 @@ function attendanceRealtimeToast(message) {
 
 async function reloadAttendanceRealtimeSurfaces(forceDashboard = true) {
   const page = currentPageId();
-  console.log('[ATTENDANCE_REALTIME] STEP 8: Dashboard update started', { page, forceDashboard });
+  if (attendanceAjaxRefreshing) return;
+  attendanceAjaxRefreshing = true;
 
-  if (page === 'dashboard' && typeof loadDashboard === 'function') {
-    await loadDashboard({ force: forceDashboard });
+  try {
+    if (page === 'dashboard' && typeof loadDashboard === 'function') {
+      await loadDashboard({ force: forceDashboard });
+    }
+
+    if (page === 'attendance') {
+      if (typeof loadClockStatus === 'function') loadClockStatus();
+      if (typeof loadBiometricAttendanceStatus === 'function') loadBiometricAttendanceStatus();
+      if (typeof loadOverviewStats === 'function') loadOverviewStats();
+      if (typeof loadMySummary === 'function') loadMySummary();
+      if (typeof loadAttRecords === 'function') loadAttRecords();
+      if (typeof loadBiometricEvents === 'function') loadBiometricEvents();
+      if (typeof loadBiometricExceptions === 'function') loadBiometricExceptions();
+    }
+
+    if (page === 'payroll' && typeof loadPayrollRecords === 'function') {
+      loadPayrollRecords();
+    }
+
+    if (page === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
+      initEmployeeDashboard();
+    }
+  } finally {
+    attendanceAjaxRefreshing = false;
   }
-
-  if (page === 'attendance') {
-    if (typeof loadClockStatus === 'function') loadClockStatus();
-    if (typeof loadBiometricAttendanceStatus === 'function') loadBiometricAttendanceStatus();
-    if (typeof loadOverviewStats === 'function') loadOverviewStats();
-    if (typeof loadMySummary === 'function') loadMySummary();
-    if (typeof loadAttRecords === 'function') loadAttRecords();
-    if (typeof loadBiometricEvents === 'function') loadBiometricEvents();
-    if (typeof loadBiometricExceptions === 'function') loadBiometricExceptions();
-  }
-
-  if (page === 'payroll' && typeof loadPayrollRecords === 'function') {
-    loadPayrollRecords();
-  }
-
-  if (page === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
-    initEmployeeDashboard();
-  }
-
-  console.log('[ATTENDANCE_REALTIME] STEP 8: Dashboard update completed', { page });
 }
 
-function handleAttendanceRealtimeEvent(data) {
-  console.log('[ATTENDANCE_REALTIME] STEP 7: Frontend received event', data);
-  if (!canUseAttendanceEvent(data)) return;
-  attendanceLastRealtimeAt = Date.now();
-  reloadAttendanceRealtimeSurfaces(true);
-  attendanceRealtimeToast(`New biometric attendance recorded: ${data.employee_name || 'Employee'} ${String(data.scan_type || '').replace('_', ' ')}`);
-}
-
-function startAttendanceFallbackPolling() {
-  if (attendanceFallbackTimer) return;
-  attendanceFallbackTimer = window.setInterval(() => {
+function startAttendanceAjaxRefresh() {
+  if (attendanceAjaxRefreshTimer) return;
+  attendanceAjaxRefreshTimer = window.setInterval(() => {
+    if (document.hidden) return;
     const page = currentPageId();
     if (!['dashboard', 'attendance', 'payroll', 'employee-dashboard'].includes(page)) return;
-    if (attendanceRealtimeSocket?.connected && Date.now() - attendanceLastRealtimeAt < 15000) return;
     reloadAttendanceRealtimeSurfaces(false);
-  }, 10000);
+  }, ATTENDANCE_AJAX_REFRESH_MS);
+}
+
+function stopAttendanceAjaxRefresh() {
+  if (!attendanceAjaxRefreshTimer) return;
+  window.clearInterval(attendanceAjaxRefreshTimer);
+  attendanceAjaxRefreshTimer = null;
 }
 
 function initAttendanceRealtime() {
-  if (attendanceRealtimeSocket || typeof io !== 'function' || typeof getToken !== 'function') {
-    startAttendanceFallbackPolling();
-    return;
-  }
-
-  const token = getToken();
-  if (!token) {
-    startAttendanceFallbackPolling();
-    return;
-  }
-
-  attendanceRealtimeSocket = io({
-    auth: { token },
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 10000,
-  });
-  window.attendanceRealtimeSocket = attendanceRealtimeSocket;
-
-  attendanceRealtimeSocket.on('connect', () => {
-    attendanceLastRealtimeAt = Date.now();
-  });
-  attendanceRealtimeSocket.on('attendance:created', handleAttendanceRealtimeEvent);
-  attendanceRealtimeSocket.on('disconnect', startAttendanceFallbackPolling);
-  attendanceRealtimeSocket.on('connect_error', startAttendanceFallbackPolling);
-
-  startAttendanceFallbackPolling();
+  startAttendanceAjaxRefresh();
 }
 
 window.initAttendanceRealtime = initAttendanceRealtime;
 window.reloadAttendanceRealtimeSurfaces = reloadAttendanceRealtimeSurfaces;
+window.startAttendanceAjaxRefresh = startAttendanceAjaxRefresh;
+window.stopAttendanceAjaxRefresh = stopAttendanceAjaxRefresh;

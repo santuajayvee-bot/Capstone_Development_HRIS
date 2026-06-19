@@ -239,17 +239,89 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString('en-PH');
 }
 
-function badge(value) {
+function badge(value, tone = '') {
   const text = String(value || '-');
   const normalized = text.toLowerCase();
-  const color = normalized.includes('validated') || normalized.includes('success') || normalized === 'present' || normalized === 'anchored'
+  const color = tone || (normalized.includes('not ready')
+    ? 'neutral'
+    : normalized.includes('validated') || normalized.includes('success') || normalized.includes('payroll_ready') || normalized === 'ready' || normalized === 'present' || normalized === 'anchored'
     ? 'green'
     : normalized.includes('reject') || normalized.includes('fail') || normalized === 'absent'
       ? 'red'
       : normalized.includes('incomplete') || normalized.includes('review') || normalized.includes('late') || normalized.includes('partial')
         ? 'yellow'
-        : 'blue';
+        : normalized.includes('overtime')
+          ? 'info'
+          : 'neutral');
   return `<span class="badge badge-${color}">${esc(text)}</span>`;
+}
+
+function attendanceBadge(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized.includes('late') || normalized.includes('review') || normalized.includes('incomplete')) return badge(value, 'yellow');
+  if (normalized.includes('overtime')) return badge(value, 'info');
+  if (normalized.includes('undertime') || normalized.includes('half day')) return badge(value, 'neutral');
+  return badge(value);
+}
+
+function minuteValue(record, summaryKey, logKey) {
+  const summaryValue = Number(record?.[summaryKey] ?? NaN);
+  if (Number.isFinite(summaryValue)) return Math.max(0, summaryValue);
+  const logValue = Number(record?.[logKey] ?? 0);
+  return Number.isFinite(logValue) ? Math.max(0, logValue) : 0;
+}
+
+function formatMinutes(value) {
+  const minutes = Math.max(0, Math.round(Number(value || 0)));
+  if (!minutes) return '-';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function attendanceFlagBadges(record) {
+  const flags = [];
+  const status = record.attendance_status || record.status || 'Present';
+  const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
+  const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
+  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+  if (status && !['Late', 'Undertime', 'Overtime'].includes(status)) flags.push(status);
+  if (lateMinutes > 0) flags.push('Late');
+  if (undertimeMinutes > 0) flags.push('Undertime');
+  if (overtimeMinutes > 0) flags.push('Overtime');
+  return [...new Set(flags.length ? flags : [status || '-'])].map(flag => attendanceBadge(flag)).join(' ');
+}
+
+function primaryAttendanceStatus(record) {
+  const validation = normalizeValidationStatus(record.verification_status);
+  const status = String(record.attendance_status || record.status || '').trim();
+  if (validation === 'NEEDS_REVIEW' || /needs review|incomplete/i.test(status)) return 'Needs Review';
+  if (validation === 'REJECTED' || /rejected/i.test(status)) return 'Rejected';
+  if (/absent/i.test(status)) return 'Absent';
+  if (/half day/i.test(status)) return 'Half Day';
+  return 'Present';
+}
+
+function attendanceSummary(record) {
+  const items = [];
+  const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
+  const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
+  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+  if (lateMinutes > 0) items.push(`Late ${formatMinutes(lateMinutes)}`);
+  if (undertimeMinutes > 0) items.push(`Undertime ${formatMinutes(undertimeMinutes)}`);
+  if (overtimeMinutes > 0) items.push(`Overtime ${formatMinutes(overtimeMinutes)}`);
+  return {
+    text: items.length ? items.join(' · ') : 'Normal',
+    title: `Late: ${formatMinutes(lateMinutes)} | Undertime: ${formatMinutes(undertimeMinutes)} | Overtime: ${formatMinutes(overtimeMinutes)}`
+  };
+}
+
+function validationLabel(value) {
+  const normalized = normalizeValidationStatus(value);
+  if (normalized === 'PAYROLL_READY' || normalized === 'VALIDATED' || normalized === 'CORRECTED_BY_HR') return 'Validated';
+  if (normalized === 'REJECTED') return 'Rejected';
+  return 'Pending';
 }
 
 function actionDotsIcon() {
@@ -450,7 +522,7 @@ async function loadAttRecords() {
   } catch (err) {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="11" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -478,7 +550,7 @@ function renderAttRecords() {
   const tbody = document.getElementById('att-records-tbody');
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="att-empty">No attendance records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
     return;
   }
 
@@ -486,15 +558,15 @@ function renderAttRecords() {
     const isSummary = Object.prototype.hasOwnProperty.call(record, 'regular_minutes');
     const attendanceId = record.attendance_id || '';
     const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out);
-    const overtime = isSummary ? `${(Number(record.overtime_minutes || 0) / 60).toFixed(1)}h` : `${Number(record.overtime_hours || 0).toFixed(1)}h`;
-    const status = record.attendance_status || record.status;
-    const verification = normalizeValidationStatus(record.verification_status);
+    const summary = attendanceSummary(record);
+    const primaryStatus = primaryAttendanceStatus(record);
+    const verification = validationLabel(record.verification_status);
     const payrollReady = isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready';
     const actions = isHr() && attendanceId
       ? `<div class="att-row-menu">
            <button class="att-menu-trigger action-dots-button" onclick="toggleAttendanceActionMenu(event, ${Number(attendanceId)})" aria-label="Attendance actions">${actionDotsIcon()}</button>
            <div class="att-menu-panel" id="att-menu-${Number(attendanceId)}">
-             <button onclick="openAttendanceDetail(${Number(attendanceId)})"><span>View</span> View</button>
+             <button onclick="openAttendanceDetail(${Number(attendanceId)})"><span>View</span> View Details</button>
              <button onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')"><span class="status-ok">✓</span> Validate</button>
              <button onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')"><span class="status-bad">×</span> Reject</button>
              <button onclick="openOverrideModal(${Number(attendanceId)})"><span>Edit</span> Correct</button>
@@ -509,10 +581,12 @@ function renderAttRecords() {
       <td><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<br><small>${esc(record.employee_code)}</small>` : ''}</td>
       <td>${esc(record.department || '-')}</td>
       <td>${esc(formatDate(record.attendance_date || record.date))}</td>
-      <td>${esc(record.time_in || '-')}</td>
-      <td>${esc(record.time_out || '-')}</td>
+      <td>${esc(record.time_in || '-')} - ${esc(record.time_out || '-')}</td>
       <td>${esc(hours)}</td>
-      <td>${badge(status)}</td>
+      <td class="att-summary-cell" title="${esc(summary.title)}">
+        ${attendanceBadge(primaryStatus)}
+        <span class="att-summary-text">${esc(summary.text)}</span>
+      </td>
       <td>${badge(verification)}</td>
       <td>${badge(payrollReady)}</td>
       <td>${actions}</td>
@@ -590,7 +664,7 @@ function bulkCorrectAttendance() {
 
 function exportAttendanceRecords() {
   if (!ATT_RECORDS.length) return alert('No attendance records to export.');
-  const headers = ['Employee', 'Department', 'Date', 'Time In', 'Time Out', 'Hours Worked', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
+  const headers = ['Employee', 'Department', 'Date', 'Time In', 'Time Out', 'Hours Worked', 'Late Minutes', 'Undertime Minutes', 'Overtime Minutes', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
   const rows = ATT_RECORDS.map(record => [
     record.employee_name || 'You',
     record.department || '',
@@ -598,6 +672,9 @@ function exportAttendanceRecords() {
     record.time_in || '',
     record.time_out || '',
     Object.prototype.hasOwnProperty.call(record, 'regular_minutes') ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out),
+    minuteValue(record, 'summary_late_minutes', 'late_minutes'),
+    minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes'),
+    minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes'),
     record.attendance_status || record.status || '',
     normalizeValidationStatus(record.verification_status),
     isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready'
@@ -624,6 +701,9 @@ function openAttendanceDetail(attendanceId) {
   const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
     ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
     : calculateHours(record.time_in, record.time_out);
+  const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
+  const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
+  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
   content.innerHTML = `
     <section>
       <h4>Employee Information</h4>
@@ -637,7 +717,9 @@ function openAttendanceDetail(attendanceId) {
       <table><tbody>
         <tr><th>Date</th><td>${esc(formatDate(record.attendance_date || record.date))}</td><th>Hours Worked</th><td>${esc(hours)}</td></tr>
         <tr><th>Time In</th><td>${esc(record.time_in || '-')}</td><th>Time Out</th><td>${esc(record.time_out || '-')}</td></tr>
-        <tr><th>Status</th><td>${badge(record.attendance_status || record.status)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
+        <tr><th>Attendance Status</th><td>${attendanceFlagBadges(record)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
+        <tr><th>Late Minutes</th><td>${esc(formatMinutes(lateMinutes))}</td><th>Undertime Minutes</th><td>${esc(formatMinutes(undertimeMinutes))}</td></tr>
+        <tr><th>Overtime Minutes</th><td>${esc(formatMinutes(overtimeMinutes))}</td><th></th><td></td></tr>
       </tbody></table>
     </section>
     <section>
@@ -1200,35 +1282,101 @@ async function loadAttendancePolicies() {
       throw new Error(data.error || 'Failed to load attendance policies.');
     }
     const data = await res.json();
-    document.getElementById('policy-work-schedule').value = data.work_schedule || '08:00-17:00';
+    setPolicyValue('policy-effective-date', new Date().toISOString().slice(0, 10));
+    setPolicyValue('policy-work-start-time', data.work_start_time || '08:00');
+    setPolicyValue('policy-work-end-time', data.work_end_time || '17:00');
+    setPolicyValue('policy-break-start-time', data.break_start_time || '12:00');
+    setPolicyValue('policy-break-end-time', data.break_end_time || '13:00');
+    setPolicyValue('policy-standard-work-hours', data.standard_work_hours ?? 8);
     document.getElementById('policy-grace-period').value = data.grace_period_minutes ?? 10;
+    setPolicyValue('policy-enable-late', String(data.enable_late_tracking ?? true));
+    setPolicyValue('policy-late-threshold', data.late_threshold_minutes ?? 0);
+    setPolicyValue('policy-count-late-payroll', String(data.count_late_for_payroll ?? true));
+    setPolicyValue('policy-enable-undertime', String(data.enable_undertime_tracking ?? true));
+    setPolicyValue('policy-count-undertime-payroll', String(data.count_undertime_for_payroll ?? true));
+    setPolicyValue('policy-enable-half-day', String(data.enable_half_day_rule ?? true));
+    setPolicyValue('policy-half-day-threshold', data.half_day_threshold_hours ?? 4);
     document.getElementById('policy-duplicate-window').value = data.duplicate_scan_window_seconds ?? 60;
     document.getElementById('policy-hr-validation').value = data.hr_validation_required ? '1' : '0';
-    document.getElementById('policy-overtime-threshold').value = data.overtime_threshold_hours ?? 8;
+    setPolicyValue('policy-auto-payroll-ready', String(data.auto_payroll_ready ?? false));
+    setPolicyValue('policy-validation-expiration', data.validation_expiration_days ?? 3);
+    setPolicyValue('policy-enable-overtime', String(data.enable_overtime ?? true));
+    setPolicyValue('policy-overtime-threshold-minutes', data.overtime_threshold_minutes ?? 480);
+    setPolicyValue('policy-overtime-approval', String(data.overtime_approval_required ?? true));
+    setPolicyValue('policy-minimum-overtime', data.minimum_overtime_minutes ?? 30);
     document.getElementById('policy-missing-timeout').value = data.missing_timeout_handling || 'Needs Review';
-    document.getElementById('policy-payroll-ready').value = data.payroll_ready_rules || 'Validated attendance only';
-    setText('attendance-policy-status', data.updated_at ? `Last updated ${formatDateTime(data.updated_at)}` : 'Default policy loaded.');
+    setPolicyValue('policy-payroll-source', data.payroll_attendance_source || 'payroll_ready');
+    setPolicyValue('policy-enable-holiday', String(data.enable_holiday_rules ?? false));
+    setPolicyValue('policy-regular-holiday', data.regular_holiday_multiplier ?? 2);
+    setPolicyValue('policy-special-holiday', data.special_holiday_multiplier ?? 1.3);
+    setPolicyValue('policy-rest-day', data.rest_day_multiplier ?? 1.3);
+    setPolicyValue('policy-holiday-overtime', data.holiday_overtime_multiplier ?? 1.3);
+    setPolicyValue('policy-allow-manual', String(data.allow_manual_attendance ?? true));
+    setPolicyValue('policy-allow-hr-correction', String(data.allow_hr_correction ?? true));
+    setPolicyValue('policy-allow-manager-cert', String(data.allow_manager_certification ?? false));
+    setPolicyValue('policy-device-failure', data.device_failure_handling || 'HR Correction Required');
+    setText('attendance-policy-status', 'Active attendance policy loaded.');
   } catch (err) {
     setText('attendance-policy-status', err.message);
   }
 }
 
+function setPolicyValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value ?? '';
+}
+
+function switchAttendancePolicyTab(tabName, trigger) {
+  document.querySelectorAll('[id^="policy-tab-"]').forEach(panel => {
+    panel.style.display = panel.id === `policy-tab-${tabName}` ? 'block' : 'none';
+  });
+  document.querySelectorAll('[data-policy-tab]').forEach(tab => tab.classList.remove('active'));
+  trigger?.classList?.add('active');
+}
+
 async function saveAttendancePolicies(event) {
   event?.preventDefault?.();
   const body = {
-    work_schedule: document.getElementById('policy-work-schedule')?.value,
+    effective_date: document.getElementById('policy-effective-date')?.value,
+    work_start_time: document.getElementById('policy-work-start-time')?.value,
+    work_end_time: document.getElementById('policy-work-end-time')?.value,
+    break_start_time: document.getElementById('policy-break-start-time')?.value,
+    break_end_time: document.getElementById('policy-break-end-time')?.value,
+    standard_work_hours: document.getElementById('policy-standard-work-hours')?.value,
     grace_period_minutes: Number(document.getElementById('policy-grace-period')?.value || 0),
+    enable_late_tracking: document.getElementById('policy-enable-late')?.value,
+    late_threshold_minutes: document.getElementById('policy-late-threshold')?.value,
+    count_late_for_payroll: document.getElementById('policy-count-late-payroll')?.value,
+    enable_undertime_tracking: document.getElementById('policy-enable-undertime')?.value,
+    count_undertime_for_payroll: document.getElementById('policy-count-undertime-payroll')?.value,
+    enable_half_day_rule: document.getElementById('policy-enable-half-day')?.value,
+    half_day_threshold_hours: document.getElementById('policy-half-day-threshold')?.value,
     duplicate_scan_window_seconds: Number(document.getElementById('policy-duplicate-window')?.value || 0),
     hr_validation_required: document.getElementById('policy-hr-validation')?.value === '1',
-    overtime_threshold_hours: Number(document.getElementById('policy-overtime-threshold')?.value || 0),
+    require_hr_validation: document.getElementById('policy-hr-validation')?.value === '1',
+    auto_payroll_ready: document.getElementById('policy-auto-payroll-ready')?.value,
+    validation_expiration_days: document.getElementById('policy-validation-expiration')?.value,
+    enable_overtime: document.getElementById('policy-enable-overtime')?.value,
+    overtime_threshold_minutes: document.getElementById('policy-overtime-threshold-minutes')?.value,
+    overtime_approval_required: document.getElementById('policy-overtime-approval')?.value,
+    minimum_overtime_minutes: document.getElementById('policy-minimum-overtime')?.value,
     missing_timeout_handling: document.getElementById('policy-missing-timeout')?.value,
-    payroll_ready_rules: document.getElementById('policy-payroll-ready')?.value,
+    payroll_attendance_source: document.getElementById('policy-payroll-source')?.value,
+    enable_holiday_rules: document.getElementById('policy-enable-holiday')?.value,
+    regular_holiday_multiplier: document.getElementById('policy-regular-holiday')?.value,
+    special_holiday_multiplier: document.getElementById('policy-special-holiday')?.value,
+    rest_day_multiplier: document.getElementById('policy-rest-day')?.value,
+    holiday_overtime_multiplier: document.getElementById('policy-holiday-overtime')?.value,
+    allow_manual_attendance: document.getElementById('policy-allow-manual')?.value,
+    allow_hr_correction: document.getElementById('policy-allow-hr-correction')?.value,
+    allow_manager_certification: document.getElementById('policy-allow-manager-cert')?.value,
+    device_failure_handling: document.getElementById('policy-device-failure')?.value,
   };
   try {
     const res = await apiFetch('/api/attendance/policies', { method: 'PUT', body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to save attendance policies.');
-    setText('attendance-policy-status', data.message || 'Attendance policies saved.');
+    setText('attendance-policy-status', `${data.message || 'Attendance policies saved.'} ${data.changes?.length || 0} change(s) recorded.`);
   } catch (err) {
     setText('attendance-policy-status', err.message);
   }
@@ -1280,4 +1428,5 @@ window.anchorPendingIntegrity = anchorPendingIntegrity;
 window.loadAuditLog = loadAuditLog;
 window.loadAttendancePolicies = loadAttendancePolicies;
 window.saveAttendancePolicies = saveAttendancePolicies;
+window.switchAttendancePolicyTab = switchAttendancePolicyTab;
 document.addEventListener('click', closeAttendanceActionMenus);

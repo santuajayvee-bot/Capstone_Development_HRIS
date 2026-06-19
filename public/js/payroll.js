@@ -396,7 +396,6 @@ function renderPayroll() {
 
   grid.innerHTML = table;
   renderPayrollRecords(currentSalaryCalculationRecords || []);
-  renderPayslipManagement(currentSalaryCalculationRecords || []);
 }
 
 function renderPayrollRecords(records) {
@@ -568,12 +567,10 @@ function renderSalaryCalculations(records) {
   if (!grid) return;
 
   if (records.length === 0) {
-    renderPayrollRecords([]);
-    renderPayslipManagement([]);
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
         <div style="font-size: 14px; color: var(--muted);">
-          📋 No salary calculation records found.
+          No salary calculation records found.
         </div>
       </div>
     `;
@@ -581,29 +578,24 @@ function renderSalaryCalculations(records) {
   }
 
   const table = `
-    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <table class="payroll-erp-table">
       <thead>
-        <tr style="border-bottom: 2px solid var(--border); background: var(--card);">
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Date</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Employee</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Code</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Department</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Agency</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Wage Type</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Calculation Details</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Base Rate</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Gross Pay</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Deductions</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--text);">Net Pay</th>
-          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Status</th>
+        <tr>
+          <th>Payroll ID</th>
+          <th>Employee</th>
+          <th>Period</th>
+          <th>Department</th>
+          <th>Wage Type</th>
+          <th>Output</th>
+          <th class="text-right">Gross Pay</th>
+          <th class="text-right">Deductions</th>
+          <th class="text-right">Net Pay</th>
+          <th>Status</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         ${records.map(r => {
-          const statusColor = r.status === 'Approved' ? 'var(--green)' : 
-                             r.status === 'Submitted' ? 'var(--yellow)' : 'var(--muted)';
-          const statusBg = r.status === 'Approved' ? 'rgba(34, 211, 165, 0.2)' :
-                          r.status === 'Submitted' ? 'rgba(245, 166, 35, 0.2)' : 'rgba(128, 128, 128, 0.2)';
           const calcDate = new Date(r.calculation_date).toLocaleDateString('en-US', { 
             year: 'numeric', month: 'short', day: 'numeric' 
           });
@@ -632,25 +624,19 @@ function renderSalaryCalculations(records) {
           }
           
           return `
-            <tr style="border-bottom: 1px solid var(--border); cursor: pointer; transition: background-color 0.2s;" 
-                onmouseover="this.style.background='var(--card)'" 
-                onmouseout="this.style.background='transparent'"
-                onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">
-              <td style="padding: 12px; color: var(--text); font-size: 12px;">${calcDate}</td>
-              <td style="padding: 12px; color: var(--text); font-weight: 500;">${r.employee_name}</td>
-              <td style="padding: 12px; color: var(--muted); font-family: 'Courier New', monospace; font-size: 12px;">${r.employee_code}</td>
-              <td style="padding: 12px; color: var(--muted);">${r.department || 'N/A'}</td>
-              <td style="padding: 12px; color: var(--muted);">${r.agency_name || '-'}</td>
-              <td style="padding: 12px; color: var(--text);">${r.wage_type || 'N/A'}</td>
-              <td style="padding: 12px; color: var(--accent); font-size: 12px; font-weight: 500;">${calcDetails}</td>
-              <td style="padding: 12px; text-align: right; color: var(--text);">₱${parseFloat(r.base_rate || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--text); font-weight: 600;">₱${parseFloat(r.gross_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--red);">₱${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--accent); font-weight: 700;">₱${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: center;">
-                <span style="background: ${statusBg}; color: ${statusColor}; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
-                  ${r.status || 'Draft'}
-                </span>
+            <tr>
+              <td>CALC-${String(r.id).padStart(5, '0')}</td>
+              <td>${r.employee_name}<br><span class="muted-small">${r.employee_code}</span></td>
+              <td>${calcDate}</td>
+              <td>${r.department || '-'}</td>
+              <td>${r.wage_type || '-'}</td>
+              <td>${calcDetails}</td>
+              <td class="text-right">${money(r.gross_pay)}</td>
+              <td class="text-right">${money(r.total_deductions)}</td>
+              <td class="text-right payroll-net">${money(r.net_pay)}</td>
+              <td>${payrollBadge(r.status || 'Draft')}</td>
+              <td>
+                <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">View</button>
               </td>
             </tr>
           `;
@@ -660,6 +646,26 @@ function renderSalaryCalculations(records) {
   `;
 
   grid.innerHTML = table;
+}
+
+async function generatePayslipsFromRecords() {
+  const monthYear = document.getElementById('payroll-filter-month')?.value
+    || currentMonthYear
+    || new Date().toISOString().slice(0, 7);
+  if (!monthYear) return alert('Select a payroll period first.');
+  try {
+    const response = await apiFetch('/api/payroll/convert-calculations-to-payslips', {
+      method: 'POST',
+      body: JSON.stringify({ month_year: monthYear })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || data.details || 'Failed to generate payslips.');
+    alert(data.message || `Payslips generated for ${monthYear}.`);
+    loadSalaryCalculations();
+    loadPayrollRecords(monthYear);
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 // Show calculation breakdown in modal
@@ -874,6 +880,96 @@ function payrollBadge(status) {
   return `<span class="badge badge-${color}">${normalized}</span>`;
 }
 
+function showCalculationBreakdown(record) {
+  const number = value => parseFloat(value || 0);
+  const fmt = value => money(number(value));
+  const modalId = 'calc-breakdown-modal';
+  document.getElementById(modalId)?.remove();
+
+  const calculationDate = record.calculation_date
+    ? new Date(record.calculation_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    : '-';
+  const calcNo = `CALC-${String(record.id || '').padStart(5, '0')}`;
+  const totalAllowances = number(record.total_allowances)
+    || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
+  const totalDeductions = number(record.total_deductions);
+  const basePay = Math.max(0, number(record.gross_pay) - totalAllowances);
+  const workOutput = record.wage_type === 'Hourly'
+    ? `${number(record.hours_worked).toLocaleString('en-US')} hours`
+    : record.wage_type === 'Daily'
+      ? `${number(record.days_worked).toLocaleString('en-US')} days`
+      : record.wage_type === 'Per-Trip'
+        ? `${number(record.quantity).toLocaleString('en-US')} trips`
+        : record.wage_type === 'Per-Piece'
+          ? `${number(record.quantity).toLocaleString('en-US')} pieces`
+          : '-';
+
+  const deductionRows = [
+    ['SSS', number(record.sss_deduction)],
+    ['Pag-IBIG', number(record.pagibig_deduction)],
+    ['PhilHealth', number(record.philhealth_deduction)]
+  ].filter(([, amount]) => amount > 0);
+  if (!deductionRows.length && totalDeductions > 0) {
+    deductionRows.push(['Configured Deductions', totalDeductions]);
+  }
+
+  const row = (label, value, className = '') => `
+    <tr class="${className}">
+      <td>${label}</td>
+      <td class="text-right">${value}</td>
+    </tr>
+  `;
+
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'erp-modal-backdrop';
+  modal.innerHTML = `
+    <div class="erp-modal payroll-breakdown-modal" role="dialog" aria-modal="true" aria-labelledby="calc-breakdown-title">
+      <div class="erp-modal-head">
+        <div>
+          <h2 id="calc-breakdown-title">Salary Calculation</h2>
+          <p>${calcNo} · ${calculationDate}</p>
+        </div>
+        <button class="erp-modal-close" type="button" aria-label="Close" onclick="document.getElementById('${modalId}')?.remove()">×</button>
+      </div>
+
+      <div class="payroll-breakdown-grid">
+        <label>Employee<input value="${record.employee_name || '-'}" readonly /></label>
+        <label>Employee ID<input value="${record.employee_code || '-'}" readonly /></label>
+        <label>Department<input value="${record.department || '-'}" readonly /></label>
+        <label>Status<input value="${record.status || 'Draft'}" readonly /></label>
+        <label>Wage Type<input value="${record.wage_type || '-'}" readonly /></label>
+        <label>Base Rate<input value="${fmt(record.base_rate)}" readonly /></label>
+        <label>Work Output<input value="${workOutput}" readonly /></label>
+        <label>Payroll Date<input value="${calculationDate}" readonly /></label>
+      </div>
+
+      <div class="payroll-breakdown-section">
+        <h3>Calculation Summary</h3>
+        <table class="payroll-breakdown-table">
+          <tbody>
+            ${row('Base Pay', fmt(basePay))}
+            ${row('Allowances', fmt(totalAllowances))}
+            ${row('Gross Pay', fmt(record.gross_pay), 'is-positive')}
+            ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
+            ${row('Total Deductions', `- ${fmt(totalDeductions)}`, 'is-deduction')}
+            ${row('Net Pay', fmt(record.net_pay), 'is-net')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="payroll-breakdown-actions">
+        <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
+        <button class="btn btn-primary" type="button" onclick="exportPayrollReport('employee','pdf')">Generate Payslip</button>
+      </div>
+    </div>
+  `;
+  modal.addEventListener('click', event => {
+    if (event.target.id === modalId) modal.remove();
+  });
+  document.body.appendChild(modal);
+}
+
 function switchPayrollTab(tab) {
   document.querySelectorAll('.payroll-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.payrollTab === tab);
@@ -891,7 +987,7 @@ function switchPayrollTab(tab) {
     loadPayrollAudit();
     renderPayrollReportLibrary();
   }
-  if (tab === 'records' || tab === 'payslips') loadSalaryCalculations();
+  if (tab === 'records') loadSalaryCalculations();
 }
 
 async function loadPieceRateConfig() {
@@ -1982,6 +2078,7 @@ window.runPayroll = runPayroll;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
+window.generatePayslipsFromRecords = generatePayslipsFromRecords;
 window.switchPayrollTab = switchPayrollTab;
 window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;

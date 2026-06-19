@@ -218,10 +218,7 @@ function canAccess(pageId) {
 }
 
 function logout() {
-  if (window.attendanceRealtimeSocket?.disconnect) {
-    window.attendanceRealtimeSocket.disconnect();
-    window.attendanceRealtimeSocket = null;
-  }
+  if (typeof stopAttendanceAjaxRefresh === 'function') stopAttendanceAjaxRefresh();
   clearAuth();
   closeMobileSidebar();
   document.getElementById('app').style.display = 'none';

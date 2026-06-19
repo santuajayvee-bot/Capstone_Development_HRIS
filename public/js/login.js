@@ -33,7 +33,9 @@ async function doLogin() {
     if (!res.ok) {
       const message = data.message || data.error || 'Login failed.';
       errEl.textContent = message;
-      errEl.className = res.status === 423 ? 'login-err is-warning' : 'login-err';
+      errEl.className = (res.status === 423 || Number(data.remaining_attempts || 0) <= 2)
+        ? 'login-err is-warning'
+        : 'login-err';
       errEl.style.display = 'block';
       return;
     }

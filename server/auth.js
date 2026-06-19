@@ -23,6 +23,26 @@ const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '8h';
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
 
+function lockoutResponse(res, minutesLeft) {
+  return res.status(423).json({
+    error: `Account locked. Try again in ${minutesLeft} minute(s) or contact your administrator.`,
+    locked: true,
+    minutes_left: minutesLeft
+  });
+}
+
+function invalidPasswordResponse(res, attempts) {
+  const remaining = Math.max(MAX_LOGIN_ATTEMPTS - attempts, 0);
+  return res.status(401).json({
+    error: remaining > 0
+      ? `Invalid username or password. ${remaining} attempt(s) remaining before lockout.`
+      : 'Invalid username or password.',
+    attempts,
+    remaining_attempts: remaining,
+    max_attempts: MAX_LOGIN_ATTEMPTS
+  });
+}
+
 async function login(req, res) {
   const { username, password } = req.body;
 
@@ -55,9 +75,7 @@ async function login(req, res) {
         if (locked_until && new Date(locked_until) > new Date()) {
           const minutesLeft = Math.ceil((new Date(locked_until) - new Date()) / 60000);
           console.log(`\n🔒 [SECURITY] ACCOUNT_LOCKED: User '${user.username}' — ${minutesLeft} min remaining`);
-          return res.status(423).json({
-            error: `Account locked due to ${MAX_LOGIN_ATTEMPTS} failed attempts. Try again in ${minutesLeft} minute(s).`,
-          });
+          return lockoutResponse(res, minutesLeft);
         }
       }
     } catch (lockErr) {
@@ -88,13 +106,18 @@ async function login(req, res) {
           );
           console.log(`\n🔒 [SECURITY] ACCOUNT_LOCKED: User '${user.username}' locked after ${MAX_LOGIN_ATTEMPTS} failed attempts`);
           return res.status(423).json({
-            error: `Account locked after ${MAX_LOGIN_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_DURATION_MINUTES} minutes.`,
+            error: `Account locked after ${MAX_LOGIN_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_DURATION_MINUTES} minutes or contact your administrator.`,
+            locked: true,
+            minutes_left: LOCKOUT_DURATION_MINUTES,
+            attempts,
+            max_attempts: MAX_LOGIN_ATTEMPTS
           });
         } else {
           await pool.execute(
             'UPDATE users SET login_attempts = ? WHERE id = ?', [attempts, user.id]
           );
           console.log(`\n⚠️  [AUTH] Failed login attempt ${attempts}/${MAX_LOGIN_ATTEMPTS} for user '${user.username}'`);
+          return invalidPasswordResponse(res, attempts);
         }
       } catch (lockErr) {
         // Columns may not exist — continue

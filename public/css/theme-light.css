@@ -31,6 +31,39 @@
   color-scheme: light;
 }
 
+input,
+select,
+textarea,
+button,
+.btn,
+.card,
+.table-wrap,
+.stat-card,
+.modal-content,
+.lgsv-modal,
+.profile-page,
+.profile-field,
+.profile-record,
+.profile-photo,
+.profile-doc-card,
+.profile-family-surface,
+.profile-family-dialog,
+.employee-form-card,
+.employee-form-back,
+.employee-form-shell .form-group input,
+.employee-form-shell .form-group select,
+.employee-id-controls select,
+.employee-id-controls input,
+.employee-lifecycle-card,
+.employee-agency-block,
+.employee-wage-panel,
+.document-upload-box,
+.dropzone,
+.draft-restore-banner,
+.realtime-toast {
+  border-radius: 0 !important;
+}
+
 html,
 body,
 #app,
@@ -783,6 +816,25 @@ tr:hover td,
   border-color: #fecaca !important;
 }
 
+.badge-info {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
+.badge-neutral,
+#page-attendance .badge-neutral {
+  background: #f8fafc !important;
+  color: #475569 !important;
+  border-color: #cbd5e1 !important;
+}
+
+#page-attendance .badge-yellow {
+  background: #fffbeb !important;
+  color: #92400e !important;
+  border-color: #fde68a !important;
+}
+
 .att-menu-panel button {
   color: #1f2937 !important;
 }
@@ -826,4 +878,445 @@ tr:hover td,
   color: #1f2937 !important;
   border-color: var(--border) !important;
   box-shadow: 0 12px 30px rgba(16, 24, 40, .12) !important;
+}
+
+/* Employee registration form: replace legacy dark intake panel with the system light/red theme. */
+.employee-form-shell {
+  --form-panel: #ffffff !important;
+  --form-panel-soft: #f8fafc !important;
+  --form-line: #d9e1ec !important;
+  --form-muted: #667085 !important;
+  --form-accent: #e73737 !important;
+  --form-accent-ink: #ffffff !important;
+  color: #101828 !important;
+}
+
+.employee-form-card {
+  background: #ffffff !important;
+  border: 1px solid #d9e1ec !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  color: #101828 !important;
+}
+
+.employee-form-hero {
+  background: #ffffff !important;
+  border-bottom: 1px solid #d9e1ec !important;
+  align-items: center !important;
+}
+
+.employee-form-kicker {
+  color: #b91c1c !important;
+  font-family: Poppins, Arial, sans-serif !important;
+  font-weight: 500 !important;
+  letter-spacing: .08em !important;
+}
+
+.employee-form-title,
+.employee-form-block-title {
+  color: #111827 !important;
+  font-family: Poppins, Arial, sans-serif !important;
+  font-weight: 500 !important;
+}
+
+.employee-form-sub,
+.employee-id-hint,
+#emp-photo-status,
+.employee-form-note {
+  color: #667085 !important;
+}
+
+.employee-form-back {
+  background: #ffffff !important;
+  border: 1px solid #cfd8e6 !important;
+  color: #344054 !important;
+  border-radius: 0 !important;
+  font-weight: 500 !important;
+}
+
+.employee-form-back:hover {
+  border-color: #e73737 !important;
+  color: #b91c1c !important;
+  background: #fff7f7 !important;
+}
+
+.employee-form-tabs {
+  background: #f8fafc !important;
+  border-bottom: 1px solid #d9e1ec !important;
+}
+
+.employee-form-tabs .form-tab {
+  color: #475467 !important;
+  font-family: Poppins, Arial, sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  min-height: 44px !important;
+  padding: 0 16px !important;
+}
+
+.employee-form-tabs .form-tab.active,
+.employee-form-tabs .form-tab:hover {
+  background: #e73737 !important;
+  color: #ffffff !important;
+}
+
+.employee-form-section {
+  background: #ffffff !important;
+}
+
+.employee-form-block {
+  border-bottom: 1px solid #e6ebf2 !important;
+}
+
+.employee-form-shell .form-group label {
+  color: #475467 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+.employee-form-shell .form-group input,
+.employee-form-shell .form-group select,
+.employee-id-controls select,
+.employee-id-controls input {
+  background: #ffffff !important;
+  border: 1px solid #cfd8e6 !important;
+  color: #101828 !important;
+  border-radius: 0 !important;
+  min-height: 42px !important;
+  box-shadow: none !important;
+}
+
+.employee-form-shell .form-group input::placeholder,
+.employee-id-controls input::placeholder {
+  color: #98a2b3 !important;
+}
+
+.employee-form-shell .form-group input:focus,
+.employee-form-shell .form-group select:focus,
+.employee-id-controls select:focus,
+.employee-id-controls input:focus {
+  border-color: #e73737 !important;
+  box-shadow: 0 0 0 3px rgba(231, 55, 55, .12) !important;
+  outline: none !important;
+}
+
+.employee-form-shell .form-group input[type="date"] {
+  color-scheme: light !important;
+  background-color: #ffffff !important;
+  background-image: linear-gradient(90deg, transparent 0, transparent calc(100% - 44px), #fff1f1 calc(100% - 44px), #fff1f1 100%) !important;
+}
+
+.employee-form-shell .form-group input[type="date"]::-webkit-datetime-edit {
+  color: #101828 !important;
+}
+
+.employee-form-shell .form-group input[type="date"]::-webkit-datetime-edit-text {
+  color: #667085 !important;
+}
+
+.employee-form-shell .form-group input[type="date"]::-webkit-calendar-picker-indicator {
+  background: transparent !important;
+  filter: invert(33%) sepia(93%) saturate(1837%) hue-rotate(338deg) brightness(95%) contrast(91%) !important;
+}
+
+.employee-form-section [style*="background:#101720"],
+.employee-form-section [style*="background: #101720"],
+.employee-form-section [style*="background:#111922"],
+.employee-form-section [style*="background: #111922"],
+#documents-list {
+  background: #f8fafc !important;
+  border-color: #cfd8e6 !important;
+  color: #475467 !important;
+}
+
+.employee-lifecycle-card,
+.employee-agency-block,
+.employee-wage-panel,
+.document-upload-box {
+  background: #ffffff !important;
+  border: 1px solid #d9e1ec !important;
+  border-radius: 0 !important;
+  color: #101828 !important;
+}
+
+.employee-inline-check {
+  color: #344054 !important;
+}
+
+.dropzone {
+  background: #f8fafc !important;
+  border-color: #cfd8e6 !important;
+  color: #667085 !important;
+}
+
+.register-actions {
+  background: #ffffff !important;
+  border-top: 1px solid #d9e1ec !important;
+}
+
+input,
+select,
+textarea,
+div,
+button,
+.btn,
+.form-control,
+.form-select,
+.input-group-text,
+.dropdown-menu,
+.modal-content,
+.card,
+.table-wrap,
+.tab,
+.tabs,
+.form-tab,
+.form-tabs,
+.leave-tab,
+.leave-tabs,
+.profile-tab,
+.profile-tabs,
+.att-tab,
+.attendance-tab,
+.payroll-tab,
+.report-tab,
+.profile-field,
+.profile-record,
+.profile-doc-card,
+.employee-form-card {
+  border-radius: 0 !important;
+}
+
+#attendance-policy-form > .tabs {
+  display: flex !important;
+  gap: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+  margin: 0 0 16px !important;
+  background: #ffffff !important;
+  border: 1px solid #d9e1ec !important;
+  border-bottom: 0 !important;
+}
+
+#attendance-policy-form > .tabs .tab {
+  flex: 1 1 auto !important;
+  min-height: 40px !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-right: 1px solid #d9e1ec !important;
+  background: #ffffff !important;
+  color: #475467 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: none !important;
+}
+
+#attendance-policy-form > .tabs .tab:last-child {
+  border-right: 0 !important;
+}
+
+#attendance-policy-form > .tabs .tab:hover {
+  background: #fff7f7 !important;
+  color: #b91c1c !important;
+}
+
+#attendance-policy-form > .tabs .tab.active {
+  background: #e73737 !important;
+  color: #ffffff !important;
+  border-color: #e73737 !important;
+}
+
+/* Reports module: compact ERP report library */
+#page-reports .page-header {
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#page-reports .report-library-panel {
+  overflow: visible !important;
+  margin-bottom: 16px;
+  border-radius: 0 !important;
+  background: #ffffff !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+}
+
+#page-reports .report-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.3fr) minmax(170px, 1.3fr) repeat(4, minmax(140px, 1fr));
+  gap: 14px;
+  align-items: end;
+  padding: 16px;
+  overflow: visible !important;
+}
+
+#page-reports .report-filter-grid .form-group {
+  min-width: 0;
+}
+
+#page-reports .report-filter-grid .form-group:nth-child(1),
+#page-reports .report-filter-grid .form-group:nth-child(6) {
+  grid-column: span 2;
+}
+
+#page-reports .report-filter-grid label {
+  display: block;
+  margin-bottom: 6px;
+  color: #475467 !important;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+#page-reports .report-filter-grid input,
+#page-reports .report-filter-grid select,
+#page-reports .report-filter-grid .lgsv-date-trigger {
+  min-height: 42px;
+  width: 100%;
+  border-radius: 0 !important;
+  background: #ffffff !important;
+  color: #101828 !important;
+  font-weight: 400 !important;
+  box-shadow: none !important;
+}
+
+#page-reports .report-filter-grid .lgsv-date-field {
+  margin-top: 0;
+}
+
+#page-reports .report-filter-grid .lgsv-date-panel {
+  width: 216px;
+  border-radius: 0 !important;
+  z-index: 13000;
+}
+
+#page-reports .report-filter-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#page-reports .report-filter-actions .btn {
+  min-height: 42px;
+  border-radius: 0 !important;
+  white-space: nowrap;
+}
+
+#page-reports .table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#page-reports .table-toolbar h3 {
+  margin: 0;
+  color: #101828 !important;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+#page-reports .table-toolbar p {
+  margin: 4px 0 0;
+  color: #667085 !important;
+  font-size: 13px;
+}
+
+#page-reports .responsive-table {
+  overflow-x: auto;
+}
+
+#page-reports .report-library-table {
+  min-width: 1080px;
+  border-collapse: collapse;
+}
+
+#page-reports .report-library-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f2f4f7 !important;
+  color: #475467 !important;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+#page-reports .report-library-table th,
+#page-reports .report-library-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+#page-reports .report-library-table tbody tr:hover td {
+  background: #fff7f7 !important;
+}
+
+#page-reports .report-star {
+  width: 32px;
+  height: 32px;
+  border-radius: 0 !important;
+  font-size: 15px;
+}
+
+#page-reports .report-star.active {
+  color: #d92d20 !important;
+  border-color: #fda29b !important;
+  background: #fff1f1 !important;
+}
+
+#page-reports .badge-neutral {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid #eaecf0;
+  border-radius: 0 !important;
+  background: #f9fafb;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+#page-reports .pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+#page-reports .pagination-row .btn {
+  border-radius: 0 !important;
+}
+
+@media (max-width: 1180px) {
+  #page-reports .report-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  #page-reports .report-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  #page-reports .report-filter-grid .form-group:nth-child(1),
+  #page-reports .report-filter-grid .form-group:nth-child(6) {
+    grid-column: auto;
+  }
 }

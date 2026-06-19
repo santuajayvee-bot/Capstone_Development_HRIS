@@ -13,6 +13,11 @@ const {
 } = require('./attendance-service');
 const { encryptAES256 } = require('./crypto');
 const { emitAttendanceCreated } = require('./realtime');
+const {
+  getActiveAttendancePolicy,
+  getAttendanceStatusForTimeIn,
+  getInitialVerificationStatus,
+} = require('./attendance-policy-engine');
 
 const router = express.Router();
 
@@ -85,6 +90,9 @@ async function ensureBiometricAttendanceSchema() {
       time_in TIME NULL,
       time_out TIME NULL,
       overtime_hours DECIMAL(10,2) DEFAULT 0.00,
+      late_minutes INT NOT NULL DEFAULT 0,
+      undertime_minutes INT NOT NULL DEFAULT 0,
+      overtime_minutes INT NOT NULL DEFAULT 0,
       absences TINYINT(1) DEFAULT 0,
       status ENUM('Present','Late','Absent','On Leave','Half Day','Incomplete','Needs Review') NOT NULL DEFAULT 'Present',
       device_fingerprint VARCHAR(255) NULL,
@@ -185,6 +193,7 @@ async function ensureBiometricAttendanceSchema() {
       regular_minutes INT NOT NULL DEFAULT 0,
       overtime_minutes INT NOT NULL DEFAULT 0,
       late_minutes INT NOT NULL DEFAULT 0,
+      undertime_minutes INT NOT NULL DEFAULT 0,
       attendance_status VARCHAR(40) NOT NULL,
       verification_status VARCHAR(40) NOT NULL,
       payroll_eligible TINYINT(1) NOT NULL DEFAULT 0,
@@ -278,19 +287,6 @@ async function ensureBiometricAttendanceSchema() {
     `);
   } catch (err) {
     console.warn('[biometric/schema] attendance_log enum check:', err.message);
-  }
-}
-
-async function getAttendancePolicyNumber(key, fallback) {
-  try {
-    const [rows] = await pool.execute(
-      'SELECT setting_value FROM attendance_policy_settings WHERE setting_key = ? LIMIT 1',
-      [key]
-    );
-    const value = Number(rows[0]?.setting_value);
-    return Number.isFinite(value) && value >= 0 ? value : fallback;
-  } catch (_) {
-    return fallback;
   }
 }
 
@@ -474,7 +470,8 @@ async function recordBiometricAttendance(req, res, options = {}) {
     }
     const mapping = mappings[0];
 
-    const duplicateWindowSeconds = Math.max(0, Math.floor(await getAttendancePolicyNumber('duplicate_scan_window_seconds', 60)));
+    const attendancePolicy = await getActiveAttendancePolicy(pool, scan.date);
+    const duplicateWindowSeconds = attendancePolicy.duplicate_scan_window_seconds;
     const [recent] = await pool.execute(
       `SELECT scan_event_id
          FROM biometric_scan_event
@@ -528,8 +525,8 @@ async function recordBiometricAttendance(req, res, options = {}) {
     }
 
     if (!record) {
-      const status = scanType === 'TIME_IN' ? (scan.hour >= 9 ? 'Late' : 'Present') : 'Incomplete';
-      const verificationStatus = scanType === 'TIME_OUT' ? 'NEEDS_REVIEW' : 'PENDING_VALIDATION';
+      const status = scanType === 'TIME_IN' ? getAttendanceStatusForTimeIn(scan.time, attendancePolicy) : 'Incomplete';
+      const verificationStatus = getInitialVerificationStatus(scanType, attendancePolicy, { missingTimeIn: scanType === 'TIME_OUT' });
       const [created] = await conn.execute(
         `INSERT INTO attendance_log
            (employee_id, date, time_in, time_out, status, biometric_user_hash,
@@ -555,15 +552,16 @@ async function recordBiometricAttendance(req, res, options = {}) {
         `UPDATE attendance_log
             SET time_in = ?, status = ?, biometric_user_hash = ?,
                 biometric_user_id_encrypted = ?, device_id = ?, source = 'BIOMETRIC_API',
-                verification_status = 'PENDING_VALIDATION',
+                verification_status = ?,
                 first_scan_at = COALESCE(first_scan_at, ?), last_scan_at = ?
           WHERE attendance_id = ?`,
         [
           scan.time,
-          scan.hour >= 9 ? 'Late' : 'Present',
+          getAttendanceStatusForTimeIn(scan.time, attendancePolicy),
           mapping.biometric_user_hash,
           mapping.biometric_user_id_encrypted,
           device.device_id,
+          getInitialVerificationStatus(scanType, attendancePolicy),
           scan.dateTime,
           scan.dateTime,
           attendanceId,
@@ -575,7 +573,7 @@ async function recordBiometricAttendance(req, res, options = {}) {
             SET time_out = ?, biometric_user_hash = COALESCE(biometric_user_hash, ?),
                 biometric_user_id_encrypted = COALESCE(biometric_user_id_encrypted, ?),
                 device_id = ?, source = 'BIOMETRIC_API',
-                verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE 'PENDING_VALIDATION' END,
+                verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE ? END,
                 status = CASE WHEN time_in IS NULL THEN 'Incomplete' ELSE status END,
                 last_scan_at = ?
           WHERE attendance_id = ?`,
@@ -584,6 +582,7 @@ async function recordBiometricAttendance(req, res, options = {}) {
           mapping.biometric_user_hash,
           mapping.biometric_user_id_encrypted,
           device.device_id,
+          getInitialVerificationStatus(scanType, attendancePolicy),
           scan.dateTime,
           attendanceId,
         ]

@@ -20,12 +20,20 @@ const {
   appendIntegrityEntry,
   getDeviceSecret,
   ingestBiometricEvents,
+  ensureAttendanceLogMetricColumns,
+  ensureAttendanceSummaryPolicyColumns,
   pullDeviceLogs,
   refreshSummary,
   sha256,
   timingSafeEqualText,
 } = require('./attendance-service');
 const { emitAttendanceCreated } = require('./realtime');
+const {
+  ensureAttendancePolicySettings,
+  getActiveAttendancePolicy,
+  getAttendanceStatusForTimeIn,
+  saveAttendancePolicyValues,
+} = require('./attendance-policy-engine');
 
 const router = express.Router();
 
@@ -66,38 +74,19 @@ function isDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+function requestBool(value, fallback = false) {
+  if (value === true || value === 1 || value === '1') return true;
+  if (value === false || value === 0 || value === '0') return false;
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['true', 'yes', 'on'].includes(text)) return true;
+  if (['false', 'no', 'off'].includes(text)) return false;
+  return fallback;
+}
+
 function requireReason(value) {
   const reason = cleanText(value, 500);
   if (reason.length < 8) throw new Error('A correction reason of at least 8 characters is required.');
   return reason;
-}
-
-let attendancePolicyTableReady = false;
-
-async function ensureAttendancePolicyTable() {
-  if (attendancePolicyTableReady) return;
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS attendance_policies (
-      id INT PRIMARY KEY DEFAULT 1,
-      work_schedule VARCHAR(50) NOT NULL DEFAULT '08:00-17:00',
-      grace_period_minutes INT NOT NULL DEFAULT 10,
-      duplicate_scan_window_seconds INT NOT NULL DEFAULT 60,
-      hr_validation_required TINYINT(1) NOT NULL DEFAULT 1,
-      overtime_threshold_hours DECIMAL(5,2) NOT NULL DEFAULT 8.00,
-      missing_timeout_handling VARCHAR(80) NOT NULL DEFAULT 'Needs Review',
-      payroll_ready_rules VARCHAR(120) NOT NULL DEFAULT 'Validated attendance only',
-      updated_by INT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `);
-  await pool.execute(`
-    INSERT IGNORE INTO attendance_policies
-      (id, work_schedule, grace_period_minutes, duplicate_scan_window_seconds,
-       hr_validation_required, overtime_threshold_hours, missing_timeout_handling, payroll_ready_rules)
-    VALUES (1, '08:00-17:00', 10, 60, 1, 8.00, 'Needs Review', 'Validated attendance only')
-  `);
-  attendancePolicyTableReady = true;
 }
 
 function safeJson(value) {
@@ -572,12 +561,20 @@ router.post('/static-qr/scan', requireAuth, requireRole(ROLES.any), async (req, 
 router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     if (!req.user.employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    await ensureAttendanceLogMetricColumns(pool);
+    await ensureAttendanceSummaryPolicyColumns(pool);
     const [rows] = await pool.execute(
-      `SELECT attendance_id, employee_id, date, time_in, time_out, overtime_hours,
-              absences, status, verification_status, source, integrity_hash
-         FROM attendance_log
-        WHERE employee_id = ?
-        ORDER BY date DESC
+      `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out, al.overtime_hours,
+              al.late_minutes, al.undertime_minutes, al.overtime_minutes,
+              al.absences, al.status, al.verification_status, al.source, al.integrity_hash,
+              ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
+              ats.late_minutes AS summary_late_minutes,
+              ats.undertime_minutes AS summary_undertime_minutes,
+              ats.attendance_status, ats.payroll_eligible
+         FROM attendance_log al
+         LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
+        WHERE al.employee_id = ?
+        ORDER BY al.date DESC
         LIMIT 200`,
       [req.user.employeeId]
     );
@@ -628,6 +625,8 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
 
 router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
   try {
+    await ensureAttendanceLogMetricColumns(pool);
+    await ensureAttendanceSummaryPolicyColumns(pool);
     const { date, month, year } = req.query;
     const search = cleanText(req.query.search, 80);
     const department = cleanText(req.query.department, 80);
@@ -666,8 +665,17 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
       values.push(department);
     }
     if (status) {
-      conditions.push('al.status = ?');
-      values.push(status);
+      const normalizedStatus = status.toLowerCase();
+      if (normalizedStatus === 'late') {
+        conditions.push('COALESCE(ats.late_minutes, al.late_minutes, 0) > 0');
+      } else if (normalizedStatus === 'undertime') {
+        conditions.push('COALESCE(ats.undertime_minutes, al.undertime_minutes, 0) > 0');
+      } else if (normalizedStatus === 'overtime') {
+        conditions.push('COALESCE(ats.overtime_minutes, al.overtime_minutes, 0) > 0');
+      } else {
+        conditions.push('COALESCE(ats.attendance_status, al.status) = ?');
+        values.push(status);
+      }
     }
     if (validationStatus) {
       conditions.push('al.verification_status = ?');
@@ -678,13 +686,19 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
 
     const [rows] = await pool.execute(
       `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
-              al.overtime_hours, al.absences, al.status, al.verification_status,
+              al.overtime_hours, al.late_minutes, al.undertime_minutes, al.overtime_minutes,
+              al.absences, al.status, al.verification_status,
               al.source, al.integrity_hash, al.device_id,
+              ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
+              ats.late_minutes AS summary_late_minutes,
+              ats.undertime_minutes AS summary_undertime_minutes,
+              ats.attendance_status, ats.payroll_eligible,
               CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
               e.employee_code, d.name AS department, e.position
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
          LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
         ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
         ORDER BY al.date DESC, al.time_in ASC
         LIMIT 500`,
@@ -696,49 +710,44 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
   }
 });
 
-router.get('/policies', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_MANAGER_ROLES]), async (_req, res) => {
+router.get('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
   try {
-    await ensureAttendancePolicyTable();
-    const [rows] = await pool.execute('SELECT * FROM attendance_policies WHERE id = 1 LIMIT 1');
-    res.json(rows[0]);
+    const policy = await getActiveAttendancePolicy(pool, req.query.as_of || null);
+    res.json(policy);
   } catch (err) {
+    console.error('[attendance/policies:get]', err.message);
     res.status(500).json({ error: 'Failed to fetch attendance policies.' });
   }
 });
 
-router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
+router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
   try {
-    await ensureAttendancePolicyTable();
+    await ensureAttendancePolicySettings(pool);
     const body = req.body || {};
-    const workSchedule = cleanText(body.work_schedule, 50) || '08:00-17:00';
-    const gracePeriod = Math.max(0, Number(body.grace_period_minutes || 0));
-    const duplicateWindow = Math.max(0, Number(body.duplicate_scan_window_seconds || 0));
-    const hrValidation = body.hr_validation_required ? 1 : 0;
-    const overtimeThreshold = Math.max(0, Number(body.overtime_threshold_hours || 0));
-    const missingTimeout = cleanText(body.missing_timeout_handling, 80) || 'Needs Review';
-    const payrollReadyRules = cleanText(body.payroll_ready_rules, 120) || 'Validated attendance only';
-    if (!Number.isFinite(gracePeriod) || !Number.isFinite(duplicateWindow) || !Number.isFinite(overtimeThreshold)) {
-      return res.status(400).json({ error: 'Numeric policy values are invalid.' });
-    }
-    const [oldRows] = await pool.execute('SELECT * FROM attendance_policies WHERE id = 1 LIMIT 1');
-    await pool.execute(
-      `UPDATE attendance_policies
-          SET work_schedule = ?, grace_period_minutes = ?, duplicate_scan_window_seconds = ?,
-              hr_validation_required = ?, overtime_threshold_hours = ?, missing_timeout_handling = ?,
-              payroll_ready_rules = ?, updated_by = ?
-        WHERE id = 1`,
-      [workSchedule, gracePeriod, duplicateWindow, hrValidation, overtimeThreshold, missingTimeout, payrollReadyRules, req.user.id]
-    );
+    const [startTime, endTime] = cleanText(body.work_schedule, 50).split('-');
+    const normalized = {
+      ...body,
+      work_start_time: body.work_start_time || startTime || '08:00',
+      work_end_time: body.work_end_time || endTime || '17:00',
+      grace_period_minutes: String(Math.max(0, Number(body.grace_period_minutes || 0))),
+      duplicate_scan_window_seconds: String(Math.max(0, Number(body.duplicate_scan_window_seconds || 0))),
+      require_hr_validation: String(requestBool(body.hr_validation_required ?? body.require_hr_validation, true)),
+      overtime_threshold_minutes: String(Math.max(0, Math.round(Number(body.overtime_threshold_hours || 0) * 60) || Number(body.overtime_threshold_minutes || 0))),
+      missing_timeout_handling: cleanText(body.missing_timeout_handling, 80) || 'Needs Review',
+      payroll_attendance_source: body.payroll_attendance_source || (String(body.payroll_ready_rules || '').toLowerCase().includes('validated') ? 'validated' : 'payroll_ready'),
+    };
+    const { changes, policy } = await saveAttendancePolicyValues(pool, normalized, req.user.id);
     await writeAuditLog(
       req.user.id,
       req.user.employeeId || null,
-      'ATTENDANCE POLICY UPDATED',
-      safeJson(oldRows[0] || null),
-      safeJson({ workSchedule, gracePeriod, duplicateWindow, hrValidation, overtimeThreshold, missingTimeout, payrollReadyRules }),
+      changes.length ? 'ATTENDANCE POLICY UPDATED' : 'ATTENDANCE POLICY SAVED',
+      null,
+      safeJson(changes),
       req
     );
-    res.json({ message: 'Attendance policies saved.' });
+    res.json({ message: 'Attendance policies saved.', changes, policy });
   } catch (err) {
+    console.error('[attendance/policies:put]', err.message);
     res.status(500).json({ error: 'Failed to save attendance policies.' });
   }
 });
@@ -837,6 +846,10 @@ router.get('/overview', requireAuth, requireRole(ROLES.any), async (req, res) =>
 router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    const policy = await getActiveAttendancePolicy(pool, req.body.date || null);
+    if (!policy.allow_manual_attendance) {
+      return res.status(403).json({ error: 'Manual attendance is disabled by the active attendance policy.' });
+    }
     const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
     const date = cleanText(req.body.date, 10);
     const timeIn = cleanText(req.body.time_in, 8) || null;
@@ -854,8 +867,8 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
       return res.status(409).json({ error: 'Attendance already exists. Use correction instead.' });
     }
 
-    const verificationStatus = timeIn && timeOut ? 'PAYROLL_READY' : 'NEEDS_REVIEW';
-    const status = timeIn && timeOut ? 'Present' : 'Incomplete';
+    const verificationStatus = timeIn && timeOut && !policy.require_hr_validation && policy.auto_payroll_ready ? 'PAYROLL_READY' : (timeIn && timeOut ? 'PENDING_VALIDATION' : 'NEEDS_REVIEW');
+    const status = timeIn && timeOut ? getAttendanceStatusForTimeIn(timeIn, policy) : 'Incomplete';
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
          (employee_id, date, time_in, time_out, status, verification_status, source)
@@ -885,6 +898,10 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
 router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    const policy = await getActiveAttendancePolicy(pool);
+    if (!policy.allow_hr_correction) {
+      return res.status(403).json({ error: 'HR attendance correction is disabled by the active attendance policy.' });
+    }
     const attendanceId = positiveInteger(req.params.id, 'id');
     const reason = requireReason(req.body.reason);
     const timeIn = req.body.time_in ? cleanText(req.body.time_in, 8) : null;
@@ -943,6 +960,10 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     if (!['VALIDATED', 'PAYROLL_READY', 'REJECTED', 'NEEDS_REVIEW'].includes(requestedStatus)) {
       return res.status(400).json({ error: 'verification_status must be PAYROLL_READY, REJECTED, or NEEDS_REVIEW.' });
     }
+    const policy = await getActiveAttendancePolicy(pool);
+    if (!policy.require_hr_validation && requestedStatus !== 'REJECTED' && requestedStatus !== 'NEEDS_REVIEW') {
+      return res.status(400).json({ error: 'HR validation is not required by the active attendance policy.' });
+    }
     const verificationStatus = requestedStatus === 'VALIDATED' ? 'PAYROLL_READY' : requestedStatus;
     const reason = verificationStatus === 'PAYROLL_READY'
       ? (cleanText(req.body.reason, 500) || 'Attendance validated by HR.')
@@ -983,11 +1004,18 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
 router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    const policy = await getActiveAttendancePolicy(pool);
+    if (!policy.enable_overtime) {
+      return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
+    }
     const attendanceId = positiveInteger(req.params.id, 'id');
     const hours = Number(req.body.overtime_hours);
     const reason = requireReason(req.body.reason);
     if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
       return res.status(400).json({ error: 'overtime_hours must be between 0 and 24.' });
+    }
+    if (hours > 0 && Math.round(hours * 60) < policy.minimum_overtime_minutes) {
+      return res.status(400).json({ error: `Overtime must be at least ${policy.minimum_overtime_minutes} minutes.` });
     }
     await conn.beginTransaction();
     const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);

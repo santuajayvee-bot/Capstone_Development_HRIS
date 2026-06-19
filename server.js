@@ -24,7 +24,7 @@ const adminRbacRoutes                        = require('./server/admin-rbac');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
 const dashboardRoutes                        = require('./server/dashboard');
-const { initRealtime }                       = require('./server/realtime');
+const reportsRoutes                          = require('./server/reports');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -476,6 +476,7 @@ app.patch('/api/form-drafts/status', requireAuth, requireRole(ROLES.any), async 
 // Payroll Routes (wages, transactions, payroll generation)
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/reports', reportsRoutes);
 
 // 201-File Management (Auth required, role-based per endpoint)
 app.use('/api/201-files', requireAuth, fileManagementRoutes);
@@ -902,6 +903,22 @@ app.put('/api/employees/id-config', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_R
     if (!Number.isInteger(startingNumber) || startingNumber < 1) return res.status(400).json({ error: 'Starting number must be greater than zero.' });
     if (!Number.isInteger(numberPadding) || numberPadding < 1 || numberPadding > 12) return res.status(400).json({ error: 'Number padding must be between 1 and 12.' });
     if (!Number.isInteger(currentSequence) || currentSequence < 0) return res.status(400).json({ error: 'Current sequence must be zero or greater.' });
+
+    if (autoGenerateEnabled) {
+      await ensureOnboardingLifecycleSchema(pool);
+      const nextSequence = Math.max(currentSequence + 1, startingNumber);
+      const nextEmployeeCode = formatEmployeeCode(nextSequence, {
+        prefix,
+        number_padding: numberPadding,
+      });
+      const duplicate = await findEmployeeIntakeDuplicate(pool, nextEmployeeCode, 'employee-id-config-check@example.invalid');
+      if (duplicate?.field === 'employee_code') {
+        return res.status(400).json({
+          error: `Employee ID configuration would generate duplicate ID ${nextEmployeeCode}. Increase the current sequence or use a different prefix.`,
+          next_employee_code: nextEmployeeCode,
+        });
+      }
+    }
 
     const [[oldConfig]] = await pool.execute('SELECT * FROM employee_id_config WHERE id = 1');
     await pool.execute(
@@ -3457,14 +3474,12 @@ if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
     minVersion: 'TLSv1.3',
   };
   const server = https.createServer(tlsOptions, app);
-  initRealtime(server);
   server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR running with TLS 1.3 on ${HOST}:${PORT}`);
     logServerUrls('https');
   });
 } else {
   const server = http.createServer(app);
-  initRealtime(server);
   server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR local development server listening on ${HOST}:${PORT}`);
     logServerUrls('http');

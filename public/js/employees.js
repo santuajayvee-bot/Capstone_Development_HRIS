@@ -1941,7 +1941,13 @@ function setText(id, value) {
 
 function formatValue(value) {
   if (value === null || value === undefined || value === '') return '-';
-  if (typeof value === 'string' && value.includes('T')) return value.split('T')[0];
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '-';
+    const isoDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$/);
+    if (isoDate) return isoDate[1];
+  }
   return String(value);
 }
 

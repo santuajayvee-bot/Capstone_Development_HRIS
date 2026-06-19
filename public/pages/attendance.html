@@ -88,6 +88,8 @@
         <option value="">All</option>
         <option value="Present">Present</option>
         <option value="Late">Late</option>
+        <option value="Undertime">Undertime</option>
+        <option value="Overtime">Overtime</option>
         <option value="Absent">Absent</option>
         <option value="Incomplete">Incomplete</option>
       </select>
@@ -97,7 +99,6 @@
       <select id="att-validation-filter" onchange="loadAttRecords()">
         <option value="">All</option>
         <option value="PENDING_VALIDATION">Pending Validation</option>
-        <option value="PAYROLL_READY">Validated</option>
         <option value="REJECTED">Rejected</option>
         <option value="PAYROLL_READY">Payroll Ready</option>
         <option value="NEEDS_REVIEW">Needs Review</option>
@@ -119,13 +120,13 @@
       <thead>
         <tr>
           <th><input type="checkbox" id="att-select-all" onchange="toggleAllAttendanceRows(this.checked)" /></th>
-          <th>Employee</th><th>Department</th><th>Date</th><th>Time In</th><th>Time Out</th>
-          <th>Hours Worked</th><th>Attendance Status</th><th>Validation Status</th><th>Payroll Ready</th>
+          <th>Employee</th><th>Department</th><th>Date</th><th>Time</th>
+          <th>Hours</th><th>Attendance Summary</th><th>Validation</th><th>Payroll</th>
           <th id="att-action-col">Actions</th>
         </tr>
       </thead>
       <tbody id="att-records-tbody">
-        <tr><td colspan="11" class="att-empty">Loading...</td></tr>
+        <tr><td colspan="10" class="att-empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -225,19 +226,79 @@
     <div class="att-card-heading">
       <div>
         <h3>Attendance Policies</h3>
-        <p>Configure attendance lifecycle rules used for validation and payroll readiness.</p>
+        <p>Configure active and future-dated attendance rules used during biometric processing, validation, and payroll preparation.</p>
       </div>
       <button class="btn btn-outline btn-sm" onclick="loadAttendancePolicies()">Refresh</button>
     </div>
-    <form id="attendance-policy-form" class="att-form-grid" onsubmit="saveAttendancePolicies(event)">
-      <div><label>Work Schedule</label><input id="policy-work-schedule" placeholder="08:00-17:00" /></div>
-      <div><label>Grace Period</label><input id="policy-grace-period" type="number" min="0" step="1" /></div>
-      <div><label>Duplicate Scan Window</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
-      <div><label>HR Validation Required</label><select id="policy-hr-validation"><option value="1">Yes</option><option value="0">No</option></select></div>
-      <div><label>Overtime Threshold</label><input id="policy-overtime-threshold" type="number" min="0" step="0.25" /></div>
-      <div><label>Missing Timeout Handling</label><select id="policy-missing-timeout"><option>Needs Review</option><option>Auto Reject</option><option>Manual Correction Required</option></select></div>
-      <div><label>Payroll Ready Rules</label><select id="policy-payroll-ready"><option>Validated attendance only</option><option>Validated or corrected attendance</option></select></div>
-      <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save Policies</button></div>
+    <form id="attendance-policy-form" onsubmit="saveAttendancePolicies(event)">
+      <div class="att-form-grid" style="margin-bottom:12px;">
+        <div><label>Effective Date</label><input id="policy-effective-date" type="date" /></div>
+        <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save Policy Version</button></div>
+      </div>
+      <div class="tabs" style="margin-bottom:14px;">
+        <button class="tab active" type="button" data-policy-tab="schedule" onclick="switchAttendancePolicyTab('schedule', this)">Schedule Policies</button>
+        <button class="tab" type="button" data-policy-tab="validation" onclick="switchAttendancePolicyTab('validation', this)">Validation Policies</button>
+        <button class="tab" type="button" data-policy-tab="overtime" onclick="switchAttendancePolicyTab('overtime', this)">Overtime Policies</button>
+        <button class="tab" type="button" data-policy-tab="payroll" onclick="switchAttendancePolicyTab('payroll', this)">Payroll Policies</button>
+        <button class="tab" type="button" data-policy-tab="biometric" onclick="switchAttendancePolicyTab('biometric', this)">Biometric Policies</button>
+        <button class="tab" type="button" data-policy-tab="holiday" onclick="switchAttendancePolicyTab('holiday', this)">Holiday Policies</button>
+      </div>
+      <div id="policy-tab-schedule" class="policy-tab-panel">
+        <div class="att-form-grid">
+          <div><label>Work Start Time</label><input id="policy-work-start-time" type="time" /></div>
+          <div><label>Work End Time</label><input id="policy-work-end-time" type="time" /></div>
+          <div><label>Break Start Time</label><input id="policy-break-start-time" type="time" /></div>
+          <div><label>Break End Time</label><input id="policy-break-end-time" type="time" /></div>
+          <div><label>Standard Work Hours</label><input id="policy-standard-work-hours" type="number" min="0" step="0.25" /></div>
+        </div>
+      </div>
+      <div id="policy-tab-validation" class="policy-tab-panel" style="display:none;">
+        <div class="att-form-grid">
+          <div><label>Grace Period Minutes</label><input id="policy-grace-period" type="number" min="0" step="1" /></div>
+          <div><label>Enable Late Tracking</label><select id="policy-enable-late"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Late Threshold Minutes</label><input id="policy-late-threshold" type="number" min="0" step="1" /></div>
+          <div><label>Count Late for Payroll</label><select id="policy-count-late-payroll"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Enable Undertime Tracking</label><select id="policy-enable-undertime"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Count Undertime for Payroll</label><select id="policy-count-undertime-payroll"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Enable Half-Day Rule</label><select id="policy-enable-half-day"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Half-Day Threshold Hours</label><input id="policy-half-day-threshold" type="number" min="0" step="0.25" /></div>
+          <div><label>Require HR Validation</label><select id="policy-hr-validation"><option value="1">Yes</option><option value="0">No</option></select></div>
+          <div><label>Auto Payroll Ready</label><select id="policy-auto-payroll-ready"><option value="false">No</option><option value="true">Yes</option></select></div>
+          <div><label>Validation Expiration Days</label><input id="policy-validation-expiration" type="number" min="0" step="1" /></div>
+          <div><label>Missing Timeout Handling</label><select id="policy-missing-timeout"><option>Needs Review</option><option>Auto Close</option><option>HR Correction Required</option></select></div>
+        </div>
+      </div>
+      <div id="policy-tab-overtime" class="policy-tab-panel" style="display:none;">
+        <div class="att-form-grid">
+          <div><label>Enable Overtime</label><select id="policy-enable-overtime"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Overtime Threshold Minutes</label><input id="policy-overtime-threshold-minutes" type="number" min="0" step="1" /></div>
+          <div><label>Overtime Approval Required</label><select id="policy-overtime-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Minimum Overtime Minutes</label><input id="policy-minimum-overtime" type="number" min="0" step="1" /></div>
+        </div>
+      </div>
+      <div id="policy-tab-payroll" class="policy-tab-panel" style="display:none;">
+        <div class="att-form-grid">
+          <div><label>Payroll Attendance Source</label><select id="policy-payroll-source"><option value="payroll_ready">Use Payroll Ready Attendance</option><option value="validated">Use Validated Attendance</option></select></div>
+        </div>
+      </div>
+      <div id="policy-tab-biometric" class="policy-tab-panel" style="display:none;">
+        <div class="att-form-grid">
+          <div><label>Duplicate Scan Window Seconds</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
+        </div>
+      </div>
+      <div id="policy-tab-holiday" class="policy-tab-panel" style="display:none;">
+        <div class="att-form-grid">
+          <div><label>Enable Holiday Rules</label><select id="policy-enable-holiday"><option value="false">No</option><option value="true">Yes</option></select></div>
+          <div><label>Regular Holiday Multiplier</label><input id="policy-regular-holiday" type="number" min="0" step="0.01" /></div>
+          <div><label>Special Holiday Multiplier</label><input id="policy-special-holiday" type="number" min="0" step="0.01" /></div>
+          <div><label>Rest Day Multiplier</label><input id="policy-rest-day" type="number" min="0" step="0.01" /></div>
+          <div><label>Holiday Overtime Multiplier</label><input id="policy-holiday-overtime" type="number" min="0" step="0.01" /></div>
+          <div><label>Allow Manual Attendance</label><select id="policy-allow-manual"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Allow HR Correction</label><select id="policy-allow-hr-correction"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Allow Manager Certification</label><select id="policy-allow-manager-cert"><option value="false">No</option><option value="true">Yes</option></select></div>
+          <div><label>Device Failure Handling</label><select id="policy-device-failure"><option>HR Correction Required</option><option>Allow Manual Attendance</option><option>Needs Review</option></select></div>
+        </div>
+      </div>
     </form>
     <div id="attendance-policy-status" class="att-muted" style="margin-top:10px;"></div>
   </div>

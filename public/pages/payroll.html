@@ -4,7 +4,7 @@
 <div class="page-header">
   <div>
     <div class="section-title">Payroll</div>
-    <div class="section-sub">Weekly payroll processing, salary calculation, payslips, settings, and reports.</div>
+    <div class="section-sub">Weekly payroll processing, salary calculation, payroll records, settings, and reports.</div>
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline" onclick="exportPayrollReport('summary','csv')">Export CSV</button>
@@ -16,7 +16,6 @@
   <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Payroll Dashboard</button>
   <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Salary Calculation</button>
   <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
-  <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslip Management</button>
   <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece-Rate Config</button>
   <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deduction Settings</button>
   <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowance Settings</button>
@@ -219,24 +218,15 @@
     <div class="payroll-card-header-row">
       <div>
         <h3>Payroll Records</h3>
-        <p>Submitted calculations and payroll entries by period.</p>
+        <p>Submitted calculations, payroll entries, and payslip generation by period.</p>
       </div>
-      <button class="btn btn-outline" onclick="loadSalaryCalculations()">Refresh</button>
+      <div class="button-row">
+        <button class="btn btn-primary" onclick="generatePayslipsFromRecords()">Generate Payslips</button>
+        <button class="btn btn-outline" onclick="exportPayrollReport('employee','pdf')">Export Payslip PDF</button>
+        <button class="btn btn-outline" onclick="loadSalaryCalculations()">Refresh</button>
+      </div>
     </div>
     <div id="salary-calculations-grid"></div>
-  </div>
-</section>
-
-<section class="payroll-panel" id="payroll-tab-payslips">
-  <div class="table-wrap">
-    <div class="payroll-card-header-row">
-      <div>
-        <h3>Payslip Management</h3>
-        <p>Generate and export payslips after payroll is approved or released.</p>
-      </div>
-      <button class="btn btn-outline" onclick="exportPayrollReport('employee','pdf')">Export PDF</button>
-    </div>
-    <div id="payroll-payslips-grid"></div>
   </div>
 </section>
 

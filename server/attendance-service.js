@@ -11,6 +11,12 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { encryptAES256, decryptAES256 } = require('./crypto');
 const { requestJson } = require('./secure-http');
+const {
+  getActiveAttendancePolicy,
+  getAttendanceStatusForTimeIn,
+  computeAttendanceMetrics,
+  getInitialVerificationStatus,
+} = require('./attendance-policy-engine');
 
 const GENESIS_HASH = '0'.repeat(64);
 const VALID_TYPES = new Set(['TIME_IN', 'TIME_OUT', 'AUTO']);
@@ -32,6 +38,43 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+async function ensureAttendanceSummaryPolicyColumns(conn) {
+  const [columns] = await conn.execute(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'attendance_summary'
+        AND COLUMN_NAME IN ('undertime_minutes','policy_snapshot_json')`
+  );
+  const existing = new Set(columns.map((row) => row.COLUMN_NAME));
+  if (!existing.has('undertime_minutes')) {
+    await conn.execute('ALTER TABLE attendance_summary ADD COLUMN undertime_minutes INT NOT NULL DEFAULT 0 AFTER late_minutes');
+  }
+  if (!existing.has('policy_snapshot_json')) {
+    await conn.execute('ALTER TABLE attendance_summary ADD COLUMN policy_snapshot_json JSON NULL AFTER integrity_hash');
+  }
+}
+
+async function ensureAttendanceLogMetricColumns(conn) {
+  const [columns] = await conn.execute(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'attendance_log'
+        AND COLUMN_NAME IN ('late_minutes','undertime_minutes','overtime_minutes')`
+  );
+  const existing = new Set(columns.map((row) => row.COLUMN_NAME));
+  if (!existing.has('late_minutes')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN late_minutes INT NOT NULL DEFAULT 0 AFTER overtime_hours');
+  }
+  if (!existing.has('undertime_minutes')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN undertime_minutes INT NOT NULL DEFAULT 0 AFTER late_minutes');
+  }
+  if (!existing.has('overtime_minutes')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN overtime_minutes INT NOT NULL DEFAULT 0 AFTER undertime_minutes');
+  }
 }
 
 function getManilaParts(date) {
@@ -215,49 +258,74 @@ async function refreshSummary(conn, attendanceId) {
   );
   if (!rows.length) return;
   const row = rows[0];
+  await ensureAttendanceSummaryPolicyColumns(conn);
+  await ensureAttendanceLogMetricColumns(conn);
 
-  const [minutesRows] = await conn.execute(
-    `SELECT
-       CASE WHEN time_in IS NOT NULL AND time_out IS NOT NULL
-            THEN GREATEST(0, FLOOR(TIME_TO_SEC(TIMEDIFF(time_out, time_in)) / 60))
-            ELSE 0 END AS regular_minutes,
-       CASE WHEN time_in IS NOT NULL
-            THEN GREATEST(0, FLOOR(TIME_TO_SEC(TIMEDIFF(time_in, '09:00:00')) / 60))
-            ELSE 0 END AS late_minutes
-       FROM attendance_log
+  const policy = await getActiveAttendancePolicy(conn, row.date);
+  const metrics = computeAttendanceMetrics(row, policy);
+  const { regularMinutes, overtimeMinutes, lateMinutes, undertimeMinutes, attendanceStatus } = metrics;
+  const statusReady = policy.payroll_attendance_source === 'validated'
+    ? PAYROLL_READY_STATUSES.has(row.verification_status)
+    : row.verification_status === 'PAYROLL_READY';
+  const payrollEligible = statusReady && !!row.time_in && !!row.time_out ? 1 : 0;
+  const policySnapshot = JSON.stringify({
+    work_start_time: policy.work_start_time,
+    work_end_time: policy.work_end_time,
+    break_start_time: policy.break_start_time,
+    break_end_time: policy.break_end_time,
+    standard_work_hours: policy.standard_work_hours,
+    grace_period_minutes: policy.grace_period_minutes,
+    overtime_threshold_minutes: policy.overtime_threshold_minutes,
+    overtime_approval_required: policy.overtime_approval_required,
+    payroll_attendance_source: policy.payroll_attendance_source,
+    missing_timeout_handling: policy.missing_timeout_handling,
+    holiday: {
+      enabled: policy.enable_holiday_rules,
+      regular_multiplier: policy.regular_holiday_multiplier,
+      special_multiplier: policy.special_holiday_multiplier,
+      rest_day_multiplier: policy.rest_day_multiplier,
+      overtime_multiplier: policy.holiday_overtime_multiplier,
+    },
+  });
+
+  await conn.execute(
+    `UPDATE attendance_log
+        SET late_minutes = ?,
+            undertime_minutes = ?,
+            overtime_minutes = ?
       WHERE attendance_id = ?`,
-    [attendanceId]
+    [lateMinutes, undertimeMinutes, overtimeMinutes, row.attendance_id]
   );
-
-  const regularMinutes = Number(minutesRows[0]?.regular_minutes || 0);
-  const overtimeMinutes = Math.round(Number(row.overtime_hours || 0) * 60);
-  const payrollEligible = PAYROLL_READY_STATUSES.has(row.verification_status) && !!row.time_in && !!row.time_out ? 1 : 0;
 
   await conn.execute(
     `INSERT INTO attendance_summary
        (employee_id, attendance_date, attendance_id, regular_minutes, overtime_minutes,
-        late_minutes, attendance_status, verification_status, payroll_eligible, integrity_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        late_minutes, undertime_minutes, attendance_status, verification_status, payroll_eligible, integrity_hash, policy_snapshot_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        attendance_id = VALUES(attendance_id),
        regular_minutes = VALUES(regular_minutes),
        overtime_minutes = VALUES(overtime_minutes),
        late_minutes = VALUES(late_minutes),
+       undertime_minutes = VALUES(undertime_minutes),
        attendance_status = VALUES(attendance_status),
        verification_status = VALUES(verification_status),
        payroll_eligible = VALUES(payroll_eligible),
-       integrity_hash = VALUES(integrity_hash)`,
+       integrity_hash = VALUES(integrity_hash),
+       policy_snapshot_json = VALUES(policy_snapshot_json)`,
     [
       row.employee_id,
       row.date,
       row.attendance_id,
       regularMinutes,
       overtimeMinutes,
-      Number(minutesRows[0]?.late_minutes || 0),
-      row.status,
+      lateMinutes,
+      undertimeMinutes,
+      attendanceStatus,
       row.verification_status,
       payrollEligible,
       row.integrity_hash,
+      policySnapshot,
     ]
   );
 }
@@ -321,7 +389,31 @@ async function updateScanEvent(conn, scanEventId, values) {
 
 async function processMappedEvent(conn, device, event, match, scanEventId) {
   const manila = getManilaParts(event.timestamp);
+  const policy = await getActiveAttendancePolicy(conn, manila.date);
   const encryptedBiometricId = event.biometricUserId ? encryptAES256(event.biometricUserId) : null;
+  if (policy.duplicate_scan_window_seconds > 0) {
+    const [recent] = await conn.execute(
+      `SELECT scan_event_id, attendance_id
+         FROM biometric_scan_event
+        WHERE employee_id = ?
+          AND device_id = ?
+          AND scan_event_id <> ?
+          AND scan_timestamp BETWEEN DATE_SUB(?, INTERVAL ${policy.duplicate_scan_window_seconds} SECOND)
+                                 AND DATE_ADD(?, INTERVAL ${policy.duplicate_scan_window_seconds} SECOND)
+        LIMIT 1`,
+      [match.employeeId, device.device_id, scanEventId, manila.dateTime, manila.dateTime]
+    );
+    if (recent.length) {
+      await updateScanEvent(conn, scanEventId, {
+        ...match,
+        biometricUserIdEncrypted: encryptedBiometricId,
+        verificationStatus: 'DUPLICATE',
+        attendanceId: recent[0].attendance_id,
+        errorMessage: `Duplicate biometric scan within ${policy.duplicate_scan_window_seconds} seconds.`,
+      });
+      return { status: 'duplicate', attendanceId: recent[0].attendance_id };
+    }
+  }
   const [rows] = await conn.execute(
     'SELECT * FROM attendance_log WHERE employee_id = ? AND date = ? FOR UPDATE',
     [match.employeeId, manila.date]
@@ -357,8 +449,8 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
 
   if (!record) {
     const isTimeIn = attendanceType === 'TIME_IN';
-    const status = isTimeIn ? (manila.hour >= 9 ? 'Late' : 'Present') : 'Incomplete';
-    const verificationStatus = 'PENDING_VALIDATION';
+    const status = isTimeIn ? getAttendanceStatusForTimeIn(manila.time, policy) : 'Incomplete';
+    const verificationStatus = getInitialVerificationStatus(attendanceType, policy, { missingTimeIn: attendanceType === 'TIME_OUT' });
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
          (employee_id, date, time_in, time_out, status, biometric_user_hash,
@@ -385,15 +477,16 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
       `UPDATE attendance_log
           SET time_in = ?, status = ?, biometric_user_hash = ?,
               biometric_user_id_encrypted = ?, device_id = ?, source = 'BIOMETRIC_API',
-              verification_status = 'PENDING_VALIDATION',
+              verification_status = ?,
               first_scan_at = COALESCE(first_scan_at, ?), last_scan_at = ?
         WHERE attendance_id = ?`,
       [
         manila.time,
-        manila.hour >= 9 ? 'Late' : 'Present',
+        getAttendanceStatusForTimeIn(manila.time, policy),
         match.biometricUserHash,
         encryptedBiometricId,
         device.device_id,
+        getInitialVerificationStatus(attendanceType, policy),
         manila.dateTime,
         manila.dateTime,
         record.attendance_id,
@@ -403,11 +496,11 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
     await conn.execute(
       `UPDATE attendance_log
           SET time_out = ?, device_id = ?, source = 'BIOMETRIC_API',
-              verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE 'PENDING_VALIDATION' END,
+              verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE ? END,
               status = CASE WHEN time_in IS NULL THEN 'Incomplete' ELSE status END,
               last_scan_at = ?
         WHERE attendance_id = ?`,
-      [manila.time, device.device_id, manila.dateTime, record.attendance_id]
+      [manila.time, device.device_id, getInitialVerificationStatus(attendanceType, policy), manila.dateTime, record.attendance_id]
     );
   }
 
@@ -575,6 +668,8 @@ module.exports = {
   canonicalJson,
   getDeviceSecret,
   ingestBiometricEvents,
+  ensureAttendanceLogMetricColumns,
+  ensureAttendanceSummaryPolicyColumns,
   pullDeviceLogs,
   refreshSummary,
   sha256,

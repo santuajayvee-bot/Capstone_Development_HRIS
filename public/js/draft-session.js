@@ -10,7 +10,14 @@ const DraftSession = (() => {
     { module: 'Employees', form: 'Employee Profile Editing', selector: '#profile-edit-root', record: () => window.currentProfileEmployee?.id || new URLSearchParams(location.search).get('employeeId') || 'profile', clearFns: ['saveProfilePageChanges'] },
     { module: 'Leave', form: 'Leave Request Filing', selector: '#req-leave-fields', extraSelectors: ['#req-reason', '#req-attachment'], record: () => 'new', clearFns: ['saveRequest'] },
     { module: 'Leave', form: 'Manual Leave Encoding', selector: '#manual-leave-form', record: () => document.getElementById('manual-employee')?.value || 'new', clearFns: ['submitManualLeave'] },
-    { module: 'Payroll', form: 'Salary Calculation', selector: '#payroll-tab-salary', record: () => document.getElementById('salary-employee')?.value || document.getElementById('salary-employee-search')?.value || 'new', clearFns: ['saveSalaryAsDraft', 'saveCalculation', 'saveSalaryRecord', 'saveProductionTransaction', 'saveLogisticsTransaction'] },
+    {
+      module: 'Payroll',
+      form: 'Salary Calculation',
+      selector: '#payroll-tab-salary',
+      record: () => document.getElementById('salary-employee')?.value || document.getElementById('salary-employee-search')?.value || 'new',
+      clearFns: ['saveSalaryAsDraft', 'saveCalculation', 'saveSalaryRecord', 'saveProductionTransaction', 'saveLogisticsTransaction'],
+      hasMeaningfulData: data => Boolean(String(data['salary-employee'] || data['salary-employee-search'] || '').trim())
+    },
     { module: 'Payroll', form: 'Payroll Processing', selector: '#payroll-tab-dashboard', record: () => document.getElementById('payroll-filter-month')?.value || 'new', clearFns: ['generatePayroll', 'createPayrollRun'] },
     { module: 'Attendance', form: 'Manual Correction', selector: '#override-modal, #att-overtime', record: () => document.getElementById('override-att-id')?.value || document.getElementById('ot-employee')?.value || 'new', clearFns: ['submitOverride', 'encodeOvertime'] },
     { module: 'Onboarding', form: 'Checklist', selector: '#onboarding-checklist-form, #onboarding-form, #onboarding-checklist', record: () => document.getElementById('onboarding-employee-id')?.value || 'new', clearFns: ['saveOnboardingChecklist', 'submitOnboardingChecklist'] },
@@ -42,8 +49,24 @@ const DraftSession = (() => {
       .find(Boolean) || null;
   }
 
+  function isVisibleElement(element) {
+    if (!element || !document.body.contains(element)) return false;
+    let current = element;
+    while (current && current !== document.body) {
+      const style = window.getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden' || current.hidden) return false;
+      current = current.parentElement;
+    }
+    return element.getClientRects().length > 0;
+  }
+
   function findRoot(config) {
-    return queryFirst(config.selector);
+    const root = queryFirst(config.selector);
+    return isVisibleElement(root) ? root : null;
+  }
+
+  function isAuthenticated() {
+    return Boolean(sessionStorage.getItem('vp_token'));
   }
 
   function controlsFor(config) {
@@ -99,7 +122,8 @@ const DraftSession = (() => {
     });
   }
 
-  function hasMeaningfulData(data) {
+  function hasMeaningfulData(data, config = {}) {
+    if (typeof config.hasMeaningfulData === 'function') return config.hasMeaningfulData(data);
     return Object.entries(data).some(([name, value]) => {
       if (name.endsWith('__draft_meta')) return false;
       if (value && typeof value === 'object') return Array.isArray(value.file_names) && value.file_names.length > 0;
@@ -125,8 +149,10 @@ const DraftSession = (() => {
   }
 
   async function save(config, session) {
+    if (!isAuthenticated()) return;
+    if (!isVisibleElement(session.root)) return;
     const data = serialize(config);
-    if (!hasMeaningfulData(data)) return;
+    if (!hasMeaningfulData(data, config)) return;
     setStatus(session, 'Saving...', 'saving');
     try {
       await apiFetch('/api/form-drafts', {
@@ -151,6 +177,7 @@ const DraftSession = (() => {
   }
 
   async function clear(config, status = 'Submitted') {
+    if (!isAuthenticated()) return;
     try {
       await apiFetch('/api/form-drafts/status', {
         method: 'PATCH',
@@ -196,6 +223,8 @@ const DraftSession = (() => {
   }
 
   async function checkDraft(config) {
+    if (!isAuthenticated()) return;
+    if (!findRoot(config)) return;
     try {
       const params = new URLSearchParams({
         module_name: config.module,
@@ -205,7 +234,14 @@ const DraftSession = (() => {
       const response = await apiFetch(`/api/form-drafts?${params.toString()}`);
       if (!response?.ok) return;
       const draft = await response.json();
-      if (draft?.draft_data_json) showRestorePrompt(config, draft);
+      if (draft?.draft_data_json) {
+        const data = typeof draft.draft_data_json === 'string' ? JSON.parse(draft.draft_data_json) : draft.draft_data_json;
+        if (!hasMeaningfulData(data, config)) {
+          await clear(config, 'Discarded');
+          return;
+        }
+        showRestorePrompt(config, draft);
+      }
     } catch (error) {
       console.warn('[DraftSession] draft check failed:', error);
     }
@@ -226,6 +262,7 @@ const DraftSession = (() => {
   }
 
   function register(config) {
+    if (!isAuthenticated()) return;
     const root = findRoot(config);
     if (!root) return;
     const id = key(config);
@@ -245,6 +282,7 @@ const DraftSession = (() => {
   }
 
   function scan() {
+    if (!isAuthenticated()) return;
     configs.forEach(register);
   }
 

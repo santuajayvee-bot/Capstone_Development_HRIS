@@ -876,6 +876,19 @@ async function generateEmployeeID() {
       }
     }
 
+    const nextCodeError = await nextCodeResponse?.json?.().catch(() => ({}));
+    if (nextCodeResponse?.status === 400 && nextCodeError?.error) {
+      empCodeInput.value = '';
+      empCodeInput.readOnly = true;
+      empCodeInput.disabled = false;
+      const hint = document.getElementById('emp-id-hint');
+      if (hint) {
+        hint.textContent = `${nextCodeError.error} Use existing employee ID mode.`;
+        hint.classList.add('error');
+      }
+      return null;
+    }
+
     console.warn('Server next-code endpoint unavailable; falling back to employee list scan.');
     const response = await apiFetch('/api/employees');
     if (!response || !response.ok) {
@@ -952,6 +965,10 @@ async function onEmployeeIdModeChange() {
     modeSelect.disabled = true;
   }
 
+  if (EMPLOYEE_ID_CONFIG && Number(EMPLOYEE_ID_CONFIG.auto_generate_enabled) === 0 && modeSelect.value === 'auto' && canOverrideEmployeeId()) {
+    modeSelect.value = 'manual';
+  }
+
   if (modeSelect.value === 'manual') {
     empCodeInput.value = '';
     empCodeInput.readOnly = false;
@@ -962,6 +979,17 @@ async function onEmployeeIdModeChange() {
       hint.classList.remove('error');
     }
     empCodeInput.focus();
+    return;
+  }
+
+  if (EMPLOYEE_ID_CONFIG && Number(EMPLOYEE_ID_CONFIG.auto_generate_enabled) === 0) {
+    empCodeInput.value = '';
+    empCodeInput.readOnly = true;
+    empCodeInput.disabled = false;
+    if (hint) {
+      hint.textContent = 'Auto-generation is disabled. Use existing employee ID mode.';
+      hint.classList.add('error');
+    }
     return;
   }
 
@@ -1179,6 +1207,12 @@ async function saveEmployee() {
     IS_SAVING = false;  // Reset double-submit flag
     alert('Employee ID is required when using an existing employee ID.');
     console.error('Employee code is empty!');
+    return;
+  }
+
+  if (employeeIdMode === 'auto' && EMPLOYEE_ID_CONFIG && Number(EMPLOYEE_ID_CONFIG.auto_generate_enabled) === 0) {
+    IS_SAVING = false;
+    alert('Employee ID auto-generation is disabled. Use existing employee ID mode.');
     return;
   }
 

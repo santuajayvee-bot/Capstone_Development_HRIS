@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
+const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
@@ -103,6 +104,7 @@ function periodRange(payrollPeriod, fallbackDate) {
 async function getPayrollPolicy(pool) {
   await ensurePieceRatePayrollSchema(pool);
   const [rows] = await pool.execute('SELECT setting_key, setting_value FROM payroll_policy_settings');
+  const attendancePolicy = await getActiveAttendancePolicy(pool);
   const map = {};
   for (const row of rows) map[row.setting_key] = row.setting_value;
   const bool = key => String(map[key] || '').toLowerCase() === 'true';
@@ -113,21 +115,22 @@ async function getPayrollPolicy(pool) {
   return {
     raw: map,
     daily: {
-      require_hr_validation: bool('daily_require_hr_validation'),
-      use_payroll_ready_only: bool('daily_use_payroll_ready_only'),
-      count_late: bool('daily_count_late'),
-      count_undertime: bool('daily_count_undertime'),
-      allow_half_day: bool('daily_allow_half_day'),
-      half_day_threshold_hours: num('daily_half_day_threshold_hours', 4),
+      require_hr_validation: attendancePolicy.require_hr_validation,
+      use_payroll_ready_only: attendancePolicy.payroll_attendance_source === 'payroll_ready',
+      count_late: attendancePolicy.count_late_for_payroll,
+      count_undertime: attendancePolicy.count_undertime_for_payroll,
+      allow_half_day: attendancePolicy.enable_half_day_rule,
+      half_day_threshold_hours: attendancePolicy.half_day_threshold_hours || num('daily_half_day_threshold_hours', 4),
     },
     hourly: {
-      standard_hours_per_day: num('hourly_standard_hours_per_day', 8),
-      break_deduction_hours: num('hourly_break_deduction_hours', 0),
-      overtime_threshold: num('hourly_overtime_threshold', 8),
+      standard_hours_per_day: attendancePolicy.standard_work_hours || num('hourly_standard_hours_per_day', 8),
+      break_deduction_hours: 0,
+      overtime_threshold: (attendancePolicy.overtime_threshold_minutes || 480) / 60,
       maximum_regular_hours: num('hourly_maximum_regular_hours', 8),
       round_off_rule: map.hourly_round_off_rule || 'none',
-      require_hr_validation: bool('hourly_require_hr_validation'),
-      require_payroll_ready_attendance: bool('hourly_require_payroll_ready_attendance'),
+      require_hr_validation: attendancePolicy.require_hr_validation,
+      require_payroll_ready_attendance: attendancePolicy.payroll_attendance_source === 'payroll_ready',
+      count_undertime: attendancePolicy.count_undertime_for_payroll,
     }
   };
 }
@@ -244,7 +247,9 @@ async function validateDailyHourlyPayroll(pool, options) {
   }
 
   const attendanceDays = attendanceRows.length;
-  const lateDays = attendanceRows.filter(row => String(row.attendance_status || row.log_status || '').toLowerCase().includes('late')).length;
+  const lateDays = attendanceRows.filter(row => Number(row.late_minutes || 0) > 0 || String(row.attendance_status || row.log_status || '').toLowerCase().includes('late')).length;
+  const undertimeDays = attendanceRows.filter(row => Number(row.undertime_minutes || 0) > 0).length;
+  const undertimeHours = attendanceRows.reduce((sum, row) => sum + Number(row.undertime_minutes || 0) / 60, 0);
   const absentDays = attendanceRows.filter(row => String(row.attendance_status || '').toLowerCase().includes('absent')).length;
   const rawRegularHours = attendanceRows.reduce((sum, row) => sum + Number(row.regular_minutes || 0) / 60, 0);
   const overtimeHours = attendanceRows.reduce((sum, row) => sum + Number(row.overtime_minutes || 0) / 60, 0);
@@ -263,7 +268,12 @@ async function validateDailyHourlyPayroll(pool, options) {
   if (isDaily && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
 
-  const grossPay = isDaily ? rate * daysWorked : rate * hoursWorked;
+  const dailyUndertimeDeduction = isDaily && policy.daily.count_undertime
+    ? (rate / Math.max(1, Number(policy.hourly.standard_hours_per_day || 8))) * undertimeHours
+    : 0;
+  const grossPay = isDaily
+    ? Math.max(0, (rate * daysWorked) - dailyUndertimeDeduction)
+    : rate * hoursWorked;
   const result = {
     ok: errors.length === 0,
     errors,
@@ -281,10 +291,12 @@ async function validateDailyHourlyPayroll(pool, options) {
     days_worked: Number(daysWorked.toFixed(2)),
     absent_days: absentDays,
     late_days: lateDays,
-    undertime_days: 0,
+    undertime_days: undertimeDays,
+    undertime_hours: Number(undertimeHours.toFixed(2)),
     hours_worked: Number(hoursWorked.toFixed(2)),
     regular_hours: Number(hoursWorked.toFixed(2)),
     overtime_hours: Number(overtimeHours.toFixed(2)),
+    undertime_deduction: Number(dailyUndertimeDeduction.toFixed(2)),
     gross_pay: Number(grossPay.toFixed(2)),
     validation_status: errors.length ? 'Blocked' : 'Ready',
     policy: isDaily ? policy.daily : policy.hourly,
@@ -295,6 +307,8 @@ async function validateDailyHourlyPayroll(pool, options) {
       payroll_eligible: Number(row.payroll_eligible || 0) === 1,
       regular_hours: Number(row.regular_minutes || 0) / 60,
       overtime_hours: Number(row.overtime_minutes || 0) / 60,
+      late_minutes: Number(row.late_minutes || 0),
+      undertime_minutes: Number(row.undertime_minutes || 0),
       time_in: row.time_in,
       time_out: row.time_out
     }))
