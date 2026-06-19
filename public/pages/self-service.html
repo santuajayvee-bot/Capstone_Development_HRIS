@@ -1,0 +1,149 @@
+<section class="erp-module self-service-page">
+  <div class="erp-page-header">
+    <div>
+      <h1>My Profile</h1>
+      <p>Manage your own contact details, account security, and HR profile change requests.</p>
+    </div>
+    <button type="button" class="btn btn-secondary" id="self-service-refresh">Refresh</button>
+  </div>
+
+  <div class="erp-tabs self-service-tabs">
+    <button type="button" class="tab-btn active" data-self-tab="personal">Personal Information</button>
+    <button type="button" class="tab-btn" data-self-tab="contact">Contact Information</button>
+    <button type="button" class="tab-btn" data-self-tab="address">Address Information</button>
+    <button type="button" class="tab-btn" data-self-tab="emergency">Emergency Contact</button>
+    <button type="button" class="tab-btn" data-self-tab="picture">Profile Picture</button>
+    <button type="button" class="tab-btn" data-self-tab="security">Account Security</button>
+    <button type="button" class="tab-btn" data-self-tab="requests">Change Requests</button>
+    <button type="button" class="tab-btn" data-self-tab="activity">Activity Log</button>
+    <button type="button" class="tab-btn self-service-hr-only" data-self-tab="hr-requests">Employee Change Requests</button>
+  </div>
+
+  <form class="erp-panel self-tab-panel active" id="self-tab-personal">
+    <div class="erp-section-title">Read-only employee information</div>
+    <div class="erp-form-grid">
+      <label>Employee ID<input id="self-employee-code" readonly></label>
+      <label>Full Legal Name<input id="self-full-name" readonly></label>
+      <label>Department<input id="self-department" readonly></label>
+      <label>Position<input id="self-position" readonly></label>
+      <label>Wage Type<input id="self-wage-type" readonly></label>
+      <label>Employment Status<input id="self-employment-status" readonly></label>
+      <label>Date Hired<input id="self-date-hired" readonly></label>
+      <label>Civil Status<input id="self-civil-status" readonly></label>
+    </div>
+    <p class="form-note">For legal name, civil status, government numbers, or bank details, submit a change request for HR review.</p>
+  </form>
+
+  <form class="erp-panel self-tab-panel" id="self-tab-contact">
+    <div class="erp-section-title">Editable contact information</div>
+    <div class="erp-form-grid">
+      <label>Email address<input type="email" id="self-email"></label>
+      <label>Work email<input type="email" id="self-work-email"></label>
+      <label>Contact number<input id="self-contact-number"></label>
+      <label class="self-email-password">Password confirmation<input type="password" id="self-email-password" autocomplete="current-password" placeholder="Required only when changing email"></label>
+    </div>
+    <div class="erp-actions">
+      <button type="button" class="btn btn-primary" data-self-save="contact">Save Contact</button>
+    </div>
+  </form>
+
+  <form class="erp-panel self-tab-panel" id="self-tab-address">
+    <div class="erp-section-title">Editable address information</div>
+    <div class="erp-form-grid">
+      <label>Current address<textarea id="self-current-address" rows="3"></textarea></label>
+      <label>Mailing address<textarea id="self-mailing-address" rows="3"></textarea></label>
+      <label>Permanent/residential address<input id="self-permanent-address" readonly></label>
+    </div>
+    <div class="erp-actions">
+      <button type="button" class="btn btn-primary" data-self-save="address">Save Address</button>
+    </div>
+  </form>
+
+  <form class="erp-panel self-tab-panel" id="self-tab-emergency">
+    <div class="erp-section-title">Editable emergency contact</div>
+    <div class="erp-form-grid">
+      <label>Contact name<input id="self-emergency-name"></label>
+      <label>Relationship<input id="self-emergency-relationship"></label>
+      <label>Contact number<input id="self-emergency-number"></label>
+      <label>Contact email<input type="email" id="self-emergency-email"></label>
+    </div>
+    <div class="erp-actions">
+      <button type="button" class="btn btn-primary" data-self-save="emergency">Save Emergency Contact</button>
+    </div>
+  </form>
+
+  <div class="erp-panel self-tab-panel" id="self-tab-picture">
+    <div class="erp-section-title">Profile picture</div>
+    <div class="self-picture-row">
+      <div class="self-picture-preview" id="self-picture-preview">No Photo</div>
+      <form id="self-picture-form" class="self-picture-form">
+        <label>Upload JPG or PNG<input type="file" id="self-picture-input" accept="image/jpeg,image/png"></label>
+        <button type="submit" class="btn btn-primary">Upload Picture</button>
+      </form>
+    </div>
+  </div>
+
+  <form class="erp-panel self-tab-panel" id="self-tab-security">
+    <div class="erp-section-title">Change password</div>
+    <div class="erp-form-grid">
+      <label>Current password<input type="password" id="self-current-password" autocomplete="current-password"></label>
+      <label>New password<input type="password" id="self-new-password" autocomplete="new-password"></label>
+      <label>Confirm new password<input type="password" id="self-confirm-password" autocomplete="new-password"></label>
+    </div>
+    <p class="form-note">Use at least 12 characters with uppercase, lowercase, number, and symbol.</p>
+    <div class="erp-actions">
+      <button type="button" class="btn btn-primary" id="self-password-save">Change Password</button>
+    </div>
+  </form>
+
+  <div class="erp-panel self-tab-panel" id="self-tab-requests">
+    <div class="erp-section-title">Submit restricted-field change request</div>
+    <form class="erp-form-grid" id="self-change-request-form">
+      <label>Field
+        <select id="self-request-field">
+          <option value="">Select field</option>
+          <option value="full_legal_name">Full legal name correction</option>
+          <option value="civil_status">Civil status</option>
+          <option value="permanent_address">Permanent/residential address</option>
+          <option value="sss_number">SSS number</option>
+          <option value="philhealth_number">PhilHealth number</option>
+          <option value="pagibig_number">Pag-IBIG number</option>
+          <option value="tin">TIN</option>
+          <option value="bank_account_number">Bank account number</option>
+          <option value="bank_name">Bank name</option>
+        </select>
+      </label>
+      <label>Requested value<input id="self-request-value"></label>
+      <label class="erp-span-2">Reason<textarea id="self-request-reason" rows="2"></textarea></label>
+      <div class="erp-actions erp-span-2">
+        <button type="submit" class="btn btn-primary">Submit Request</button>
+      </div>
+    </form>
+    <div class="erp-table-wrap">
+      <table>
+        <thead><tr><th>Field</th><th>Requested Value</th><th>Status</th><th>Submitted</th><th>Remarks</th></tr></thead>
+        <tbody id="self-change-requests-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="erp-panel self-tab-panel" id="self-tab-activity">
+    <div class="erp-section-title">Profile activity log</div>
+    <div class="erp-table-wrap">
+      <table>
+        <thead><tr><th>Action</th><th>Field</th><th>Date</th></tr></thead>
+        <tbody id="self-activity-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="erp-panel self-tab-panel self-service-hr-only" id="self-tab-hr-requests">
+    <div class="erp-section-title">Employee change requests</div>
+    <div class="erp-table-wrap">
+      <table>
+        <thead><tr><th>Employee</th><th>Field</th><th>Requested Value</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="self-hr-requests-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

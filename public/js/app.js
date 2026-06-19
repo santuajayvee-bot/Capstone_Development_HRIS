@@ -17,6 +17,7 @@ const PAGE_TITLES = {
   'system-admin': 'System Administration',
   'employee-dashboard': 'Employee Dashboard',
   'employee-profile': 'Employee Profile',
+  'self-service': 'My Profile',
 };
 
 let topbarClockTimer = null;
@@ -166,6 +167,10 @@ function navigate(pageId, navEl, params = null) {
 
   if (pageId === 'employee-profile' && typeof loadEmployeeProfilePage === 'function') {
     loadEmployeeProfilePage(params || {});
+  }
+
+  if (pageId === 'self-service' && typeof initSelfServiceProfile === 'function') {
+    initSelfServiceProfile();
   }
 
   requestAnimationFrame(() => enhanceResponsiveTables(document.getElementById('page-' + pageId) || document));

@@ -880,6 +880,142 @@ function payrollBadge(status) {
   return `<span class="badge badge-${color}">${normalized}</span>`;
 }
 
+function payslipMoney(value) {
+  const amount = Number(value || 0);
+  const text = `PHP ${Math.abs(amount).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return amount < 0 ? `(${text})` : text;
+}
+
+function payslipLine(label, value, className = '') {
+  return `
+    <tr class="${className}">
+      <td>${label}</td>
+      <td class="text-right">${value}</td>
+    </tr>
+  `;
+}
+
+async function generatePayslipPreview(calculationId) {
+  try {
+    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/payslip`);
+    const payslip = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payslip.error || 'Failed to generate payslip.');
+    showPayslipPreview(payslip);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function exportPayslipPdf(calculationId, printMode = false) {
+  try {
+    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/payslip.pdf${printMode ? '?print=1' : ''}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Failed to export payslip PDF.');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    if (printMode) {
+      const win = window.open(url, '_blank');
+      if (win) win.addEventListener('load', () => win.print(), { once: true });
+    } else {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `payslip-${calculationId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function showPayslipPreview(payslip) {
+  const modalId = 'payslip-preview-modal';
+  document.getElementById(modalId)?.remove();
+  const earningsRows = [
+    ['Days Worked', payslip.earnings.days_worked || 0],
+    ...(payslip.wage_type === 'Per-Piece' ? [
+      ['Quantity', payslip.earnings.quantity || 0],
+      ['Piece Rate', payslipMoney(payslip.earnings.piece_rate)],
+      ['Production Amount', payslipMoney(payslip.earnings.production_amount)],
+      ...(payslip.earnings.share_percentage ? [['Share', `${payslip.earnings.share_percentage}%`]] : [])
+    ] : []),
+    ...(payslip.wage_type === 'Per-Trip' ? [
+      ['Trip Count', payslip.earnings.trip_count || 0],
+      ['Driver/Helper Rate', payslipMoney(payslip.earnings.trip_rate)]
+    ] : []),
+    ['Basic Pay', payslipMoney(payslip.earnings.basic_pay)],
+    ['ROT/SOT', payslipMoney(payslip.earnings.rot_sot)],
+    ['ND', payslipMoney(payslip.earnings.nd)],
+    ['ADD', payslipMoney(payslip.earnings.add)],
+    ['Tardy/UT', payslipMoney(payslip.earnings.tardy_ut)],
+    ['Allowances', payslipMoney(payslip.earnings.allowances)],
+    ['Gross Pay', payslipMoney(payslip.earnings.gross_pay)]
+  ];
+
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'erp-modal-backdrop';
+  modal.innerHTML = `
+    <div class="erp-modal payslip-preview-modal" role="dialog" aria-modal="true">
+      <div class="erp-modal-head">
+        <div>
+          <h2>Payslip</h2>
+          <p>${payslip.reference_no} · ${payslip.payroll_period}</p>
+        </div>
+        <button class="erp-modal-close" type="button" onclick="document.getElementById('${modalId}')?.remove()">×</button>
+      </div>
+      <div class="payslip-paper">
+        <div class="payslip-title">
+          <h3>${payslip.company_name}</h3>
+          <span>Payroll Period: ${payslip.payroll_period}</span>
+        </div>
+        <div class="payroll-breakdown-grid">
+          <label>Employee<input value="${payslip.employee.name || '-'}" readonly /></label>
+          <label>Employee Code<input value="${payslip.employee.code || '-'}" readonly /></label>
+          <label>Department<input value="${payslip.employee.department || '-'}" readonly /></label>
+          <label>Position<input value="${payslip.employee.position || '-'}" readonly /></label>
+        </div>
+        <div class="payslip-two-column">
+          <div>
+            <h3>Earnings</h3>
+            <table class="payroll-breakdown-table">
+              <tbody>${earningsRows.map(([label, value]) => payslipLine(label, value, label === 'Gross Pay' ? 'is-positive' : '')).join('')}</tbody>
+            </table>
+          </div>
+          <div>
+            <h3>Deductions</h3>
+            <table class="payroll-breakdown-table">
+              <tbody>
+                ${payslip.deductions.map(item => payslipLine(item.label, payslipMoney(item.amount), item.amount ? 'is-deduction' : '')).join('')}
+                ${payslipLine('Total Deductions', payslipMoney(payslip.summary.total_deductions), 'is-deduction')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <table class="payroll-breakdown-table payslip-summary-table">
+          <tbody>
+            ${payslipLine('Gross Pay', payslipMoney(payslip.summary.gross_pay))}
+            ${payslipLine('Total Deductions', payslipMoney(payslip.summary.total_deductions), 'is-deduction')}
+            ${payslipLine('Net Due / Net Pay', payslipMoney(payslip.summary.net_due), 'is-net')}
+          </tbody>
+        </table>
+        <div class="payslip-foot">Generated: ${new Date(payslip.generated_at).toLocaleString()} · Prepared by: ${payslip.prepared_by || '-'}</div>
+      </div>
+      <div class="payroll-breakdown-actions">
+        <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
+      </div>
+    </div>
+  `;
+  modal.addEventListener('click', event => {
+    if (event.target.id === modalId) modal.remove();
+  });
+  document.body.appendChild(modal);
+}
+
 function showCalculationBreakdown(record) {
   const number = value => parseFloat(value || 0);
   const fmt = value => money(number(value));
@@ -960,7 +1096,9 @@ function showCalculationBreakdown(record) {
 
       <div class="payroll-breakdown-actions">
         <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
-        <button class="btn btn-primary" type="button" onclick="exportPayrollReport('employee','pdf')">Generate Payslip</button>
+        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, true)">Print Payslip</button>
+        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, false)">Export Payslip PDF</button>
+        <button class="btn btn-primary" type="button" onclick="generatePayslipPreview(${Number(record.id)})">Generate Payslip</button>
       </div>
     </div>
   `;
@@ -2079,6 +2217,8 @@ window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
 window.generatePayslipsFromRecords = generatePayslipsFromRecords;
+window.generatePayslipPreview = generatePayslipPreview;
+window.exportPayslipPdf = exportPayslipPdf;
 window.switchPayrollTab = switchPayrollTab;
 window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;

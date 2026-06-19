@@ -6,30 +6,30 @@
 const ROLE_PERMISSIONS = {
   admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile',
+    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile',
+    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'reports', 'onboarding', 'blockchain', 'employee-profile',
+    'attendance', 'payroll', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   system_admin: [
-    'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain',
+    'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain', 'self-service',
   ],
   payroll_officer: [
-    'dashboard', 'attendance', 'leave', 'payroll', 'blockchain',
+    'dashboard', 'attendance', 'leave', 'payroll', 'blockchain', 'self-service',
   ],
   payroll_manager: [
-    'dashboard', 'attendance', 'leave', 'payroll', 'reports', 'blockchain',
+    'dashboard', 'attendance', 'leave', 'payroll', 'reports', 'blockchain', 'self-service',
   ],
   manager: [
-    'dashboard', 'attendance', 'leave', 'reports',
+    'dashboard', 'attendance', 'leave', 'reports', 'self-service',
   ],
   employee: [
-    'dashboard', 'requests', 'attendance', 'leave', 'payroll', 'employee-profile',
+    'dashboard', 'requests', 'attendance', 'leave', 'payroll', 'employee-profile', 'self-service',
   ],
 };
 
@@ -156,6 +156,10 @@ function buildSidebar(user) {
     badge.className = `role-badge role-${user.role}`;
     badge.style.display = 'inline-block';
   }
+  const profileBtn = document.getElementById('btn-self-profile');
+  if (profileBtn) {
+    profileBtn.style.display = canAccess('self-service') ? 'inline-flex' : 'none';
+  }
   buildEmployeeBottomNav(user);
 }
 
@@ -173,8 +177,8 @@ function buildEmployeeBottomNav(user) {
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'leave', icon: 'LV', label: 'Leave' },
-    { page: 'employee-profile', icon: 'PF', label: 'Profile' },
-  ].filter(item => item.page === 'employee-profile' || canAccess(item.page));
+    { page: 'self-service', icon: 'PF', label: 'Profile' },
+  ].filter(item => canAccess(item.page));
 
   bottomNav.innerHTML = items.map((item, index) => `
     <button type="button"
@@ -192,6 +196,7 @@ function buildEmployeeBottomNav(user) {
 function canAccess(pageId) {
   const user = getUser();
   if (!user) return false;
+  if (pageId === 'self-service') return true;
   if (user.role === 'employee' && pageId === 'employee-profile') return true;
   if (pageId === 'requests') return user.role === 'employee';
   if (pageId === '201file') return false;
@@ -200,6 +205,7 @@ function canAccess(pageId) {
     'organization-setup': ['employee.manage', 'settings.manage'],
     register: ['employee.manage'],
     'employee-profile': ['employee.view'],
+    'self-service': [],
     attendance: ['attendance.view', 'attendance.manage'],
     leave: ['leave.request.create', 'leave.request.approve', 'leave.request.view_all', 'leave.request.view_own'],
     payroll: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve'],

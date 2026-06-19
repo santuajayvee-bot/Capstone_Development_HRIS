@@ -106,20 +106,70 @@ body *:not(code):not(pre) {
 .nav-item.active { color: var(--accent); background: rgba(79,124,255,0.1); border-left-color: var(--accent); }
 .nav-item .nav-icon { font-size: 17px; width: 20px; text-align: center; }
 .sidebar-user {
-  padding: 16px 20px;
+  padding: 14px 16px;
   border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+.sidebar-user-info {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.sidebar-user-info .name {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-user-info .role-badge {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 0 !important;
+  padding: 2px 6px !important;
+  font-size: 9.5px !important;
+  line-height: 1.25 !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  white-space: normal;
+}
+.sidebar-user-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
+}
+.btn-self-profile,
+.btn-logout {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+.btn-self-profile:hover,
+.btn-self-profile.active,
+.btn-logout:hover {
+  color: var(--accent);
+  background: rgba(231, 55, 55, 0.08);
 }
 .user-avatar {
-  width: 36px; height: 36px; border-radius: 50%;
+  width: 34px; height: 34px; border-radius: 0;
   background: linear-gradient(135deg, #4f7cff, #22d3a5);
   display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 700; flex-shrink: 0;
+  font-size: 12px; font-weight: 600; flex-shrink: 0;
 }
-.user-info .name { font-size: 13px; font-weight: 600; }
-.user-info .role { font-size: 11px; color: var(--muted); }
 
 /* ---- MAIN CONTENT ---- */
 .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -2979,6 +3029,12 @@ tr:hover td,
   border-color: #fecaca !important;
 }
 
+.sidebar-user .role-badge {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--muted) !important;
+}
+
 .att-note,
 .att-detail-grid > div,
 .att-metric,
@@ -3248,12 +3304,449 @@ tr:hover td,
   border-top: 1px solid var(--border);
 }
 
+.payslip-preview-modal {
+  width: min(860px, 96vw);
+}
+
+.payslip-paper {
+  padding: 20px 24px 24px;
+}
+
+.payslip-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.payslip-title h3,
+.payslip-two-column h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.payslip-title span,
+.payslip-foot {
+  color: #667085;
+  font-size: 12px;
+}
+
+.payslip-two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.payslip-two-column h3 {
+  margin-bottom: 10px;
+}
+
+.payslip-summary-table {
+  margin-top: 18px;
+}
+
+.payslip-foot {
+  margin-top: 14px;
+  text-align: right;
+}
+
 @media (max-width: 720px) {
   .payroll-breakdown-grid {
     grid-template-columns: 1fr;
   }
 
+  .payslip-two-column {
+    grid-template-columns: 1fr;
+  }
+
   .payroll-breakdown-actions {
     flex-direction: column-reverse;
+  }
+}
+/* Employee self-service */
+.self-service-page {
+  display: grid;
+  gap: 16px;
+}
+
+.self-service-page .erp-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.self-service-page .erp-page-header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.self-service-page .erp-page-header p,
+.self-service-page .form-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.self-service-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-width: 1px 0;
+  background: transparent;
+  padding: 10px 0;
+}
+
+.self-service-tabs .tab-btn {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  min-height: 42px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.self-service-tabs .tab-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.self-service-tabs .tab-btn:not(.active):hover {
+  color: var(--accent);
+  background: #fff1f1;
+}
+
+.self-service-page .erp-panel {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 16px;
+  border-radius: 0;
+}
+
+.self-tab-panel {
+  display: none;
+}
+
+.self-tab-panel.active {
+  display: block;
+}
+
+.self-service-page .erp-section-title {
+  font-size: 15px;
+  margin-bottom: 14px;
+}
+
+.self-service-page .erp-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.self-service-page label {
+  color: var(--muted);
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.self-service-page input,
+.self-service-page select,
+.self-service-page textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--input-bg, var(--bg));
+  color: var(--text);
+  min-height: 42px;
+  padding: 10px 12px;
+}
+
+.self-service-page textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.self-service-page input[readonly] {
+  background: var(--card2);
+}
+
+.self-service-page .erp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.self-service-page .erp-span-2 {
+  grid-column: span 2;
+}
+
+.self-picture-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.self-picture-preview {
+  width: 118px;
+  height: 118px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.self-picture-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.self-picture-form {
+  display: grid;
+  gap: 12px;
+  min-width: min(420px, 100%);
+}
+
+.self-service-page .erp-table-wrap {
+  margin-top: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+.self-service-page table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.self-service-page th,
+.self-service-page td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.self-service-page th {
+  background: var(--table-head, var(--card2));
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .self-service-page .erp-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .self-service-page .erp-span-2 {
+    grid-column: auto;
+  }
+
+  .self-picture-row {
+    flex-direction: column;
+  }
+}
+
+/* Employee request workspace */
+.requests-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.requests-workspace .erp-page-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.requests-workspace .erp-page-header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.requests-workspace .erp-page-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.request-panel {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 16px;
+  border-radius: 0;
+}
+
+.request-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.request-panel-header h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.request-panel-header p,
+.request-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.request-type-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.request-type-bar .req-type {
+  min-height: 62px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+  padding: 11px 14px;
+  cursor: pointer;
+}
+
+.request-type-bar .req-type:last-child {
+  border-right: 0;
+}
+
+.request-type-bar .req-type:hover {
+  background: #fff1f1;
+}
+
+.request-type-bar .req-type.selected {
+  background: #fff1f1;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.request-type-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.request-type-sub {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.request-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.request-form-main {
+  margin-top: 14px;
+}
+
+.request-form-grid label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.request-form-grid input,
+.request-form-grid select,
+.request-form-grid textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--card);
+  color: var(--text);
+  min-height: 42px;
+  padding: 10px 12px;
+}
+
+.request-form-grid textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.request-form-grid small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.request-span-2 {
+  grid-column: span 2;
+}
+
+.request-span-3 {
+  grid-column: span 3;
+}
+
+.request-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-top: 16px;
+}
+
+.request-table-wrap {
+  border-radius: 0;
+}
+
+.request-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+}
+
+@media (max-width: 960px) {
+  .request-type-bar,
+  .request-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .request-type-bar .req-type {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .request-type-bar .req-type:last-child {
+    border-bottom: 0;
+  }
+
+  .request-span-2,
+  .request-span-3 {
+    grid-column: auto;
+  }
+
+  .request-actions {
+    flex-direction: column;
   }
 }

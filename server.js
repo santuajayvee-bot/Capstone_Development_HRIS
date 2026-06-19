@@ -25,6 +25,7 @@ const employeeDashboardRoutes                = require('./server/employee-dashbo
 const { encryptPII }                         = require('./server/crypto');
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
+const selfServiceRoutes                      = require('./server/self-service');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -160,7 +161,6 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static(path.join(__dirname, 'public')));
-
 app.get('/attendance/scan', (_req, res) => {
   res.status(410).type('text/plain').send('QR attendance has been disabled. Please use fingerprint biometric attendance.');
 });
@@ -3406,6 +3406,9 @@ app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin_any, ...ROLE
     });
   } catch (err) { res.status(500).json({ error: 'Failed to fetch blockchain audit summary.' }); }
 });
+
+// Employee self-service profile and HR change-request review
+app.use('/api', selfServiceRoutes);
 
 // Error handling middleware (before SPA fallback)
 app.use((err, req, res, next) => {

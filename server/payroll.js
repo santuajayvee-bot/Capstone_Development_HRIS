@@ -3,6 +3,7 @@
    ============================================================ */
 
 const express = require('express');
+const PDFDocument = require('pdfkit');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
@@ -84,6 +85,208 @@ function normalizePayrollWageType(value) {
   if (text.includes('trip')) return 'Per-Trip';
   if (text.includes('salary') || text.includes('base')) return 'Base Salary';
   return String(value || '');
+}
+
+function peso(value) {
+  const amount = Number(value || 0);
+  const formatted = `PHP ${Math.abs(amount).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return amount < 0 ? `(${formatted})` : formatted;
+}
+
+function numeric(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function periodLabel(record) {
+  const raw = record.payroll_period || (record.calculation_date ? String(record.calculation_date).slice(0, 7) : '');
+  const match = String(raw).match(/^(\d{4})-(\d{2})$/);
+  if (!match) return raw || '-';
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
+function parseJsonSafe(value) {
+  if (!value) return {};
+  try {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  } catch (_) {
+    return {};
+  }
+}
+
+async function getSalaryCalculationForPayslip(pool, calculationId) {
+  const [rows] = await pool.execute(`
+    SELECT sc.*,
+           CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+           e.employee_code,
+           e.position,
+           d.name AS department,
+           wt.name AS wage_type,
+           u.username AS prepared_by
+      FROM salary_calculations sc
+      JOIN employees e ON e.id = sc.employee_id
+      LEFT JOIN departments d ON d.id = e.department_id
+      LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
+      LEFT JOIN users u ON u.id = sc.calculated_by
+     WHERE sc.id = ?
+     LIMIT 1
+  `, [calculationId]);
+  return rows[0] || null;
+}
+
+function canAccessPayslip(req, record) {
+  const role = req.user?.role;
+  const employeeId = Number(req.user?.employeeId || req.user?.employee_id || 0);
+  if (['system_admin', 'admin', 'hr_manager', 'hr_admin', 'payroll_officer', 'payroll_manager'].includes(role)) return true;
+  return role === 'employee' && employeeId && employeeId === Number(record.employee_id);
+}
+
+function buildPayslipPayload(record) {
+  const snapshot = parseJsonSafe(record.validation_snapshot);
+  const wageType = normalizePayrollWageType(record.wage_type);
+  const grossPay = numeric(record.gross_pay);
+  const allowances = numeric(record.total_allowances)
+    || numeric(record.housing_allowance) + numeric(record.meal_allowance) + numeric(record.transport_allowance) + numeric(record.bonus_allowance);
+  const basePay = Math.max(0, grossPay - allowances);
+  const totalDeductions = numeric(record.total_deductions);
+  const knownDeductions = [
+    { key: 'sss', label: 'SSS', amount: numeric(record.sss_deduction) },
+    { key: 'hdmf', label: 'HDMF / Pag-IBIG', amount: numeric(record.pagibig_deduction) },
+    { key: 'phic', label: 'PHIC / PhilHealth', amount: numeric(record.philhealth_deduction) },
+  ];
+  const knownTotal = knownDeductions.reduce((sum, item) => sum + item.amount, 0);
+  const otherAmount = Math.max(0, totalDeductions - knownTotal);
+  const deductionRows = [
+    ...knownDeductions,
+    { key: 'ir_coop', label: 'IR COOP', amount: 0 },
+    { key: 'cash_advance', label: 'Cash Advance', amount: 0 },
+    { key: 'adjustment', label: 'Adjustment', amount: 0 },
+    { key: 'canteen', label: 'Canteen', amount: 0 },
+    { key: 'other', label: 'Other Deductions', amount: otherAmount },
+  ];
+  const quantity = numeric(record.quantity);
+  const productionAmount = wageType === 'Per-Piece' ? numeric(record.base_rate) * quantity : 0;
+  const tripCount = wageType === 'Per-Trip' ? quantity : 0;
+
+  return {
+    reference_no: `CALC-${String(record.id).padStart(5, '0')}`,
+    company_name: 'Marulas Industrial Corp',
+    generated_at: new Date().toISOString(),
+    prepared_by: record.prepared_by || 'Payroll',
+    payroll_period: periodLabel(record),
+    employee: {
+      name: record.employee_name,
+      code: record.employee_code,
+      department: record.department || '-',
+      position: record.position || '-',
+    },
+    wage_type: wageType,
+    earnings: {
+      days_worked: numeric(record.days_worked) || snapshot.days_worked || 0,
+      hours_worked: numeric(record.hours_worked) || snapshot.hours_worked || 0,
+      basic_pay: basePay,
+      rot_sot: numeric(record.overtime_amount),
+      nd: 0,
+      add: numeric(record.bonus_allowance),
+      tardy_ut: numeric(snapshot.undertime_deduction),
+      allowances,
+      gross_pay: grossPay,
+      quantity,
+      piece_rate: wageType === 'Per-Piece' ? numeric(record.base_rate) : 0,
+      production_amount: productionAmount,
+      share_label: snapshot.pairing_type || snapshot.role || '',
+      share_percentage: snapshot.worker1_share || snapshot.share_percentage || null,
+      trip_count: tripCount,
+      trip_rate: wageType === 'Per-Trip' ? numeric(record.base_rate) : 0,
+    },
+    deductions: deductionRows,
+    summary: {
+      gross_pay: grossPay,
+      total_deductions: totalDeductions,
+      net_due: numeric(record.net_pay),
+    },
+  };
+}
+
+function drawPayslipPdf(doc, payslip) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const row = (label, value, x, y, w = width / 2 - 12) => {
+    doc.fontSize(8).fillColor('#667085').text(label, x, y, { width: w });
+    doc.fontSize(10).fillColor('#111827').text(value || '-', x, y + 12, { width: w });
+  };
+  const line = y => doc.moveTo(left, y).lineTo(right, y).strokeColor('#d0d5dd').lineWidth(0.6).stroke();
+  let y = 28;
+
+  doc.font('Helvetica-Bold').fontSize(14).fillColor('#111827').text(payslip.company_name, left, y);
+  doc.font('Helvetica').fontSize(9).fillColor('#667085').text(`Payroll Period: ${payslip.payroll_period}`, left, y + 18);
+  doc.text(`Reference: ${payslip.reference_no}`, right - 180, y + 18, { width: 180, align: 'right' });
+  line(y + 38);
+  y += 52;
+
+  row('Employee Name', payslip.employee.name, left, y);
+  row('Employee Code', payslip.employee.code, left + width / 2, y);
+  row('Department', payslip.employee.department, left, y + 40);
+  row('Position', payslip.employee.position, left + width / 2, y + 40);
+  y += 88;
+
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Earnings', left, y);
+  doc.text('Deductions', left + width / 2, y);
+  y += 16;
+  line(y);
+  y += 8;
+
+  const earnings = [
+    ['Days Worked', payslip.earnings.days_worked],
+    ['Basic Pay', peso(payslip.earnings.basic_pay)],
+    ['ROT/SOT', peso(payslip.earnings.rot_sot)],
+    ['ND', peso(payslip.earnings.nd)],
+    ['ADD', peso(payslip.earnings.add)],
+    ['Tardy/UT', peso(payslip.earnings.tardy_ut)],
+    ['Allowances', peso(payslip.earnings.allowances)],
+    ['Gross Pay', peso(payslip.earnings.gross_pay)],
+  ];
+  if (payslip.wage_type === 'Per-Piece') {
+    earnings.splice(1, 0, ['Quantity', payslip.earnings.quantity], ['Piece Rate', peso(payslip.earnings.piece_rate)], ['Production Amount', peso(payslip.earnings.production_amount)]);
+    if (payslip.earnings.share_percentage) earnings.splice(4, 0, ['Share', `${payslip.earnings.share_percentage}%`]);
+  }
+  if (payslip.wage_type === 'Per-Trip') {
+    earnings.splice(1, 0, ['Trip Count', payslip.earnings.trip_count], ['Driver/Helper Rate', peso(payslip.earnings.trip_rate)]);
+  }
+
+  const maxRows = Math.max(earnings.length, payslip.deductions.length);
+  for (let i = 0; i < maxRows; i += 1) {
+    const e = earnings[i];
+    const d = payslip.deductions[i];
+    if (e) {
+      doc.font('Helvetica').fontSize(9).fillColor('#344054').text(e[0], left, y);
+      doc.text(String(e[1]), left + 165, y, { width: 95, align: 'right' });
+    }
+    if (d) {
+      doc.text(d.label, left + width / 2, y);
+      doc.text(peso(d.amount), right - 95, y, { width: 95, align: 'right' });
+    }
+    y += 18;
+  }
+
+  y += 8;
+  line(y);
+  y += 14;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827');
+  doc.text('Total Deductions', left + width / 2, y);
+  doc.text(peso(payslip.summary.total_deductions), right - 95, y, { width: 95, align: 'right' });
+  y += 22;
+  doc.rect(left, y, width, 28).fill('#fef3f2');
+  doc.fillColor('#b91c1c').fontSize(12).text('Net Due / Net Pay', left + 10, y + 8);
+  doc.text(peso(payslip.summary.net_due), right - 180, y + 8, { width: 170, align: 'right' });
+  y += 46;
+  doc.font('Helvetica').fontSize(8).fillColor('#667085')
+    .text(`Generated: ${new Date(payslip.generated_at).toLocaleString('en-PH')}`, left, y)
+    .text(`Prepared by: ${payslip.prepared_by}`, right - 180, y, { width: 180, align: 'right' });
 }
 
 function periodRange(payrollPeriod, fallbackDate) {
@@ -2874,6 +3077,60 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
   }
 });
 
+router.get('/salary-calculations/:id/payslip', requireAuth, async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const record = await getSalaryCalculationForPayslip(pool, req.params.id);
+    if (!record) return res.status(404).json({ error: 'Salary calculation not found.' });
+    if (!canAccessPayslip(req, record)) return res.status(403).json({ error: 'You can only access your own payslip.' });
+
+    const payslip = buildPayslipPayload(record);
+    await logPayrollAudit(pool, req, 'payslip_generated', {
+      employee_id: record.employee_id,
+      salary_calculation_id: record.id,
+      remarks: `Generated payslip preview ${payslip.reference_no}`,
+      metadata: { reference_no: payslip.reference_no }
+    });
+    res.json(payslip);
+  } catch (err) {
+    console.error('Error generating payslip preview:', err);
+    res.status(500).json({ error: 'Failed to generate payslip.' });
+  }
+});
+
+router.get('/salary-calculations/:id/payslip.pdf', requireAuth, async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const record = await getSalaryCalculationForPayslip(pool, req.params.id);
+    if (!record) return res.status(404).json({ error: 'Salary calculation not found.' });
+    if (!canAccessPayslip(req, record)) return res.status(403).json({ error: 'You can only access your own payslip.' });
+
+    const payslip = buildPayslipPayload(record);
+    const action = req.query.print === '1' ? 'payslip_printed' : 'payslip_exported';
+    await logPayrollAudit(pool, req, action, {
+      employee_id: record.employee_id,
+      salary_calculation_id: record.id,
+      remarks: `${req.query.print === '1' ? 'Printed' : 'Exported'} payslip ${payslip.reference_no}`,
+      metadata: { reference_no: payslip.reference_no, format: 'pdf' }
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `${req.query.print === '1' ? 'inline' : 'attachment'}; filename="${payslip.reference_no}-${record.employee_code}.pdf"`
+    );
+    const doc = new PDFDocument({ size: 'A5', margin: 28 });
+    doc.pipe(res);
+    drawPayslipPdf(doc, payslip);
+    doc.end();
+  } catch (err) {
+    console.error('Error exporting payslip PDF:', err);
+    res.status(500).json({ error: 'Failed to export payslip PDF.' });
+  }
+});
+
 // Convert pending salary calculations to payslips for a specific period
 router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
@@ -2923,9 +3180,10 @@ router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.
     let convertedCount = 0;
     try {
       const [calculations] = await pool.execute(`
-        SELECT sc.id, sc.employee_id, sc.wage_type_id, sc.gross_pay, sc.deductions, sc.net_pay
+        SELECT sc.id, sc.employee_id, sc.wage_type_id, sc.gross_pay, sc.total_deductions, sc.net_pay
         FROM salary_calculations sc
-        WHERE sc.month_year = ? AND sc.status = 'Submitted'
+        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+          AND sc.status IN ('Submitted', 'Approved', 'Released', 'Paid')
         AND NOT EXISTS (
           SELECT 1 FROM payslips p 
           WHERE p.payroll_run_id = ? AND p.employee_id = sc.employee_id
@@ -2940,7 +3198,7 @@ router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.
           await pool.execute(`
             INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay, status)
             VALUES (?, ?, ?, ?, ?, ?, 'Approved')
-          `, [payrollRunId, calc.employee_id, calc.wage_type_id, calc.gross_pay, calc.deductions, calc.net_pay]);
+          `, [payrollRunId, calc.employee_id, calc.wage_type_id, calc.gross_pay || 0, calc.total_deductions || 0, calc.net_pay || 0]);
 
           convertedCount++;
           console.log(`✅ Converted calculation for employee ${calc.employee_id}`);
