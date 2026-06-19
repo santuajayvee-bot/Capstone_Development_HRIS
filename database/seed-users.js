@@ -94,25 +94,32 @@ async function findEmployee(connection, user) {
   return rows[0]?.id || null;
 }
 
-async function resetEmployeeAuth(connection, employeeId, passwordHash) {
+async function resetEmployeeAuth(connection, employeeId, passwordHash, employeesHasForcePasswordChange = false) {
   await connection.execute(
     `UPDATE employees
         SET Employee_ID = COALESCE(Employee_ID, id),
             Password_Hash = ?,
-            Password_Changed_At = NULL,
+            Password_Changed_At = NOW(),
             Failed_Login_Attempts = 0,
             Locked_Until = NULL,
             MFA_Enabled = COALESCE(MFA_Enabled, 1)
       WHERE id = ?`,
     [passwordHash, employeeId]
   );
+
+  if (employeesHasForcePasswordChange) {
+    await connection.execute(
+      'UPDATE employees SET force_password_change = 0 WHERE id = ?',
+      [employeeId]
+    );
+  }
 }
 
-async function ensureEmployee(connection, user, passwordHash) {
+async function ensureEmployee(connection, user, passwordHash, employeesHasForcePasswordChange = false) {
   const existingEmployeeId = await findEmployee(connection, user);
 
   if (existingEmployeeId) {
-    await resetEmployeeAuth(connection, existingEmployeeId, passwordHash);
+    await resetEmployeeAuth(connection, existingEmployeeId, passwordHash, employeesHasForcePasswordChange);
     return existingEmployeeId;
   }
 
@@ -122,7 +129,7 @@ async function ensureEmployee(connection, user, passwordHash) {
        (employee_code, first_name, last_name, email, position, employment_type,
         status, Password_Hash, Password_Changed_At, Failed_Login_Attempts,
         Locked_Until, MFA_Enabled)
-     VALUES (?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NULL, 0, NULL, 1)`,
+     VALUES (?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL, 1)`,
     [
       employee.employee_code,
       employee.first_name,
@@ -152,6 +159,16 @@ async function seedUsers() {
     const [roles] = await conn.execute('SELECT id, name FROM roles');
     const roleIdByName = new Map(roles.map(role => [role.name, role.id]));
     const usersHasEmail = await hasColumn(conn, 'users', 'email');
+    const usersHasAccountStatus = await hasColumn(conn, 'users', 'account_status');
+    const usersHasPhoneNumber = await hasColumn(conn, 'users', 'phone_number');
+    const usersHasMfaEnabled = await hasColumn(conn, 'users', 'mfa_enabled');
+    const usersHasMfaMethod = await hasColumn(conn, 'users', 'mfa_method');
+    const usersHasPasswordChangedAt = await hasColumn(conn, 'users', 'password_changed_at');
+    const usersHasForcePasswordChange = await hasColumn(conn, 'users', 'force_password_change');
+    const usersHasFailedLoginAttempts = await hasColumn(conn, 'users', 'failed_login_attempts');
+    const usersHasAccountLockedUntil = await hasColumn(conn, 'users', 'account_locked_until');
+    const usersHasLastLoginAt = await hasColumn(conn, 'users', 'last_login_at');
+    const employeesHasForcePasswordChange = await hasColumn(conn, 'employees', 'force_password_change');
 
     for (const user of USERS) {
       const roleId = roleIdByName.get(user.role);
@@ -160,33 +177,87 @@ async function seedUsers() {
       // Bootstrap passwords are temporary demo credentials. They are still
       // stored only as Argon2id hashes, never plaintext or reversible data.
       const hash = await argon2.hash(user.password, ARGON2ID_OPTIONS);
-      const employeeId = await ensureEmployee(conn, user, hash);
+      const employeeId = await ensureEmployee(conn, user, hash, employeesHasForcePasswordChange);
+
+      const columns = ['username'];
+      const values = [user.username];
+      const updates = [];
 
       if (usersHasEmail) {
-        await conn.execute(
-          `INSERT INTO users (username, email, password_hash, role_id, employee_id, is_active, account_status)
-           VALUES (?, ?, ?, ?, ?, 1, 'Active')
-           ON DUPLICATE KEY UPDATE
-             email = VALUES(email),
-             password_hash = VALUES(password_hash),
-             role_id = VALUES(role_id),
-             employee_id = VALUES(employee_id),
-             is_active = 1,
-             account_status = 'Active'`,
-          [user.username, user.email, hash, roleId, employeeId]
-        );
-      } else {
-        await conn.execute(
-          `INSERT INTO users (username, password_hash, role_id, employee_id, is_active)
-           VALUES (?, ?, ?, ?, 1)
-           ON DUPLICATE KEY UPDATE
-             password_hash = VALUES(password_hash),
-             role_id = VALUES(role_id),
-             employee_id = VALUES(employee_id),
-             is_active = 1`,
-          [user.username, hash, roleId, employeeId]
-        );
+        columns.push('email');
+        values.push(user.email);
+        updates.push('email = VALUES(email)');
       }
+
+      columns.push('password_hash', 'role_id', 'employee_id', 'is_active');
+      values.push(hash, roleId, employeeId, 1);
+      updates.push(
+        'password_hash = VALUES(password_hash)',
+        'role_id = VALUES(role_id)',
+        'employee_id = VALUES(employee_id)',
+        'is_active = 1'
+      );
+
+      if (usersHasAccountStatus) {
+        columns.push('account_status');
+        values.push('Active');
+        updates.push("account_status = 'Active'");
+      }
+
+      if (usersHasPhoneNumber) {
+        columns.push('phone_number');
+        values.push(user.phone_number || null);
+        updates.push('phone_number = COALESCE(VALUES(phone_number), phone_number)');
+      }
+
+      if (usersHasMfaEnabled) {
+        columns.push('mfa_enabled');
+        values.push(user.role === 'employee' ? 0 : 1);
+        updates.push('mfa_enabled = VALUES(mfa_enabled)');
+      }
+
+      if (usersHasMfaMethod) {
+        columns.push('mfa_method');
+        values.push('sms');
+        updates.push('mfa_method = VALUES(mfa_method)');
+      }
+
+      if (usersHasPasswordChangedAt) {
+        columns.push('password_changed_at');
+        values.push(new Date());
+        updates.push('password_changed_at = VALUES(password_changed_at)');
+      }
+
+      if (usersHasForcePasswordChange) {
+        columns.push('force_password_change');
+        values.push(0);
+        updates.push('force_password_change = 0');
+      }
+
+      if (usersHasFailedLoginAttempts) {
+        columns.push('failed_login_attempts');
+        values.push(0);
+        updates.push('failed_login_attempts = 0');
+      }
+
+      if (usersHasAccountLockedUntil) {
+        columns.push('account_locked_until');
+        values.push(null);
+        updates.push('account_locked_until = NULL');
+      }
+
+      if (usersHasLastLoginAt) {
+        columns.push('last_login_at');
+        values.push(null);
+      }
+
+      const placeholders = columns.map(() => '?').join(', ');
+      await conn.execute(
+        `INSERT INTO users (${columns.join(', ')})
+         VALUES (${placeholders})
+         ON DUPLICATE KEY UPDATE ${updates.join(', ')}`,
+        values
+      );
 
       console.log(`  ${user.username} (${user.role}) seeded`);
     }

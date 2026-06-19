@@ -59,7 +59,13 @@ function onbOptions(values, selected, placeholder = '') {
 async function onbJson(url, options = {}) {
   const response = await apiFetch(url, options);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status}).`);
+    error.status = response.status;
+    error.code = data.code || '';
+    error.details = data.details || '';
+    throw error;
+  }
   return data;
 }
 
@@ -209,6 +215,18 @@ async function onbRefresh() {
     await Promise.all([onbLoadDashboard(), onbLoadApplicants()]);
   } catch (error) {
     onbToast(error.message, 'error');
+    const body = document.getElementById('onb-review-body');
+    if (body) {
+      const details = error.details
+        ? `<p class="onb-muted">${onbEscape(error.details)}</p>`
+        : '<p class="onb-muted">Close this review and refresh after the configuration is corrected.</p>';
+      body.innerHTML = `
+        <div class="onb-empty">
+          <strong>${onbEscape(error.message)}</strong>
+          ${details}
+        </div>
+      `;
+    }
   }
 }
 

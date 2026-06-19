@@ -3,6 +3,12 @@
    ============================================================ */
 
 const jwt = require('jsonwebtoken');
+const pool = require('../config/db');
+
+const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
+  '/api/account/password',
+  '/api/auth/me',
+]);
 
 function getJwtSecret() {
   return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
@@ -40,7 +46,42 @@ const ROLES = {
  * requireAuth — verifies JWT and attaches req.user.
  * Use on every protected API route.
  */
-function requireAuth(req, res, next) {
+function isAllowedDuringForcedPasswordChange(req) {
+  return PASSWORD_CHANGE_ALLOWED_PATHS.has(req.originalUrl.split('?')[0]);
+}
+
+function isTokenOlderThanPasswordChange(tokenPayload, passwordChangedAt) {
+  if (!tokenPayload?.iat || !passwordChangedAt) return false;
+  const changedAt = new Date(passwordChangedAt).getTime();
+  if (Number.isNaN(changedAt)) return false;
+  return tokenPayload.iat * 1000 < changedAt;
+}
+
+async function getAccountSessionState(tokenPayload) {
+  const [rows] = await pool.execute(
+    `SELECT
+       u.force_password_change,
+       COALESCE(u.password_changed_at, e.Password_Changed_At) AS password_changed_at,
+       s.Session_ID,
+       s.Revoked_At,
+       s.Expires_At
+     FROM users u
+     LEFT JOIN employees e ON e.id = u.employee_id
+     LEFT JOIN USER_SESSION s ON s.JWT_ID = ?
+     WHERE u.id = ? OR e.id = ? OR e.Employee_ID = ?
+     LIMIT 1`,
+    [
+      tokenPayload.jti || '',
+      tokenPayload.id || 0,
+      tokenPayload.employeeId || 0,
+      tokenPayload.Employee_ID || 0,
+    ]
+  );
+
+  return rows[0] || null;
+}
+
+async function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
   console.log('[requireAuth] Authorization header present:', !!authHeader);
 
@@ -57,6 +98,35 @@ function requireAuth(req, res, next) {
   try {
     req.user = jwt.verify(token, jwtSecret);
     req.user.role = ROLE_ALIASES[req.user.role] || req.user.role;
+
+    const accountState = await getAccountSessionState(req.user);
+    if (!accountState) {
+      return res.status(401).json({ error: 'Invalid session.' });
+    }
+
+    if (req.user.jti) {
+      if (!accountState.Session_ID || accountState.Revoked_At || new Date(accountState.Expires_At) <= new Date()) {
+        return res.status(401).json({ error: 'Session expired. Please log in again.' });
+      }
+    }
+
+    if (isTokenOlderThanPasswordChange(req.user, accountState.password_changed_at)) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.' });
+    }
+
+    const forcePasswordChange = Boolean(Number(accountState.force_password_change));
+    req.user.forcePasswordChange = forcePasswordChange;
+    req.user.mustChangePassword = forcePasswordChange;
+    req.user.passwordChangedAt = accountState.password_changed_at || null;
+
+    if (forcePasswordChange && !isAllowedDuringForcedPasswordChange(req)) {
+      return res.status(403).json({
+        error: 'Password change required.',
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        mustChangePassword: true,
+      });
+    }
+
     console.log('[requireAuth] Token verified successfully for user:', req.user.username);
     next();
   } catch (err) {

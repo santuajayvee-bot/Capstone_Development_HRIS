@@ -21,6 +21,23 @@ function sysFormatDateTime(value) {
   return new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function sysPasswordErrors(password) {
+  const errors = [];
+  if (!String(password || '').trim()) errors.push('Temporary password is required.');
+  if (typeof password === 'string' && password.length > 128) errors.push('Temporary password must be 128 characters or fewer.');
+  return errors;
+}
+
+function sysActionIcon(icon) {
+  const icons = {
+    shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-2.8 8.5-7 10-4.2-1.5-7-5.5-7-10V6l7-3z"/><path d="M12 7v10"/></svg>',
+    key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="3"/><path d="M10.5 12.5L20 3"/><path d="M15 8l2 2"/><path d="M17 6l2 2"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10"/><path d="M15 7v10"/></svg>',
+    play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7-11-7z"/></svg>',
+  };
+  return icons[icon] || '';
+}
+
 // ── Tab Switching ────────────────────────────────────────────
 function switchSysAdminTab(tabId, el) {
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
@@ -117,7 +134,7 @@ function renderUsersTable(users) {
           <div class="action-group">
             ${!isSelf ? `
               <button class="btn-sysadmin-sm" onclick="showRoleModal(${u.id}, '${u.username}', '${u.role_label || u.role_name}', ${u.role_id})" title="Change Role">🛡️</button>
-              <button class="btn-sysadmin-sm" onclick="showCredentialsModal(${u.id}, '${u.username}')" title="Edit Credentials">🔑</button>
+              <button class="btn-sysadmin-sm" onclick="showCredentialsModal(${u.id}, '${u.username}')" title="Reset Password">🔑</button>
               ${u.is_active 
                 ? `<button class="btn-sysadmin-danger" onclick="toggleUserStatus(${u.id}, false)" title="Deactivate">⏸</button>`
                 : `<button class="btn-sysadmin-sm" onclick="toggleUserStatus(${u.id}, true)" title="Activate">▶</button>`
@@ -420,7 +437,8 @@ function validateRegistrationAccountSetup() {
 
   if (!username) { showSysToast('Username is required.', 'error'); return false; }
   if (!/^[a-z0-9._-]+$/.test(username)) { showSysToast('Username can only contain lowercase letters, numbers, dots, hyphens.', 'error'); return false; }
-  if (!password || password.length < 8) { showSysToast('Password must be at least 8 characters.', 'error'); return false; }
+  const passwordErrors = sysPasswordErrors(password);
+  if (passwordErrors.length) { showSysToast(passwordErrors[0], 'error'); return false; }
   if (password !== confirm) { showSysToast('Passwords do not match.', 'error'); return false; }
   if (!roleId) { showSysToast('Please select a role.', 'error'); return false; }
   return true;
@@ -507,7 +525,7 @@ async function submitRegistration() {
       closeRegisterModal();
       loadUsersTable();
     } else {
-      showSysToast(`❌ ${data.error}`, 'error');
+      showSysToast(data.message || data.error || 'Account registration failed.', 'error');
     }
   } catch (err) {
     console.error('[SysAdmin] submitRegistration error:', err);
@@ -601,6 +619,11 @@ function showCredentialsModal(userId, username) {
   document.getElementById('cred-modal-username').value = username;
   document.getElementById('cred-modal-password').value = '';
   document.getElementById('cred-modal-password-confirm').value = '';
+  const generated = document.getElementById('cred-modal-generated');
+  if (generated) {
+    generated.textContent = '';
+    generated.style.display = 'none';
+  }
   document.getElementById('credentials-modal').style.display = 'flex';
 }
 
@@ -610,25 +633,32 @@ function closeCredentialsModal() {
 
 async function submitCredentialsUpdate() {
   const userId = parseInt(document.getElementById('cred-modal-user-id').value);
-  const username = document.getElementById('cred-modal-username').value.trim().toLowerCase();
   const password = document.getElementById('cred-modal-password').value;
   const confirm = document.getElementById('cred-modal-password-confirm').value;
+  const generated = document.getElementById('cred-modal-generated');
 
-  if (!username) { showSysToast('Username is required.', 'error'); return; }
-  if (!password || password.length < 8) { showSysToast('Password must be at least 8 characters.', 'error'); return; }
-  if (password !== confirm) { showSysToast('Passwords do not match.', 'error'); return; }
+  if (password) {
+    const passwordErrors = sysPasswordErrors(password);
+    if (passwordErrors.length) { showSysToast(passwordErrors[0], 'error'); return; }
+    if (password !== confirm) { showSysToast('Passwords do not match.', 'error'); return; }
+  }
 
   try {
-    const res = await apiFetch(`/api/admin/users/${userId}/credentials`, {
+    const res = await apiFetch(`/api/admin/users/${userId}/reset-password`, {
       method: 'PUT',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify(password ? { temporaryPassword: password } : {}),
     });
 
     const data = await res.json();
 
     if (res.ok) {
       showSysToast(`✅ ${data.message}`, 'success');
-      closeCredentialsModal();
+      if (data.temporaryPassword && generated) {
+        generated.textContent = `Generated temporary password: ${data.temporaryPassword}`;
+        generated.style.display = 'block';
+      } else {
+        closeCredentialsModal();
+      }
       loadUsersTable();
     } else {
       showSysToast(`❌ ${data.error}`, 'error');

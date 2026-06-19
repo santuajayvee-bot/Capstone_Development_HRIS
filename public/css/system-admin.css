@@ -733,3 +733,79 @@
     width: 95vw;
   }
 }
+
+/* Polished compact account action buttons */
+.action-group {
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 120px;
+}
+
+.action-group .btn-sysadmin-sm,
+.action-group .btn-sysadmin-danger {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--action-border, rgba(108, 92, 231, 0.34));
+  background: var(--action-bg, rgba(108, 92, 231, 0.1));
+  color: var(--action-color, #6c5ce7);
+  font-size: 14px;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.action-group .btn-sysadmin-sm:nth-child(1) {
+  --action-color: #3b82f6;
+  --action-border: rgba(59, 130, 246, 0.34);
+  --action-bg: rgba(59, 130, 246, 0.1);
+  --action-bg-hover: rgba(59, 130, 246, 0.18);
+  --action-shadow: rgba(59, 130, 246, 0.2);
+}
+
+.action-group .btn-sysadmin-sm:nth-child(2) {
+  --action-color: #f59e0b;
+  --action-border: rgba(245, 158, 11, 0.34);
+  --action-bg: rgba(245, 158, 11, 0.1);
+  --action-bg-hover: rgba(245, 158, 11, 0.18);
+  --action-shadow: rgba(245, 158, 11, 0.2);
+}
+
+.action-group .btn-sysadmin-sm:nth-child(3) {
+  --action-color: #22c55e;
+  --action-border: rgba(34, 197, 94, 0.34);
+  --action-bg: rgba(34, 197, 94, 0.1);
+  --action-bg-hover: rgba(34, 197, 94, 0.18);
+  --action-shadow: rgba(34, 197, 94, 0.2);
+}
+
+.action-group .btn-sysadmin-danger {
+  --action-color: #ef4444;
+  --action-border: rgba(239, 68, 68, 0.34);
+  --action-bg: rgba(239, 68, 68, 0.1);
+  --action-bg-hover: rgba(239, 68, 68, 0.18);
+  --action-shadow: rgba(239, 68, 68, 0.2);
+}
+
+.action-group .btn-sysadmin-sm:hover,
+.action-group .btn-sysadmin-danger:hover,
+.action-group .btn-sysadmin-sm:focus-visible,
+.action-group .btn-sysadmin-danger:focus-visible {
+  outline: none;
+  border-color: var(--action-color);
+  background: var(--action-bg-hover, rgba(108, 92, 231, 0.18));
+  color: var(--action-color);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px var(--action-shadow, rgba(108, 92, 231, 0.2));
+}
+
+.action-group .btn-sysadmin-sm:active,
+.action-group .btn-sysadmin-danger:active {
+  transform: translateY(0);
+  box-shadow: none;
+}

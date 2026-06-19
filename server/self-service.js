@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
+const accountController = require('../controllers/accountController');
 
 const router = express.Router();
 const HR_REVIEW_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
@@ -227,16 +228,6 @@ async function verifyPassword(hash, password) {
     : bcrypt.compare(password, hash);
 }
 
-function validatePasswordPolicy(password) {
-  if (typeof password !== 'string' || password.length < 12) {
-    return 'New password must be at least 12 characters.';
-  }
-  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
-    return 'New password must include uppercase, lowercase, number, and symbol.';
-  }
-  return null;
-}
-
 function maskSensitive(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -412,39 +403,7 @@ router.put('/self-service/profile', async (req, res) => {
   }
 });
 
-router.put('/self-service/password', async (req, res) => {
-  const connection = await pool.getConnection();
-  try {
-    const userId = currentUserId(req);
-    const employeeId = currentEmployeeId(req);
-    const { current_password, new_password } = req.body || {};
-    const policyError = validatePasswordPolicy(new_password);
-    if (policyError) return res.status(400).json({ error: policyError });
-
-    const hash = await getUserPasswordHash(userId);
-    if (!(await verifyPassword(hash, current_password || ''))) {
-      return res.status(400).json({ error: 'Current password is incorrect.' });
-    }
-
-    const newHash = await argon2.hash(new_password, { type: argon2.argon2id });
-    await connection.beginTransaction();
-    await connection.execute('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, userId]);
-    try {
-      await connection.execute('UPDATE employees SET Password_Hash = ?, Password_Changed_At = NOW() WHERE id = ?', [newHash, employeeId]);
-    } catch (_legacyError) {
-      // Older schemas may not carry legacy employee login columns.
-    }
-    await auditProfile(req, connection, 'Password changed', 'password', null, 'updated');
-    await connection.commit();
-    res.json({ message: 'Password updated successfully.' });
-  } catch (error) {
-    await connection.rollback();
-    console.error('[self-service/password]', error.message);
-    res.status(500).json({ error: 'Failed to update password.' });
-  } finally {
-    connection.release();
-  }
-});
+router.put('/self-service/password', accountController.changeOwnAccountPassword);
 
 router.post('/self-service/profile-picture', (req, res, next) => {
   photoUpload.single('photo')(req, res, err => {

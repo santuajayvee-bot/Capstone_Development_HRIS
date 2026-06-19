@@ -100,6 +100,13 @@
 
 .login-field input::placeholder { color: #98a2b3; }
 
+.login-turnstile-wrap {
+  display: flex;
+  justify-content: center;
+  min-height: 70px;
+  margin: 4px 0 14px;
+}
+
 .btn-login {
   width: 100%;
   min-height: 46px;
@@ -116,10 +123,61 @@
   transition: .2s;
 }
 
+.btn-login:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn-login:hover {
   background: #cf252b;
   transform: translateY(-1px);
   box-shadow: 0 12px 24px rgba(237, 50, 55, 0.24);
+}
+
+.btn-login:disabled:hover {
+  background: #ed3237;
+  transform: none;
+  box-shadow: none;
+}
+
+.login-mfa-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+  text-align: center;
+  margin: 4px 0 6px;
+}
+
+.login-mfa-subtitle {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.login-mfa-actions {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.login-mfa-actions button {
+  border: 0;
+  background: transparent;
+  color: #b4232a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-mfa-actions button:disabled {
+  color: #98a2b3;
+  cursor: not-allowed;
 }
 
 .login-err {

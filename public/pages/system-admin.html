@@ -261,9 +261,9 @@
         </div>
         <div class="form-row">
           <div class="form-col">
-            <label class="sysadmin-label">Default Password</label>
+            <label class="sysadmin-label">Temporary Password</label>
             <div class="password-field">
-              <input type="password" id="reg-password" class="sysadmin-input" placeholder="Minimum 8 characters" autocomplete="new-password" />
+              <input type="password" id="reg-password" class="sysadmin-input" placeholder="e.g. 123" autocomplete="new-password" />
               <button type="button" class="toggle-password" onclick="togglePasswordVisibility()">👁</button>
             </div>
           </div>
@@ -315,36 +315,36 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════
-     MODAL: Edit Credentials
+     MODAL: Reset Password
      ═══════════════════════════════════════════════════════════════ -->
 <div class="sysadmin-modal-overlay" id="credentials-modal" style="display:none;">
   <div class="sysadmin-modal sysadmin-modal-sm">
     <div class="modal-header">
-      <h3>Edit Credentials</h3>
+      <h3>Reset Password</h3>
       <button class="modal-close" onclick="closeCredentialsModal()">✕</button>
     </div>
     <div class="modal-body">
       <div class="employee-preview" style="display:block;">
         <div class="preview-row"><span>User:</span> <strong id="cred-modal-username-display">—</strong></div>
       </div>
-      <label class="sysadmin-label" style="margin-top:16px;">New Username</label>
-      <input type="text" id="cred-modal-username" class="sysadmin-input" placeholder="e.g. john.doe" autocomplete="off" />
-      <small class="input-hint">Lowercase letters, numbers, dots, hyphens only</small>
+      <input type="hidden" id="cred-modal-username" />
       
-      <label class="sysadmin-label" style="margin-top:16px;">New Password</label>
+      <label class="sysadmin-label" style="margin-top:16px;">Temporary Password</label>
       <div class="password-field">
-        <input type="password" id="cred-modal-password" class="sysadmin-input" placeholder="Minimum 8 characters" autocomplete="new-password" />
+        <input type="password" id="cred-modal-password" class="sysadmin-input" placeholder="Leave blank to generate" autocomplete="new-password" />
         <button type="button" class="toggle-password" onclick="toggleCredPasswordVisibility()">👁</button>
       </div>
       
       <label class="sysadmin-label" style="margin-top:16px;">Confirm Password</label>
-      <input type="password" id="cred-modal-password-confirm" class="sysadmin-input" placeholder="Re-enter new password" autocomplete="new-password" />
+      <input type="password" id="cred-modal-password-confirm" class="sysadmin-input" placeholder="Required only when typing a password" autocomplete="new-password" />
+      <small class="input-hint">Simple temporary passwords are allowed here. The employee must set a strong password on next login.</small>
+      <div class="password-strength" id="cred-modal-generated" style="display:none;"></div>
 
       <input type="hidden" id="cred-modal-user-id" />
     </div>
     <div class="modal-footer">
       <button class="btn-sysadmin-outline" onclick="closeCredentialsModal()">Cancel</button>
-      <button class="btn-sysadmin-primary" onclick="submitCredentialsUpdate()">Save Changes</button>
+      <button class="btn-sysadmin-primary" onclick="submitCredentialsUpdate()">Reset Password</button>
     </div>
   </div>
 </div>

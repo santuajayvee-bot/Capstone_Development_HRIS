@@ -482,16 +482,23 @@ async function fetchEmployees() {
     EMPLOYEES = [];
     EMPLOYEES_RAW = [];
     
-    const grid = document.getElementById('emp-grid');
-    if (grid) {
-      grid.innerHTML = `
-        <div style="grid-column: 1/-1; padding: 40px; text-align: center; color: #ff6b6b;">
-          <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Failed to Load Employees</div>
-          <div style="font-size: 14px; color: #999;">${error.message}</div>
-          <button onclick="location.reload()" style="margin-top: 16px; padding: 8px 16px; background: #4f7cff; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
-        </div>
+    const message = error.message.includes('HTTP 401')
+      ? 'Session expired. Please log in again.'
+      : error.message;
+    const tbody = document.getElementById('emp-tbody');
+    if (tbody) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="10" style="padding:32px;text-align:center;color:#ff6b6b;">
+            <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Failed to Load Employees</div>
+            <div style="font-size:14px;color:var(--muted);">${employeeSetupEscape(message)}</div>
+            <button onclick="location.reload()" style="margin-top:16px;padding:8px 16px;background:#4f7cff;color:white;border:none;border-radius:4px;cursor:pointer;">Retry</button>
+          </td>
+        </tr>
       `;
     }
+    const countEl = document.getElementById('emp-count');
+    if (countEl) countEl.textContent = 'Unable to load employees';
     
     return [];
   }

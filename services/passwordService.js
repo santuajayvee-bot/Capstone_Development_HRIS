@@ -62,6 +62,23 @@ function validatePasswordStrength(password) {
   };
 }
 
+function validateTemporaryPassword(password) {
+  const errors = [];
+
+  if (!isNonEmptyString(password)) {
+    errors.push('Temporary password is required.');
+  }
+
+  if (typeof password === 'string' && password.length > 128) {
+    errors.push('Temporary password must be 128 characters or fewer.');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
 async function hashPassword(password) {
   if (!isNonEmptyString(password)) {
     throw new Error('Password is required.');
@@ -76,6 +93,18 @@ async function hashPassword(password) {
   // with strong protection against GPU/password-cracking attacks.
   // Only this irreversible hash is returned for storage; plaintext passwords
   // must never be saved in the database, logs, tokens, or audit records.
+  return argon2.hash(password, ARGON2ID_OPTIONS);
+}
+
+async function hashTemporaryPassword(password) {
+  const validation = validateTemporaryPassword(password);
+  if (!validation.valid) {
+    throw new Error('Temporary password is invalid.');
+  }
+
+  // This is only for administrator-issued temporary credentials that are
+  // forced to change before dashboard/API access. It still uses Argon2id and
+  // never stores plaintext.
   return argon2.hash(password, ARGON2ID_OPTIONS);
 }
 
@@ -112,8 +141,9 @@ async function isPasswordReused(newPassword, previousPasswordHashes) {
 
 module.exports = {
   hashPassword,
+  hashTemporaryPassword,
   verifyPassword,
+  validateTemporaryPassword,
   validatePasswordStrength,
   isPasswordReused,
 };
-

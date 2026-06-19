@@ -11,19 +11,16 @@
    ============================================================ */
 
 const express  = require('express');
-const argon2   = require('argon2');
 const router   = express.Router();
 const pool     = require('../config/db');
 const { requireAuth }    = require('./middleware');
+const accountController = require('../controllers/accountController');
+const {
+  hashTemporaryPassword,
+  validateTemporaryPassword,
+} = require('../services/passwordService');
 
 // ── Argon2 Configuration (OWASP recommended) ────────────────
-const ARGON2_OPTIONS = {
-  type:        argon2.argon2id,   // Hybrid: side-channel + GPU resistant
-  memoryCost:  65536,             // 64 MB
-  timeCost:    3,                 // 3 iterations
-  parallelism: 4,                 // 4 threads
-};
-
 /* ================================================================
    MIDDLEWARE: requireLevel4 — Strict System Administrator Guard
    ================================================================
@@ -92,9 +89,27 @@ function sanitizeInput(str) {
   return str.trim().replace(/[<>]/g, '');
 }
 
+function passwordPolicyErrors(password) {
+  const result = validateTemporaryPassword(password);
+  return result.valid ? [] : result.errors;
+}
+
+async function revokeEmployeeSessions(conn, employeeId, reason) {
+  await conn.execute(
+    `UPDATE USER_SESSION
+        SET Revoked_At = NOW(),
+            Revocation_Reason = ?
+      WHERE Employee_ID = (SELECT Employee_ID FROM employees WHERE id = ? LIMIT 1)
+        AND Revoked_At IS NULL`,
+    [reason, employeeId]
+  );
+}
+
 // ── Apply auth + Level 4 guard to ALL routes in this router ──
 router.use(requireAuth);
 router.use(requireLevel4);
+
+router.put('/users/:userId/reset-password', accountController.resetUserPassword);
 
 /* ================================================================
    POST /api/admin/register-role
@@ -125,9 +140,11 @@ router.post('/register-role', async (req, res) => {
       });
     }
 
-    if (typeof password !== 'string' || password.length < 8) {
+    const passwordErrors = passwordPolicyErrors(password);
+    if (passwordErrors.length) {
       return res.status(400).json({
-        error: 'Password must be at least 8 characters long.',
+        error: 'Temporary password is invalid.',
+        requirements: passwordErrors,
       });
     }
 
@@ -159,7 +176,9 @@ router.post('/register-role', async (req, res) => {
     const assignedRole = roleRows[0];
 
     // ── Hash password with Argon2id ──────────────────────────
-    const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
+    // Administrator-created passwords are temporary. They are stored only as
+    // Argon2id hashes and force the employee to choose a new password.
+    const passwordHash = await hashTemporaryPassword(password);
 
     // ── Begin Transaction ────────────────────────────────────
     await conn.beginTransaction();
@@ -188,22 +207,45 @@ router.post('/register-role', async (req, res) => {
       });
 
       await conn.execute(
-        `UPDATE users SET username = ?, password_hash = ?, role_id = ? WHERE id = ?`,
+        `UPDATE users
+            SET username = ?,
+                password_hash = ?,
+                role_id = ?,
+                password_changed_at = NOW(),
+                force_password_change = 1,
+                failed_login_attempts = 0,
+                account_locked_until = NULL
+          WHERE id = ?`,
         [cleanUsername, passwordHash, role_id, userId]
       );
+      await revokeEmployeeSessions(conn, employee_id, 'admin_password_reset');
 
       actionPerformed = `ROLE_UPDATED: Employee ${employee.employee_code} (${employee.first_name} ${employee.last_name}) role changed from ${oldRoleRows[0]?.label || oldRoleId} to ${assignedRole.label}`;
 
     } else {
       // ── INSERT new account ─────────────────────────────────
       const [insertResult] = await conn.execute(
-        `INSERT INTO users (username, password_hash, role_id, employee_id, is_active) VALUES (?, ?, ?, ?, 1)`,
+        `INSERT INTO users
+           (username, password_hash, role_id, employee_id, is_active,
+            password_changed_at, force_password_change, failed_login_attempts, account_locked_until)
+         VALUES (?, ?, ?, ?, 1, NOW(), 1, 0, NULL)`,
         [cleanUsername, passwordHash, role_id, employee_id]
       );
       userId = insertResult.insertId;
 
       actionPerformed = `ACCOUNT_CREATED: New account '${cleanUsername}' for Employee ${employee.employee_code} (${employee.first_name} ${employee.last_name}) with role ${assignedRole.label} (${assignedRole.access_level})`;
     }
+
+    await conn.execute(
+      `UPDATE employees
+          SET Password_Hash = ?,
+              Password_Changed_At = NULL,
+              Failed_Login_Attempts = 0,
+              Locked_Until = NULL,
+              force_password_change = 1
+        WHERE id = ?`,
+      [passwordHash, employee_id]
+    );
 
     // ── Immutable Audit Log Entry (Non-Repudiation) ──────────
     const newValue = JSON.stringify({
@@ -213,6 +255,7 @@ router.post('/register-role', async (req, res) => {
       role_name: assignedRole.name,
       role_label: assignedRole.label,
       access_level: assignedRole.access_level,
+      force_password_change: true,
     });
 
     const adminIP = extractClientIP(req);
@@ -353,8 +396,12 @@ router.put('/users/:userId/credentials', async (req, res) => {
       return res.status(400).json({ error: 'Both username and password are required.' });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    const passwordErrors = passwordPolicyErrors(password);
+    if (passwordErrors.length) {
+      return res.status(400).json({
+        error: 'Temporary password is invalid.',
+        requirements: passwordErrors,
+      });
     }
 
     const cleanUsername = sanitizeInput(username).toLowerCase();
@@ -374,18 +421,36 @@ router.put('/users/:userId/credentials', async (req, res) => {
     }
     const targetUser = userRows[0];
 
-    const passwordHash = await argon2.hash(password, ARGON2_OPTIONS);
+    const passwordHash = await hashTemporaryPassword(password);
 
     await conn.beginTransaction();
 
     await conn.execute(
-      'UPDATE users SET username = ?, password_hash = ? WHERE id = ?',
+      `UPDATE users
+          SET username = ?,
+              password_hash = ?,
+              password_changed_at = NOW(),
+              force_password_change = 1,
+              failed_login_attempts = 0,
+              account_locked_until = NULL
+        WHERE id = ?`,
       [cleanUsername, passwordHash, targetUserId]
     );
+    await conn.execute(
+      `UPDATE employees
+          SET Password_Hash = ?,
+              Password_Changed_At = NULL,
+              Failed_Login_Attempts = 0,
+              Locked_Until = NULL,
+              force_password_change = 1
+        WHERE id = ?`,
+      [passwordHash, targetUser.employee_id]
+    );
+    await revokeEmployeeSessions(conn, targetUser.employee_id, 'admin_password_reset');
 
     // Audit log
     const oldValue = JSON.stringify({ username: targetUser.username });
-    const newValue = JSON.stringify({ username: cleanUsername, password_changed: true });
+    const newValue = JSON.stringify({ username: cleanUsername, password_changed: true, force_password_change: true });
     const action = `CREDENTIALS_UPDATED: Credentials updated for user ID ${targetUserId} (${targetUser.username} -> ${cleanUsername})`;
 
     await conn.execute(
@@ -435,7 +500,8 @@ router.get('/roles', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.username, u.role_id, u.employee_id, u.is_active, u.last_login, u.created_at,
+      `SELECT u.id, u.username, u.role_id, u.employee_id, u.is_active, u.last_login,
+              u.password_changed_at, u.force_password_change, u.created_at,
               r.name AS role_name, r.label AS role_label, r.access_level,
               e.first_name, e.last_name, e.employee_code
        FROM users u

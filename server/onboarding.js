@@ -398,6 +398,18 @@ function decryptApplicantPii(applicant) {
   return JSON.parse(decryptAES256(applicant.pii_encrypted));
 }
 
+function isEncryptedDataAuthFailure(error) {
+  return /unable to authenticate data|Unsupported state/i.test(error?.message || '');
+}
+
+function encryptedDataAuthErrorResponse(res) {
+  return res.status(409).json({
+    code: 'ENCRYPTED_DATA_AUTH_FAILED',
+    error: 'Encrypted applicant data cannot be authenticated with the current server key.',
+    details: 'Use the same AES_ENCRYPTION_KEY that encrypted this applicant record, or use the original JWT_SECRET if the record was encrypted before AES_ENCRYPTION_KEY was configured.',
+  });
+}
+
 function truthy(value) {
   return value === true || value === 1 || value === '1' || value === 'true' || value === 'on' || value === 'yes';
 }
@@ -815,6 +827,9 @@ router.get('/applicants/:applicantId', async (req, res) => {
       biometric_reference: applicant.biometric_reference_encrypted ? decryptAES256(applicant.biometric_reference_encrypted) : '',
     });
   } catch (error) {
+    if (isEncryptedDataAuthFailure(error)) {
+      return encryptedDataAuthErrorResponse(res);
+    }
     res.status(400).json({ error: error.message });
   }
 });

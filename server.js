@@ -14,6 +14,7 @@ const http       = require('http');
 const { me }                                 = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
 const authRoutes                             = require('./routes/authRoutes');
+const accountRoutes                          = require('./routes/accountRoutes');
 const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
@@ -178,6 +179,7 @@ app.use('/api/auth', authRoutes);
 
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);
+app.use('/api/account', accountRoutes);
 
 function requirePhilippineAddressCache(res) {
   if (philippineAddressCache) return true;

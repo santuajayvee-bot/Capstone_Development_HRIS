@@ -69,6 +69,13 @@ function enhanceResponsiveTables(root = document) {
 }
 
 function navigate(pageId, navEl, params = null) {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  if ((user?.mustChangePassword || user?.forcePasswordChange) && pageId !== 'self-service') {
+    pageId = 'self-service';
+    navEl = null;
+    params = { ...(params || {}), forcePasswordChange: true };
+  }
+
   // Role guard — check permission before switching
   if (!canAccess(pageId)) {
     showAccessDenied();

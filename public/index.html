@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="css/attendance.css" />
   <link rel="stylesheet" href="css/blockchain.css" />
   <link rel="stylesheet" href="css/recruitment.css?v=3" />
-  <link rel="stylesheet" href="css/system-admin.css?v=2" />
+  <link rel="stylesheet" href="css/system-admin.css?v=3" />
   <link rel="stylesheet" href="css/employee-dashboard.css" />
   <link rel="stylesheet" href="css/theme-light.css?v=10" />
 </head>
@@ -34,13 +34,32 @@
     </div>
     <div class="login-welcome">Sign in to your account</div>
     <div class="login-subtitle">Secure employee, attendance, payroll, and HR operations portal.</div>
-    <div class="login-field">
-      <input type="text" id="username" placeholder="Username" autocomplete="username" />
+    <div id="login-password-step">
+      <div class="login-field">
+        <input type="text" id="username" placeholder="Username" autocomplete="username" />
+      </div>
+      <div class="login-field">
+        <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+      </div>
+      <div class="login-turnstile-wrap">
+        <div id="login-turnstile"></div>
+      </div>
+      <button class="btn-login" onclick="doLogin()">Login</button>
     </div>
-    <div class="login-field">
-      <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+
+    <div id="login-mfa-step" class="login-mfa" style="display:none;">
+      <div class="login-mfa-title">SMS Verification</div>
+      <div class="login-mfa-subtitle">Enter the verification code sent to your registered phone number.</div>
+      <div class="login-field">
+        <input type="text" id="mfa-code" placeholder="Verification code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" />
+      </div>
+      <button class="btn-login" id="btn-mfa-verify" onclick="verifySmsMfa()">Verify code</button>
+      <div class="login-mfa-actions">
+        <button type="button" id="btn-mfa-resend" onclick="resendSmsMfa()">Resend code</button>
+        <button type="button" onclick="cancelSmsMfa()">Use another account</button>
+      </div>
     </div>
-    <button class="btn-login" onclick="doLogin()">Login</button>
+
     <div class="login-err" id="login-err"></div>
   </div>
 </div>
@@ -200,14 +219,15 @@
 <!-- JS Modules (order matters: auth first, then others) -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="js/modal-utils.js"></script>
-<script src="js/auth.js?v=3"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/auth.js?v=5"></script>
+<script src="js/app.js?v=3"></script>
 <script src="js/draft-session.js?v=3"></script>
-<script src="js/login.js?v=2"></script>
+<script src="js/login.js?v=3"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileScriptLoaded" async defer></script>
 <script src="js/dashboard.js"></script>
 <script src="js/ph-address.js"></script>
 <script src="js/register.js?v=2"></script>
-<script src="js/employees.js?v=7"></script>
+<script src="js/employees.js?v=8"></script>
 <script src="js/leave.js"></script>
 <script src="js/attendance.js?v=4"></script>
 <script src="js/payroll.js?v=5"></script>
@@ -216,9 +236,9 @@
 <script src="js/blockchain.js"></script>
 <script src="js/recruitment.js?v=2"></script>
 <script src="js/date-picker.js"></script>
-<script src="js/system-admin.js?v=3"></script>
+<script src="js/system-admin.js?v=5"></script>
 <script src="js/employee-dashboard.js"></script>
-<script src="js/self-service.js?v=1"></script>
+<script src="js/self-service.js?v=2"></script>
 <script src="js/attendance-realtime.js"></script>
 
 <!-- Page partial loader -->

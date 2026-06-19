@@ -1,0 +1,9 @@
+-- DOWN migration: Semaphore PH SMS OTP fields
+
+DROP INDEX IF EXISTS idx_mfa_challenge_otp_expires
+  ON MFA_CHALLENGE;
+
+ALTER TABLE MFA_CHALLENGE
+  DROP COLUMN IF EXISTS OTP_Attempt_Count,
+  DROP COLUMN IF EXISTS OTP_Expires_At,
+  DROP COLUMN IF EXISTS OTP_Hash;

@@ -49,17 +49,25 @@ function isSelfHrReviewer() {
   return SELF_HR_ROLES.has(user?.role);
 }
 
+function isForcedPasswordChange() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return Boolean(user?.mustChangePassword || user?.forcePasswordChange);
+}
+
+function setSelfServiceTab(tab) {
+  document.querySelectorAll('[data-self-tab]').forEach(item => item.classList.remove('active'));
+  document.querySelectorAll('.self-tab-panel').forEach(panel => panel.classList.remove('active'));
+  document.querySelector(`[data-self-tab="${tab}"]`)?.classList.add('active');
+  document.getElementById(`self-tab-${tab}`)?.classList.add('active');
+  if (tab === 'requests') loadSelfChangeRequests();
+  if (tab === 'activity') loadSelfActivityLog();
+  if (tab === 'hr-requests') loadHrProfileChangeRequests();
+}
+
 function initSelfServiceTabs() {
   document.querySelectorAll('[data-self-tab]').forEach(button => {
     button.addEventListener('click', () => {
-      const tab = button.dataset.selfTab;
-      document.querySelectorAll('[data-self-tab]').forEach(item => item.classList.remove('active'));
-      document.querySelectorAll('.self-tab-panel').forEach(panel => panel.classList.remove('active'));
-      button.classList.add('active');
-      document.getElementById(`self-tab-${tab}`)?.classList.add('active');
-      if (tab === 'requests') loadSelfChangeRequests();
-      if (tab === 'activity') loadSelfActivityLog();
-      if (tab === 'hr-requests') loadHrProfileChangeRequests();
+      setSelfServiceTab(button.dataset.selfTab);
     });
   });
 }
@@ -170,21 +178,34 @@ async function saveSelfProfileSection(section) {
 async function changeSelfPassword() {
   try {
     const newPassword = selfValue('self-new-password');
-    if (newPassword !== selfValue('self-confirm-password')) {
-      selfServiceNotify('New password confirmation does not match.', 'error');
+    const confirmPassword = selfValue('self-confirm-password');
+    if (newPassword !== confirmPassword) {
+      selfServiceNotify('Passwords do not match.', 'error');
       return;
     }
-    const res = await apiFetch('/api/self-service/password', {
+    const res = await apiFetch('/api/account/password', {
       method: 'PUT',
       body: JSON.stringify({
-        current_password: selfValue('self-current-password'),
-        new_password: newPassword
+        currentPassword: selfValue('self-current-password'),
+        newPassword,
+        confirmPassword
       })
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Failed to change password.');
+    if (!res.ok) throw new Error(data.message || data.error || 'Failed to change password.');
     ['self-current-password', 'self-new-password', 'self-confirm-password'].forEach(id => setSelfValue(id, ''));
     selfServiceNotify(data.message || 'Password changed.', 'success');
+    if (data.requiresRelogin) {
+      if (typeof clearAuth === 'function') clearAuth();
+      const app = document.getElementById('app');
+      const login = document.getElementById('login-screen');
+      if (app) app.style.display = 'none';
+      if (login) login.style.display = 'flex';
+      if (typeof loginError === 'function') {
+        loginError('Password changed successfully. Please log in again.', true);
+      }
+      return;
+    }
     await loadSelfActivityLog();
   } catch (error) {
     selfServiceNotify(error.message, 'error');
@@ -345,9 +366,24 @@ function wireSelfServiceEvents() {
 
 async function initSelfServiceProfile() {
   wireSelfServiceEvents();
+  const forced = isForcedPasswordChange();
   document.querySelectorAll('.self-service-hr-only').forEach(el => {
-    el.style.display = isSelfHrReviewer() ? '' : 'none';
+    el.style.display = !forced && isSelfHrReviewer() ? '' : 'none';
   });
+  document.querySelectorAll('[data-self-tab]').forEach(button => {
+    if (button.classList.contains('self-service-hr-only')) return;
+    button.style.display = forced && button.dataset.selfTab !== 'security' ? 'none' : '';
+  });
+  document.querySelectorAll('.self-tab-panel').forEach(panel => {
+    if (panel.classList.contains('self-service-hr-only')) return;
+    panel.style.display = forced && panel.id !== 'self-tab-security' ? 'none' : '';
+  });
+  const forceNote = document.getElementById('self-password-required-note');
+  if (forceNote) forceNote.style.display = forced ? '' : 'none';
+  if (forced) {
+    setSelfServiceTab('security');
+    return;
+  }
   try {
     await loadSelfServiceProfile();
     await loadSelfChangeRequests();

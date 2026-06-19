@@ -123,6 +123,19 @@ function isLoggedIn() {
   return !!getToken();
 }
 
+function markPasswordChangeRequired() {
+  const user = getUser() || {};
+  user.mustChangePassword = true;
+  user.forcePasswordChange = true;
+  sessionStorage.setItem('vp_user', JSON.stringify(user));
+  if (typeof showToast === 'function') {
+    showToast('Please change your temporary password before continuing.', 'error');
+  }
+  if (typeof navigate === 'function') {
+    navigate('self-service', null, { forcePasswordChange: true });
+  }
+}
+
 async function apiFetch(url, options = {}) {
   const token = getToken();
   const isFormData = options.body instanceof FormData;
@@ -132,7 +145,22 @@ async function apiFetch(url, options = {}) {
   };
   if (!isFormData && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const response = await fetch(url, { ...options, headers });
-  if (response.status === 401) console.warn('401 Unauthorized:', url);
+  if (response.status === 401) {
+    console.warn('401 Unauthorized:', url);
+    clearAuth();
+    const app = document.getElementById('app');
+    const login = document.getElementById('login-screen');
+    if (app && login) {
+      app.style.display = 'none';
+      login.style.display = 'flex';
+    }
+  }
+  if (response.status === 403) {
+    const data = await response.clone().json().catch(() => ({}));
+    if (data.code === 'PASSWORD_CHANGE_REQUIRED') {
+      markPasswordChangeRequired();
+    }
+  }
   return response;
 }
 
@@ -266,6 +294,7 @@ window.getToken = getToken;
 window.getUser = getUser;
 window.clearAuth = clearAuth;
 window.isLoggedIn = isLoggedIn;
+window.markPasswordChangeRequired = markPasswordChangeRequired;
 window.apiFetch = apiFetch;
 window.buildSidebar = buildSidebar;
 window.canAccess = canAccess;
