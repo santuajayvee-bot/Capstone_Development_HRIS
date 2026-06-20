@@ -18,7 +18,6 @@
     <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Generate Payroll</button>
     <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
     <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslips</button>
-    <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
   </div>
   <div class="payroll-nav-group">
     <span>Payroll Configuration</span>
@@ -27,11 +26,11 @@
     <button class="payroll-tab" data-payroll-tab="cash-advances" onclick="switchPayrollTab('cash-advances')">Cash Advances</button>
     <button class="payroll-tab" data-payroll-tab="employee-loans" onclick="switchPayrollTab('employee-loans')">Employee Loans</button>
     <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece Rate</button>
+    <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
     <button class="payroll-tab" data-payroll-tab="policies" onclick="switchPayrollTab('policies')">Policies</button>
   </div>
   <div class="payroll-nav-group">
     <span>Reports</span>
-    <button class="payroll-tab" data-payroll-tab="swr-fxr" onclick="switchPayrollTab('swr-fxr')">SWR-FXR-SUM</button>
     <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
   </div>
 </div>
@@ -366,21 +365,6 @@
   </div>
 </section>
 
-<section class="payroll-panel" id="payroll-tab-swr-fxr">
-  <div class="page-header compact">
-    <div>
-      <div class="section-title small">SWR-FXR-SUM Payroll Registry</div>
-      <div class="section-sub">Agency-based Sewer and Fixer payroll register with days worked and payroll totals.</div>
-    </div>
-    <div class="button-row">
-      <input class="form-control" id="swr-fxr-period" type="month" />
-      <button class="btn btn-outline" type="button" onclick="loadSwrFxrRegistry()">Generate Registry</button>
-      <button class="btn btn-primary" type="button" onclick="printSwrFxrRegistry()">Print Registry</button>
-    </div>
-  </div>
-  <div id="swr-fxr-registry" class="swr-fxr-registry"></div>
-</section>
-
 <section class="payroll-panel" id="payroll-tab-piece-config">
   <div class="page-header compact">
     <div>
@@ -668,6 +652,23 @@
 </section>
 
 <section class="payroll-panel" id="payroll-tab-reports">
+  <section class="table-wrap swr-fxr-report-card">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>SWR-FXR-SUM Payroll Registry</h3>
+        <p>Generate the final Sewer and Fixer payroll register from encoded production pairs for a payroll period.</p>
+      </div>
+      <div class="button-row">
+        <input class="form-control" id="swr-fxr-period" type="month" aria-label="SWR-FXR-SUM payroll period" />
+        <button class="btn btn-outline" type="button" onclick="generateSwrFxrRegistry()">Generate Registry</button>
+        <button class="btn btn-primary" type="button" onclick="printSwrFxrRegistry()">Print Registry</button>
+      </div>
+    </div>
+    <p id="swr-fxr-period-hint" class="section-sub"></p>
+    <div id="swr-fxr-registry" class="swr-fxr-registry">
+      <div class="payroll-empty-state">Choose a production payroll period, then select <strong>Generate Registry</strong>. The register table appears only after it is generated.</div>
+    </div>
+  </section>
   <div class="report-library">
     <div class="report-library-head">
       <div>

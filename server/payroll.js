@@ -4931,6 +4931,64 @@ async function buildPiecePayrollRegister(pool, monthYear) {
   };
 }
 
+async function listSwrFxrProductionPeriods(pool) {
+  await ensurePieceRatePayrollSchema(pool);
+  const [rows] = await pool.execute(`
+    SELECT payroll_period,
+           MIN(production_date) AS start_date,
+           MAX(production_date) AS end_date,
+           COUNT(*) AS production_pair_count
+      FROM payroll_production_pairs
+     WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}$'
+     GROUP BY payroll_period
+     ORDER BY payroll_period DESC
+     LIMIT 24
+  `);
+  return rows;
+}
+
+router.get('/swr-fxr-sum/periods', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    res.json({ periods: await listSwrFxrProductionPeriods(pool) });
+  } catch (err) {
+    console.error('Error loading SWR-FXR-SUM production periods:', err);
+    res.status(500).json({ error: 'Failed to load SWR-FXR-SUM production periods.' });
+  }
+});
+
+router.post('/swr-fxr-sum/generate', requireAuth, requireRole(PAYROLL_PERMISSIONS.reports), async (req, res) => {
+  try {
+    const monthYear = String(req.body.month_year || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(monthYear)) return res.status(400).json({ error: 'A valid payroll period is required.' });
+
+    const pool = require('../config/db');
+    const register = await buildPiecePayrollRegister(pool, monthYear);
+    if (!register.production_register.length) {
+      return res.status(422).json({
+        error: `No Sewer/Fixer production pairs were encoded for ${monthYear}. Encode production pairs for this payroll period before generating its registry.`,
+        available_periods: await listSwrFxrProductionPeriods(pool)
+      });
+    }
+
+    await logPayrollAudit(pool, req, 'swr_fxr_sum_registry_generated', {
+      remarks: `Generated SWR-FXR-SUM payroll registry for ${monthYear}`,
+      metadata: { month_year: monthYear, totals: register.totals, production_pair_count: register.production_register.length }
+    });
+    res.json({
+      message: 'SWR-FXR-SUM payroll registry generated.',
+      payroll_period: monthYear,
+      rows: register.swr_fxr_rows,
+      agency_totals: register.agency_totals,
+      totals: register.totals,
+      production_pair_count: register.production_register.length
+    });
+  } catch (err) {
+    console.error('Error generating SWR-FXR-SUM registry:', err);
+    res.status(500).json({ error: 'Failed to generate SWR-FXR-SUM payroll registry.' });
+  }
+});
+
 router.get('/piece-payroll-register', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const pool = require('../config/db');

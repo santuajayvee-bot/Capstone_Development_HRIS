@@ -1027,7 +1027,6 @@ function switchPayrollTab(tab) {
   if (targetTab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
   if (targetTab === 'piece-config') loadPieceRateConfig();
   if (targetTab === 'logistics' && typeof loadLogisticsPayrollModule === 'function') loadLogisticsPayrollModule();
-  if (targetTab === 'swr-fxr' && typeof loadSwrFxrRegistry === 'function') loadSwrFxrRegistry();
   if (targetTab === 'deductions') loadPayrollSettings('deduction');
   if (targetTab === 'cash-advances') loadEmployeeDeductionAccounts('cash_advance');
   if (targetTab === 'employee-loans') loadEmployeeDeductionAccounts('loan');
@@ -1036,6 +1035,7 @@ function switchPayrollTab(tab) {
   if (targetTab === 'reports') {
     loadPayrollAudit();
     renderPayrollReportLibrary();
+    if (typeof prepareSwrFxrRegistry === 'function') prepareSwrFxrRegistry();
   }
   if (targetTab === 'records') loadSalaryCalculations();
 }
@@ -2090,7 +2090,6 @@ const PAYROLL_REPORTS = [
   { id: 'piece-production-register', name: 'Production Register', category: 'Production', description: 'Production date, sewer, fixer, quantity, rate and production amount.', formats: ['CSV', 'Excel'] },
   { id: 'piece-sewer-register', name: 'Sewer Payroll Register', category: 'Production', description: 'Sewer production amount and payroll share.', formats: ['CSV', 'Excel'] },
   { id: 'piece-fixer-register', name: 'Fixer Payroll Register', category: 'Production', description: 'Fixer production amount and payroll share.', formats: ['CSV', 'Excel'] },
-  { id: 'piece-combined-register', name: 'SWR-FXR-SUM', category: 'Production', description: 'Combined per-piece payroll register by employee and role.', formats: ['CSV', 'Excel'] },
   { id: 'deductions', name: 'Deduction Report', category: 'Government', description: 'Configured deductions and deduction totals.', formats: ['CSV', 'Excel', 'PDF'] },
   { id: 'government', name: 'Government Contribution Report', category: 'Government', description: 'SSS, PhilHealth, Pag-IBIG and withholding tax summary.', formats: ['CSV', 'Excel', 'PDF'] },
   { id: 'audit', name: 'Audit Trail', category: 'Audit', description: 'Salary calculations, approvals, releases, settings updates and report activity.', formats: ['CSV'] }

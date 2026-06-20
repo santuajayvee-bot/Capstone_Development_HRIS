@@ -1778,6 +1778,19 @@ input.lgsv-date-native[type="date"] {
   margin: 0 0 8px;
   font-size: 13px;
 }
+
+.swr-fxr-report-card {
+  margin-bottom: 18px;
+}
+
+.payroll-empty-state {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
 @media (max-width: 1100px) {

@@ -317,20 +317,60 @@
     if (!target) return;
     target.innerHTML = `<div class="swr-fxr-sheet">
       <div class="swr-fxr-heading"><strong>MARULAS INDUSTRIAL CORPORATION</strong><span>SWR-FXR-SUM PAYROLL REGISTRY</span><span>PAYROLL PERIOD: ${escapeHtml(result.payroll_period || '')}</span></div>
-      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer, 'Sewer')}${registryCell(row.fixer, 'Fixer')}<td>${money(row.combined_amount)}</td></tr>`).join('') || '<tr><td colspan="10">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="4">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>${money(result.totals?.combined_payroll)}</th></tr></tfoot></table></div>
+      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer, 'Sewer')}${registryCell(row.fixer, 'Fixer')}<td>${money(row.combined_amount)}</td></tr>`).join('') || '<tr><td colspan="10">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="3">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>GRAND TOTAL<br>${money(result.totals?.combined_payroll)}</th></tr></tfoot></table></div>
       <div class="swr-fxr-agency-totals"><h3>Agency Totals</h3><table><thead><tr><th>Agency</th><th>Sewer</th><th>Fixer</th><th>Total</th></tr></thead><tbody>${result.agency_totals.map(row => `<tr><td>${escapeHtml(row.agency)}</td><td>${money(row.sewer_amount)}</td><td>${money(row.fixer_amount)}</td><td>${money(row.total_amount)}</td></tr>`).join('') || '<tr><td colspan="4">No agency totals.</td></tr>'}</tbody></table></div>
     </div>`;
   }
 
-  async function loadSwrFxrRegistry() {
+  function renderSwrFxrRegistryEmpty(message) {
+    const target = document.getElementById('swr-fxr-registry');
+    if (!target) return;
+    target.innerHTML = `<div class="payroll-empty-state">${escapeHtml(message)}</div>`;
+  }
+
+  async function prepareSwrFxrRegistry() {
+    const periodInput = document.getElementById('swr-fxr-period');
+    const hint = document.getElementById('swr-fxr-period-hint');
+    if (!periodInput) return;
+
+    if (!periodInput.dataset.swrFxrPeriodReady) {
+      periodInput.dataset.swrFxrPeriodReady = '1';
+      periodInput.addEventListener('change', () => {
+        periodInput.dataset.swrFxrPeriodSelected = '1';
+        renderSwrFxrRegistryEmpty('Select Generate Registry to create the payroll register for the selected period.');
+      });
+    }
+
+    try {
+      const result = await request('/api/payroll/swr-fxr-sum/periods');
+      const periods = Array.isArray(result.periods) ? result.periods : [];
+      if (!periodInput.dataset.swrFxrPeriodSelected && periods[0]?.payroll_period) {
+        periodInput.value = periods[0].payroll_period;
+      }
+      if (hint) {
+        hint.textContent = periods.length
+          ? `Available Sewer/Fixer production periods: ${periods.map(row => row.payroll_period).join(', ')}.`
+          : 'No Sewer/Fixer production pairs have been encoded yet.';
+      }
+    } catch (error) {
+      if (hint) hint.textContent = 'Production periods could not be loaded.';
+    }
+  }
+
+  async function generateSwrFxrRegistry() {
     const period = document.getElementById('swr-fxr-period')?.value || currentMonth();
     try {
-      const result = await request(`/api/payroll/swr-fxr-sum?month_year=${encodeURIComponent(period)}`);
+      const result = await request('/api/payroll/swr-fxr-sum/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ month_year: period })
+      });
       renderSwrFxrRegistry(result);
+      const hint = document.getElementById('swr-fxr-period-hint');
+      if (hint) hint.textContent = `Registry generated from ${Number(result.production_pair_count || 0)} encoded Sewer/Fixer production pair(s).`;
       return result;
     } catch (error) {
-      const target = document.getElementById('swr-fxr-registry');
-      if (target) target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
+      renderSwrFxrRegistryEmpty(error.message);
       return null;
     }
   }
@@ -338,12 +378,23 @@
   function printSwrFxrRegistry() {
     const sheet = document.querySelector('#swr-fxr-registry .swr-fxr-sheet');
     if (!sheet) return showMessage('Generate the registry first.', 'error');
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+    // Open synchronously from the user click. `noopener,noreferrer` makes some
+    // browsers return null even when the popup opened, which looked like a block.
+    const printWindow = window.open('', '_blank');
     if (!printWindow) return showMessage('Your browser blocked the print window.', 'error');
-    printWindow.document.write(`<!doctype html><html><head><title>SWR-FXR-SUM Payroll Registry</title><style>body{font-family:Arial,sans-serif;color:#111;padding:18px}table{width:100%;border-collapse:collapse;font-size:11px;margin:12px 0}th,td{border:1px solid #333;padding:5px;vertical-align:top}th{text-align:center;background:#f1f1f1}.swr-fxr-heading{text-align:center;display:grid;gap:4px;margin-bottom:12px}.swr-fxr-agency-totals{max-width:520px;margin-top:18px}@page{size:landscape;margin:10mm}</style></head><body>${sheet.outerHTML}</body></html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+    try {
+      printWindow.opener = null;
+      printWindow.document.open();
+      printWindow.document.write(`<!doctype html><html><head><title>SWR-FXR-SUM Payroll Registry</title><style>body{font-family:Arial,sans-serif;color:#111;padding:18px}table{width:100%;border-collapse:collapse;font-size:11px;margin:12px 0}th,td{border:1px solid #333;padding:5px;vertical-align:top}th{text-align:center;background:#f1f1f1}.swr-fxr-heading{text-align:center;display:grid;gap:4px;margin-bottom:12px}.swr-fxr-agency-totals{max-width:520px;margin-top:18px}@page{size:landscape;margin:10mm}</style></head><body>${sheet.outerHTML}</body></html>`);
+      printWindow.document.close();
+      window.setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+      }, 100);
+    } catch (error) {
+      printWindow.close();
+      return showMessage('The payroll registry could not be prepared for printing.', 'error');
+    }
   }
 
   function bindTripPreview() {
@@ -369,6 +420,7 @@
     saveDeliveryTrip, submitDeliveryTripForm, refreshTripPreview, editLogisticsTruckType, editLogisticsLocation,
     editLogisticsRate, editDeliveryTrip, deactivateLogisticsTruckType, deactivateLogisticsLocation,
     deactivateLogisticsRate, submitDeliveryTrip, approveDeliveryTrip, rejectDeliveryTrip, deleteDeliveryTrip,
-    loadLogisticsPayrollSummary, loadSwrFxrRegistry, printSwrFxrRegistry
+    loadLogisticsPayrollSummary, prepareSwrFxrRegistry, generateSwrFxrRegistry,
+    loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
   });
 })();
