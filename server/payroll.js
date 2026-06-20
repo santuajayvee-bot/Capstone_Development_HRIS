@@ -9,6 +9,13 @@ const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
 const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
 const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
+const {
+  isTripBasedWageType,
+  normalizeTripType,
+  normalizeTripRole,
+  computeTripPay,
+  findActiveLogisticsRate,
+} = require('./services/logisticsTripPayroll');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
@@ -17,6 +24,13 @@ const PAYROLL_PERMISSIONS = {
   release: ['payroll_manager', 'hr_manager'],
   settings: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin'],
   reports: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin']
+};
+
+const LOGISTICS_TRIP_PERMISSIONS = {
+  view: PAYROLL_PERMISSIONS.view,
+  encode: ROLES.payroll_any,
+  approve: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
+  configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval, ...ROLES.admin_any],
 };
 
 function currentUserId(req) {
@@ -50,6 +64,66 @@ function payrollWeekFromDate(dateValue) {
 
 function settingAppliesThisWeek(setting, weekNumber) {
   return setting.apply_schedule === 'Every Payroll' || setting.apply_schedule === `${weekNumber}${weekNumber === 1 ? 'st' : weekNumber === 2 ? 'nd' : weekNumber === 3 ? 'rd' : 'th'} Week`;
+}
+
+function logisticsDate(value, label = 'Date') {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error(`${label} must use YYYY-MM-DD.`);
+  return text;
+}
+
+function logisticsPositiveId(value, label) {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`${label} is required.`);
+  return id;
+}
+
+function logisticsMoney(value, label, { allowZero = true } = {}) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0 || (!allowZero && amount === 0)) {
+    throw new Error(`${label} must be a valid ${allowZero ? 'non-negative' : 'positive'} amount.`);
+  }
+  return Math.round((amount + Number.EPSILON) * 100) / 100;
+}
+
+function logisticsText(value, label, maxLength, { required = false } = {}) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  if (required && !text) throw new Error(`${label} is required.`);
+  if (text.length > maxLength) throw new Error(`${label} must not exceed ${maxLength} characters.`);
+  if (/[<>]/.test(text) || /(?:javascript:|on\w+\s*=)/i.test(text)) throw new Error(`${label} contains invalid characters.`);
+  return text || null;
+}
+
+function logisticsStatus(value) {
+  return String(value || '').trim().toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+}
+
+function canManageTrip(req, trip) {
+  if (req.user?.role !== 'payroll_officer') return true;
+  return Number(trip.created_by) === Number(currentUserId(req));
+}
+
+async function assertLogisticsTripSchema(pool) {
+  for (const table of ['truck_types', 'logistics_locations', 'logistics_rates', 'delivery_trips']) {
+    if (!(await payrollTableExists(pool, table))) {
+      throw new Error('Logistics trip payroll is not configured. Apply the logistics trip payroll migration first.');
+    }
+  }
+}
+
+async function getApprovedDeliveryTripPayroll(pool, employeeId, period) {
+  const [trips] = await pool.execute(`
+    SELECT id, total_trip_pay, trip_date, trip_type, role, truck_type_id, location_id
+      FROM delivery_trips
+     WHERE employee_id = ?
+       AND trip_date BETWEEN ? AND ?
+       AND status = 'Approved'
+     ORDER BY trip_date, id
+  `, [employeeId, period.start, period.end]);
+  return {
+    trips,
+    total: trips.reduce((sum, trip) => sum + numeric(trip.total_trip_pay), 0)
+  };
 }
 
 async function computeConfiguredDeductions(pool, grossPay, calculationDate) {
@@ -210,7 +284,7 @@ function normalizePayrollWageType(value) {
   if (text.includes('hour')) return 'Hourly';
   if (text.includes('day') || text.includes('daily')) return 'Daily';
   if (text.includes('piece')) return 'Per-Piece';
-  if (text.includes('trip')) return 'Per-Trip';
+  if (text.includes('trip') || text.includes('logistics')) return 'Per-Trip';
   if (text.includes('salary') || text.includes('base') || text.includes('month')) return 'Monthly';
   return String(value || '');
 }
@@ -1850,6 +1924,504 @@ router.post('/logistics-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.set
   }
 });
 
+// ── Approved delivery-trip payroll ────────────────────────────────────────
+// This workflow is independent from legacy logistics_transactions. It is the
+// authoritative source for new trip-based payroll calculations.
+router.get('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const includeInactive = req.query.include_inactive === '1';
+    const [rows] = await pool.execute(`
+      SELECT id, name, description, is_active, created_at, updated_at
+        FROM truck_types
+       ${includeInactive ? '' : 'WHERE is_active = 1'}
+       ORDER BY is_active DESC, name
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[logistics/truck-types:get]', err.message);
+    res.status(500).json({ error: 'Failed to load truck types.' });
+  }
+});
+
+router.post('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const name = logisticsText(req.body.name, 'Truck type', 100, { required: true });
+    const description = logisticsText(req.body.description, 'Description', 255);
+    const [result] = await pool.execute(
+      'INSERT INTO truck_types (name, description, is_active, created_by, updated_by) VALUES (?, ?, 1, ?, ?)',
+      [name, description, currentUserId(req), currentUserId(req)]
+    );
+    await logPayrollAudit(pool, req, 'logistics_truck_type_created', { remarks: `Created truck type ${name}`, metadata: { new_value: { name, description } } });
+    res.status(201).json({ id: result.insertId, message: 'Truck type created.' });
+  } catch (err) {
+    console.error('[logistics/truck-types:post]', err.message);
+    res.status(err.code === 'ER_DUP_ENTRY' ? 409 : 400).json({ error: err.code === 'ER_DUP_ENTRY' ? 'Truck type already exists.' : err.message || 'Failed to create truck type.' });
+  }
+});
+
+router.put('/logistics/truck-types/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Truck type');
+    const [existing] = await pool.execute('SELECT * FROM truck_types WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Truck type not found.' });
+    const name = logisticsText(req.body.name, 'Truck type', 100, { required: true });
+    const description = logisticsText(req.body.description, 'Description', 255);
+    const isActive = req.body.is_active === false || req.body.is_active === '0' ? 0 : 1;
+    await pool.execute('UPDATE truck_types SET name = ?, description = ?, is_active = ?, updated_by = ? WHERE id = ?', [name, description, isActive, currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_truck_type_updated', { remarks: `Updated truck type ${name}`, metadata: { old_value: existing[0], new_value: { name, description, is_active: isActive } } });
+    res.json({ message: 'Truck type updated.' });
+  } catch (err) {
+    console.error('[logistics/truck-types:put]', err.message);
+    res.status(err.code === 'ER_DUP_ENTRY' ? 409 : 400).json({ error: err.code === 'ER_DUP_ENTRY' ? 'Truck type already exists.' : err.message || 'Failed to update truck type.' });
+  }
+});
+
+router.delete('/logistics/truck-types/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Truck type');
+    const [existing] = await pool.execute('SELECT * FROM truck_types WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Truck type not found.' });
+    await pool.execute('UPDATE truck_types SET is_active = 0, updated_by = ? WHERE id = ?', [currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_truck_type_deactivated', { remarks: `Deactivated truck type ${existing[0].name}`, metadata: { old_value: existing[0], new_value: { is_active: 0 } } });
+    res.json({ message: 'Truck type deactivated. Existing trip history was retained.' });
+  } catch (err) {
+    console.error('[logistics/truck-types:delete]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to deactivate truck type.' });
+  }
+});
+
+router.get('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const includeInactive = req.query.include_inactive === '1';
+    const [rows] = await pool.execute(`
+      SELECT id, location_category, name, description, is_active, created_at, updated_at
+        FROM logistics_locations
+       ${includeInactive ? '' : 'WHERE is_active = 1'}
+       ORDER BY is_active DESC, location_category, name
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[logistics/locations:get]', err.message);
+    res.status(500).json({ error: 'Failed to load logistics locations.' });
+  }
+});
+
+router.post('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const locationCategory = logisticsText(req.body.location_category, 'Location category', 40, { required: true });
+    if (!['Manila', 'Province', 'Special Location'].includes(locationCategory)) throw new Error('Location category must be Manila, Province, or Special Location.');
+    const name = logisticsText(req.body.name, 'Specific location', 120, { required: true });
+    const description = logisticsText(req.body.description, 'Description', 255);
+    const [result] = await pool.execute(
+      'INSERT INTO logistics_locations (location_category, name, description, is_active, created_by, updated_by) VALUES (?, ?, ?, 1, ?, ?)',
+      [locationCategory, name, description, currentUserId(req), currentUserId(req)]
+    );
+    await logPayrollAudit(pool, req, 'logistics_location_created', { remarks: `Created logistics location ${name}`, metadata: { new_value: { location_category: locationCategory, name, description } } });
+    res.status(201).json({ id: result.insertId, message: 'Logistics location created.' });
+  } catch (err) {
+    console.error('[logistics/locations:post]', err.message);
+    res.status(err.code === 'ER_DUP_ENTRY' ? 409 : 400).json({ error: err.code === 'ER_DUP_ENTRY' ? 'Location already exists in this category.' : err.message || 'Failed to create logistics location.' });
+  }
+});
+
+router.put('/logistics/locations/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Location');
+    const [existing] = await pool.execute('SELECT * FROM logistics_locations WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Logistics location not found.' });
+    const locationCategory = logisticsText(req.body.location_category, 'Location category', 40, { required: true });
+    if (!['Manila', 'Province', 'Special Location'].includes(locationCategory)) throw new Error('Location category must be Manila, Province, or Special Location.');
+    const name = logisticsText(req.body.name, 'Specific location', 120, { required: true });
+    const description = logisticsText(req.body.description, 'Description', 255);
+    const isActive = req.body.is_active === false || req.body.is_active === '0' ? 0 : 1;
+    await pool.execute('UPDATE logistics_locations SET location_category = ?, name = ?, description = ?, is_active = ?, updated_by = ? WHERE id = ?', [locationCategory, name, description, isActive, currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_location_updated', { remarks: `Updated logistics location ${name}`, metadata: { old_value: existing[0], new_value: { location_category: locationCategory, name, description, is_active: isActive } } });
+    res.json({ message: 'Logistics location updated.' });
+  } catch (err) {
+    console.error('[logistics/locations:put]', err.message);
+    res.status(err.code === 'ER_DUP_ENTRY' ? 409 : 400).json({ error: err.code === 'ER_DUP_ENTRY' ? 'Location already exists in this category.' : err.message || 'Failed to update logistics location.' });
+  }
+});
+
+router.delete('/logistics/locations/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Location');
+    const [existing] = await pool.execute('SELECT * FROM logistics_locations WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Logistics location not found.' });
+    await pool.execute('UPDATE logistics_locations SET is_active = 0, updated_by = ? WHERE id = ?', [currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_location_deactivated', { remarks: `Deactivated logistics location ${existing[0].name}`, metadata: { old_value: existing[0], new_value: { is_active: 0 } } });
+    res.json({ message: 'Logistics location deactivated. Existing trip history was retained.' });
+  } catch (err) {
+    console.error('[logistics/locations:delete]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to deactivate logistics location.' });
+  }
+});
+
+async function logisticsRatePayload(pool, body) {
+  const truckTypeId = logisticsPositiveId(body.truck_type_id, 'Truck type');
+  const locationId = logisticsPositiveId(body.location_id, 'Location');
+  const tripType = normalizeTripType(body.trip_type || 'Any', { allowAny: true });
+  const role = normalizeTripRole(body.role);
+  const baseRate = logisticsMoney(body.base_rate, 'Base rate');
+  const additionalRate = logisticsMoney(body.additional_rate || 0, 'Additional rate');
+  const multiplier = Number(body.multiplier === undefined || body.multiplier === '' ? 1 : body.multiplier);
+  if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 100) throw new Error('Multiplier must be greater than zero and no more than 100.');
+  const specialRuleDescription = logisticsText(body.special_rule_description, 'Special rule description', 500);
+  const status = logisticsStatus(body.status);
+  const effectiveDate = logisticsDate(body.effective_date || new Date().toISOString().slice(0, 10), 'Effective date');
+  const [truckRows] = await pool.execute('SELECT id FROM truck_types WHERE id = ? LIMIT 1', [truckTypeId]);
+  const [locationRows] = await pool.execute('SELECT id FROM logistics_locations WHERE id = ? LIMIT 1', [locationId]);
+  if (!truckRows.length || !locationRows.length) throw new Error('Truck type and location must exist.');
+  return { truckTypeId, locationId, tripType, role, baseRate, additionalRate, multiplier, specialRuleDescription, status, effectiveDate };
+}
+
+router.get('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const includeInactive = req.query.include_inactive === '1';
+    const [rows] = await pool.execute(`
+      SELECT r.*, tt.name AS truck_type, ll.name AS location_name, ll.location_category
+        FROM logistics_rates r
+        JOIN truck_types tt ON tt.id = r.truck_type_id
+        JOIN logistics_locations ll ON ll.id = r.location_id
+       ${includeInactive ? '' : "WHERE r.status = 'Active'"}
+       ORDER BY CASE WHEN r.status = 'Active' THEN 0 ELSE 1 END, r.effective_date DESC, tt.name, ll.name, r.trip_type, r.role
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[logistics/rates:get]', err.message);
+    res.status(500).json({ error: 'Failed to load logistics rates.' });
+  }
+});
+
+router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const rate = await logisticsRatePayload(pool, req.body);
+    const [result] = await pool.execute(`
+      INSERT INTO logistics_rates
+        (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [rate.truckTypeId, rate.locationId, rate.tripType, rate.role, rate.baseRate, rate.additionalRate, rate.multiplier, rate.specialRuleDescription, rate.status, rate.effectiveDate, currentUserId(req), currentUserId(req)]);
+    await logPayrollAudit(pool, req, 'logistics_rate_created', { remarks: `Created ${rate.role} logistics rate`, metadata: { new_value: rate } });
+    res.status(201).json({ id: result.insertId, total_trip_pay: computeTripPay(rate), message: 'Logistics rate created.' });
+  } catch (err) {
+    console.error('[logistics/rates:post]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to create logistics rate.' });
+  }
+});
+
+router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Logistics rate');
+    const [existing] = await pool.execute('SELECT * FROM logistics_rates WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Logistics rate not found.' });
+    const rate = await logisticsRatePayload(pool, req.body);
+    await pool.execute(`
+      UPDATE logistics_rates
+         SET truck_type_id = ?, location_id = ?, trip_type = ?, role = ?, base_rate = ?, additional_rate = ?, multiplier = ?,
+             special_rule_description = ?, status = ?, effective_date = ?, updated_by = ?
+       WHERE id = ?
+    `, [rate.truckTypeId, rate.locationId, rate.tripType, rate.role, rate.baseRate, rate.additionalRate, rate.multiplier, rate.specialRuleDescription, rate.status, rate.effectiveDate, currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_rate_updated', { remarks: `Updated ${rate.role} logistics rate`, metadata: { old_value: existing[0], new_value: rate } });
+    res.json({ total_trip_pay: computeTripPay(rate), message: 'Logistics rate updated.' });
+  } catch (err) {
+    console.error('[logistics/rates:put]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to update logistics rate.' });
+  }
+});
+
+router.delete('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Logistics rate');
+    const [existing] = await pool.execute('SELECT * FROM logistics_rates WHERE id = ? LIMIT 1', [id]);
+    if (!existing.length) return res.status(404).json({ error: 'Logistics rate not found.' });
+    await pool.execute("UPDATE logistics_rates SET status = 'Inactive', updated_by = ? WHERE id = ?", [currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'logistics_rate_deactivated', { remarks: `Deactivated logistics rate ${id}`, metadata: { old_value: existing[0], new_value: { status: 'Inactive' } } });
+    res.json({ message: 'Logistics rate deactivated. Existing trip history was retained.' });
+  } catch (err) {
+    console.error('[logistics/rates:delete]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to deactivate logistics rate.' });
+  }
+});
+
+router.get('/logistics/rates/preview', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const tripDate = logisticsDate(req.query.trip_date || new Date().toISOString().slice(0, 10), 'Trip date');
+    const rate = await findActiveLogisticsRate(pool, {
+      truckTypeId: logisticsPositiveId(req.query.truck_type_id, 'Truck type'),
+      locationId: logisticsPositiveId(req.query.location_id, 'Location'),
+      tripType: req.query.trip_type,
+      role: req.query.role,
+      tripDate
+    });
+    if (!rate) return res.status(404).json({ error: 'No active logistics rate matches this truck, location, trip type, role, and date.' });
+    res.json({ ...rate, total_trip_pay: computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }) });
+  } catch (err) {
+    console.error('[logistics/rates:preview]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to preview logistics rate.' });
+  }
+});
+
+router.get('/logistics/employees', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [rows] = await pool.execute(`
+      SELECT e.id, e.employee_code, e.first_name, e.last_name, e.position, w.name AS wage_type
+        FROM employees e
+        JOIN wage_types w ON w.id = e.wage_type_id
+       WHERE (LOWER(w.name) LIKE '%trip%' OR LOWER(w.name) LIKE '%logistics%')
+         AND COALESCE(e.status, 'Active') = 'Active'
+       ORDER BY e.last_name, e.first_name
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[logistics/employees:get]', err.message);
+    res.status(500).json({ error: 'Failed to load trip-based employees.' });
+  }
+});
+
+async function logisticsTripPayload(pool, body) {
+  const employeeId = logisticsPositiveId(body.employee_id, 'Employee');
+  const truckTypeId = logisticsPositiveId(body.truck_type_id, 'Truck type');
+  const locationId = logisticsPositiveId(body.location_id, 'Location');
+  const tripDate = logisticsDate(body.trip_date, 'Trip date');
+  const tripType = normalizeTripType(body.trip_type);
+  const role = normalizeTripRole(body.role);
+  const plateNumber = logisticsText(body.plate_number, 'Plate number', 30);
+  if (plateNumber && !/^[A-Za-z0-9 -]+$/.test(plateNumber)) throw new Error('Plate number may contain letters, numbers, spaces, and hyphens only.');
+  const [employees] = await pool.execute(`
+    SELECT e.id, e.employee_code, e.position, e.status, w.name AS wage_type
+      FROM employees e
+      LEFT JOIN wage_types w ON w.id = e.wage_type_id
+     WHERE e.id = ?
+     LIMIT 1
+  `, [employeeId]);
+  const employee = employees[0];
+  if (!employee || String(employee.status || 'Active').toLowerCase() !== 'active') throw new Error('Employee must be active.');
+  if (!isTripBasedWageType(employee.wage_type)) throw new Error('Employee must use the Trip-Based or Logistics wage type.');
+  if (logisticsPositionKind(employee.position) !== role) throw new Error(`Employee position must be ${role} for this trip entry.`);
+  const rate = await findActiveLogisticsRate(pool, { truckTypeId, locationId, tripType, role, tripDate });
+  if (!rate) throw new Error('No active logistics rate matches this truck, location, trip type, role, and date.');
+  return {
+    employeeId, truckTypeId, locationId, tripDate, tripType, role, plateNumber,
+    rateId: rate.id,
+    baseRate: logisticsMoney(rate.base_rate, 'Base rate'),
+    additionalRate: logisticsMoney(rate.additional_rate, 'Additional rate'),
+    multiplier: Number(rate.multiplier),
+    totalTripPay: computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }),
+    specialRuleDescription: rate.special_rule_description || null,
+    employeeCode: employee.employee_code
+  };
+}
+
+router.get('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const where = ['1 = 1'];
+    const values = [];
+    if (req.query.status) { where.push('dt.status = ?'); values.push(String(req.query.status)); }
+    if (req.query.start_date) { where.push('dt.trip_date >= ?'); values.push(logisticsDate(req.query.start_date, 'Start date')); }
+    if (req.query.end_date) { where.push('dt.trip_date <= ?'); values.push(logisticsDate(req.query.end_date, 'End date')); }
+    if (req.query.employee_id) { where.push('dt.employee_id = ?'); values.push(logisticsPositiveId(req.query.employee_id, 'Employee')); }
+    const [rows] = await pool.execute(`
+      SELECT dt.*, e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
+             tt.name AS truck_type, ll.name AS location_name, ll.location_category,
+             creator.username AS created_by_username, approver.username AS approved_by_username
+        FROM delivery_trips dt
+        JOIN employees e ON e.id = dt.employee_id
+        JOIN truck_types tt ON tt.id = dt.truck_type_id
+        JOIN logistics_locations ll ON ll.id = dt.location_id
+        LEFT JOIN users creator ON creator.id = dt.created_by
+        LEFT JOIN users approver ON approver.id = dt.approved_by
+       WHERE ${where.join(' AND ')}
+       ORDER BY dt.trip_date DESC, dt.id DESC
+       LIMIT 500
+    `, values);
+    res.json(rows);
+  } catch (err) {
+    console.error('[logistics/trips:get]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to load delivery trips.' });
+  }
+});
+
+router.post('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.encode), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const trip = await logisticsTripPayload(pool, req.body);
+    const submitNow = String(req.body.status || '').toLowerCase() === 'submitted';
+    const [result] = await pool.execute(`
+      INSERT INTO delivery_trips
+        (employee_id, truck_type_id, location_id, logistics_rate_id, trip_date, trip_type, role, plate_number,
+         base_rate, additional_rate, multiplier, total_trip_pay, special_rule_description, status,
+         submitted_by, submitted_at, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [trip.employeeId, trip.truckTypeId, trip.locationId, trip.rateId, trip.tripDate, trip.tripType, trip.role, trip.plateNumber,
+      trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, submitNow ? 'Submitted' : 'Draft',
+      submitNow ? currentUserId(req) : null, submitNow ? new Date() : null, currentUserId(req), currentUserId(req)]);
+    await logPayrollAudit(pool, req, submitNow ? 'delivery_trip_submitted' : 'delivery_trip_drafted', {
+      employee_id: trip.employeeId,
+      remarks: `${submitNow ? 'Submitted' : 'Drafted'} ${trip.tripType} delivery trip for ${trip.employeeCode}`,
+      metadata: { delivery_trip_id: result.insertId, new_value: trip }
+    });
+    res.status(201).json({ id: result.insertId, status: submitNow ? 'Submitted' : 'Draft', total_trip_pay: trip.totalTripPay, message: submitNow ? 'Delivery trip submitted for approval.' : 'Delivery trip saved as draft.' });
+  } catch (err) {
+    console.error('[logistics/trips:post]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to create delivery trip.' });
+  }
+});
+
+router.put('/logistics/trips/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.encode), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Delivery trip');
+    const [existing] = await pool.execute('SELECT * FROM delivery_trips WHERE id = ? LIMIT 1', [id]);
+    const oldTrip = existing[0];
+    if (!oldTrip) return res.status(404).json({ error: 'Delivery trip not found.' });
+    if (oldTrip.status !== 'Draft') return res.status(409).json({ error: 'Only Draft delivery trips can be edited.' });
+    if (!canManageTrip(req, oldTrip)) return res.status(403).json({ error: 'You may edit only delivery trips that you created.' });
+    const trip = await logisticsTripPayload(pool, { ...oldTrip, ...req.body });
+    await pool.execute(`
+      UPDATE delivery_trips
+         SET employee_id = ?, truck_type_id = ?, location_id = ?, logistics_rate_id = ?, trip_date = ?, trip_type = ?, role = ?, plate_number = ?,
+             base_rate = ?, additional_rate = ?, multiplier = ?, total_trip_pay = ?, special_rule_description = ?, updated_by = ?
+       WHERE id = ?
+    `, [trip.employeeId, trip.truckTypeId, trip.locationId, trip.rateId, trip.tripDate, trip.tripType, trip.role, trip.plateNumber,
+      trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'delivery_trip_updated', { employee_id: trip.employeeId, remarks: `Updated delivery trip ${id}`, metadata: { delivery_trip_id: id, old_value: oldTrip, new_value: trip } });
+    res.json({ total_trip_pay: trip.totalTripPay, message: 'Delivery trip updated.' });
+  } catch (err) {
+    console.error('[logistics/trips:put]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to update delivery trip.' });
+  }
+});
+
+router.post('/logistics/trips/:id/submit', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.encode), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Delivery trip');
+    const [rows] = await pool.execute('SELECT * FROM delivery_trips WHERE id = ? LIMIT 1', [id]);
+    const trip = rows[0];
+    if (!trip) return res.status(404).json({ error: 'Delivery trip not found.' });
+    if (trip.status !== 'Draft') return res.status(409).json({ error: 'Only Draft delivery trips can be submitted.' });
+    if (!canManageTrip(req, trip)) return res.status(403).json({ error: 'You may submit only delivery trips that you created.' });
+    await pool.execute("UPDATE delivery_trips SET status = 'Submitted', submitted_by = ?, submitted_at = NOW(), updated_by = ? WHERE id = ?", [currentUserId(req), currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'delivery_trip_submitted', { employee_id: trip.employee_id, remarks: `Submitted delivery trip ${id} for approval.`, metadata: { delivery_trip_id: id, old_value: { status: 'Draft' }, new_value: { status: 'Submitted' } } });
+    res.json({ message: 'Delivery trip submitted for approval.' });
+  } catch (err) {
+    console.error('[logistics/trips:submit]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to submit delivery trip.' });
+  }
+});
+
+router.post('/logistics/trips/:id/approve', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.approve), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Delivery trip');
+    const [rows] = await pool.execute('SELECT * FROM delivery_trips WHERE id = ? LIMIT 1', [id]);
+    const trip = rows[0];
+    if (!trip) return res.status(404).json({ error: 'Delivery trip not found.' });
+    if (trip.status !== 'Submitted') return res.status(409).json({ error: 'Only Submitted delivery trips can be approved.' });
+    await pool.execute("UPDATE delivery_trips SET status = 'Approved', approved_by = ?, approved_at = NOW(), updated_by = ? WHERE id = ?", [currentUserId(req), currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'delivery_trip_approved', { employee_id: trip.employee_id, remarks: `Approved delivery trip ${id}.`, metadata: { delivery_trip_id: id, old_value: { status: 'Submitted' }, new_value: { status: 'Approved' } } });
+    res.json({ message: 'Delivery trip approved and ready for payroll.' });
+  } catch (err) {
+    console.error('[logistics/trips:approve]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to approve delivery trip.' });
+  }
+});
+
+router.post('/logistics/trips/:id/reject', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.approve), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Delivery trip');
+    const reason = logisticsText(req.body.reason, 'Rejection reason', 500, { required: true });
+    const [rows] = await pool.execute('SELECT * FROM delivery_trips WHERE id = ? LIMIT 1', [id]);
+    const trip = rows[0];
+    if (!trip) return res.status(404).json({ error: 'Delivery trip not found.' });
+    if (trip.status !== 'Submitted') return res.status(409).json({ error: 'Only Submitted delivery trips can be rejected.' });
+    await pool.execute("UPDATE delivery_trips SET status = 'Rejected', updated_by = ? WHERE id = ?", [currentUserId(req), id]);
+    await logPayrollAudit(pool, req, 'delivery_trip_rejected', { employee_id: trip.employee_id, remarks: `Rejected delivery trip ${id}: ${reason}`, metadata: { delivery_trip_id: id, old_value: { status: 'Submitted' }, new_value: { status: 'Rejected', reason } } });
+    res.json({ message: 'Delivery trip rejected.' });
+  } catch (err) {
+    console.error('[logistics/trips:reject]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to reject delivery trip.' });
+  }
+});
+
+router.delete('/logistics/trips/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.encode), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const id = logisticsPositiveId(req.params.id, 'Delivery trip');
+    const [rows] = await pool.execute('SELECT * FROM delivery_trips WHERE id = ? LIMIT 1', [id]);
+    const trip = rows[0];
+    if (!trip) return res.status(404).json({ error: 'Delivery trip not found.' });
+    if (trip.status !== 'Draft') return res.status(409).json({ error: 'Only Draft delivery trips can be deleted.' });
+    if (!canManageTrip(req, trip)) return res.status(403).json({ error: 'You may delete only delivery trips that you created.' });
+    await pool.execute('DELETE FROM delivery_trips WHERE id = ? AND status = \'Draft\'', [id]);
+    await logPayrollAudit(pool, req, 'delivery_trip_deleted', { employee_id: trip.employee_id, remarks: `Deleted draft delivery trip ${id}.`, metadata: { delivery_trip_id: id, old_value: trip } });
+    res.json({ message: 'Draft delivery trip deleted.' });
+  } catch (err) {
+    console.error('[logistics/trips:delete]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to delete delivery trip.' });
+  }
+});
+
+router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await assertLogisticsTripSchema(pool);
+    const startDate = logisticsDate(req.query.start_date || monthRange(req.query.month_year).start, 'Start date');
+    const endDate = logisticsDate(req.query.end_date || monthRange(req.query.month_year).end, 'End date');
+    const [rows] = await pool.execute(`
+      SELECT dt.employee_id, e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name, e.position,
+             COUNT(*) AS approved_trip_count, COALESCE(SUM(dt.total_trip_pay), 0) AS total_logistics_pay
+        FROM delivery_trips dt
+        JOIN employees e ON e.id = dt.employee_id
+       WHERE dt.status IN ('Approved', 'Included in Payroll')
+         AND dt.trip_date BETWEEN ? AND ?
+       GROUP BY dt.employee_id, e.employee_code, e.last_name, e.first_name, e.position
+       ORDER BY e.last_name, e.first_name
+    `, [startDate, endDate]);
+    const totalLogisticsPay = rows.reduce((sum, row) => sum + numeric(row.total_logistics_pay), 0);
+    res.json({ start_date: startDate, end_date: endDate, rows, total_logistics_pay: totalLogisticsPay });
+  } catch (err) {
+    console.error('[logistics/payroll-summary:get]', err.message);
+    res.status(400).json({ error: err.message || 'Failed to load logistics payroll summary.' });
+  }
+});
+
 // Get employee wage rate configuration
 router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
   try {
@@ -2726,6 +3298,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     const wageTypeName = wageRows[0]?.name || '';
     const isPieceRate = /piece/i.test(wageTypeName);
     const normalizedWageType = normalizePayrollWageType(wageTypeName);
+    if (isTripBasedWageType(wageTypeName)) {
+      return res.status(400).json({
+        error: 'Trip-Based and Logistics payroll must be generated from approved delivery trips. Use the Logistics Trip Payroll workflow.'
+      });
+    }
     const isDailyRate = normalizedWageType === 'Daily';
     const isMonthlyRate = normalizedWageType === 'Monthly';
     const isHourlyRate = normalizedWageType === 'Hourly';
@@ -3225,21 +3802,27 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
           continue;
         }
 
-        const [calculationRows] = await pool.execute(`
-          SELECT *
-          FROM salary_calculations
-          WHERE employee_id = ?
-            AND COALESCE(payroll_period, DATE_FORMAT(calculation_date, '%Y-%m')) = ?
-            AND status IN ('Submitted','Approved','Released','Paid')
-          ORDER BY FIELD(status, 'Approved','Released','Paid','Submitted'), updated_at DESC, id DESC
-          LIMIT 1
-        `, [emp.id, period.month_year]);
+        const tripBasedEmployee = isTripBasedWageType(emp.wage_type);
+        let calculationRows = [];
+        if (!tripBasedEmployee) {
+          const [rows] = await pool.execute(`
+            SELECT *
+            FROM salary_calculations
+            WHERE employee_id = ?
+              AND COALESCE(payroll_period, DATE_FORMAT(calculation_date, '%Y-%m')) = ?
+              AND status IN ('Submitted','Approved','Released','Paid')
+            ORDER BY FIELD(status, 'Approved','Released','Paid','Submitted'), updated_at DESC, id DESC
+            LIMIT 1
+          `, [emp.id, period.month_year]);
+          calculationRows = rows;
+        }
 
         let totalEarning = 0;
         let totalDeduction = 0;
         let netPay = 0;
         let salaryCalculationId = null;
         let employeeDeductions = [];
+        let approvedDeliveryTrips = [];
 
         if (calculationRows.length) {
           const calc = calculationRows[0];
@@ -3276,13 +3859,16 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
             WHERE employee_id = ? AND month_year = ?
           `, [emp.id, period.month_year]);
           totalEarning = numeric(prods[0]?.total);
-        } else if (emp.wage_type === 'Per-Trip') {
-          const [trips] = await pool.execute(`
-            SELECT COALESCE(SUM(amount), 0) AS total
-            FROM logistics_transactions
-            WHERE employee_id = ? AND month_year = ?
-          `, [emp.id, period.month_year]);
-          totalEarning = numeric(trips[0]?.total);
+        } else if (tripBasedEmployee) {
+          await assertLogisticsTripSchema(pool);
+          const approvedTrips = await getApprovedDeliveryTripPayroll(pool, emp.id, period);
+          if (!approvedTrips.trips.length) {
+            skippedCount++;
+            skipped.push({ employee_id: emp.id, reason: 'No approved delivery trips exist for this payroll period.' });
+            continue;
+          }
+          totalEarning = approvedTrips.total;
+          approvedDeliveryTrips = approvedTrips.trips;
         }
 
         if (!calculationRows.length && !['Daily', 'Hourly', 'Monthly'].includes(normalizePayrollWageType(emp.wage_type))) {
@@ -3301,6 +3887,22 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
 
         if (employeeDeductions.length) {
           await applyEmployeeDeductionBalances(pool, req, emp.id, salaryCalculationId, period.month_year, employeeDeductions);
+        }
+
+        if (tripBasedEmployee && approvedDeliveryTrips.length) {
+          const ids = approvedDeliveryTrips.map(trip => trip.id);
+          await pool.execute(`
+            UPDATE delivery_trips
+               SET status = 'Included in Payroll', payroll_run_id = ?, updated_by = ?
+             WHERE id IN (${ids.map(() => '?').join(', ')})
+               AND status = 'Approved'
+          `, [payrollRunId, currentUserId(req), ...ids]);
+          await logPayrollAudit(pool, req, 'delivery_trips_included_in_payroll', {
+            employee_id: emp.id,
+            payroll_run_id: payrollRunId,
+            remarks: `Included ${ids.length} approved delivery trip(s) in payroll for ${period.start} to ${period.end}.`,
+            metadata: { delivery_trip_ids: ids, total_logistics_pay: totalEarning }
+          });
         }
 
         processedCount++;
@@ -3556,25 +4158,31 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
       `, [empId, monthYear]);
       earnings.production = prods;
       totalEarning = prods.reduce((sum, p) => sum + (p.amount || 0), 0);
-    } else if (emp.wage_type === 'Per-Trip') {
+    } else if (isTripBasedWageType(emp.wage_type)) {
+      await assertLogisticsTripSchema(pool);
+      const range = monthRange(monthYear);
       const [trips] = await pool.execute(`
-        SELECT lr.name AS region,
-               lt.truck_type,
-               lt.crew_role,
+        SELECT ll.name AS location,
+               ll.location_category,
+               tt.name AS truck_type,
+               dt.trip_type,
+               dt.role,
                COUNT(*) AS trips,
-               MAX(lt.base_rate) AS base_rate,
-               MAX(lt.missing_helper_share) AS missing_helper_share,
-               SUM(COALESCE(lt.gross_pay, lt.amount)) AS gross_pay,
-               SUM(COALESCE(lt.net_pay, lt.amount)) AS net_pay,
-               SUM(lt.amount) AS amount
-        FROM logistics_transactions lt
-        JOIN logistics_regions lr ON lr.id = lt.logistics_region_id
-        WHERE lt.employee_id = ? AND lt.month_year = ?
-        GROUP BY lt.logistics_region_id, lt.truck_type, lt.crew_role
-        ORDER BY lr.name, lt.truck_type, lt.crew_role
-      `, [empId, monthYear]);
+               MAX(dt.base_rate) AS base_rate,
+               MAX(dt.additional_rate) AS additional_rate,
+               MAX(dt.multiplier) AS multiplier,
+               SUM(dt.total_trip_pay) AS total_trip_pay
+          FROM delivery_trips dt
+          JOIN truck_types tt ON tt.id = dt.truck_type_id
+          JOIN logistics_locations ll ON ll.id = dt.location_id
+         WHERE dt.employee_id = ?
+           AND dt.trip_date BETWEEN ? AND ?
+           AND dt.status IN ('Approved', 'Included in Payroll')
+         GROUP BY ll.name, ll.location_category, tt.name, dt.trip_type, dt.role
+         ORDER BY ll.name, tt.name, dt.trip_type, dt.role
+      `, [empId, range.start, range.end]);
       earnings.logistics = trips;
-      totalEarning = trips.reduce((sum, t) => sum + Number(t.gross_pay || t.amount || 0), 0);
+      totalEarning = trips.reduce((sum, trip) => sum + Number(trip.total_trip_pay || 0), 0);
     }
 
     // Get deductions
@@ -4235,8 +4843,10 @@ async function buildPiecePayrollRegister(pool, monthYear) {
            pp.payroll_period,
            w1.employee_code AS sewer_code,
            CONCAT(w1.last_name, ', ', w1.first_name) AS sewer,
+           COALESCE(NULLIF(w1.agency_name, ''), 'Direct') AS sewer_agency,
            w2.employee_code AS fixer_code,
            CONCAT(w2.last_name, ', ', w2.first_name) AS fixer,
+           COALESCE(NULLIF(w2.agency_name, ''), 'Direct') AS fixer_agency,
            pp.sew_type_code,
            pp.size_range,
            pp.quantity_produced,
@@ -4255,27 +4865,53 @@ async function buildPiecePayrollRegister(pool, monthYear) {
   `, values);
 
   const employeeTotals = new Map();
-  const addEmployee = (employeeId, employeeCode, employee, role, amount) => {
+  const addEmployee = (employeeId, employeeCode, employee, agency, role, amount, productionDate) => {
     const key = `${employeeId}:${role}`;
     const current = employeeTotals.get(key) || {
       employee_id: employeeId,
       employee_code: employeeCode,
       employee,
+      agency: agency || 'Direct',
       role,
-      payroll_amount: 0
+      payroll_amount: 0,
+      work_dates: new Set()
     };
     current.payroll_amount += Number(amount || 0);
+    if (productionDate) current.work_dates.add(String(productionDate).slice(0, 10));
     employeeTotals.set(key, current);
   };
 
   for (const row of production) {
-    addEmployee(row.worker1_employee_id, row.sewer_code, row.sewer, 'Sewer', row.sewer_share);
-    addEmployee(row.worker2_employee_id, row.fixer_code, row.fixer, 'Fixer', row.fixer_share);
+    addEmployee(row.worker1_employee_id, row.sewer_code, row.sewer, row.sewer_agency, 'Sewer', row.sewer_share, row.production_date);
+    addEmployee(row.worker2_employee_id, row.fixer_code, row.fixer, row.fixer_agency, 'Fixer', row.fixer_share, row.production_date);
   }
 
-  const sewer = [...employeeTotals.values()].filter(row => row.role === 'Sewer').sort((a, b) => a.employee.localeCompare(b.employee));
-  const fixer = [...employeeTotals.values()].filter(row => row.role === 'Fixer').sort((a, b) => a.employee.localeCompare(b.employee));
-  const combined = [...employeeTotals.values()].sort((a, b) => a.employee.localeCompare(b.employee) || a.role.localeCompare(b.role));
+  const normalizedEmployees = [...employeeTotals.values()].map(row => ({
+    ...row,
+    no_of_days: row.work_dates.size,
+    work_dates: undefined,
+    payroll_amount: Number(row.payroll_amount.toFixed(2))
+  }));
+  const sewer = normalizedEmployees.filter(row => row.role === 'Sewer').sort((a, b) => a.agency.localeCompare(b.agency) || a.employee.localeCompare(b.employee));
+  const fixer = normalizedEmployees.filter(row => row.role === 'Fixer').sort((a, b) => a.agency.localeCompare(b.agency) || a.employee.localeCompare(b.employee));
+  const combined = [...normalizedEmployees].sort((a, b) => a.agency.localeCompare(b.agency) || a.employee.localeCompare(b.employee) || a.role.localeCompare(b.role));
+  const agencyMap = new Map();
+  for (const row of combined) {
+    const current = agencyMap.get(row.agency) || { agency: row.agency, sewer_amount: 0, fixer_amount: 0, total_amount: 0 };
+    if (row.role === 'Sewer') current.sewer_amount += row.payroll_amount;
+    if (row.role === 'Fixer') current.fixer_amount += row.payroll_amount;
+    current.total_amount += row.payroll_amount;
+    agencyMap.set(row.agency, current);
+  }
+  const agency_totals = [...agencyMap.values()]
+    .map(row => ({ ...row, sewer_amount: Number(row.sewer_amount.toFixed(2)), fixer_amount: Number(row.fixer_amount.toFixed(2)), total_amount: Number(row.total_amount.toFixed(2)) }))
+    .sort((a, b) => a.agency.localeCompare(b.agency));
+  const swr_fxr_rows = Array.from({ length: Math.max(sewer.length, fixer.length) }, (_, index) => ({
+    line_number: index + 1,
+    sewer: sewer[index] || null,
+    fixer: fixer[index] || null,
+    combined_amount: Number(((sewer[index]?.payroll_amount || 0) + (fixer[index]?.payroll_amount || 0)).toFixed(2))
+  }));
   const totals = {
     production_amount: production.reduce((sum, row) => sum + Number(row.production_amount || 0), 0),
     sewer_share: production.reduce((sum, row) => sum + Number(row.sewer_share || 0), 0),
@@ -4289,6 +4925,8 @@ async function buildPiecePayrollRegister(pool, monthYear) {
     sewer_register: sewer,
     fixer_register: fixer,
     combined_register: combined,
+    swr_fxr_rows,
+    agency_totals,
     totals
   };
 }
@@ -4301,6 +4939,26 @@ router.get('/piece-payroll-register', requireAuth, requireRole(PAYROLL_PERMISSIO
   } catch (err) {
     console.error('Error building piece payroll register:', err);
     res.status(500).json({ error: err.message || 'Failed to build piece payroll register.' });
+  }
+});
+
+router.get('/swr-fxr-sum', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const monthYear = String(req.query.month_year || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(monthYear)) return res.status(400).json({ error: 'Payroll period is required.' });
+    const register = await buildPiecePayrollRegister(pool, monthYear);
+    res.json({
+      payroll_period: monthYear,
+      sewer_register: register.sewer_register,
+      fixer_register: register.fixer_register,
+      rows: register.swr_fxr_rows,
+      agency_totals: register.agency_totals,
+      totals: register.totals
+    });
+  } catch (err) {
+    console.error('Error building SWR-FXR-SUM registry:', err);
+    res.status(500).json({ error: 'Failed to build SWR-FXR-SUM payroll registry.' });
   }
 });
 

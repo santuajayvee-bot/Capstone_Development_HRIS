@@ -18,6 +18,7 @@
     <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Generate Payroll</button>
     <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
     <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslips</button>
+    <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
   </div>
   <div class="payroll-nav-group">
     <span>Payroll Configuration</span>
@@ -30,6 +31,7 @@
   </div>
   <div class="payroll-nav-group">
     <span>Reports</span>
+    <button class="payroll-tab" data-payroll-tab="swr-fxr" onclick="switchPayrollTab('swr-fxr')">SWR-FXR-SUM</button>
     <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
   </div>
 </div>
@@ -276,6 +278,107 @@
     </div>
     <div id="salary-calculations-grid"></div>
   </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-logistics">
+  <div class="page-header compact">
+    <div>
+      <div class="section-title small">Trip-Based Logistics Payroll</div>
+      <div class="section-sub">Record delivery trips, submit them for approval, and include only approved trips in payroll.</div>
+    </div>
+    <div class="button-row">
+      <button class="btn btn-outline" type="button" onclick="loadLogisticsPayrollModule()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="payroll-form-page logistics-payroll-page">
+    <details class="payroll-collapsible" open>
+      <summary>Logistics Rate Management</summary>
+      <div class="logistics-config-grid">
+        <form id="logistics-truck-type-form" class="payroll-field-row" onsubmit="saveLogisticsTruckType(event)">
+          <input type="hidden" name="id" />
+          <label>Truck Type<input name="name" required maxlength="100" placeholder="Closed Van" /></label>
+          <label class="span-2">Description<input name="description" maxlength="255" placeholder="Optional description" /></label>
+          <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Truck Type</button></div>
+        </form>
+        <div class="table-wrap"><div id="logistics-truck-types-grid"></div></div>
+
+        <form id="logistics-location-form" class="payroll-field-row" onsubmit="saveLogisticsLocation(event)">
+          <input type="hidden" name="id" />
+          <label>Location Category<select name="location_category" required><option>Manila</option><option>Province</option><option>Special Location</option></select></label>
+          <label>Specific Location<input name="name" required maxlength="120" placeholder="Pangasinan" /></label>
+          <label class="span-2">Description<input name="description" maxlength="255" placeholder="Optional description" /></label>
+          <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Location</button></div>
+        </form>
+        <div class="table-wrap"><div id="logistics-locations-grid"></div></div>
+
+        <form id="logistics-rate-form" class="payroll-field-row" onsubmit="saveLogisticsRate(event)">
+          <input type="hidden" name="id" />
+          <label>Truck Type<select name="truck_type_id" id="logistics-rate-truck-type" required><option value="">Select truck type</option></select></label>
+          <label>Location<select name="location_id" id="logistics-rate-location" required><option value="">Select location</option></select></label>
+          <label>Trip Type<select name="trip_type" required><option>1st Trip</option><option>2nd Trip</option><option>Additional Trip</option><option>Any</option></select></label>
+          <label>Role<select name="role" required><option>Driver</option><option>Helper</option></select></label>
+          <label>Base Rate<input name="base_rate" type="number" min="0" step="0.01" required /></label>
+          <label>Additional Rate<input name="additional_rate" type="number" min="0" step="0.01" value="0" required /></label>
+          <label>Multiplier<input name="multiplier" type="number" min="0.01" max="100" step="0.01" value="1" required /></label>
+          <label>Effective Date<input name="effective_date" type="date" required /></label>
+          <label>Status<select name="status" required><option>Active</option><option>Inactive</option></select></label>
+          <label class="span-2">Special Rule Description<input name="special_rule_description" maxlength="500" placeholder="e.g., helper half rate for second trip" /></label>
+          <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Logistics Rate</button></div>
+        </form>
+      </div>
+      <div class="table-wrap"><div id="logistics-rates-grid"></div></div>
+    </details>
+
+    <details class="payroll-collapsible" open>
+      <summary>Record Delivery Trip</summary>
+      <form id="delivery-trip-form" class="payroll-field-row" onsubmit="saveDeliveryTrip(event, 'Draft')">
+        <input type="hidden" name="id" />
+        <label>Trip-Based Employee<select name="employee_id" id="delivery-trip-employee" required><option value="">Select employee</option></select></label>
+        <label>Truck Type<select name="truck_type_id" id="delivery-trip-truck-type" required><option value="">Select truck type</option></select></label>
+        <label>Location<select name="location_id" id="delivery-trip-location" required><option value="">Select location</option></select></label>
+        <label>Trip Date<input name="trip_date" id="delivery-trip-date" type="date" required /></label>
+        <label>Trip Type<select name="trip_type" id="delivery-trip-type" required><option>1st Trip</option><option>2nd Trip</option><option>Additional Trip</option></select></label>
+        <label>Role<select name="role" id="delivery-trip-role" required><option>Driver</option><option>Helper</option></select></label>
+        <label>Plate Number<input name="plate_number" maxlength="30" placeholder="ABC 1234" /></label>
+        <label>Rate Preview<span class="salary-readonly" id="delivery-trip-rate-preview">Select the trip details.</span></label>
+        <label>Trip Pay<span class="salary-readonly" id="delivery-trip-pay-preview">PHP 0.00</span></label>
+        <div class="payroll-form-actions">
+          <button class="btn btn-outline" type="reset">Clear</button>
+          <button class="btn btn-outline" type="submit">Save Draft</button>
+          <button class="btn btn-primary" type="button" onclick="submitDeliveryTripForm()">Save &amp; Submit</button>
+        </div>
+      </form>
+    </details>
+
+    <div class="table-wrap">
+      <div class="payroll-card-header-row"><div><h3>Delivery Trip Queue</h3><p>Draft → Submitted → Approved → Included in Payroll</p></div></div>
+      <div id="delivery-trips-grid"></div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="payroll-card-header-row">
+        <div><h3>Logistics Payroll Summary</h3><p>Approved and payroll-included trip pay for the selected period.</p></div>
+        <div class="button-row"><input class="form-control" id="logistics-summary-start" type="date" /><input class="form-control" id="logistics-summary-end" type="date" /><button class="btn btn-outline" type="button" onclick="loadLogisticsPayrollSummary()">Apply</button></div>
+      </div>
+      <div id="logistics-payroll-summary-grid"></div>
+    </div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-swr-fxr">
+  <div class="page-header compact">
+    <div>
+      <div class="section-title small">SWR-FXR-SUM Payroll Registry</div>
+      <div class="section-sub">Agency-based Sewer and Fixer payroll register with days worked and payroll totals.</div>
+    </div>
+    <div class="button-row">
+      <input class="form-control" id="swr-fxr-period" type="month" />
+      <button class="btn btn-outline" type="button" onclick="loadSwrFxrRegistry()">Generate Registry</button>
+      <button class="btn btn-primary" type="button" onclick="printSwrFxrRegistry()">Print Registry</button>
+    </div>
+  </div>
+  <div id="swr-fxr-registry" class="swr-fxr-registry"></div>
 </section>
 
 <section class="payroll-panel" id="payroll-tab-piece-config">

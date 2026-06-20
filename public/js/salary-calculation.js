@@ -27,7 +27,7 @@ function salaryEscape(value) {
 function normalizeSalaryWageType(value) {
   const name = String(value || '').trim();
   if (/piece/i.test(name)) return 'Per-Piece';
-  if (/trip/i.test(name)) return 'Per-Trip';
+  if (/trip|logistics/i.test(name)) return 'Per-Trip';
   if (/hour/i.test(name)) return 'Hourly';
   if (/day|daily/i.test(name)) return 'Daily';
   if (/base|salary/i.test(name)) return 'Base Salary';

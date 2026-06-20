@@ -1026,6 +1026,8 @@ function switchPayrollTab(tab) {
   if (targetTab === 'dashboard') loadPayrollDashboard();
   if (targetTab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
   if (targetTab === 'piece-config') loadPieceRateConfig();
+  if (targetTab === 'logistics' && typeof loadLogisticsPayrollModule === 'function') loadLogisticsPayrollModule();
+  if (targetTab === 'swr-fxr' && typeof loadSwrFxrRegistry === 'function') loadSwrFxrRegistry();
   if (targetTab === 'deductions') loadPayrollSettings('deduction');
   if (targetTab === 'cash-advances') loadEmployeeDeductionAccounts('cash_advance');
   if (targetTab === 'employee-loans') loadEmployeeDeductionAccounts('loan');
