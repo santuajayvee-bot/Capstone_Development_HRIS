@@ -4180,6 +4180,10 @@ async function buildWeeklyPayrollRegistry(pool, query = {}) {
     where.push('(CONCAT(e.first_name, " ", e.last_name) LIKE ? OR e.employee_code LIKE ?)');
     params.push(`%${query.employee}%`, `%${query.employee}%`);
   }
+  if (query.employee_id) {
+    where.push('e.id = ?');
+    params.push(Number(query.employee_id));
+  }
   if (query.pay_type || query.wage_type) {
     const pattern = payrollTypePattern(query.pay_type || query.wage_type);
     if (pattern) {
@@ -4296,9 +4300,39 @@ router.get('/filter-options', requireAuth, requireRole(PAYROLL_PERMISSIONS.view)
        ORDER BY d.name
     `);
     const [wageTypes] = await pool.execute('SELECT id, name FROM wage_types ORDER BY name');
+    const [employees] = await pool.execute(`
+      SELECT e.id,
+             e.employee_code,
+             e.first_name,
+             e.last_name,
+             e.position,
+             e.department_id,
+             d.name AS department,
+             e.wage_type_id,
+             w.name AS wage_type
+        FROM employees e
+        LEFT JOIN departments d ON d.id = e.department_id
+        LEFT JOIN wage_types w ON w.id = e.wage_type_id
+       WHERE ${activeEmployeeWhere}
+       ORDER BY d.name, e.last_name, e.first_name, e.employee_code
+       LIMIT 1000
+    `);
     res.json({
       departments,
-      pay_types: wageTypes.map(row => ({ id: row.id, name: row.name, normalized: normalizePayrollWageType(row.name) }))
+      pay_types: wageTypes.map(row => ({ id: row.id, name: row.name, normalized: normalizePayrollWageType(row.name) })),
+      employees: employees.map(row => ({
+        id: row.id,
+        employee_code: row.employee_code,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        employee_name: `${row.last_name || ''}, ${row.first_name || ''}`.replace(/^,\s*/, '').trim(),
+        position: row.position,
+        department_id: row.department_id,
+        department: row.department,
+        wage_type_id: row.wage_type_id,
+        wage_type: row.wage_type,
+        normalized_wage_type: normalizePayrollWageType(row.wage_type)
+      }))
     });
   } catch (err) {
     console.error('Error loading payroll filter options:', err);

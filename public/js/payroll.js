@@ -7,6 +7,7 @@ let currentMonthYear = null;
 let currentSalaryCalculationRecords = [];
 let payrollReportPage = 1;
 let selectedPayrollReport = null;
+let weeklyPayrollEmployees = [];
 let pieceRateConfig = {
   sew_types: [],
   size_ranges: [],
@@ -446,11 +447,13 @@ function setDefaultWeeklyPayrollDates() {
 async function loadWeeklyPayrollFilterOptions() {
   const departmentSelect = document.getElementById('weekly-payroll-department');
   const payTypeSelect = document.getElementById('weekly-payroll-pay-type');
-  if (!departmentSelect && !payTypeSelect) return;
+  const employeeSelect = document.getElementById('weekly-payroll-employee');
+  if (!departmentSelect && !payTypeSelect && !employeeSelect) return;
   try {
     const response = await apiFetch('/api/payroll/filter-options');
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to load payroll filter options.');
+    weeklyPayrollEmployees = Array.isArray(data.employees) ? data.employees : [];
     if (departmentSelect) {
       const current = departmentSelect.value;
       departmentSelect.innerHTML = '<option value="">All departments</option>' + (data.departments || [])
@@ -477,9 +480,43 @@ async function loadWeeklyPayrollFilterOptions() {
         .join('');
       if ([...payTypeSelect.options].some(option => option.value === current)) payTypeSelect.value = current;
     }
+    renderWeeklyPayrollEmployeeOptions();
   } catch (error) {
     console.warn('Weekly payroll filter options skipped:', error.message);
   }
+}
+
+function weeklyPayTypeMatches(employee, selectedPayType) {
+  if (!selectedPayType) return true;
+  const selected = selectedPayType === 'Piece Rate' ? 'Per-Piece' : selectedPayType === 'Logistics' ? 'Per-Trip' : selectedPayType;
+  return employee.normalized_wage_type === selected
+    || (selected === 'Per-Trip' && /logistics|trip/i.test(employee.wage_type || ''))
+    || (selected === 'Per-Piece' && /piece/i.test(employee.wage_type || ''));
+}
+
+function renderWeeklyPayrollEmployeeOptions() {
+  const select = document.getElementById('weekly-payroll-employee');
+  if (!select) return;
+  const current = select.value;
+  const departmentId = document.getElementById('weekly-payroll-department')?.value || '';
+  const payType = document.getElementById('weekly-payroll-pay-type')?.value || '';
+  const rows = weeklyPayrollEmployees
+    .filter(employee => !departmentId || String(employee.department_id || '') === String(departmentId))
+    .filter(employee => weeklyPayTypeMatches(employee, payType))
+    .sort((a, b) =>
+      String(a.department || '').localeCompare(String(b.department || ''))
+      || String(a.last_name || '').localeCompare(String(b.last_name || ''))
+      || String(a.first_name || '').localeCompare(String(b.first_name || ''))
+      || String(a.employee_code || '').localeCompare(String(b.employee_code || ''))
+    );
+  select.innerHTML = '<option value="">All employees in selected filters</option>' + rows.map(employee => {
+    const label = `${employee.employee_code || 'No Code'} — ${employee.employee_name || `${employee.first_name || ''} ${employee.last_name || ''}`.trim()} (${employee.department || 'No Department'} / ${employee.wage_type || 'No Pay Type'})`;
+    return `<option value="${Number(employee.id)}">${payrollEscape(label)}</option>`;
+  }).join('');
+  if (rows.some(employee => String(employee.id) === String(current))) {
+    select.value = current;
+  }
+  select.title = `${rows.length} employee(s) match the selected department/pay type.`;
 }
 
 function renderWeeklyPayrollRegistry(payload = {}) {
@@ -555,6 +592,7 @@ async function loadWeeklyPayrollRegistry() {
   const end = document.getElementById('weekly-payroll-end')?.value;
   const departmentId = document.getElementById('weekly-payroll-department')?.value;
   const payType = document.getElementById('weekly-payroll-pay-type')?.value;
+  const employeeId = document.getElementById('weekly-payroll-employee')?.value;
   if (!start || !end) return;
   const params = new URLSearchParams({ month_year: payrollWeekKeyFromDates(start, end) });
   if (departmentId) {
@@ -562,6 +600,7 @@ async function loadWeeklyPayrollRegistry() {
     if (departmentText) params.set('department', departmentText);
   }
   if (payType) params.set('pay_type', payType);
+  if (employeeId) params.set('employee_id', employeeId);
   try {
     const response = await apiFetch(`/api/payroll/registry?${params.toString()}`);
     const data = await response.json().catch(() => ({}));
@@ -578,12 +617,7 @@ async function generateWeeklyPayroll(event) {
   const form = event.currentTarget;
   const status = document.getElementById('weekly-payroll-result');
   const data = Object.fromEntries(new FormData(form).entries());
-  const employeeSearch = String(data.employee_search || '').trim();
-  delete data.employee_search;
-  if (employeeSearch) {
-    if (/^\d+$/.test(employeeSearch)) data.employee_id = Number(employeeSearch);
-    else data.employee_code = employeeSearch;
-  }
+  if (!data.employee_id) delete data.employee_id;
   data.weekly = true;
   data.month_year = payrollWeekKeyFromDates(data.start_date, data.end_date);
   if (status) status.textContent = 'Generating weekly payroll...';
@@ -2490,6 +2524,27 @@ function initializePayrollModule() {
   if (splitDate && !splitDate.value) splitDate.value = today;
   if (cashAdvanceDate && !cashAdvanceDate.value) cashAdvanceDate.value = today;
   if (loanDate && !loanDate.value) loanDate.value = today;
+  const weeklyDepartment = document.getElementById('weekly-payroll-department');
+  const weeklyPayType = document.getElementById('weekly-payroll-pay-type');
+  const weeklyEmployee = document.getElementById('weekly-payroll-employee');
+  if (weeklyDepartment && !weeklyDepartment.dataset.employeeFilterBound) {
+    weeklyDepartment.addEventListener('change', () => {
+      renderWeeklyPayrollEmployeeOptions();
+      loadWeeklyPayrollRegistry();
+    });
+    weeklyDepartment.dataset.employeeFilterBound = '1';
+  }
+  if (weeklyPayType && !weeklyPayType.dataset.employeeFilterBound) {
+    weeklyPayType.addEventListener('change', () => {
+      renderWeeklyPayrollEmployeeOptions();
+      loadWeeklyPayrollRegistry();
+    });
+    weeklyPayType.dataset.employeeFilterBound = '1';
+  }
+  if (weeklyEmployee && !weeklyEmployee.dataset.employeeFilterBound) {
+    weeklyEmployee.addEventListener('change', loadWeeklyPayrollRegistry);
+    weeklyEmployee.dataset.employeeFilterBound = '1';
+  }
   toggleDeductionNameField();
 }
 
@@ -2533,6 +2588,7 @@ window.generatePiecePayrollRegister = generatePiecePayrollRegister;
 window.generateWeeklyPayroll = generateWeeklyPayroll;
 window.loadWeeklyPayrollRegistry = loadWeeklyPayrollRegistry;
 window.renderWeeklyPayrollRegistry = renderWeeklyPayrollRegistry;
+window.renderWeeklyPayrollEmployeeOptions = renderWeeklyPayrollEmployeeOptions;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {

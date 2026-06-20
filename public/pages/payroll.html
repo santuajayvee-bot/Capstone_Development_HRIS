@@ -145,7 +145,7 @@
       <label>Week End<input name="end_date" id="weekly-payroll-end" type="date" required /></label>
       <label>Department<select name="department_id" id="weekly-payroll-department"><option value="">All departments</option></select></label>
       <label>Pay Type<select name="pay_type" id="weekly-payroll-pay-type"><option value="">All pay types</option><option value="Monthly">Monthly</option><option value="Daily">Daily</option><option value="Hourly">Hourly</option><option value="Piece Rate">Piece Rate</option><option value="Logistics">Logistics / Trip-Based</option></select></label>
-      <label class="span-2">Employee ID / Code<input name="employee_search" id="weekly-payroll-employee" placeholder="Optional; leave blank for all employees" /></label>
+      <label class="span-2">Employee ID / Code<select name="employee_id" id="weekly-payroll-employee"><option value="">All employees in selected filters</option></select></label>
       <div class="payroll-form-actions">
         <button class="btn btn-outline" type="button" onclick="loadWeeklyPayrollRegistry()">Load Registry</button>
         <button class="btn btn-primary" type="submit">Generate Weekly Payroll</button>
