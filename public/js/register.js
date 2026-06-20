@@ -233,7 +233,16 @@ function copyHomeAddress(config) {
     const same = document.getElementById(item.same);
     const input = document.getElementById(item.input);
     if (!same || !input || !same.checked) return;
-    setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude, home?.dataset.placeId);
+    // A same-as-home address is the same verified address, not merely the same
+    // display text. Preserve its full selection metadata for payload generation.
+    setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude, home?.dataset.placeId, {
+      region: home?.dataset.region,
+      province: home?.dataset.province,
+      city_municipality: home?.dataset.cityMunicipality,
+      barangay: home?.dataset.barangay,
+      street_address: home?.dataset.streetAddress,
+      full_address: home?.dataset.fullAddress || home?.value || ''
+    });
     if (window.copyPhilippineAddressSection) window.copyPhilippineAddressSection(config.home.input, item.input);
     input.disabled = true;
   });
@@ -378,8 +387,12 @@ function collectEmployeeAddressPayload(mode = 'emp') {
   if (!currentSame && !current?.value.trim()) errors.push('Current Address is required unless Same as Home Address is checked.');
   if (!mailingSame && !mailing?.value.trim()) errors.push('Mailing Address is required unless Same as Home Address is checked.');
   if (home?.value.trim() && !selected(home)) errors.push('Home Address must be selected from address suggestions.');
-  if (current?.value.trim() && !selected(current)) errors.push('Current Address must be selected from address suggestions.');
-  if (mailing?.value.trim() && !selected(mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+  // The verified Home Address is authoritative when either same-as-home flag is set.
+  // Do not require the user to select the same address three separate times.
+  const currentSelection = currentSame ? home : current;
+  const mailingSelection = mailingSame ? home : mailing;
+  if (currentSelection?.value.trim() && !selected(currentSelection)) errors.push('Current Address must be selected from address suggestions.');
+  if (mailingSelection?.value.trim() && !selected(mailingSelection)) errors.push('Mailing Address must be selected from address suggestions.');
   const phInputIds = [...new Set([config.home.input, currentSame ? config.home.input : config.current.input, mailingSame ? config.home.input : config.mailing.input])];
   const phAddress = window.collectPhilippineAddressPayload
     ? window.collectPhilippineAddressPayload(phInputIds)

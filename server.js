@@ -595,8 +595,15 @@ function validateEmployeeAddresses(body) {
   if (!addresses.sameCurrent && !addresses.current.address) errors.push('Current Address is required unless Same as Home Address is checked.');
   if (!addresses.sameMailing && !addresses.mailing.address) errors.push('Mailing Address is required unless Same as Home Address is checked.');
   if (addresses.home.address && !hasSelectedAddress(addresses.home)) errors.push('Home Address must be selected from address suggestions.');
-  if (addresses.current.address && !hasSelectedAddress(addresses.current)) errors.push('Current Address must be selected from address suggestions.');
-  if (addresses.mailing.address && !hasSelectedAddress(addresses.mailing)) errors.push('Mailing Address must be selected from address suggestions.');
+  // When marked as the same address, normalizeAddressPayload already derives the
+  // value from Home Address. Only independently entered addresses need their own
+  // suggestion-selection proof.
+  if (!addresses.sameCurrent && addresses.current.address && !hasSelectedAddress(addresses.current)) {
+    errors.push('Current Address must be selected from address suggestions.');
+  }
+  if (!addresses.sameMailing && addresses.mailing.address && !hasSelectedAddress(addresses.mailing)) {
+    errors.push('Mailing Address must be selected from address suggestions.');
+  }
 
   return { errors, addresses };
 }
