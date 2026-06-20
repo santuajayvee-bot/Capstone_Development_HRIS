@@ -364,9 +364,9 @@
           </div>
         </div>
         <div class="employee-form-grid">
-          <div class="form-group"><label>First Name</label><input id="emp-first-name" placeholder="First name" /></div>
-          <div class="form-group"><label>Middle Name</label><input id="emp-middle-name" placeholder="Middle name" /></div>
-          <div class="form-group"><label>Last Name</label><input id="emp-last-name" placeholder="Last name" /></div>
+          <div class="form-group"><label>First Name</label><input id="emp-first-name" placeholder="First name" data-validation="name" required /></div>
+          <div class="form-group"><label>Middle Name</label><input id="emp-middle-name" placeholder="Middle name" data-validation="name" /></div>
+          <div class="form-group"><label>Last Name</label><input id="emp-last-name" placeholder="Last name" data-validation="name" required /></div>
           <div class="form-group"><label>Suffix</label><select id="emp-suffix"><option>None</option><option>Jr.</option><option>Sr.</option><option>III</option></select></div>
           <div class="form-group"><label>Date of Birth</label><input id="emp-dob" type="date" /></div>
           <div class="form-group"><label>Place of Birth</label><input id="emp-place-of-birth" placeholder="City / Province" /></div>
@@ -384,9 +384,9 @@
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Primary Contact Info</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>Personal Mobile Number</label><input id="emp-contact" placeholder="+63 9XX XXX XXXX" /></div>
-          <div class="form-group"><label>Personal Email Address</label><input id="emp-email" type="email" placeholder="personal@email.com" /></div>
-          <div class="form-group"><label>Work Email Address</label><input id="emp-work-email" type="email" placeholder="name@company.com" /></div>
+          <div class="form-group"><label>Personal Mobile Number</label><input id="emp-contact" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Personal Email Address</label><input id="emp-email" type="email" placeholder="personal@email.com" data-validation="email" required /></div>
+          <div class="form-group"><label>Work Email Address</label><input id="emp-work-email" type="email" placeholder="name@company.com" data-validation="email" /></div>
           <div class="form-group full">
             <label>Permanent Home Address</label>
             <div class="address-autocomplete" data-address-field="home">
@@ -416,11 +416,11 @@
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Emergency Contacts</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>Contact Name(s)</label><input id="emp-emerg-name" placeholder="Contact name(s)" /></div>
+          <div class="form-group"><label>Contact Name(s)</label><input id="emp-emerg-name" placeholder="Contact name(s)" data-validation="name" /></div>
           <div class="form-group"><label>Relationship to Employee</label><input id="emp-emerg-relationship" placeholder="Parent, spouse, sibling" /></div>
-          <div class="form-group"><label>Primary Phone Number</label><input id="emp-emerg-phone" placeholder="+63 9XX XXX XXXX" /></div>
-          <div class="form-group"><label>Secondary Phone Number</label><input id="emp-emerg-secondary-phone" placeholder="+63 9XX XXX XXXX" /></div>
-          <div class="form-group"><label>Alternative Email Address</label><input id="emp-emerg-email" type="email" placeholder="optional@email.com" /></div>
+          <div class="form-group"><label>Primary Phone Number</label><input id="emp-emerg-phone" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Secondary Phone Number</label><input id="emp-emerg-secondary-phone" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Alternative Email Address</label><input id="emp-emerg-email" type="email" placeholder="optional@email.com" data-validation="email" /></div>
           <div class="form-group full"><label>Residential Address</label><input id="emp-emerg-address" placeholder="Emergency contact residential address" /></div>
         </div>
       </div>
@@ -458,8 +458,8 @@
             <label>Agency Deployment</label>
             <div class="employee-form-grid">
               <div class="form-group"><label>Agency Name</label><input id="emp-agency-name" placeholder="Agency name" /></div>
-              <div class="form-group"><label>Agency Contact Person</label><input id="emp-agency-contact-person" placeholder="Contact person" /></div>
-              <div class="form-group"><label>Agency Contact Number</label><input id="emp-agency-contact-number" placeholder="+63 9XX XXX XXXX" /></div>
+              <div class="form-group"><label>Agency Contact Person</label><input id="emp-agency-contact-person" placeholder="Contact person" data-validation="name" /></div>
+              <div class="form-group"><label>Agency Contact Number</label><input id="emp-agency-contact-number" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
               <div class="form-group"><label>Deployment Status</label><select id="emp-deployment-status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></div>
               <div class="form-group"><label>Contract Start Date</label><input id="emp-contract-start-date" type="date" /></div>
               <div class="form-group"><label>Contract End Date</label><input id="emp-contract-end-date" type="date" /></div>
@@ -485,26 +485,26 @@
               <option value="Per-Trip">Per-Trip</option>
             </select>
           </div>
-          <div class="form-group"><label>Allowances</label><input id="emp-allowances" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+          <div class="form-group"><label>Allowances</label><input id="emp-allowances" type="number" min="0" step="0.01" placeholder="0.00" data-validation="decimal" /></div>
           <div class="form-group"><label>Payroll Schedule</label><select id="emp-pay-freq"><option>Monthly</option><option>Semi-monthly</option><option>Bi-weekly</option><option>Weekly</option></select></div>
         </div>
 
         <div id="wage-base-salary" class="employee-wage-panel">
           <div class="employee-form-grid two">
-            <div class="form-group"><label>Basic Salary</label><input id="emp-salary" type="number" placeholder="0.00" /></div>
+            <div class="form-group"><label>Basic Salary</label><input id="emp-salary" type="number" placeholder="0.00" data-validation="decimal" /></div>
           </div>
         </div>
 
         <div id="wage-hourly" class="employee-wage-panel">
           <div class="employee-form-grid two">
-            <div class="form-group"><label>Hourly Rate</label><input id="emp-hourly-rate" type="number" placeholder="0.00" step="0.01" /></div>
-            <div class="form-group"><label>Overtime Rate / Hour</label><input id="emp-overtime-rate" type="number" placeholder="0.00" step="0.01" /></div>
+            <div class="form-group"><label>Hourly Rate</label><input id="emp-hourly-rate" type="number" placeholder="0.00" step="0.01" data-validation="decimal" /></div>
+            <div class="form-group"><label>Overtime Rate / Hour</label><input id="emp-overtime-rate" type="number" placeholder="0.00" step="0.01" data-validation="decimal" /></div>
           </div>
         </div>
 
         <div id="wage-production" class="employee-wage-panel">
           <p class="employee-form-note">Set base rate and sewing-type specific rates.</p>
-          <div class="form-group" style="margin-bottom:14px;"><label>Base Per-Piece Rate</label><input id="emp-prod-base-rate" type="number" placeholder="0.00" step="0.01" /></div>
+          <div class="form-group" style="margin-bottom:14px;"><label>Base Per-Piece Rate</label><input id="emp-prod-base-rate" type="number" placeholder="0.00" step="0.01" data-validation="decimal" /></div>
           <div id="emp-sewing-rates" class="wage-rate-grid"></div>
         </div>
 
@@ -525,10 +525,10 @@
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Government & Tax Information</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>TIN</label><input id="emp-tin" placeholder="XXX-XXX-XXX" /></div>
-          <div class="form-group"><label>SSS Number</label><input id="emp-sss" placeholder="XX-XXXXXXX-X" /></div>
-          <div class="form-group"><label>PhilHealth Number</label><input id="emp-philhealth" placeholder="XXXX-XXXX-XXXX" /></div>
-          <div class="form-group"><label>Pag-IBIG Number</label><input id="emp-pagibig" placeholder="XXXX-XXXX-XXXX" /></div>
+          <div class="form-group"><label>TIN</label><input id="emp-tin" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>SSS Number</label><input id="emp-sss" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>PhilHealth Number</label><input id="emp-philhealth" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Pag-IBIG Number</label><input id="emp-pagibig" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
           <div class="form-group"><label>Tax Status</label><select id="emp-tax-status"><option value="">Select tax status</option><option>Single</option><option>Married</option><option>Head of Family</option><option>Exempt</option></select></div>
         </div>
       </div>

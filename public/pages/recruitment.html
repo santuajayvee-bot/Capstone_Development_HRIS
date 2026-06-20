@@ -71,17 +71,18 @@
         <p>Configure whether a position enters screening and training or proceeds directly to HR approval.</p>
       </div>
       <form class="onb-route-form" id="onb-route-form">
+        <input type="hidden" name="id" />
         <label>Position<input required name="position_name" placeholder="e.g. Quality Inspector" /></label>
         <label>Department<select name="department_id" id="onb-route-department"><option value="">Any department</option></select></label>
         <label class="onb-check"><input type="checkbox" name="requires_onboarding" checked /> Screening required</label>
         <label class="onb-check"><input type="checkbox" name="requires_training" checked /> Training required</label>
-        <button class="btn btn-primary" type="submit">Save Rule</button>
+        <button class="btn btn-primary" id="onb-route-save" type="submit">Save Rule</button>
       </form>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Position</th><th>Department</th><th>Screening</th><th>Training</th><th>Employee Directory path</th></tr></thead>
-        <tbody id="onb-position-rows"><tr><td colspan="5" class="onb-empty">Loading position routes...</td></tr></tbody>
+        <thead><tr><th>Position</th><th>Department</th><th>Screening</th><th>Training</th><th>Employee Directory path</th><th>Actions</th></tr></thead>
+        <tbody id="onb-position-rows"><tr><td colspan="6" class="onb-empty">Loading position routes...</td></tr></tbody>
       </table>
     </div>
   </section>

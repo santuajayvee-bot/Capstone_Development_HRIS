@@ -3784,6 +3784,13 @@ tr:hover td,
   padding: 24px;
 }
 
+/* Shared client-side form validation state. The browser's native validation
+   message provides the text; this makes the affected field visible at once. */
+.input-validation-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, .16) !important;
+}
+
 @media (max-width: 960px) {
   .request-type-bar,
   .request-form-grid {

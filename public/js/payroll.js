@@ -25,6 +25,16 @@ function money(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function payrollEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
 async function viewPayslipDetails(employeeId, employeeName, monthYear) {
   try {
     // Fetch monthly summary with detailed breakdown
@@ -1036,6 +1046,7 @@ async function loadPieceRateConfig() {
     pieceRateConfig = await res.json();
     window.pieceRateConfig = pieceRateConfig;
     populatePieceRateDropdowns();
+    if (typeof refreshSalaryPieceRowOptions === 'function') refreshSalaryPieceRowOptions();
     const pairingSelect = document.querySelector('#production-share-rule-form [name="pairing_type"]');
     if (pairingSelect && !pairingSelect.dataset.bound) {
       pairingSelect.addEventListener('change', applyPairingTypeDefaults);
@@ -1696,22 +1707,42 @@ async function loadPayrollSettings(type) {
 function renderDeductionSettings(rows) {
   return `
     <table>
-      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Rate/Amount</th><th>Schedule</th><th>Status</th><th>Effective</th></tr></thead>
+      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Rate/Amount</th><th>Schedule</th><th>Status</th><th>Effective</th><th>Actions</th></tr></thead>
       <tbody>
         ${rows.map(row => `
           <tr>
-            <td>${row.name}</td>
-            <td>${row.category}</td>
-            <td>${row.computation_type}</td>
-            <td>${row.rate_or_amount}</td>
-            <td>${row.apply_schedule}</td>
+            <td>${payrollEscape(row.name)}</td>
+            <td>${payrollEscape(row.category)}</td>
+            <td>${payrollEscape(row.computation_type)}</td>
+            <td>${payrollEscape(row.rate_or_amount)}</td>
+            <td>${payrollEscape(row.apply_schedule)}</td>
             <td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td>
-            <td>${(row.effective_date || '').slice(0, 10)}</td>
+            <td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td>
+            <td><button class="btn btn-outline btn-sm" type="button" onclick="deleteDeductionSetting(${Number(row.id)})">Delete</button></td>
           </tr>
         `).join('')}
       </tbody>
     </table>
   `;
+}
+
+async function deleteDeductionSetting(id) {
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Delete this deduction setting? It will no longer affect future payroll calculations. Historical payroll records remain unchanged.', 'Delete Deduction', 'Delete', 'Cancel')
+    : window.confirm('Delete this deduction setting?');
+  if (!confirmed) return;
+
+  try {
+    const res = await apiFetch(`/api/payroll/deduction-settings/${id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to delete deduction setting.');
+    await loadPayrollSettings('deduction');
+    await loadPayrollAudit();
+    if (typeof showAlert === 'function') await showAlert('Deduction setting deleted.', 'Deleted', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
 }
 
 function renderAllowanceSettings(rows) {
@@ -2284,6 +2315,7 @@ window.switchPayrollTab = switchPayrollTab;
 window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;
+window.deleteDeductionSetting = deleteDeductionSetting;
 window.toggleDeductionNameField = toggleDeductionNameField;
 window.loadEmployeeDeductionAccounts = loadEmployeeDeductionAccounts;
 window.saveEmployeeDeductionAccount = saveEmployeeDeductionAccount;

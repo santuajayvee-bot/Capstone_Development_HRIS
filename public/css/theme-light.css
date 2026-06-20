@@ -1323,3 +1323,28 @@ button,
     grid-column: auto;
   }
 }
+
+/* Keep payroll-readiness metrics aligned when a label wraps to two lines. */
+#page-payroll .payroll-readiness-grid .stat-card {
+  display: grid !important;
+  grid-template-rows: 32px 28px 18px;
+  align-items: center;
+  justify-items: center;
+  min-height: 112px !important;
+  text-align: center;
+}
+
+#page-payroll .payroll-readiness-grid .stat-label {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  margin: 0 !important;
+  line-height: 16px;
+}
+
+#page-payroll .payroll-readiness-grid .stat-val,
+#page-payroll .payroll-readiness-grid .stat-sub {
+  margin: 0 !important;
+  line-height: 1;
+}

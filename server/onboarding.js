@@ -674,6 +674,7 @@ router.get('/positions', async (_req, res) => {
       SELECT opr.*, d.name AS department
         FROM onboarding_position_route opr
         LEFT JOIN departments d ON d.id = opr.department_id
+       WHERE opr.is_active = 1
        ORDER BY opr.position_name
     `);
     res.json(rows);
@@ -717,6 +718,94 @@ router.post('/positions', async (req, res) => {
   } catch (error) {
     await connection.rollback();
     res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.put('/positions/:positionRouteId', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const positionRouteId = positiveInteger(req.params.positionRouteId, 'positionRouteId');
+    const positionName = requiredText(req.body.position_name, 'Position name', 120);
+    const departmentId = optionalPositiveInteger(req.body.department_id, 'department_id');
+    const requiresOnboarding = req.body.requires_onboarding === false || req.body.requires_onboarding === 0 ? 0 : 1;
+    const requiresTraining = requiresOnboarding && !(req.body.requires_training === false || req.body.requires_training === 0) ? 1 : 0;
+
+    await connection.beginTransaction();
+    const [existingRows] = await connection.execute(
+      'SELECT * FROM onboarding_position_route WHERE position_route_id = ? FOR UPDATE',
+      [positionRouteId]
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Position routing rule not found.' });
+    }
+
+    const [duplicateRows] = await connection.execute(
+      'SELECT position_route_id FROM onboarding_position_route WHERE position_name = ? AND position_route_id <> ? LIMIT 1',
+      [positionName, positionRouteId]
+    );
+    if (duplicateRows.length) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'A routing rule already exists for that position.' });
+    }
+
+    await connection.execute(
+      `UPDATE onboarding_position_route
+          SET position_name = ?, department_id = ?, requires_onboarding = ?,
+              requires_training = ?, is_active = 1, updated_by = ?
+        WHERE position_route_id = ?`,
+      [positionName, departmentId, requiresOnboarding, requiresTraining, req.user.id, positionRouteId]
+    );
+    await writeModuleAudit(connection, req, `POSITION_ROUTE_UPDATED [ROUTE:${positionRouteId}]`, existing, {
+      position_name: positionName,
+      department_id: departmentId,
+      requires_onboarding: requiresOnboarding,
+      requires_training: requiresTraining,
+      is_active: 1,
+    });
+    await connection.commit();
+    return res.json({ message: 'Position routing rule updated.' });
+  } catch (error) {
+    await connection.rollback();
+    return res.status(400).json({ error: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+// Soft-delete preserves historical routing decisions and the audit trail while
+// keeping the route out of all future onboarding decisions and dropdowns.
+router.delete('/positions/:positionRouteId', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const positionRouteId = positiveInteger(req.params.positionRouteId, 'positionRouteId');
+    await connection.beginTransaction();
+    const [existingRows] = await connection.execute(
+      'SELECT * FROM onboarding_position_route WHERE position_route_id = ? FOR UPDATE',
+      [positionRouteId]
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Position routing rule not found.' });
+    }
+
+    await connection.execute(
+      'UPDATE onboarding_position_route SET is_active = 0, updated_by = ? WHERE position_route_id = ?',
+      [req.user.id, positionRouteId]
+    );
+    await writeModuleAudit(connection, req, `POSITION_ROUTE_DEACTIVATED [ROUTE:${positionRouteId}]`, existing, {
+      ...existing,
+      is_active: 0,
+    });
+    await connection.commit();
+    return res.json({ message: 'Position routing rule deleted.' });
+  } catch (error) {
+    await connection.rollback();
+    return res.status(400).json({ error: error.message });
   } finally {
     connection.release();
   }

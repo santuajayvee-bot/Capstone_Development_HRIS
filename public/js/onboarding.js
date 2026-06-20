@@ -183,6 +183,7 @@ function moveStep(delta) {
 function validateCurrentStep() {
   const activeStep = document.getElementById(`step-${currentStep}`);
   if (!activeStep) return true;
+  if (window.LGSVValidation && !window.LGSVValidation.validateScope(activeStep)) return false;
   const inputs = activeStep.querySelectorAll('input[required], select[required], textarea[required]');
   for (let input of inputs) {
     if (input.type === 'checkbox' && !input.checked) { alert("Please check the consent box."); return false; }

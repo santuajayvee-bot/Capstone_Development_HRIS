@@ -8,6 +8,7 @@ const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
 const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
+const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
@@ -54,16 +55,16 @@ function settingAppliesThisWeek(setting, weekNumber) {
 async function computeConfiguredDeductions(pool, grossPay, calculationDate) {
   const weekNumber = payrollWeekFromDate(calculationDate);
   const [settings] = await pool.execute(`
-    SELECT name, category, computation_type, rate_or_amount, apply_schedule
+    SELECT id, name, category, computation_type, rate_or_amount, apply_schedule, effective_date
     FROM payroll_deduction_settings
     WHERE is_active = 1 AND effective_date <= ?
-    ORDER BY category, name
+    ORDER BY effective_date DESC, id DESC
   `, [calculationDate || new Date().toISOString().split('T')[0]]);
 
   const applied = [];
   let total = 0;
 
-  for (const setting of settings) {
+  for (const setting of selectCurrentStatutoryDeductions(settings)) {
     if (!settingAppliesThisWeek(setting, weekNumber)) continue;
     let amount = 0;
     if (setting.computation_type === 'Percentage') {
@@ -3881,6 +3882,11 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
         error: 'Cash advances and loans must be assigned per employee. Use Employee Cash Advance or Employee Loan instead.'
       });
     }
+    if (/withholding\s*tax|income\s*tax/i.test(String(name))) {
+      return res.status(400).json({
+        error: 'Income tax and withholding tax are outside this payroll module. Only SSS, PhilHealth, and Pag-IBIG are computed here.'
+      });
+    }
 
     const [result] = await pool.execute(`
       INSERT INTO payroll_deduction_settings
@@ -3907,6 +3913,45 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
   } catch (err) {
     console.error('Error saving deduction setting:', err);
     res.status(500).json({ error: 'Failed to save deduction setting' });
+  }
+});
+
+// Deleting a setting affects only future payroll calculations. Historical
+// payroll snapshots retain their original deductions, and the deletion is
+// retained in the payroll audit trail.
+router.delete('/deduction-settings/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const settingId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(settingId) || settingId <= 0) {
+      return res.status(400).json({ error: 'Invalid deduction setting ID.' });
+    }
+
+    const [rows] = await pool.execute(
+      'SELECT * FROM payroll_deduction_settings WHERE id = ? LIMIT 1',
+      [settingId]
+    );
+    const setting = rows[0];
+    if (!setting) return res.status(404).json({ error: 'Deduction setting not found.' });
+
+    await pool.execute('DELETE FROM payroll_deduction_settings WHERE id = ?', [settingId]);
+    await logPayrollAudit(pool, req, 'deduction_setting_deleted', {
+      remarks: `Deleted deduction setting: ${setting.name}`,
+      metadata: {
+        id: setting.id,
+        name: setting.name,
+        category: setting.category,
+        computation_type: setting.computation_type,
+        rate_or_amount: setting.rate_or_amount,
+        apply_schedule: setting.apply_schedule,
+        effective_date: setting.effective_date,
+      },
+    });
+
+    return res.json({ success: true, message: 'Deduction setting deleted.' });
+  } catch (err) {
+    console.error('Error deleting deduction setting:', err);
+    return res.status(500).json({ error: 'Failed to delete deduction setting.' });
   }
 });
 

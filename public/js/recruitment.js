@@ -157,8 +157,12 @@ function onbRenderPositions(routes) {
       <td>${onbBadge(route.requires_onboarding ? 'Required' : 'Not required')}</td>
       <td>${onbBadge(route.requires_training ? 'Required' : 'Not required')}</td>
       <td>${route.requires_onboarding ? 'Screening workflow' : 'Direct HR approval'}${route.requires_training ? ', then training' : ''}</td>
+      <td>
+        <button class="onb-mini" type="button" onclick="onbEditPositionRoute(${Number(route.position_route_id)})">Edit</button>
+        <button class="onb-mini" type="button" onclick="onbDeletePositionRoute(${Number(route.position_route_id)})">Delete</button>
+      </td>
     </tr>
-  `).join('') : '<tr><td colspan="5" class="onb-empty">No position routes configured.</td></tr>';
+  `).join('') : '<tr><td colspan="6" class="onb-empty">No position routes configured.</td></tr>';
 }
 
 function onbPopulateLookups() {
@@ -953,13 +957,55 @@ async function onbSavePositionRoute(event) {
   try {
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form).entries());
+    const routeId = Number(data.id || 0);
+    delete data.id;
     data.requires_onboarding = form.elements.requires_onboarding.checked;
     data.requires_training = form.elements.requires_training.checked;
-    await onbJson('/api/onboarding/positions', { method: 'POST', body: JSON.stringify(data) });
-    form.reset();
-    form.elements.requires_onboarding.checked = true;
-    form.elements.requires_training.checked = true;
-    onbToast('Position routing rule saved.');
+    await onbJson(routeId ? `/api/onboarding/positions/${routeId}` : '/api/onboarding/positions', {
+      method: routeId ? 'PUT' : 'POST',
+      body: JSON.stringify(data)
+    });
+    onbResetPositionRouteForm();
+    onbToast(routeId ? 'Position routing rule updated.' : 'Position routing rule saved.');
+    await onbLoadDashboard();
+  } catch (error) {
+    onbToast(error.message, 'error');
+  }
+}
+
+function onbResetPositionRouteForm() {
+  const form = document.getElementById('onb-route-form');
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = '';
+  form.elements.requires_onboarding.checked = true;
+  form.elements.requires_training.checked = true;
+  const button = document.getElementById('onb-route-save');
+  if (button) button.textContent = 'Save Rule';
+}
+
+function onbEditPositionRoute(positionRouteId) {
+  const route = ONB_POSITIONS.find(item => Number(item.position_route_id) === Number(positionRouteId));
+  const form = document.getElementById('onb-route-form');
+  if (!route || !form) return;
+  form.elements.id.value = route.position_route_id;
+  form.elements.position_name.value = route.position_name || '';
+  form.elements.department_id.value = route.department_id || '';
+  form.elements.requires_onboarding.checked = Boolean(Number(route.requires_onboarding));
+  form.elements.requires_training.checked = Boolean(Number(route.requires_training));
+  const button = document.getElementById('onb-route-save');
+  if (button) button.textContent = 'Update Rule';
+  form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function onbDeletePositionRoute(positionRouteId) {
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Delete this routing rule? It will no longer be used for future onboarding, while past records remain unchanged.', 'Delete Position Route', 'Delete', 'Cancel')
+    : window.confirm('Delete this routing rule?');
+  if (!confirmed) return;
+  try {
+    await onbJson(`/api/onboarding/positions/${positionRouteId}`, { method: 'DELETE' });
+    onbToast('Position routing rule deleted.');
     await onbLoadDashboard();
   } catch (error) {
     onbToast(error.message, 'error');
@@ -1016,3 +1062,5 @@ window.onbDeleteApplicant = onbDeleteApplicant;
 window.onbUploadDocument = onbUploadDocument;
 window.onbDownloadDocument = onbDownloadDocument;
 window.onbVerifyDocument = onbVerifyDocument;
+window.onbEditPositionRoute = onbEditPositionRoute;
+window.onbDeletePositionRoute = onbDeletePositionRoute;

@@ -1178,6 +1178,13 @@ async function saveEmployee() {
     return;
   }
   IS_SAVING = true;
+
+  // The form is assembled from tabs instead of a native <form>, so invoke the
+  // shared browser validator explicitly before constructing the API payload.
+  if (window.LGSVValidation && !window.LGSVValidation.validateScope(document.getElementById('register-form-view'))) {
+    IS_SAVING = false;
+    return;
+  }
   
   // Collect form data from all sections using the new ID attributes
   const empIdInput = document.getElementById('emp-id');

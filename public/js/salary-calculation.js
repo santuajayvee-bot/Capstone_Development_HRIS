@@ -268,7 +268,27 @@ function pieceOptionHtml(type) {
       .filter(row => Number(row.is_active) === 1)
       .map(row => `<option value="${row.code}">${row.code}${row.description ? ` - ${row.description}` : ''}</option>`)
       .join('');
-  }
+}
+
+// A piece row can be created while the payroll configuration is still loading.
+// Refresh rows after the configuration arrives so they do not remain stuck with
+// only their placeholder option.
+function refreshSalaryPieceRowOptions() {
+  document.querySelectorAll('#salary-piece-rows tr').forEach(tr => {
+    const sewSelect = tr.querySelector('.piece-row-sew');
+    const sizeSelect = tr.querySelector('.piece-row-size');
+    if (!sewSelect || !sizeSelect) return;
+
+    const selectedSew = sewSelect.value;
+    const selectedSize = sizeSelect.value;
+    sewSelect.innerHTML = `<option value="">Select type</option>${pieceOptionHtml('sew')}`;
+    sizeSelect.innerHTML = `<option value="">Select size</option>${pieceOptionHtml('size')}`;
+    if ([...sewSelect.options].some(option => option.value === selectedSew)) sewSelect.value = selectedSew;
+    if ([...sizeSelect.options].some(option => option.value === selectedSize)) sizeSelect.value = selectedSize;
+  });
+
+  calculateSalaryNow();
+}
   return (window.pieceRateConfig?.size_ranges || [])
     .filter(row => Number(row.is_active) === 1)
     .map(row => `<option value="${row.size_range}">${row.size_range}${row.description ? ` - ${row.description}` : ''}</option>`)
@@ -1416,6 +1436,9 @@ async function saveLogisticsTransaction() {
 // Save salary record for all wage types
 async function saveSalaryRecord(status = 'Submitted') {
   console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
+
+  const salaryPage = document.getElementById('page-salary-calculation') || document.getElementById('salary-calculation-root');
+  if (window.LGSVValidation && salaryPage && !window.LGSVValidation.validateScope(salaryPage)) return;
 
   if (status !== 'Draft' && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
     const validation = await loadSalaryPayrollValidation();

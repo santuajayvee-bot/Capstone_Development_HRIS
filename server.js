@@ -27,6 +27,7 @@ const { encryptPII }                         = require('./server/crypto');
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
+const { validateRequestBody }                = require('./validators/inputValidation');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -152,6 +153,9 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+// Enforce shared input rules before any API route receives a write request.
+// This is the final authority; browser validation is only a usability layer.
+app.use(validateRequestBody);
 app.use((req, res, next) => {
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -1165,9 +1169,7 @@ async function ensureOnboardingLifecycleSchema(pool) {
          (position_name, requires_onboarding, requires_training)
        VALUES (?, ?, ?)
        ON DUPLICATE KEY UPDATE
-         requires_onboarding = VALUES(requires_onboarding),
-         requires_training = VALUES(requires_training),
-         is_active = 1`,
+         position_name = VALUES(position_name)`,
       [position, requiresOnboarding, requiresTraining]
     );
   }
