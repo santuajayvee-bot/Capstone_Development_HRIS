@@ -94,6 +94,23 @@ async function normalizeLegacyPolicyTable(pool) {
     try { await pool.execute('ALTER TABLE attendance_policy_settings MODIFY setting_key VARCHAR(100) NULL'); } catch (_) {}
     await pool.execute('ALTER TABLE attendance_policy_settings ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST');
   }
+
+  // Legacy versions required setting_value even though the effective-dated
+  // policy model writes policy_value. Keep the legacy data but make the old
+  // column nullable so newer policy rows can be inserted safely.
+  if (await hasColumn(pool, 'attendance_policy_settings', 'setting_value')) {
+    const [columns] = await pool.execute(
+      `SELECT IS_NULLABLE
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'attendance_policy_settings'
+          AND COLUMN_NAME = 'setting_value'
+        LIMIT 1`
+    );
+    if (columns[0]?.IS_NULLABLE === 'NO') {
+      await pool.execute('ALTER TABLE attendance_policy_settings MODIFY setting_value TEXT NULL');
+    }
+  }
 }
 
 async function ensureAttendancePolicySettings(pool) {

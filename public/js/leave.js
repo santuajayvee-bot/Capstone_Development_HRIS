@@ -1644,7 +1644,7 @@ function watchPageActivation() {
       leavePage.dataset.loaded = '1';
       fetchCurrentUser(() => {
         loadLeaveRequests();
-        if (currentUser?.role === 'employee' && document.getElementById('general-requests-card')) {
+        if (CURRENT_USER?.role === 'employee' && document.getElementById('general-requests-card')) {
           loadGeneralRequests();
         }
       });

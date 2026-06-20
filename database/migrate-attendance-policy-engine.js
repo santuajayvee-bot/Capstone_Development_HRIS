@@ -76,6 +76,21 @@ async function normalizeLegacyPolicyTable(conn) {
     await conn.execute('ALTER TABLE attendance_policy_settings ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST');
     console.log('Added attendance_policy_settings.id primary key.');
   }
+
+  if (await hasColumn(conn, 'attendance_policy_settings', 'setting_value')) {
+    const [columns] = await conn.execute(
+      `SELECT IS_NULLABLE
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'attendance_policy_settings'
+          AND COLUMN_NAME = 'setting_value'
+        LIMIT 1`
+    );
+    if (columns[0]?.IS_NULLABLE === 'NO') {
+      await conn.execute('ALTER TABLE attendance_policy_settings MODIFY setting_value TEXT NULL');
+      console.log('Made legacy attendance_policy_settings.setting_value nullable.');
+    }
+  }
 }
 
 async function up(conn) {
