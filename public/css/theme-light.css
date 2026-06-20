@@ -190,6 +190,7 @@ label {
 .leave-summary-grid,
 .tabs,
 .payroll-tabs,
+.payroll-nav-group,
 .leave-tabs,
 .attendance-tabs,
 .filter-bar,
@@ -202,6 +203,8 @@ label {
 }
 
 .stat-card,
+.payroll-period-card,
+.payroll-estimate-card,
 .leave-summary-grid .leave-card,
 .att-note,
 .att-detail-grid > div,

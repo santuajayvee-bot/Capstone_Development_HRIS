@@ -8,19 +8,30 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline" onclick="exportPayrollReport('summary','csv')">Export CSV</button>
-    <button class="btn btn-primary" onclick="openRunPayrollModal()">Process Payroll</button>
   </div>
 </div>
 
-<div class="payroll-tabs" role="tablist">
-  <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Payroll Dashboard</button>
-  <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Salary Calculation</button>
-  <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
-  <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece-Rate Config</button>
-  <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deduction Settings</button>
-  <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowance Settings</button>
-  <button class="payroll-tab" data-payroll-tab="policies" onclick="switchPayrollTab('policies')">Policy Settings</button>
-  <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
+<div class="payroll-nav-groups" role="tablist">
+  <div class="payroll-nav-group">
+    <span>Payroll Processing</span>
+    <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Dashboard</button>
+    <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Generate Payroll</button>
+    <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
+    <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslips</button>
+  </div>
+  <div class="payroll-nav-group">
+    <span>Payroll Configuration</span>
+    <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowances</button>
+    <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deductions</button>
+    <button class="payroll-tab" data-payroll-tab="cash-advances" onclick="switchPayrollTab('cash-advances')">Cash Advances</button>
+    <button class="payroll-tab" data-payroll-tab="employee-loans" onclick="switchPayrollTab('employee-loans')">Employee Loans</button>
+    <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece Rate</button>
+    <button class="payroll-tab" data-payroll-tab="policies" onclick="switchPayrollTab('policies')">Policies</button>
+  </div>
+  <div class="payroll-nav-group">
+    <span>Reports</span>
+    <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
+  </div>
 </div>
 
 <section class="payroll-panel active" id="payroll-tab-dashboard">
@@ -37,32 +48,69 @@
     <button class="btn btn-outline" onclick="refreshPayrollDashboard()">Apply Filters</button>
   </div>
 
-  <div class="stat-grid payroll-stat-grid">
+  <div class="stat-grid payroll-stat-grid payroll-readiness-grid">
     <div class="stat-card">
-      <div class="stat-label">Total Payroll</div>
-      <div class="stat-val" id="payroll-total-payroll">PHP 0</div>
-      <div class="stat-sub" id="payroll-period-label">Current period</div>
+      <div class="stat-label">Total Employees</div>
+      <div class="stat-val" id="payroll-total-employees">0</div>
+      <div class="stat-sub">Active employees</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Employees Paid</div>
-      <div class="stat-val" id="payroll-employees-paid">0</div>
-      <div class="stat-sub" id="payroll-employees-label">0 employees processed</div>
+      <div class="stat-label">Payroll Ready Employees</div>
+      <div class="stat-val" id="payroll-ready-employees">0</div>
+      <div class="stat-sub">Validated attendance</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Average Salary</div>
-      <div class="stat-val" id="payroll-average-salary">PHP 0</div>
-      <div class="stat-sub">Per employee</div>
+      <div class="stat-label">Pending Attendance Validation</div>
+      <div class="stat-val" id="payroll-pending-attendance">0</div>
+      <div class="stat-sub">Needs HR review</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Total Deductions</div>
-      <div class="stat-val" id="payroll-total-deductions">PHP 0</div>
-      <div class="stat-sub">Configured deductions</div>
+      <div class="stat-label">Missing Attendance Records</div>
+      <div class="stat-val" id="payroll-missing-attendance">0</div>
+      <div class="stat-sub">No logs in period</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Pending Payroll</div>
-      <div class="stat-val" id="payroll-pending-count">0</div>
-      <div class="stat-sub">Draft or submitted</div>
+      <div class="stat-label">Draft Payrolls</div>
+      <div class="stat-val" id="payroll-draft-payrolls">0</div>
+      <div class="stat-sub">Saved drafts</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-label">Submitted Payrolls</div>
+      <div class="stat-val" id="payroll-submitted-payrolls">0</div>
+      <div class="stat-sub">Ready for approval</div>
+    </div>
+  </div>
+
+  <div class="payroll-dashboard-summary">
+    <section class="table-wrap payroll-period-card">
+      <div class="payroll-card-header-row">
+        <div>
+          <h3>Current Payroll Period</h3>
+          <p>Configured cycle used for payroll generation.</p>
+        </div>
+      </div>
+      <div class="payroll-period-fields">
+        <label>Period Start<input id="payroll-period-start" readonly value="-" /></label>
+        <label>Period End<input id="payroll-period-end" readonly value="-" /></label>
+        <label>Status<input id="payroll-period-status" readonly value="Not Generated" /></label>
+      </div>
+    </section>
+
+    <section class="table-wrap payroll-estimate-card">
+      <div class="payroll-card-header-row">
+        <div>
+          <h3>Estimated Payroll Summary</h3>
+          <p>Based on salary calculations for the selected period.</p>
+        </div>
+      </div>
+      <table class="payroll-simple-table">
+        <tbody>
+          <tr><th>Estimated Gross Payroll</th><td id="payroll-estimated-gross">PHP 0.00</td></tr>
+          <tr><th>Estimated Total Deductions</th><td id="payroll-estimated-deductions">PHP 0.00</td></tr>
+          <tr><th>Estimated Net Payroll</th><td id="payroll-estimated-net">PHP 0.00</td></tr>
+        </tbody>
+      </table>
+    </section>
   </div>
 
   <div class="table-wrap payroll-dashboard-table">
@@ -100,7 +148,7 @@
       <label>Worker Source<span class="salary-readonly" id="salary-worker-source">-</span></label>
       <label>Agency<select id="salary-agency"><option value="">Direct / No agency</option></select></label>
       <label>Wage Type<span class="salary-readonly" id="salary-wage-type">-</span></label>
-      <label>Rate<span class="salary-readonly" id="salary-rate">PHP 0.00</span></label>
+      <label id="salary-rate-field">Rate<span class="salary-readonly" id="salary-rate">PHP 0.00</span></label>
     </div>
 
     <div id="salary-employee-info" class="salary-selected-strip" style="display:none;">
@@ -178,7 +226,7 @@
       <span>Employee: <strong id="summary-employee">-</strong></span>
       <span>Agency: <strong id="summary-agency">-</strong></span>
       <span>Wage Type: <strong id="summary-wage-type">-</strong></span>
-      <span>Rate: <strong id="summary-rate">PHP 0.00</strong></span>
+      <span id="summary-rate-wrap">Rate: <strong id="summary-rate">PHP 0.00</strong></span>
       <span>Output: <strong id="summary-qty">0</strong></span>
     </div>
     <div class="salary-summary-form">
@@ -387,12 +435,21 @@
           <option value="SSS">SSS</option>
           <option value="PhilHealth">PhilHealth</option>
           <option value="Pag-IBIG">Pag-IBIG</option>
-          <option value="Withholding Tax">Withholding Tax</option>
+        </select>
+      </div>
+      <div class="form-group" id="deduction-company-name-group" style="display:none;">
+        <label>Deduction Name</label>
+        <select name="company_name" id="deduction-company-name">
+          <option value="IR COOP">IR COOP</option>
+          <option value="Canteen">Canteen</option>
+          <option value="Adjustment">Adjustment</option>
+          <option value="Uniform Deduction">Uniform Deduction</option>
+          <option value="Other Company Deduction">Other Company Deduction</option>
         </select>
       </div>
       <div class="form-group" id="deduction-custom-name-group" style="display:none;">
         <label>Deduction Name</label>
-        <input name="custom_name" id="deduction-custom-name" placeholder="Loan, Cash Advance, Other deduction" />
+        <input name="custom_name" id="deduction-custom-name" placeholder="Rule name, e.g. Uniform deduction" />
       </div>
       <div class="form-group"><label>Category</label><select name="category" id="deduction-category" onchange="toggleDeductionNameField()"><option>Government</option><option>Company</option><option>Other</option></select></div>
       <div class="form-group"><label>Computation Type</label><select name="computation_type"><option>Fixed Amount</option><option>Percentage</option><option>Manual Amount</option></select></div>
@@ -409,6 +466,55 @@
     </form>
   </details>
   <div class="table-wrap"><div id="deduction-settings-grid"></div></div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-cash-advances">
+  <details class="payroll-collapsible" open>
+    <summary>Assign Employee Cash Advance</summary>
+    <form id="cash-advance-form" class="form-grid" onsubmit="saveEmployeeDeductionAccount(event, 'cash_advance')">
+      <input type="hidden" name="id" />
+      <div class="form-group span-2"><label>Employee</label><select name="employee_id" class="employee-deduction-employee" required><option value="">Select employee</option></select></div>
+      <div class="form-group"><label>Deduction Name</label><input name="deduction_name" value="Cash Advance" required /></div>
+      <div class="form-group"><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></div>
+      <div class="form-group"><label>Remaining Balance</label><input name="remaining_balance" type="number" min="0" step="0.01" placeholder="Defaults to amount" /></div>
+      <div class="form-group"><label>Installment Amount</label><input name="installment_amount" type="number" min="0.01" step="0.01" required /></div>
+      <div class="form-group"><label>Start Date</label><input name="start_date" type="date" required /></div>
+      <div class="form-group"><label>End Date</label><input name="end_date" type="date" /></div>
+      <div class="form-group"><label>Status</label><select name="status"><option>Active</option><option>Paused</option><option>Paid</option><option>Cancelled</option></select></div>
+      <div class="form-group span-2"><label>Remarks</label><input name="remarks" placeholder="Optional notes" /></div>
+      <div class="form-actions">
+        <span class="payroll-form-status" id="cash-advance-save-status" aria-live="polite"></span>
+        <button class="btn btn-outline" type="reset">Clear</button>
+        <button class="btn btn-primary" type="submit">Save Cash Advance</button>
+      </div>
+    </form>
+  </details>
+  <div class="table-wrap"><div id="cash-advance-grid"></div></div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-employee-loans">
+  <details class="payroll-collapsible" open>
+    <summary>Assign Employee Loan</summary>
+    <form id="employee-loan-form" class="form-grid" onsubmit="saveEmployeeDeductionAccount(event, 'loan')">
+      <input type="hidden" name="id" />
+      <div class="form-group span-2"><label>Employee</label><select name="employee_id" class="employee-deduction-employee" required><option value="">Select employee</option></select></div>
+      <div class="form-group"><label>Loan Type</label><select name="loan_type"><option>Employee Loan</option><option>Cooperative Loan</option><option>Salary Loan</option><option>Equipment Loan</option><option>Other Loan</option></select></div>
+      <div class="form-group"><label>Deduction Name</label><input name="deduction_name" value="Employee Loan" required /></div>
+      <div class="form-group"><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></div>
+      <div class="form-group"><label>Remaining Balance</label><input name="remaining_balance" type="number" min="0" step="0.01" placeholder="Defaults to amount" /></div>
+      <div class="form-group"><label>Installment Amount</label><input name="installment_amount" type="number" min="0.01" step="0.01" required /></div>
+      <div class="form-group"><label>Start Date</label><input name="start_date" type="date" required /></div>
+      <div class="form-group"><label>End Date</label><input name="end_date" type="date" /></div>
+      <div class="form-group"><label>Status</label><select name="status"><option>Active</option><option>Paused</option><option>Paid</option><option>Cancelled</option></select></div>
+      <div class="form-group span-2"><label>Remarks</label><input name="remarks" placeholder="Optional notes" /></div>
+      <div class="form-actions">
+        <span class="payroll-form-status" id="employee-loan-save-status" aria-live="polite"></span>
+        <button class="btn btn-outline" type="reset">Clear</button>
+        <button class="btn btn-primary" type="submit">Save Loan</button>
+      </div>
+    </form>
+  </details>
+  <div class="table-wrap"><div id="employee-loan-grid"></div></div>
 </section>
 
 <section class="payroll-panel" id="payroll-tab-allowances">

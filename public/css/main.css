@@ -859,6 +859,28 @@ input.lgsv-date-native[type="date"] {
 }
 .payroll-tab:hover { color: var(--text); border-color: var(--border); }
 .payroll-tab.active { color: #fff; background: var(--accent); }
+.payroll-nav-groups {
+  display: grid;
+  grid-template-columns: 1.2fr 1.8fr .7fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.payroll-nav-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+.payroll-nav-group > span {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
 .payroll-panel { display: none; }
 .payroll-panel.active { display: block; }
 .payroll-filter-bar {
@@ -878,6 +900,37 @@ input.lgsv-date-native[type="date"] {
 }
 .form-control:focus { border-color: var(--accent); }
 .payroll-stat-grid { grid-template-columns: repeat(5, minmax(150px, 1fr)); }
+.payroll-readiness-grid { grid-template-columns: repeat(6, minmax(150px, 1fr)); }
+.payroll-dashboard-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, .7fr);
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.payroll-period-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.payroll-period-fields label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.payroll-period-fields input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 40px;
+  padding: 9px 10px;
+}
+.payroll-estimate-card .payroll-simple-table {
+  margin: 16px;
+  width: calc(100% - 32px);
+}
 .payroll-form-grid,
 .payroll-report-grid {
   display: grid;
@@ -1074,6 +1127,9 @@ input.lgsv-date-native[type="date"] {
 @media (max-width: 1100px) {
   .report-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-filter-actions { grid-column: 1 / -1; }
+  .payroll-nav-groups,
+  .payroll-dashboard-summary { grid-template-columns: 1fr; }
+  .payroll-readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
   .report-filter-grid { grid-template-columns: 1fr; }
@@ -1081,6 +1137,8 @@ input.lgsv-date-native[type="date"] {
   .report-modal-footer { flex-direction: column; align-items: stretch; }
   .report-filter-actions .btn,
   .report-modal-footer .btn { width: 100%; }
+  .payroll-period-fields,
+  .payroll-readiness-grid { grid-template-columns: 1fr; }
 }
 .page-header.compact { margin-bottom: 16px; }
 .section-title.small { font-size: 18px; }

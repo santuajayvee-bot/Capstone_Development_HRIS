@@ -249,7 +249,7 @@
           <div><label>Work End Time</label><input id="policy-work-end-time" type="time" /></div>
           <div><label>Break Start Time</label><input id="policy-break-start-time" type="time" /></div>
           <div><label>Break End Time</label><input id="policy-break-end-time" type="time" /></div>
-          <div><label>Standard Work Hours</label><input id="policy-standard-work-hours" type="number" min="0" step="0.25" /></div>
+          <div><label>Required Daily Working Hours</label><input id="policy-standard-work-hours" type="number" min="1" step="0.25" /></div>
         </div>
       </div>
       <div id="policy-tab-validation" class="policy-tab-panel" style="display:none;">
@@ -279,6 +279,14 @@
       <div id="policy-tab-payroll" class="policy-tab-panel" style="display:none;">
         <div class="att-form-grid">
           <div><label>Payroll Attendance Source</label><select id="policy-payroll-source"><option value="payroll_ready">Use Payroll Ready Attendance</option><option value="validated">Use Validated Attendance</option></select></div>
+          <div><label>Working Days per Month</label><input id="policy-working-days-month" type="number" min="1" step="1" /><small>Used only for monthly-salaried employees.</small></div>
+          <div><label>Late Deduction Method</label><select id="policy-late-deduction-method"><option value="auto_compute">Auto-compute from employee rate</option><option value="fixed_per_minute">Fixed amount per minute</option><option value="fixed_per_hour">Fixed amount per hour</option><option value="none">No deduction</option></select></div>
+          <div><label>Late Fixed Amount</label><input id="policy-late-fixed-amount" type="number" min="0" step="0.01" /><small>Used only for a fixed Late deduction method.</small></div>
+          <div><label>Apply Grace Period to Late Deduction</label><select id="policy-late-apply-grace"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Late Deduction Requires HR Approval</label><select id="policy-late-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
+          <div><label>Undertime Deduction Method</label><select id="policy-undertime-deduction-method"><option value="auto_compute">Auto-compute from employee rate</option><option value="fixed_per_minute">Fixed amount per minute</option><option value="fixed_per_hour">Fixed amount per hour</option><option value="none">No deduction</option></select></div>
+          <div><label>Undertime Fixed Amount</label><input id="policy-undertime-fixed-amount" type="number" min="0" step="0.01" /><small>Used only for a fixed Undertime deduction method.</small></div>
+          <div><label>Undertime Deduction Requires HR Approval</label><select id="policy-undertime-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
         </div>
       </div>
       <div id="policy-tab-biometric" class="policy-tab-panel" style="display:none;">

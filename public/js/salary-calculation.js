@@ -153,6 +153,19 @@ function setSummaryField(id, value) {
   else element.textContent = value;
 }
 
+function updateSalaryRateVisibility(wageType) {
+  const normalized = normalizeSalaryWageType(wageType);
+  const hideRate = normalized === 'Per-Piece';
+  const rateField = document.getElementById('salary-rate-field');
+  const summaryRateWrap = document.getElementById('summary-rate-wrap');
+  const wageInfo = document.getElementById('salary-employee-wage-info');
+  if (rateField) rateField.style.display = hideRate ? 'none' : '';
+  if (summaryRateWrap) summaryRateWrap.style.display = hideRate ? 'none' : '';
+  if (hideRate && wageInfo && currentSalaryEmployee) {
+    wageInfo.textContent = normalized;
+  }
+}
+
 function renderSummaryDeductions(appliedDeductions) {
   const container = document.getElementById('summary-deductions');
   if (!container) return;
@@ -815,6 +828,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       alert('⚠️ Wage structure not configured for this employee. Please ask HR admin to set it up in Employee Management → Payroll & Compensation.');
       document.getElementById('salary-wage-type').textContent = 'Not Configured';
       document.getElementById('salary-rate').textContent = '₱0.00';
+      updateSalaryRateVisibility('');
       return;
     }
     
@@ -871,7 +885,9 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       document.getElementById('salary-employee-name').textContent = `${code} - ${first} ${last}`;
       document.getElementById('salary-employee-dept-info').textContent = dept || '—';
       document.getElementById('salary-employee-pos-info').textContent = pos || '—';
-      document.getElementById('salary-employee-wage-info').textContent = `${config.wage_type} • ₱${currentSalaryEmployee.rate.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+      document.getElementById('salary-employee-wage-info').textContent = normalizedWageType === 'Per-Piece'
+        ? normalizedWageType
+        : `${config.wage_type} • ₱${currentSalaryEmployee.rate.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
     }
     
     // Show appropriate wage structure form
@@ -909,6 +925,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
 // Show appropriate wage structure form based on wage type
 function showWageStructureForm(wageType) {
   wageType = normalizeSalaryWageType(wageType);
+  updateSalaryRateVisibility(wageType);
   console.log('🔄 showWageStructureForm called with:', wageType);
   
   const perPieceSection = document.getElementById('per-piece-section');
@@ -1662,5 +1679,6 @@ function resetCalculationForm() {
   updateLogisticsPreview();
   
   currentSalaryEmployee = null;
+  updateSalaryRateVisibility('');
   console.log('✅ Form reset');
 }

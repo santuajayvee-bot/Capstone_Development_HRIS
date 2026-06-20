@@ -121,6 +121,12 @@ async function renderLoginTurnstile() {
   if (!target || LOGIN_TURNSTILE_WIDGET_ID !== null || !window.turnstile) return;
 
   const config = LOGIN_TURNSTILE_CONFIG || await loadTurnstileConfig();
+  if (config.localDevelopmentBypass) {
+    target.innerHTML = '<div class="login-turnstile-local-note">Local development verification is enabled.</div>';
+    LOGIN_TURNSTILE_TOKEN = 'local-development-bypass';
+    setLoginButtonState();
+    return;
+  }
   if (!config.enabled || !config.siteKey) {
     loginError('Verification is not configured. Please contact your administrator.', true);
     setLoginButtonState();

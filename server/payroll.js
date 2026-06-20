@@ -7,6 +7,7 @@ const PDFDocument = require('pdfkit');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
+const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
@@ -77,13 +78,139 @@ async function computeConfiguredDeductions(pool, grossPay, calculationDate) {
   return { total, applied, weekNumber };
 }
 
+async function computeEmployeeDeductions(pool, employeeId, calculationDate) {
+  if (!employeeId) return { total: 0, applied: [] };
+  const effectiveDate = calculationDate || new Date().toISOString().split('T')[0];
+  const [rows] = await pool.execute(`
+    SELECT id, module_type, deduction_name, loan_type, remaining_balance, installment_amount, start_date, end_date
+    FROM employee_deduction_accounts
+    WHERE employee_id = ?
+      AND status = 'Active'
+      AND remaining_balance > 0
+      AND start_date <= ?
+      AND (end_date IS NULL OR end_date >= ?)
+    ORDER BY start_date, id
+  `, [employeeId, effectiveDate, effectiveDate]);
+
+  const applied = rows.map(row => {
+    const remaining = numeric(row.remaining_balance);
+    const installment = numeric(row.installment_amount);
+    const amount = Math.min(remaining, installment);
+    return {
+      id: row.id,
+      name: row.deduction_name,
+      category: row.module_type,
+      loan_type: row.loan_type,
+      computation_type: 'Employee Installment',
+      rate_or_amount: installment,
+      apply_schedule: 'Every Payroll',
+      amount
+    };
+  }).filter(row => row.amount > 0);
+
+  return {
+    total: applied.reduce((sum, row) => sum + row.amount, 0),
+    applied
+  };
+}
+
+async function computePayrollDeductions(pool, employeeId, grossPay, calculationDate) {
+  const configured = await computeConfiguredDeductions(pool, grossPay, calculationDate);
+  const employee = await computeEmployeeDeductions(pool, employeeId, calculationDate);
+  return {
+    total: configured.total + employee.total,
+    statutoryTotal: configured.total,
+    employeeTotal: employee.total,
+    applied: [...configured.applied, ...employee.applied],
+    configured: configured.applied,
+    employee: employee.applied,
+    weekNumber: configured.weekNumber
+  };
+}
+
+async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
+  if (!(await payrollTableExists(pool, 'payroll_allowance_settings'))) {
+    return { total: 0, applied: [] };
+  }
+  const effectiveDate = calculationDate || new Date().toISOString().slice(0, 10);
+  const [settings] = await pool.execute(`
+    SELECT name, allowance_type, amount_or_rate, is_taxable
+    FROM payroll_allowance_settings
+    WHERE is_active = 1 AND effective_date <= ?
+    ORDER BY name
+  `, [effectiveDate]);
+
+  const applied = [];
+  let total = 0;
+  for (const setting of settings) {
+    let amount = 0;
+    if (setting.allowance_type === 'Percentage') {
+      amount = numeric(grossPay) * (numeric(setting.amount_or_rate) / 100);
+    } else if (setting.allowance_type === 'Fixed') {
+      amount = numeric(setting.amount_or_rate);
+    }
+    if (amount <= 0) continue;
+    total += amount;
+    applied.push({ ...setting, amount });
+  }
+  return { total, applied };
+}
+
+async function applyEmployeeDeductionBalances(pool, req, employeeId, salaryCalculationId, payrollPeriod, employeeDeductions) {
+  for (const item of employeeDeductions || []) {
+    const [accounts] = await pool.execute(`
+      SELECT id, remaining_balance
+      FROM employee_deduction_accounts
+      WHERE id = ? AND employee_id = ? AND status = 'Active'
+      LIMIT 1
+    `, [item.id, employeeId]);
+    const account = accounts[0];
+    if (!account) continue;
+
+    const balanceBefore = numeric(account.remaining_balance);
+    const appliedAmount = Math.min(balanceBefore, numeric(item.amount));
+    const balanceAfter = Math.max(0, balanceBefore - appliedAmount);
+
+    await pool.execute(`
+      UPDATE employee_deduction_accounts
+      SET remaining_balance = ?,
+          status = CASE WHEN ? <= 0 THEN 'Paid' ELSE status END,
+          updated_by = ?
+      WHERE id = ? AND employee_id = ?
+    `, [balanceAfter, balanceAfter, currentUserId(req), item.id, employeeId]);
+
+    await pool.execute(`
+      INSERT INTO employee_deduction_payments
+        (deduction_account_id, employee_id, salary_calculation_id, payroll_period, applied_amount,
+         balance_before, balance_after, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      item.id,
+      employeeId,
+      salaryCalculationId,
+      payrollPeriod || null,
+      appliedAmount,
+      balanceBefore,
+      balanceAfter,
+      currentUserId(req)
+    ]);
+
+    await logPayrollAudit(pool, req, 'employee_deduction_applied', {
+      employee_id: employeeId,
+      salary_calculation_id: salaryCalculationId,
+      remarks: `Applied ${item.name} installment`,
+      metadata: { deduction_account_id: item.id, applied_amount: appliedAmount, balance_before: balanceBefore, balance_after: balanceAfter }
+    });
+  }
+}
+
 function normalizePayrollWageType(value) {
   const text = String(value || '').toLowerCase();
   if (text.includes('hour')) return 'Hourly';
   if (text.includes('day') || text.includes('daily')) return 'Daily';
   if (text.includes('piece')) return 'Per-Piece';
   if (text.includes('trip')) return 'Per-Trip';
-  if (text.includes('salary') || text.includes('base')) return 'Base Salary';
+  if (text.includes('salary') || text.includes('base') || text.includes('month')) return 'Monthly';
   return String(value || '');
 }
 
@@ -96,6 +223,144 @@ function peso(value) {
 function numeric(value) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function payrollTableColumns(pool, tableName) {
+  const [rows] = await pool.execute(
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  return new Set(rows.map(row => row.COLUMN_NAME));
+}
+
+async function payrollTableExists(pool, tableName) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+}
+
+async function employeeActiveCondition(pool, alias = '') {
+  const columns = await payrollTableColumns(pool, 'employees');
+  const prefix = alias ? `${alias}.` : '';
+  const statusColumn = columns.has('status') ? `${prefix}status` : null;
+  const employmentStatusColumn = columns.has('employment_status') ? `${prefix}employment_status` : null;
+  if (statusColumn && employmentStatusColumn) {
+    return `COALESCE(${statusColumn}, ${employmentStatusColumn}, 'Active') = 'Active'`;
+  }
+  if (statusColumn) return `COALESCE(${statusColumn}, 'Active') = 'Active'`;
+  if (employmentStatusColumn) return `COALESCE(${employmentStatusColumn}, 'Active') = 'Active'`;
+  return '1 = 1';
+}
+
+async function payrollEnumValues(pool, tableName, columnName) {
+  const [rows] = await pool.execute(
+    `SELECT COLUMN_TYPE
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND COLUMN_NAME = ?
+      LIMIT 1`,
+    [tableName, columnName]
+  );
+  const columnType = rows[0]?.COLUMN_TYPE || '';
+  return Array.from(columnType.matchAll(/'([^']+)'/g)).map(match => match[1]);
+}
+
+function monthRange(monthYear) {
+  const raw = String(monthYear || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})$/);
+  const now = new Date();
+  const year = match ? Number(match[1]) : now.getFullYear();
+  const month = match ? Number(match[2]) : now.getMonth() + 1;
+  const safeMonth = Math.min(12, Math.max(1, month));
+  const start = `${year}-${String(safeMonth).padStart(2, '0')}-01`;
+  const end = new Date(Date.UTC(year, safeMonth, 0)).toISOString().slice(0, 10);
+  return { month_year: `${year}-${String(safeMonth).padStart(2, '0')}`, start, end };
+}
+
+async function findOrCreatePayrollRun(pool, req, period) {
+  const [existing] = await pool.execute(
+    'SELECT * FROM payroll_runs WHERE month_year = ? LIMIT 1',
+    [period.month_year]
+  );
+  if (existing.length) return existing[0];
+
+  const columns = await payrollTableColumns(pool, 'payroll_runs');
+  const fields = ['month_year', 'start_date', 'end_date'];
+  const values = [period.month_year, period.start, period.end];
+  if (columns.has('status')) {
+    fields.push('status');
+    values.push('Draft');
+  }
+  if (columns.has('created_by')) {
+    fields.push('created_by');
+    values.push(currentUserId(req));
+  } else if (columns.has('processed_by')) {
+    fields.push('processed_by');
+    values.push(currentUserId(req));
+  }
+  const placeholders = fields.map(() => '?').join(', ');
+  const [result] = await pool.execute(
+    `INSERT INTO payroll_runs (${fields.join(', ')}) VALUES (${placeholders})`,
+    values
+  );
+  const [rows] = await pool.execute('SELECT * FROM payroll_runs WHERE id = ?', [result.insertId]);
+  return rows[0] || { id: result.insertId, month_year: period.month_year, start_date: period.start, end_date: period.end, status: 'Draft' };
+}
+
+async function updatePayrollRunTotals(pool, payrollRunId) {
+  const columns = await payrollTableColumns(pool, 'payroll_runs');
+  const [summaryRows] = await pool.execute(
+    `SELECT COUNT(*) AS total_employees,
+            COALESCE(SUM(total_earning), 0) AS total_payroll,
+            COALESCE(SUM(total_deduction), 0) AS total_deductions
+       FROM payslips
+      WHERE payroll_run_id = ?`,
+    [payrollRunId]
+  );
+  const summary = summaryRows[0] || {};
+  const fields = [];
+  const values = [];
+  if (columns.has('total_employees')) {
+    fields.push('total_employees = ?');
+    values.push(Number(summary.total_employees || 0));
+  }
+  if (columns.has('total_payroll')) {
+    fields.push('total_payroll = ?');
+    values.push(numeric(summary.total_payroll));
+  }
+  if (columns.has('total_amount')) {
+    fields.push('total_amount = ?');
+    values.push(numeric(summary.total_payroll));
+  }
+  if (columns.has('total_deductions')) {
+    fields.push('total_deductions = ?');
+    values.push(numeric(summary.total_deductions));
+  }
+  if (columns.has('status')) {
+    const allowedStatuses = await payrollEnumValues(pool, 'payroll_runs', 'status');
+    const generatedStatus = allowedStatuses.includes('Generated')
+      ? 'Generated'
+      : allowedStatuses.includes('Pending Review')
+        ? 'Pending Review'
+        : null;
+    if (generatedStatus) {
+      fields.push('status = CASE WHEN status IN (\'Draft\', \'Generated\', \'Pending Review\') THEN ? ELSE status END');
+      values.push(generatedStatus);
+    }
+  }
+  if (!fields.length) return summary;
+  values.push(payrollRunId);
+  await pool.execute(`UPDATE payroll_runs SET ${fields.join(', ')} WHERE id = ?`, values);
+  return summary;
 }
 
 function periodLabel(record) {
@@ -158,14 +423,50 @@ function buildPayslipPayload(record) {
     { key: 'phic', label: 'PHIC / PhilHealth', amount: numeric(record.philhealth_deduction) },
   ];
   const knownTotal = knownDeductions.reduce((sum, item) => sum + item.amount, 0);
-  const otherAmount = Math.max(0, totalDeductions - knownTotal);
+  const employeeDeductionTotal = numeric(record.employee_deduction_total);
+  const configuredBreakdown = Array.isArray(snapshot.deductions) ? snapshot.deductions : [];
+  const configuredRows = [];
+  const configuredNames = new Set(['sss', 'philhealth', 'pag-ibig', 'pagibig', 'late deduction', 'undertime deduction']);
+  let configuredOtherTotal = 0;
+  let employeeBreakdownTotal = 0;
+
+  for (const item of configuredBreakdown) {
+    const amount = numeric(item.amount);
+    if (amount <= 0) continue;
+    const rawName = String(item.name || item.deduction_name || item.category || '').trim();
+    const normalized = rawName.toLowerCase();
+    if (configuredNames.has(normalized)) continue;
+
+    if (normalized.includes('cash advance') || normalized.includes('loan')) {
+      employeeBreakdownTotal += amount;
+      continue;
+    }
+
+    const label = normalized.includes('ir coop') || normalized.includes('coop')
+      ? 'IR COOP'
+      : normalized.includes('canteen')
+        ? 'Canteen'
+        : normalized.includes('adjust')
+          ? 'Adjustment'
+          : rawName || 'Other Deductions';
+    configuredRows.push({ key: normalized || label.toLowerCase(), label, amount });
+    configuredOtherTotal += amount;
+  }
+
+  const employeeDeductionAmount = employeeDeductionTotal || employeeBreakdownTotal;
+  const lateDeduction = numeric(snapshot.late_deduction);
+  const undertimeDeduction = numeric(snapshot.undertime_deduction);
+  const tardyUtDeduction = lateDeduction + undertimeDeduction;
+  const knownPlusDetailed = knownTotal + configuredOtherTotal + employeeDeductionAmount + tardyUtDeduction;
+  const otherAmount = Math.max(0, totalDeductions - knownPlusDetailed);
   const deductionRows = [
     ...knownDeductions,
-    { key: 'ir_coop', label: 'IR COOP', amount: 0 },
-    { key: 'cash_advance', label: 'Cash Advance', amount: 0 },
-    { key: 'adjustment', label: 'Adjustment', amount: 0 },
-    { key: 'canteen', label: 'Canteen', amount: 0 },
-    { key: 'other', label: 'Other Deductions', amount: otherAmount },
+    { key: 'late_deduction', label: 'Late Deduction', amount: lateDeduction },
+    { key: 'undertime_deduction', label: 'Undertime Deduction', amount: undertimeDeduction },
+    { key: 'tardy_ut_total', label: 'Total Tardy/UT', amount: tardyUtDeduction },
+    ...configuredRows,
+    ...(employeeDeductionAmount > 0 ? [{ key: 'employee_deductions', label: 'Cash Advance / Loans', amount: employeeDeductionAmount }] : []),
+    ...(otherAmount > 0 ? [{ key: 'other', label: 'Other Deductions', amount: otherAmount }] : []),
   ];
   const quantity = numeric(record.quantity);
   const productionAmount = wageType === 'Per-Piece' ? numeric(record.base_rate) * quantity : 0;
@@ -187,11 +488,17 @@ function buildPayslipPayload(record) {
     earnings: {
       days_worked: numeric(record.days_worked) || snapshot.days_worked || 0,
       hours_worked: numeric(record.hours_worked) || snapshot.hours_worked || 0,
+      employee_minute_rate: numeric(snapshot.minute_rate),
       basic_pay: basePay,
       rot_sot: numeric(record.overtime_amount),
       nd: 0,
       add: numeric(record.bonus_allowance),
-      tardy_ut: numeric(snapshot.undertime_deduction),
+      late_minutes: numeric(snapshot.late_minutes),
+      deductible_late_minutes: numeric(snapshot.deductible_late_minutes),
+      undertime_minutes: numeric(snapshot.undertime_minutes),
+      late_deduction: lateDeduction,
+      undertime_deduction: undertimeDeduction,
+      tardy_ut: tardyUtDeduction,
       allowances,
       gross_pay: grossPay,
       quantity,
@@ -215,33 +522,80 @@ function drawPayslipPdf(doc, payslip) {
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const width = right - left;
-  const row = (label, value, x, y, w = width / 2 - 12) => {
-    doc.fontSize(8).fillColor('#667085').text(label, x, y, { width: w });
-    doc.fontSize(10).fillColor('#111827').text(value || '-', x, y + 12, { width: w });
+  const red = '#e73236';
+  const ink = '#111827';
+  const muted = '#64748b';
+  const border = '#d7dde8';
+  const soft = '#f6f8fb';
+  const textValue = value => String(value ?? '-');
+  const line = (x1, x2, y, color = border) => {
+    doc.moveTo(x1, y).lineTo(x2, y).strokeColor(color).lineWidth(0.5).stroke();
   };
-  const line = y => doc.moveTo(left, y).lineTo(right, y).strokeColor('#d0d5dd').lineWidth(0.6).stroke();
-  let y = 28;
+  const cell = (label, value, x, y, w) => {
+    doc.font('Helvetica').fontSize(7).fillColor(muted).text(label, x, y, { width: w });
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(ink).text(value || '-', x, y + 10, { width: w, ellipsis: true });
+  };
+  const tableRow = (x, y, label, value, w, options = {}) => {
+    const rowHeight = options.rowHeight || 15;
+    const labelWidth = w - 92;
+    if (options.fill) doc.rect(x, y - 3, w, rowHeight + 2).fill(options.fill);
+    doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(options.bold ? 8.5 : 8)
+      .fillColor(options.color || ink)
+      .text(label, x + 7, y, { width: labelWidth - 10, ellipsis: true });
+    doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(options.bold ? 8.5 : 8)
+      .fillColor(options.color || ink)
+      .text(textValue(value), x + labelWidth, y, { width: 84, align: 'right' });
+    line(x, x + w, y + rowHeight - 2, '#e8edf3');
+  };
 
-  doc.font('Helvetica-Bold').fontSize(14).fillColor('#111827').text(payslip.company_name, left, y);
-  doc.font('Helvetica').fontSize(9).fillColor('#667085').text(`Payroll Period: ${payslip.payroll_period}`, left, y + 18);
-  doc.text(`Reference: ${payslip.reference_no}`, right - 180, y + 18, { width: 180, align: 'right' });
-  line(y + 38);
-  y += 52;
+  const slipTop = 24;
+  const slipHeight = 340;
+  doc.rect(left, slipTop, width, slipHeight).strokeColor(border).lineWidth(0.8).stroke();
 
-  row('Employee Name', payslip.employee.name, left, y);
-  row('Employee Code', payslip.employee.code, left + width / 2, y);
-  row('Department', payslip.employee.department, left, y + 40);
-  row('Position', payslip.employee.position, left + width / 2, y + 40);
-  y += 88;
+  let y = slipTop;
+  doc.rect(left, y, width, 48).fill('#ffffff');
+  doc.rect(left, y, 5, 48).fill(red);
+  doc.font('Helvetica-Bold').fontSize(15).fillColor(ink).text(payslip.company_name, left + 16, y + 10);
+  doc.font('Helvetica').fontSize(8).fillColor(muted).text('Employee Payslip', left + 16, y + 29);
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(ink)
+    .text(`Payroll Period: ${payslip.payroll_period}`, right - 210, y + 10, { width: 200, align: 'right' });
+  doc.font('Helvetica').fontSize(8).fillColor(muted)
+    .text(`Reference: ${payslip.reference_no}`, right - 210, y + 27, { width: 200, align: 'right' });
+  y += 48;
+  line(left, right, y);
 
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827').text('Earnings', left, y);
-  doc.text('Deductions', left + width / 2, y);
-  y += 16;
-  line(y);
-  y += 8;
+  doc.rect(left, y, width, 46).fill(soft);
+  const infoPadding = 12;
+  const infoGap = 10;
+  const infoWidth = (width - infoPadding * 2 - infoGap * 3) / 4;
+  const infoY = y + 9;
+  cell('Employee Name', payslip.employee.name, left + infoPadding, infoY, infoWidth);
+  cell('Employee Code', payslip.employee.code, left + infoPadding + (infoWidth + infoGap), infoY, infoWidth);
+  cell('Department', payslip.employee.department, left + infoPadding + (infoWidth + infoGap) * 2, infoY, infoWidth);
+  cell('Position', payslip.employee.position, left + infoPadding + (infoWidth + infoGap) * 3, infoY, infoWidth);
+  y += 46;
+  line(left, right, y);
+
+  const contentPadding = 14;
+  const columnGap = 18;
+  const columnWidth = (width - contentPadding * 2 - columnGap) / 2;
+  const earningsX = left + contentPadding;
+  const deductionsX = earningsX + columnWidth + columnGap;
+  y += 12;
+
+  doc.rect(earningsX, y, columnWidth, 22).fill('#f9fafb').strokeColor(border).stroke();
+  doc.rect(deductionsX, y, columnWidth, 22).fill('#f9fafb').strokeColor(border).stroke();
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(ink).text('Earnings', earningsX + 7, y + 7);
+  doc.text('Deductions', deductionsX + 7, y + 7);
+  y += 24;
 
   const earnings = [
     ['Days Worked', payslip.earnings.days_worked],
+    ['Employee Minute Rate', peso(payslip.earnings.employee_minute_rate)],
+    ['Late Minutes', payslip.earnings.late_minutes],
+    ['Undertime Minutes', payslip.earnings.undertime_minutes],
     ['Basic Pay', peso(payslip.earnings.basic_pay)],
     ['ROT/SOT', peso(payslip.earnings.rot_sot)],
     ['ND', peso(payslip.earnings.nd)],
@@ -263,30 +617,53 @@ function drawPayslipPdf(doc, payslip) {
     const e = earnings[i];
     const d = payslip.deductions[i];
     if (e) {
-      doc.font('Helvetica').fontSize(9).fillColor('#344054').text(e[0], left, y);
-      doc.text(String(e[1]), left + 165, y, { width: 95, align: 'right' });
+      tableRow(earningsX, y, e[0], e[1], columnWidth, {
+        bold: e[0] === 'Gross Pay',
+        fill: e[0] === 'Gross Pay' ? '#f9fafb' : null
+      });
     }
     if (d) {
-      doc.text(d.label, left + width / 2, y);
-      doc.text(peso(d.amount), right - 95, y, { width: 95, align: 'right' });
+      tableRow(deductionsX, y, d.label, peso(d.amount), columnWidth);
     }
-    y += 18;
+    y += 15;
   }
 
-  y += 8;
-  line(y);
-  y += 14;
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827');
-  doc.text('Total Deductions', left + width / 2, y);
-  doc.text(peso(payslip.summary.total_deductions), right - 95, y, { width: 95, align: 'right' });
+  y += 6;
+  tableRow(deductionsX, y, 'Total Deductions', peso(payslip.summary.total_deductions), columnWidth, {
+    bold: true,
+    fill: '#f9fafb'
+  });
   y += 22;
-  doc.rect(left, y, width, 28).fill('#fef3f2');
-  doc.fillColor('#b91c1c').fontSize(12).text('Net Due / Net Pay', left + 10, y + 8);
-  doc.text(peso(payslip.summary.net_due), right - 180, y + 8, { width: 170, align: 'right' });
-  y += 46;
-  doc.font('Helvetica').fontSize(8).fillColor('#667085')
-    .text(`Generated: ${new Date(payslip.generated_at).toLocaleString('en-PH')}`, left, y)
-    .text(`Prepared by: ${payslip.prepared_by}`, right - 180, y, { width: 180, align: 'right' });
+
+  const netBoxHeight = 30;
+  doc.rect(left + contentPadding, y, width - contentPadding * 2, netBoxHeight).fill('#fff1f2');
+  doc.rect(left + contentPadding, y, width - contentPadding * 2, netBoxHeight).strokeColor('#fecdd3').lineWidth(0.5).stroke();
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(red).text('Net Due / Net Pay', left + contentPadding + 10, y + 9);
+  doc.text(peso(payslip.summary.net_due), right - contentPadding - 180, y + 9, { width: 170, align: 'right' });
+
+  const footerY = slipTop + slipHeight - 44;
+  line(left + contentPadding, right - contentPadding, footerY - 8);
+  doc.font('Helvetica').fontSize(7.5).fillColor(muted)
+    .text(`Generated: ${new Date(payslip.generated_at).toLocaleString('en-PH')}`, left + contentPadding, footerY)
+    .text(`Prepared by: ${payslip.prepared_by}`, left + contentPadding, footerY + 13);
+}
+
+function renderPayslipPdfBuffer(payslip) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A5', layout: 'landscape', margin: 28 });
+    const chunks = [];
+
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    try {
+      drawPayslipPdf(doc, payslip);
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 function periodRange(payrollPeriod, fallbackDate) {
@@ -321,19 +698,43 @@ async function getPayrollPolicy(pool) {
       require_hr_validation: attendancePolicy.require_hr_validation,
       use_payroll_ready_only: attendancePolicy.payroll_attendance_source === 'payroll_ready',
       count_late: attendancePolicy.count_late_for_payroll,
+      count_late_for_payroll: attendancePolicy.count_late_for_payroll,
       count_undertime: attendancePolicy.count_undertime_for_payroll,
+      count_undertime_for_payroll: attendancePolicy.count_undertime_for_payroll,
       allow_half_day: attendancePolicy.enable_half_day_rule,
       half_day_threshold_hours: attendancePolicy.half_day_threshold_hours || num('daily_half_day_threshold_hours', 4),
+      standard_hours_per_day: attendancePolicy.standard_work_hours || num('hourly_standard_hours_per_day', 8),
+      working_days_per_month: attendancePolicy.working_days_per_month || 26,
+      work_start_time: attendancePolicy.work_start_time,
+      grace_period_minutes: attendancePolicy.grace_period_minutes,
+      late_deduction_method: attendancePolicy.late_deduction_method,
+      late_fixed_deduction_amount: attendancePolicy.late_fixed_deduction_amount,
+      late_apply_grace_period: attendancePolicy.late_apply_grace_period,
+      late_require_hr_approval: attendancePolicy.late_require_hr_approval,
+      undertime_deduction_method: attendancePolicy.undertime_deduction_method,
+      undertime_fixed_deduction_amount: attendancePolicy.undertime_fixed_deduction_amount,
+      undertime_require_hr_approval: attendancePolicy.undertime_require_hr_approval,
     },
     hourly: {
       standard_hours_per_day: attendancePolicy.standard_work_hours || num('hourly_standard_hours_per_day', 8),
+      work_start_time: attendancePolicy.work_start_time,
       break_deduction_hours: 0,
       overtime_threshold: (attendancePolicy.overtime_threshold_minutes || 480) / 60,
       maximum_regular_hours: num('hourly_maximum_regular_hours', 8),
       round_off_rule: map.hourly_round_off_rule || 'none',
       require_hr_validation: attendancePolicy.require_hr_validation,
       require_payroll_ready_attendance: attendancePolicy.payroll_attendance_source === 'payroll_ready',
+      count_late_for_payroll: attendancePolicy.count_late_for_payroll,
       count_undertime: attendancePolicy.count_undertime_for_payroll,
+      count_undertime_for_payroll: attendancePolicy.count_undertime_for_payroll,
+      grace_period_minutes: attendancePolicy.grace_period_minutes,
+      late_deduction_method: attendancePolicy.late_deduction_method,
+      late_fixed_deduction_amount: attendancePolicy.late_fixed_deduction_amount,
+      late_apply_grace_period: attendancePolicy.late_apply_grace_period,
+      late_require_hr_approval: attendancePolicy.late_require_hr_approval,
+      undertime_deduction_method: attendancePolicy.undertime_deduction_method,
+      undertime_fixed_deduction_amount: attendancePolicy.undertime_fixed_deduction_amount,
+      undertime_require_hr_approval: attendancePolicy.undertime_require_hr_approval,
     }
   };
 }
@@ -343,6 +744,11 @@ function applyHourRoundOff(hours, rule) {
   if (rule === 'nearest_quarter') return Math.round(value * 4) / 4;
   if (rule === 'nearest_half') return Math.round(value * 2) / 2;
   return value;
+}
+
+function payrollClockMinutes(value) {
+  const match = String(value || '').match(/(?:T|\s|^)(\d{1,2}):(\d{2})/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
 }
 
 async function validateDailyHourlyPayroll(pool, options) {
@@ -368,8 +774,9 @@ async function validateDailyHourlyPayroll(pool, options) {
 
   const wageType = normalizePayrollWageType(employee.wage_type || options.wage_type);
   const isDaily = wageType === 'Daily';
+  const isMonthly = wageType === 'Monthly';
   const isHourly = wageType === 'Hourly';
-  if (!isDaily && !isHourly) {
+  if (!isDaily && !isMonthly && !isHourly) {
     return { ok: true, skipped: true, wage_type: wageType, errors: [], warnings: [] };
   }
 
@@ -389,30 +796,33 @@ async function validateDailyHourlyPayroll(pool, options) {
   `, [employeeId, employee.wage_type_id, calcDate]);
 
   if (!rateRows.length) {
-    errors.push(isDaily ? 'No Daily Rate configured.' : 'No Hourly Rate configured.');
+    errors.push(isHourly ? 'No Hourly Rate configured.' : isMonthly ? 'No Monthly Salary configured.' : 'No Daily Rate configured.');
   }
   if (rateRows.length > 1) {
-    errors.push(isDaily ? 'Multiple active Daily Rates exist.' : 'Multiple active Hourly Rates exist.');
+    errors.push(isHourly ? 'Multiple active Hourly Rates exist.' : isMonthly ? 'Multiple active Monthly Salaries exist.' : 'Multiple active Daily Rates exist.');
   }
 
   const rateRow = rateRows[0] || {};
-  const rate = isDaily
-    ? Number(rateRow.rate || rateRow.base_rate || 0)
+  const configuredRate = Number(rateRow.rate || rateRow.base_rate || 0);
+  const monthlySalary = isMonthly ? configuredRate : 0;
+  const dailyRate = isMonthly
+    ? monthlySalary / Math.max(1, Number(policy.daily.working_days_per_month || 26))
+    : isDaily ? configuredRate : 0;
+  const rate = (isDaily || isMonthly)
+    ? dailyRate
     : Number(rateRow.hourly_rate || rateRow.rate || rateRow.base_rate || 0);
   if (!(rate > 0)) {
-    errors.push(isDaily ? 'Daily Rate must be greater than zero.' : 'Hourly Rate must be greater than zero.');
+    errors.push(isHourly ? 'Hourly Rate must be greater than zero.' : isMonthly ? 'Monthly salary and working days per month must produce a Daily Rate greater than zero.' : 'Daily Rate must be greater than zero.');
   }
   if (!rateRow.effective_date) errors.push('Effective Date is required.');
 
   const attendanceWhere = [
     'ats.employee_id = ?',
     'ats.attendance_date BETWEEN ? AND ?',
-    "ats.verification_status IN ('VALIDATED','PAYROLL_READY')"
+    "ats.verification_status = 'PAYROLL_READY'",
+    'COALESCE(ats.payroll_eligible, 0) = 1'
   ];
   const attendanceValues = [employeeId, range.start, range.end];
-  if ((isDaily && policy.daily.use_payroll_ready_only) || (isHourly && policy.hourly.require_payroll_ready_attendance)) {
-    attendanceWhere.push('ats.payroll_eligible = 1');
-  }
   if (isHourly) {
     attendanceWhere.push('al.time_in IS NOT NULL');
     attendanceWhere.push('al.time_out IS NOT NULL');
@@ -443,7 +853,7 @@ async function validateDailyHourlyPayroll(pool, options) {
   `, [employeeId, range.start, range.end, wageType]);
 
   if (!attendanceRows.length) {
-    errors.push(isDaily ? 'No validated payroll-ready attendance exists.' : 'No validated payroll-ready attendance with complete Time In and Time Out exists.');
+    errors.push((isDaily || isMonthly) ? 'No validated payroll-ready attendance exists.' : 'No validated payroll-ready attendance with complete Time In and Time Out exists.');
   }
   if (blockedRows.length) {
     warnings.push(`${blockedRows.length} attendance record(s) excluded because they are pending, rejected, incomplete, needs review, or not payroll ready.`);
@@ -456,26 +866,39 @@ async function validateDailyHourlyPayroll(pool, options) {
   const absentDays = attendanceRows.filter(row => String(row.attendance_status || '').toLowerCase().includes('absent')).length;
   const rawRegularHours = attendanceRows.reduce((sum, row) => sum + Number(row.regular_minutes || 0) / 60, 0);
   const overtimeHours = attendanceRows.reduce((sum, row) => sum + Number(row.overtime_minutes || 0) / 60, 0);
+  const activePolicy = (isDaily || isMonthly) ? policy.daily : policy.hourly;
+  const scheduledStartMinutes = payrollClockMinutes(activePolicy.work_start_time);
+  const graceCreditHours = isHourly && activePolicy.late_apply_grace_period
+    ? attendanceRows.reduce((sum, row) => {
+      const actualStartMinutes = payrollClockMinutes(row.time_in);
+      if (scheduledStartMinutes == null || actualStartMinutes == null) return sum;
+      const late = Math.max(0, actualStartMinutes - scheduledStartMinutes);
+      return sum + (late > 0 && late <= Number(activePolicy.grace_period_minutes || 0) ? late / 60 : 0);
+    }, 0)
+    : 0;
+  const attendanceDeductions = computeLateUndertimeDeductions({
+    attendanceRows,
+    policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
+    wageType,
+    rate
+  });
 
   let daysWorked = attendanceDays;
-  if (isDaily && policy.daily.allow_half_day) {
+  if ((isDaily || isMonthly) && policy.daily.allow_half_day) {
     daysWorked = attendanceRows.reduce((sum, row) => {
       const hours = Number(row.regular_minutes || 0) / 60;
       return sum + (hours > 0 && hours < policy.daily.half_day_threshold_hours ? 0.5 : 1);
     }, 0);
   }
   const breakDeduction = isHourly ? attendanceDays * Number(policy.hourly.break_deduction_hours || 0) : 0;
-  let hoursWorked = isHourly ? Math.max(0, rawRegularHours - breakDeduction) : 0;
+  let hoursWorked = isHourly ? Math.max(0, rawRegularHours + graceCreditHours - breakDeduction) : 0;
   hoursWorked = applyHourRoundOff(hoursWorked, policy.hourly.round_off_rule);
 
-  if (isDaily && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
+  if ((isDaily || isMonthly) && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
 
-  const dailyUndertimeDeduction = isDaily && policy.daily.count_undertime
-    ? (rate / Math.max(1, Number(policy.hourly.standard_hours_per_day || 8))) * undertimeHours
-    : 0;
-  const grossPay = isDaily
-    ? Math.max(0, (rate * daysWorked) - dailyUndertimeDeduction)
+  const grossPay = (isDaily || isMonthly)
+    ? rate * daysWorked
     : rate * hoursWorked;
   const result = {
     ok: errors.length === 0,
@@ -487,6 +910,11 @@ async function validateDailyHourlyPayroll(pool, options) {
     date_from: range.start,
     date_to: range.end,
     rate,
+    monthly_salary: Number(monthlySalary.toFixed(2)),
+    daily_rate: Number(((isDaily || isMonthly) ? dailyRate : 0).toFixed(2)),
+    hourly_rate: Number((isHourly ? rate : attendanceDeductions.hourly_rate_used).toFixed(2)),
+    minute_rate: Number((attendanceDeductions.hourly_rate_used / 60).toFixed(4)),
+    working_days_per_month: isMonthly ? Number(policy.daily.working_days_per_month || 26) : null,
     active_rate_count: rateRows.length,
     effective_date: rateRow.effective_date || null,
     attendance_count: attendanceRows.length,
@@ -499,10 +927,16 @@ async function validateDailyHourlyPayroll(pool, options) {
     hours_worked: Number(hoursWorked.toFixed(2)),
     regular_hours: Number(hoursWorked.toFixed(2)),
     overtime_hours: Number(overtimeHours.toFixed(2)),
-    undertime_deduction: Number(dailyUndertimeDeduction.toFixed(2)),
+    late_minutes: attendanceDeductions.late_minutes,
+    deductible_late_minutes: attendanceDeductions.deductible_late_minutes,
+    undertime_minutes: attendanceDeductions.undertime_minutes,
+    overtime_minutes: attendanceDeductions.overtime_minutes,
+    late_deduction: attendanceDeductions.late_deduction,
+    undertime_deduction: attendanceDeductions.undertime_deduction,
+    tardy_ut_deduction: attendanceDeductions.tardy_ut_deduction,
     gross_pay: Number(grossPay.toFixed(2)),
     validation_status: errors.length ? 'Blocked' : 'Ready',
-    policy: isDaily ? policy.daily : policy.hourly,
+    policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
     attendance_rows: attendanceRows.map(row => ({
       attendance_date: row.attendance_date,
       attendance_status: row.attendance_status,
@@ -2292,6 +2726,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     const isPieceRate = /piece/i.test(wageTypeName);
     const normalizedWageType = normalizePayrollWageType(wageTypeName);
     const isDailyRate = normalizedWageType === 'Daily';
+    const isMonthlyRate = normalizedWageType === 'Monthly';
     const isHourlyRate = normalizedWageType === 'Hourly';
     let serverGrossPay = parseFloat(gross_pay || 0);
     let serverBaseRate = parseFloat(base_rate || 0);
@@ -2299,7 +2734,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     let pieceComputation = null;
     let validationSnapshot = null;
 
-    if ((isDailyRate || isHourlyRate) && status !== 'Draft') {
+    if ((isDailyRate || isMonthlyRate || isHourlyRate) && status !== 'Draft') {
       validationSnapshot = await validateDailyHourlyPayroll(pool, {
         employee_id,
         payroll_period,
@@ -2318,7 +2753,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         });
       }
       serverBaseRate = validationSnapshot.rate;
-      if (isDailyRate) {
+      if (isDailyRate || isMonthlyRate) {
         serverQuantity = validationSnapshot.days_worked;
       } else {
         serverQuantity = validationSnapshot.hours_worked;
@@ -2400,13 +2835,42 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
 
     const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
     const submittedAt = calculationStatus === 'Submitted' ? new Date() : null;
-    const configuredDeductions = await computeConfiguredDeductions(pool, serverGrossPay, calcDate);
-    const computedTotalDeductions = configuredDeductions.total;
+    const computedDeductions = await computePayrollDeductions(pool, employee_id, serverGrossPay, calcDate);
+    const lateDeduction = numeric(validationSnapshot?.late_deduction);
+    const undertimeDeduction = numeric(validationSnapshot?.undertime_deduction);
+    const tardyUtDeduction = lateDeduction + undertimeDeduction;
+    const attendanceDeductionRows = [
+      ...(lateDeduction > 0 ? [{
+        id: null,
+        name: 'Late Deduction',
+        category: 'Attendance',
+        computation_type: validationSnapshot?.policy?.late_deduction_method || 'Auto-compute from employee rate',
+        amount: lateDeduction
+      }] : []),
+      ...(undertimeDeduction > 0 ? [{
+        id: null,
+        name: 'Undertime Deduction',
+        category: 'Attendance',
+        computation_type: validationSnapshot?.policy?.undertime_deduction_method || 'Auto-compute from employee rate',
+        amount: undertimeDeduction
+      }] : [])
+    ];
+    const computedTotalDeductions = computedDeductions.total + tardyUtDeduction;
     const computedNetPay = serverGrossPay - computedTotalDeductions;
-    const deductionByName = configuredDeductions.applied.reduce((acc, item) => {
+    const deductionByName = computedDeductions.configured.reduce((acc, item) => {
       acc[item.name.toLowerCase()] = item.amount;
       return acc;
     }, {});
+    const snapshotForStorage = {
+      ...(validationSnapshot || {}),
+      deductions: [...computedDeductions.applied, ...attendanceDeductionRows].map(item => ({
+        id: item.id || null,
+        name: item.name,
+        category: item.category,
+        computation_type: item.computation_type,
+        amount: item.amount
+      }))
+    };
 
     // Insert into salary_calculations table
     const [result] = await pool.execute(`
@@ -2429,6 +2893,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         pagibig_deduction,
         philhealth_deduction,
         total_deductions,
+        employee_deduction_total,
         net_pay,
         calculation_date,
         payroll_period,
@@ -2437,14 +2902,14 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         status,
         calculated_by,
         submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       employee_id,
       wage_type_id,
       serverBaseRate,
       serverQuantity,
       isHourlyRate && validationSnapshot ? validationSnapshot.hours_worked : hours_worked || 0,
-      isDailyRate && validationSnapshot ? validationSnapshot.days_worked : days_worked || 0,
+      (isDailyRate || isMonthlyRate) && validationSnapshot ? validationSnapshot.days_worked : days_worked || 0,
       housing_allowance || 0,
       meal_allowance || 0,
       transport_allowance || 0,
@@ -2457,15 +2922,27 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
       deductionByName.philhealth || 0,
       computedTotalDeductions,
+      computedDeductions.employeeTotal,
       computedNetPay,
       calcDate,
       payroll_period || calcDate.slice(0, 7),
       agency_name || null,
-      validationSnapshot ? JSON.stringify(validationSnapshot) : null,
+      JSON.stringify(snapshotForStorage),
       calculationStatus,
       currentUserId(req),
       submittedAt
     ]);
+
+    if (calculationStatus === 'Submitted' && computedDeductions.employee.length) {
+      await applyEmployeeDeductionBalances(
+        pool,
+        req,
+        employee_id,
+        result.insertId,
+        payroll_period || calcDate.slice(0, 7),
+        computedDeductions.employee
+      );
+    }
 
     if (pieceComputation?.mode === 'pair_rows') {
       for (const pair of pieceComputation.rows) {
@@ -2529,7 +3006,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       employee_id,
       salary_calculation_id: result.insertId,
       remarks: `${calculationStatus} salary calculation`,
-      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: configuredDeductions.applied, piece_rate: pieceComputation }
+      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.applied, piece_rate: pieceComputation }
     });
     
     res.json({ 
@@ -2582,124 +3059,276 @@ router.get('/payroll/:monthYear', requireAuth, requireRole(ROLES.payroll_any), a
   }
 });
 
+router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const period = monthRange(req.query.month_year);
+    const statusFilter = String(req.query.status || '').trim();
+    const statusParams = [];
+    const salaryStatusSql = statusFilter ? ' AND sc.status = ?' : '';
+    const payslipStatusSql = statusFilter ? ' AND ps.status = ?' : '';
+    if (statusFilter) statusParams.push(statusFilter);
+
+    const scalar = async (sql, params = []) => {
+      const [rows] = await pool.execute(sql, params);
+      return Number(Object.values(rows[0] || { value: 0 })[0] || 0);
+    };
+
+    const [runRows] = await pool.execute(
+      'SELECT * FROM payroll_runs WHERE month_year = ? ORDER BY id DESC LIMIT 1',
+      [period.month_year]
+    );
+    const payrollRun = runRows[0] || null;
+    const activeEmployeeWhere = await employeeActiveCondition(pool);
+
+    const totalEmployees = await scalar(
+      `SELECT COUNT(*) AS value FROM employees WHERE ${activeEmployeeWhere}`
+    );
+    const payrollReadyEmployees = await scalar(
+      `SELECT COUNT(DISTINCT employee_id) AS value
+         FROM attendance_summary
+        WHERE attendance_date BETWEEN ? AND ?
+          AND verification_status = 'PAYROLL_READY'
+          AND COALESCE(payroll_eligible, 0) = 1`,
+      [period.start, period.end]
+    );
+    const pendingAttendanceValidation = await scalar(
+      `SELECT COUNT(*) AS value
+         FROM attendance_summary
+        WHERE attendance_date BETWEEN ? AND ?
+          AND verification_status IN ('PENDING_VALIDATION','NEEDS_REVIEW','INCOMPLETE')`,
+      [period.start, period.end]
+    );
+    const employeesWithAnyAttendance = await scalar(
+      `SELECT COUNT(DISTINCT employee_id) AS value
+         FROM attendance_summary
+        WHERE attendance_date BETWEEN ? AND ?`,
+      [period.start, period.end]
+    );
+    const missingAttendanceRecords = Math.max(0, totalEmployees - employeesWithAnyAttendance);
+    const draftPayrolls = await scalar(
+      `SELECT COUNT(*) AS value
+         FROM salary_calculations sc
+        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+          AND sc.status = 'Draft'`,
+      [period.month_year]
+    );
+    const submittedPayrolls = await scalar(
+      `SELECT COUNT(*) AS value
+         FROM salary_calculations sc
+        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+          AND sc.status = 'Submitted'`,
+      [period.month_year]
+    );
+
+    const [estimateRows] = await pool.execute(
+      `SELECT COALESCE(SUM(sc.gross_pay), 0) AS gross,
+              COALESCE(SUM(sc.total_deductions), 0) AS deductions,
+              COALESCE(SUM(sc.net_pay), 0) AS net
+         FROM salary_calculations sc
+        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+          ${salaryStatusSql}`,
+      [period.month_year, ...statusParams]
+    );
+    const estimate = estimateRows[0] || {};
+
+    const [payslipRows] = await pool.execute(
+      `SELECT ps.id, ps.payroll_run_id, ps.employee_id, ps.total_earning, ps.total_deduction, ps.net_pay,
+              ps.status, pr.month_year, e.employee_code,
+              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              d.name AS department, w.name AS wage_type
+         FROM payslips ps
+         JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
+         JOIN employees e ON e.id = ps.employee_id
+         LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN wage_types w ON w.id = ps.wage_type_id
+        WHERE pr.month_year = ?
+          ${payslipStatusSql}
+        ORDER BY ps.created_at DESC, ps.id DESC
+        LIMIT 15`,
+      [period.month_year, ...statusParams]
+    );
+
+    res.json({
+      period: {
+        month_year: period.month_year,
+        start_date: payrollRun?.start_date || period.start,
+        end_date: payrollRun?.end_date || period.end,
+        status: payrollRun?.status || 'Not Generated'
+      },
+      metrics: {
+        totalEmployees,
+        payrollReadyEmployees,
+        pendingAttendanceValidation,
+        missingAttendanceRecords,
+        draftPayrolls,
+        submittedPayrolls
+      },
+      estimates: {
+        gross: numeric(estimate.gross),
+        deductions: numeric(estimate.deductions),
+        net: numeric(estimate.net)
+      },
+      records: payslipRows
+    });
+  } catch (err) {
+    console.error('Error loading payroll dashboard:', err);
+    res.status(500).json({ error: 'Failed to load payroll dashboard.' });
+  }
+});
+
 // Generate payroll for a month
 router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
-    const { month_year, start_date, end_date } = req.body;
+    await ensurePieceRatePayrollSchema(pool);
+    const requestedPeriod = monthRange(req.body.month_year);
+    const period = {
+      month_year: requestedPeriod.month_year,
+      start: req.body.start_date || requestedPeriod.start,
+      end: req.body.end_date || requestedPeriod.end
+    };
 
-    console.log('📊 Starting payroll generation for:', { month_year, start_date, end_date });
-
-    // Validate inputs
-    if (!month_year || !start_date || !end_date) {
-      return res.status(400).json({ error: 'month_year, start_date, and end_date are required' });
+    if (!period.month_year || !period.start || !period.end) {
+      return res.status(400).json({ error: 'Payroll period, start date, and end date are required.' });
+    }
+    if (period.start > period.end) {
+      return res.status(400).json({ error: 'Period start must be before or equal to period end.' });
     }
 
-    // Check if payroll already exists
-    try {
-      const [existing] = await pool.execute(
-        'SELECT id FROM payroll_runs WHERE month_year = ?',
-        [month_year]
-      );
+    const payrollRun = await findOrCreatePayrollRun(pool, req, period);
+    const payrollRunId = payrollRun.id;
+    const activeEmployeeWhere = await employeeActiveCondition(pool, 'e');
+    const [employees] = await pool.execute(`
+      SELECT e.id, e.wage_type_id, w.name AS wage_type
+      FROM employees e
+      LEFT JOIN wage_types w ON w.id = e.wage_type_id
+      WHERE ${activeEmployeeWhere}
+      ORDER BY e.employee_code, e.id
+    `);
 
-      if (existing.length) {
-        return res.status(400).json({ error: `Payroll already generated for ${month_year}` });
-      }
-    } catch (dbErr) {
-      console.error('❌ Error checking existing payroll:', dbErr);
-      throw new Error(`Failed to check existing payroll: ${dbErr.message}`);
-    }
-
-    // Create payroll run
-    let payrollRunId;
-    try {
-      const [runResult] = await pool.execute(`
-        INSERT INTO payroll_runs (month_year, start_date, end_date, created_by)
-        VALUES (?, ?, ?, ?)
-      `, [month_year, start_date, end_date, req.user.id || req.user.userId]);
-
-      payrollRunId = runResult.insertId;
-      console.log('✅ Payroll run created with ID:', payrollRunId);
-    } catch (dbErr) {
-      console.error('❌ Error creating payroll run:', dbErr);
-      throw new Error(`Failed to create payroll run: ${dbErr.message}`);
-    }
-
-    // Get all active employees
-    let employees = [];
-    try {
-      const [empData] = await pool.execute(`
-        SELECT e.id, e.wage_type_id, w.name AS wage_type
-        FROM employees e
-        LEFT JOIN wage_types w ON w.id = e.wage_type_id
-        WHERE e.status = 'Active'
-      `);
-      employees = empData;
-      console.log(`✅ Found ${employees.length} active employees`);
-    } catch (dbErr) {
-      console.error('❌ Error fetching employees:', dbErr);
-      throw new Error(`Failed to fetch employees: ${dbErr.message}`);
-    }
-
-    // Generate payslips for each employee
     let processedCount = 0;
+    let skippedCount = 0;
+    const skipped = [];
+
     for (const emp of employees) {
       try {
-        let totalEarning = 0;
+        const [duplicate] = await pool.execute(
+          'SELECT id FROM payslips WHERE payroll_run_id = ? AND employee_id = ? LIMIT 1',
+          [payrollRunId, emp.id]
+        );
+        if (duplicate.length) {
+          skippedCount++;
+          skipped.push({ employee_id: emp.id, reason: 'Payroll record already exists for this period.' });
+          continue;
+        }
 
-        if (emp.wage_type === 'Per-Piece') {
-          // Sum production transactions
+        const [calculationRows] = await pool.execute(`
+          SELECT *
+          FROM salary_calculations
+          WHERE employee_id = ?
+            AND COALESCE(payroll_period, DATE_FORMAT(calculation_date, '%Y-%m')) = ?
+            AND status IN ('Submitted','Approved','Released','Paid')
+          ORDER BY FIELD(status, 'Approved','Released','Paid','Submitted'), updated_at DESC, id DESC
+          LIMIT 1
+        `, [emp.id, period.month_year]);
+
+        let totalEarning = 0;
+        let totalDeduction = 0;
+        let netPay = 0;
+        let salaryCalculationId = null;
+        let employeeDeductions = [];
+
+        if (calculationRows.length) {
+          const calc = calculationRows[0];
+          salaryCalculationId = calc.id;
+          totalEarning = numeric(calc.gross_pay);
+          totalDeduction = numeric(calc.total_deductions);
+          netPay = numeric(calc.net_pay);
+        } else if (['Daily', 'Hourly', 'Monthly'].includes(normalizePayrollWageType(emp.wage_type))) {
+          const validation = await validateDailyHourlyPayroll(pool, {
+            employee_id: emp.id,
+            payroll_period: period.month_year,
+            calculation_date: period.end,
+            wage_type: emp.wage_type
+          });
+          if (!validation.ok) {
+            skippedCount++;
+            skipped.push({ employee_id: emp.id, reason: validation.errors.join(' ') || 'Attendance is not payroll-ready.' });
+            continue;
+          }
+
+          const overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
+          const baseGross = numeric(validation.gross_pay) + overtimePay;
+          const allowances = await computeConfiguredAllowances(pool, baseGross, period.end);
+          const grossWithAllowances = baseGross + allowances.total;
+          const payrollDeductions = await computePayrollDeductions(pool, emp.id, grossWithAllowances, period.end);
+          totalEarning = grossWithAllowances;
+          totalDeduction = payrollDeductions.total + numeric(validation.tardy_ut_deduction);
+          netPay = totalEarning - totalDeduction;
+          employeeDeductions = payrollDeductions.employee;
+        } else if (emp.wage_type === 'Per-Piece') {
           const [prods] = await pool.execute(`
             SELECT COALESCE(SUM(amount), 0) AS total
             FROM production_transactions
             WHERE employee_id = ? AND month_year = ?
-          `, [emp.id, month_year]);
-          totalEarning = prods[0]?.total || 0;
+          `, [emp.id, period.month_year]);
+          totalEarning = numeric(prods[0]?.total);
         } else if (emp.wage_type === 'Per-Trip') {
-          // Sum logistics transactions
           const [trips] = await pool.execute(`
             SELECT COALESCE(SUM(amount), 0) AS total
             FROM logistics_transactions
             WHERE employee_id = ? AND month_year = ?
-          `, [emp.id, month_year]);
-          totalEarning = trips[0]?.total || 0;
-        } else {
-          // Base Salary or Hourly - use a default or configured amount
-          totalEarning = 0; // Can be customized
+          `, [emp.id, period.month_year]);
+          totalEarning = numeric(trips[0]?.total);
         }
 
-        // Get deductions
-        const [deducts] = await pool.execute(`
-          SELECT COALESCE(SUM(amount), 0) AS total
-          FROM employee_deductions
-          WHERE employee_id = ? AND is_active = 1
-        `, [emp.id]);
-        const totalDeduction = deducts[0]?.total || 0;
+        if (!calculationRows.length && !['Daily', 'Hourly', 'Monthly'].includes(normalizePayrollWageType(emp.wage_type))) {
+          const allowances = await computeConfiguredAllowances(pool, totalEarning, period.end);
+          totalEarning += allowances.total;
+          const payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, period.end);
+          totalDeduction = payrollDeductions.total;
+          netPay = totalEarning - totalDeduction;
+          employeeDeductions = payrollDeductions.employee;
+        }
 
-        // Create payslip
         await pool.execute(`
           INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay)
           VALUES (?, ?, ?, ?, ?, ?)
-        `, [payrollRunId, emp.id, emp.wage_type_id || 1, totalEarning, totalDeduction, totalEarning - totalDeduction]);
+        `, [payrollRunId, emp.id, emp.wage_type_id || 1, totalEarning, totalDeduction, netPay]);
+
+        if (employeeDeductions.length) {
+          await applyEmployeeDeductionBalances(pool, req, emp.id, salaryCalculationId, period.month_year, employeeDeductions);
+        }
 
         processedCount++;
       } catch (slipErr) {
-        console.error(`❌ Error creating payslip for employee ${emp.id}:`, slipErr);
-        // Continue with next employee instead of failing entire payroll
+        console.error(`Error creating payroll record for employee ${emp.id}:`, slipErr);
+        skippedCount++;
+        skipped.push({ employee_id: emp.id, reason: slipErr.message });
       }
     }
 
-    console.log(`✅ Payroll generation completed. Processed ${processedCount} out of ${employees.length} employees`);
+    const summary = await updatePayrollRunTotals(pool, payrollRunId);
+    await logPayrollAudit(pool, req, 'payroll_generated', {
+      payroll_run_id: payrollRunId,
+      remarks: `Generated payroll for ${period.month_year}`,
+      metadata: { processedCount, skippedCount, totalEmployees: employees.length, skipped }
+    });
 
     res.json({ 
       success: true, 
-      payrollRunId: payrollRunId,
+      payrollRunId,
       employeesProcessed: processedCount,
       totalEmployees: employees.length,
-      message: `Payroll generated for ${month_year} - ${processedCount} employees processed` 
+      skippedCount,
+      skipped,
+      summary,
+      message: `Payroll generated for ${period.month_year}. ${processedCount} employee(s) processed, ${skippedCount} skipped.`
     });
   } catch (err) {
-    console.error('❌ Error generating payroll:', err);
+    console.error('Error generating payroll:', err);
     res.status(500).json({ 
       error: 'Failed to generate payroll',
       details: err.message,
@@ -3116,18 +3745,22 @@ router.get('/salary-calculations/:id/payslip.pdf', requireAuth, async (req, res)
       metadata: { reference_no: payslip.reference_no, format: 'pdf' }
     });
 
+    const pdfBuffer = await renderPayslipPdfBuffer(payslip);
+
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdfBuffer.length);
     res.setHeader(
       'Content-Disposition',
       `${req.query.print === '1' ? 'inline' : 'attachment'}; filename="${payslip.reference_no}-${record.employee_code}.pdf"`
     );
-    const doc = new PDFDocument({ size: 'A5', margin: 28 });
-    doc.pipe(res);
-    drawPayslipPdf(doc, payslip);
-    doc.end();
+    res.end(pdfBuffer);
   } catch (err) {
     console.error('Error exporting payslip PDF:', err);
-    res.status(500).json({ error: 'Failed to export payslip PDF.' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to export payslip PDF.' });
+    } else {
+      res.end();
+    }
   }
 });
 
@@ -3242,6 +3875,12 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     const pool = require('../config/db');
     const { name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date, remarks } = req.body;
     if (!name || !effective_date) return res.status(400).json({ error: 'Deduction name and effective date are required.' });
+    const employeeSpecificNames = ['cash advance', 'employee loan', 'cooperative loan', 'salary loan', 'equipment loan', 'loan'];
+    if (employeeSpecificNames.some(item => String(name).toLowerCase().includes(item))) {
+      return res.status(400).json({
+        error: 'Cash advances and loans must be assigned per employee. Use Employee Cash Advance or Employee Loan instead.'
+      });
+    }
 
     const [result] = await pool.execute(`
       INSERT INTO payroll_deduction_settings
@@ -3268,6 +3907,175 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
   } catch (err) {
     console.error('Error saving deduction setting:', err);
     res.status(500).json({ error: 'Failed to save deduction setting' });
+  }
+});
+
+router.get('/employee-deductions', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const params = [];
+    const where = [];
+    if (req.query.type) {
+      where.push('eda.module_type = ?');
+      params.push(req.query.type === 'cash_advance' ? 'Cash Advance' : 'Employee Loan');
+    }
+    if (req.query.employee_id) {
+      where.push('eda.employee_id = ?');
+      params.push(req.query.employee_id);
+    }
+    if (req.query.status) {
+      where.push('eda.status = ?');
+      params.push(req.query.status);
+    }
+
+    const [rows] = await pool.execute(`
+      SELECT eda.*,
+             e.employee_code,
+             CONCAT(e.first_name, ' ', COALESCE(e.middle_name, ''), ' ', e.last_name) AS employee_name
+      FROM employee_deduction_accounts eda
+      JOIN employees e ON e.id = eda.employee_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY eda.status = 'Active' DESC, eda.start_date DESC, eda.id DESC
+      LIMIT 300
+    `, params);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching employee deductions:', err);
+    res.status(500).json({ error: 'Failed to fetch employee deductions' });
+  }
+});
+
+async function saveEmployeeDeduction(req, res, moduleType) {
+  try {
+    const pool = require('../config/db');
+    const {
+      id,
+      employee_id,
+      deduction_name,
+      loan_type,
+      amount,
+      remaining_balance,
+      installment_amount,
+      start_date,
+      end_date,
+      status,
+      remarks
+    } = req.body;
+
+    if (!employee_id || !deduction_name || !amount || !installment_amount || !start_date) {
+      return res.status(400).json({ error: 'Employee, deduction name, amount, installment amount, and start date are required.' });
+    }
+    if (numeric(amount) <= 0 || numeric(installment_amount) <= 0) {
+      return res.status(400).json({ error: 'Amount and installment amount must be greater than zero.' });
+    }
+
+    const [employees] = await pool.execute('SELECT id, status FROM employees WHERE id = ? LIMIT 1', [employee_id]);
+    if (!employees.length) return res.status(404).json({ error: 'Employee not found.' });
+    if (String(employees[0].status || '').toLowerCase() !== 'active') {
+      return res.status(400).json({ error: 'Employee must be active before assigning deductions.' });
+    }
+
+    const balance = remaining_balance === undefined || remaining_balance === ''
+      ? numeric(amount)
+      : numeric(remaining_balance);
+    if (balance < 0) return res.status(400).json({ error: 'Remaining balance cannot be negative.' });
+
+    if (id) {
+      await pool.execute(`
+        UPDATE employee_deduction_accounts
+        SET deduction_name = ?,
+            loan_type = ?,
+            original_amount = ?,
+            remaining_balance = ?,
+            installment_amount = ?,
+            start_date = ?,
+            end_date = ?,
+            status = ?,
+            remarks = ?,
+            updated_by = ?
+        WHERE id = ? AND module_type = ?
+      `, [
+        deduction_name,
+        moduleType === 'Employee Loan' ? (loan_type || 'Employee Loan') : null,
+        numeric(amount),
+        balance,
+        numeric(installment_amount),
+        start_date,
+        end_date || null,
+        status || 'Active',
+        remarks || null,
+        currentUserId(req),
+        id,
+        moduleType
+      ]);
+      await logPayrollAudit(pool, req, 'employee_deduction_updated', {
+        employee_id,
+        remarks: `Updated ${moduleType}: ${deduction_name}`,
+        metadata: req.body
+      });
+      return res.json({ success: true, id });
+    }
+
+    const [result] = await pool.execute(`
+      INSERT INTO employee_deduction_accounts
+        (employee_id, module_type, deduction_name, loan_type, original_amount, remaining_balance,
+         installment_amount, start_date, end_date, status, remarks, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      employee_id,
+      moduleType,
+      deduction_name,
+      moduleType === 'Employee Loan' ? (loan_type || 'Employee Loan') : null,
+      numeric(amount),
+      balance,
+      numeric(installment_amount),
+      start_date,
+      end_date || null,
+      status || 'Active',
+      remarks || null,
+      currentUserId(req),
+      currentUserId(req)
+    ]);
+
+    await logPayrollAudit(pool, req, 'employee_deduction_created', {
+      employee_id,
+      remarks: `Created ${moduleType}: ${deduction_name}`,
+      metadata: req.body
+    });
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error('Error saving employee deduction:', err);
+    res.status(500).json({ error: 'Failed to save employee deduction' });
+  }
+}
+
+router.post('/employee-cash-advances', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) => {
+  saveEmployeeDeduction(req, res, 'Cash Advance');
+});
+
+router.post('/employee-loans', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) => {
+  saveEmployeeDeduction(req, res, 'Employee Loan');
+});
+
+router.patch('/employee-deductions/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const allowed = ['Active', 'Paused', 'Paid', 'Cancelled'];
+    const status = allowed.includes(req.body.status) ? req.body.status : null;
+    if (!status) return res.status(400).json({ error: 'Invalid deduction status.' });
+
+    await pool.execute(
+      'UPDATE employee_deduction_accounts SET status = ?, updated_by = ? WHERE id = ?',
+      [status, currentUserId(req), req.params.id]
+    );
+    await logPayrollAudit(pool, req, 'employee_deduction_status_changed', {
+      remarks: `Employee deduction status changed to ${status}`,
+      metadata: { id: req.params.id, status }
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating employee deduction status:', err);
+    res.status(500).json({ error: 'Failed to update deduction status' });
   }
 });
 

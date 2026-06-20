@@ -21,6 +21,11 @@ function isProduction() {
   return process.env.NODE_ENV === 'production';
 }
 
+function isLocalDevelopmentBypassEnabled() {
+  return !isProduction()
+    && String(process.env.TURNSTILE_BYPASS_LOCAL_DEVELOPMENT || '').toLowerCase() === 'true';
+}
+
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -37,8 +42,9 @@ function getTurnstileClientConfig() {
   const siteKey = getSiteKey();
   return {
     siteKey,
-    enabled: Boolean(siteKey),
+    enabled: Boolean(siteKey) && !isLocalDevelopmentBypassEnabled(),
     testMode: !isProduction() && siteKey === DEV_TEST_SITE_KEY,
+    localDevelopmentBypass: isLocalDevelopmentBypassEnabled(),
   };
 }
 
@@ -56,6 +62,11 @@ function normalizeToken(token) {
 }
 
 async function verifyTurnstileToken(token, remoteIp = null) {
+  // Local development only. Production always requires Cloudflare verification.
+  if (isLocalDevelopmentBypassEnabled()) {
+    return { success: true, localDevelopmentBypass: true };
+  }
+
   const secret = getSecretKey();
   if (!isNonEmptyString(secret)) {
     throw new TurnstileVerificationError('Turnstile secret key is not configured.', 'TURNSTILE_SECRET_MISSING');
@@ -106,5 +117,6 @@ async function verifyTurnstileToken(token, remoteIp = null) {
 module.exports = {
   TurnstileVerificationError,
   getTurnstileClientConfig,
+  isLocalDevelopmentBypassEnabled,
   verifyTurnstileToken,
 };

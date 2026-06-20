@@ -211,3 +211,11 @@
     background: rgba(255, 255, 255, 0.84);
   }
 }
+.login-turnstile-local-note {
+  padding: 10px 12px;
+  border: 1px solid #d7dde8;
+  color: #52627c;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  text-align: center;
+}

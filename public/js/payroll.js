@@ -25,170 +25,6 @@ function money(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// Open Run Payroll Modal
-function openRunPayrollModal() {
-  // Get current date for default values
-  const today = new Date();
-  const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
-  const currentYear = today.getFullYear();
-  const defaultMonthYear = `${currentYear}-${currentMonth}`;
-  
-  // First day and last day of month
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-  const startDate = firstDay.toISOString().split('T')[0];
-  const endDate = lastDay.toISOString().split('T')[0];
-  
-  const modalHTML = `
-    <div id="run-payroll-modal" style="
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5); display: flex; align-items: center;
-      justify-content: center; z-index: 10000;
-    ">
-      <div style="
-        background: var(--bg); border-radius: 14px; max-width: 450px;
-        width: 90%; padding: 24px; border: 1px solid var(--border);
-      ">
-        <h2 style="margin: 0 0 20px 0; font-size: 18px; font-weight: 700;">Run Payroll</h2>
-        
-        <div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-          <p style="margin: 0 0 12px 0; font-size: 13px; color: var(--muted);">Select the payroll period you want to generate.</p>
-          
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
-            <div>
-              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">Month & Year</label>
-              <input id="payroll-month-year" type="month" value="${defaultMonthYear}" style="
-                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
-              " />
-            </div>
-          </div>
-          
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-            <div>
-              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">Start Date</label>
-              <input id="payroll-start-date" type="date" value="${startDate}" style="
-                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
-              " />
-            </div>
-            <div>
-              <label style="display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">End Date</label>
-              <input id="payroll-end-date" type="date" value="${endDate}" style="
-                width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
-                border-radius: 8px; color: var(--text); font-size: 13px; font-family: 'DM Sans', sans-serif;
-              " />
-            </div>
-          </div>
-        </div>
-        
-        <div id="payroll-warning" style="
-          background: rgba(245, 166, 35, 0.1); border-left: 4px solid var(--yellow);
-          padding: 12px; border-radius: 4px; font-size: 12px; color: var(--yellow);
-          margin-bottom: 20px; display: none;
-        "></div>
-        
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button onclick="document.getElementById('run-payroll-modal')?.remove()" class="btn btn-outline" style="font-size: 13px; padding: 10px 20px;">Cancel</button>
-          <button onclick="runPayroll()" id="run-payroll-btn" class="btn btn-primary" style="font-size: 13px; padding: 10px 20px;">Generate Payroll</button>
-        </div>
-      </div>
-    </div>
-  `;
-  
-  const modalDiv = document.createElement('div');
-  modalDiv.innerHTML = modalHTML;
-  document.body.appendChild(modalDiv.firstElementChild);
-}
-
-// Run the payroll generation
-async function runPayroll() {
-  const monthYearInput = document.getElementById('payroll-month-year');
-  const startDateInput = document.getElementById('payroll-start-date');
-  const endDateInput = document.getElementById('payroll-end-date');
-  const warningDiv = document.getElementById('payroll-warning');
-  const runBtn = document.getElementById('run-payroll-btn');
-  
-  if (!monthYearInput?.value || !startDateInput?.value || !endDateInput?.value) {
-    warningDiv.textContent = '⚠️ Please fill in all required fields';
-    warningDiv.style.display = 'block';
-    return;
-  }
-  
-  const monthYear = monthYearInput.value; // Format: YYYY-MM
-  const startDate = startDateInput.value; // Format: YYYY-MM-DD
-  const endDate = endDateInput.value;     // Format: YYYY-MM-DD
-  
-  // Validate dates
-  if (startDate >= endDate) {
-    warningDiv.textContent = '⚠️ Start date must be before end date';
-    warningDiv.style.display = 'block';
-    return;
-  }
-  
-  // Disable button and show loading
-  runBtn.disabled = true;
-  runBtn.innerHTML = '⏳ Generating...';
-  warningDiv.style.display = 'none';
-  
-  try {
-    const response = await apiFetch('/api/payroll/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ month_year: monthYear, start_date: startDate, end_date: endDate })
-    });
-    
-    if (!response.ok) {
-      // Try to parse as JSON first
-      let errorMsg = 'Failed to generate payroll';
-      try {
-        const errorData = await response.json();
-        errorMsg = errorData.details || errorData.message || errorData.error || errorMsg;
-      } catch (parseErr) {
-        // If not JSON, try to get text
-        try {
-          const text = await response.text();
-          if (text.includes('<!DOCTYPE')) {
-            errorMsg = 'Server error: Database tables may not exist. Please run the database migration.';
-          } else {
-            errorMsg = text;
-          }
-        } catch (textErr) {
-          errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-        }
-      }
-      throw new Error(errorMsg);
-    }
-    
-    const result = await response.json();
-    
-    // Show success message
-    warningDiv.style.backgroundColor = 'rgba(34, 211, 165, 0.1)';
-    warningDiv.style.borderColor = 'var(--green)';
-    warningDiv.style.color = 'var(--green)';
-    warningDiv.textContent = `✅ Payroll generated successfully! Processed ${result.employeesProcessed || result.totalEmployees || 0} employees for ${monthYear}`;
-    warningDiv.style.display = 'block';
-    
-    console.log('✅ Payroll generation result:', result);
-    
-    // Close modal and reload data
-    setTimeout(() => {
-      document.getElementById('run-payroll-modal')?.remove();
-      loadPayrollRecords(monthYear);
-    }, 2000);
-    
-  } catch (err) {
-    console.error('Error generating payroll:', err);
-    warningDiv.style.backgroundColor = 'rgba(224, 92, 122, 0.1)';
-    warningDiv.style.borderColor = 'var(--red)';
-    warningDiv.style.color = 'var(--red)';
-    warningDiv.textContent = `❌ ${err.message}`;
-    warningDiv.style.display = 'block';
-    runBtn.disabled = false;
-    runBtn.innerHTML = 'Generate Payroll';
-  }
-}
-
 async function viewPayslipDetails(employeeId, employeeName, monthYear) {
   try {
     // Fetch monthly summary with detailed breakdown
@@ -339,7 +175,7 @@ function renderPayroll() {
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
         <div style="font-size: 14px; color: var(--muted);">
-          📊 No payroll records found. Click "Process Payroll" to generate payroll.
+          No generated payroll records found for this period.
         </div>
       </div>
     `;
@@ -347,55 +183,39 @@ function renderPayroll() {
   }
 
   const table = `
-    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <table class="payroll-erp-table">
       <thead>
-        <tr style="border-bottom: 2px solid var(--border); background: var(--card);">
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Payroll ID</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Employee</th>
-          <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--muted);">Period</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Basic Salary</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Allowances</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Deductions</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--muted);">Tax</th>
-          <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--text);">Net Pay</th>
-          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Status</th>
-          <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--muted);">Actions</th>
+        <tr>
+          <th>Payroll ID</th>
+          <th>Employee</th>
+          <th>Department</th>
+          <th>Period</th>
+          <th>Wage Type</th>
+          <th class="text-right">Gross Pay</th>
+          <th class="text-right">Deductions</th>
+          <th class="text-right">Net Pay</th>
+          <th>Status</th>
         </tr>
       </thead>
       <tbody>
-        ${currentPayrollData.map(p => {
-          const tax = (p.total_earning * 0.06).toFixed(2); // 6% tax
-          const statusBadge = p.status === 'Disbursed' 
-            ? `<span style="background: rgba(34, 211, 165, 0.2); color: var(--green); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">paid</span>`
-            : p.status === 'Pending'
-            ? `<span style="background: rgba(245, 166, 35, 0.2); color: var(--yellow); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">processed</span>`
-            : `<span style="background: rgba(224, 92, 122, 0.2); color: var(--red); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">pending</span>`;
-          
-          return `
-            <tr style="border-bottom: 1px solid var(--border); hover: {background: var(--card)};">
-              <td style="padding: 12px; color: var(--muted); font-family: 'Courier New', monospace; font-weight: 600;">${p.payroll_run_id || 'PAY001'}</td>
-              <td style="padding: 12px; color: var(--text); font-weight: 500;">${p.employee_name}</td>
-              <td style="padding: 12px; color: var(--muted);">${p.month_year || 'N/A'}</td>
-              <td style="padding: 12px; text-align: right; color: var(--text); font-weight: 600;">₱${parseFloat(p.total_earning || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--text);">₱${(parseFloat(p.total_earning || 0) * 0.1).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--red);">₱${parseFloat(p.total_deduction || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: right; color: var(--muted);">₱${tax}</td>
-              <td style="padding: 12px; text-align: right; color: var(--accent); font-weight: 700;">₱${parseFloat(p.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-              <td style="padding: 12px; text-align: center;">${statusBadge}</td>
-              <td style="padding: 12px; text-align: center;">
-                <button onclick="viewPayslipDetails(${p.employee_id}, '${p.employee_name}', '${p.month_year}')" style="
-                  background: none; border: none; color: var(--accent); cursor: pointer; font-size: 16px; padding: 4px 8px;
-                " title="View Details">📥</button>
-              </td>
-            </tr>
-          `;
-        }).join('')}
+        ${currentPayrollData.map(p => `
+          <tr>
+            <td>PAY-${String(p.payroll_run_id || p.id || 0).padStart(5, '0')}</td>
+            <td>${p.employee_name || '-'}<br><span class="muted-small">${p.employee_code || '-'}</span></td>
+            <td>${p.department || '-'}</td>
+            <td>${p.month_year || currentMonthYear || '-'}</td>
+            <td>${p.wage_type || '-'}</td>
+            <td class="text-right">${money(p.total_earning)}</td>
+            <td class="text-right">${money(p.total_deduction)}</td>
+            <td class="text-right payroll-net">${money(p.net_pay)}</td>
+            <td>${payrollBadge(p.status || 'Draft')}</td>
+          </tr>
+        `).join('')}
       </tbody>
     </table>
   `;
 
   grid.innerHTML = table;
-  renderPayrollRecords(currentSalaryCalculationRecords || []);
 }
 
 function renderPayrollRecords(records) {
@@ -478,6 +298,31 @@ function renderPayslipManagement(records) {
   `;
 }
 
+async function loadPayrollDashboard(monthYear = null) {
+  if (!monthYear) {
+    const today = new Date();
+    monthYear = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  }
+  currentMonthYear = monthYear;
+  const status = document.getElementById('payroll-filter-status')?.value || '';
+  const query = new URLSearchParams({ month_year: monthYear });
+  if (status) query.set('status', status);
+
+  try {
+    const response = await apiFetch(`/api/payroll/dashboard?${query.toString()}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to load payroll dashboard');
+    currentPayrollData = data.records || [];
+    updatePayrollDashboard(data);
+  } catch (err) {
+    console.error('Error loading payroll dashboard:', err);
+    currentPayrollData = [];
+    updatePayrollDashboard({});
+  }
+
+  renderPayroll();
+}
+
 // Load payroll records for current month
 async function loadPayrollRecords(monthYear = null) {
   if (!monthYear) {
@@ -492,39 +337,76 @@ async function loadPayrollRecords(monthYear = null) {
     if (!response.ok) {
       if (response.status === 404) {
         currentPayrollData = [];
-        updatePayrollStats({});
       } else {
         throw new Error('Failed to load payroll records');
       }
     } else {
       const data = await response.json();
       currentPayrollData = data.payslips || [];
-      updatePayrollStats(data.summary || {});
     }
   } catch (err) {
     console.error('Error loading payroll records:', err);
     currentPayrollData = [];
-    updatePayrollStats({});
   }
 
   renderPayroll();
 }
 
 // Update stats cards at the top
-function updatePayrollStats(summary) {
-  const money = value => `PHP ${parseFloat(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function updatePayrollDashboard(data = {}) {
   const setText = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.textContent = value;
   };
+  const setValue = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  };
+  const metrics = data.metrics || {};
+  const estimates = data.estimates || {};
+  const period = data.period || {};
 
-  setText('payroll-total-payroll', money(summary.totalPayroll));
-  setText('payroll-employees-paid', summary.employeesPaid || '0');
-  setText('payroll-average-salary', money(summary.avgSalary));
-  setText('payroll-total-deductions', money(summary.totalDeductions));
-  setText('payroll-pending-count', summary.pendingCount || '0');
-  setText('payroll-period-label', summary.monthYear || 'Current period');
-  setText('payroll-employees-label', `${summary.totalEmployees || 0} employees processed`);
+  setText('payroll-total-employees', metrics.totalEmployees || 0);
+  setText('payroll-ready-employees', metrics.payrollReadyEmployees || 0);
+  setText('payroll-pending-attendance', metrics.pendingAttendanceValidation || 0);
+  setText('payroll-missing-attendance', metrics.missingAttendanceRecords || 0);
+  setText('payroll-draft-payrolls', metrics.draftPayrolls || 0);
+  setText('payroll-submitted-payrolls', metrics.submittedPayrolls || 0);
+  setValue('payroll-period-start', formatDateValue(period.start_date));
+  setValue('payroll-period-end', formatDateValue(period.end_date));
+  setValue('payroll-period-status', period.status || 'Not Generated');
+  setText('payroll-estimated-gross', money(estimates.gross));
+  setText('payroll-estimated-deductions', money(estimates.deductions));
+  setText('payroll-estimated-net', money(estimates.net));
+}
+
+function updatePayrollStats(summary) {
+  updatePayrollDashboard({
+    estimates: {
+      gross: summary.totalPayroll,
+      deductions: summary.totalDeductions,
+      net: Number(summary.totalPayroll || 0) - Number(summary.totalDeductions || 0)
+    },
+    metrics: {
+      totalEmployees: summary.totalEmployees || 0,
+      payrollReadyEmployees: summary.employeesPaid || 0,
+      draftPayrolls: summary.pendingCount || 0,
+      submittedPayrolls: 0
+    },
+    period: {
+      month_year: summary.monthYear || currentMonthYear,
+      status: 'Generated'
+    }
+  });
+}
+
+function formatDateValue(value) {
+  if (!value) return '-';
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toISOString().slice(0, 10);
 }
 
 // Load and display salary calculation records
@@ -909,11 +791,17 @@ async function generatePayslipPreview(calculationId) {
 async function exportPayslipPdf(calculationId, printMode = false) {
   try {
     const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/payslip.pdf${printMode ? '?print=1' : ''}`);
+    const contentType = response.headers.get('content-type') || '';
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.error || 'Failed to export payslip PDF.');
     }
+    if (!contentType.includes('application/pdf')) {
+      const text = await response.text().catch(() => '');
+      throw new Error(text || 'The server did not return a valid PDF file.');
+    }
     const blob = await response.blob();
+    if (!blob.size) throw new Error('The generated PDF file is empty.');
     const url = URL.createObjectURL(blob);
     if (printMode) {
       const win = window.open(url, '_blank');
@@ -937,6 +825,9 @@ function showPayslipPreview(payslip) {
   document.getElementById(modalId)?.remove();
   const earningsRows = [
     ['Days Worked', payslip.earnings.days_worked || 0],
+    ['Employee Minute Rate', payslipMoney(payslip.earnings.employee_minute_rate)],
+    ['Late Minutes', payslip.earnings.late_minutes || 0],
+    ['Undertime Minutes', payslip.earnings.undertime_minutes || 0],
     ...(payslip.wage_type === 'Per-Piece' ? [
       ['Quantity', payslip.earnings.quantity || 0],
       ['Piece Rate', payslipMoney(payslip.earnings.piece_rate)],
@@ -1030,6 +921,11 @@ function showCalculationBreakdown(record) {
     || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
   const totalDeductions = number(record.total_deductions);
   const basePay = Math.max(0, number(record.gross_pay) - totalAllowances);
+  const isPieceRate = /piece/i.test(String(record.wage_type || ''));
+  const baseRateField = isPieceRate
+    ? ''
+    : `<label>Base Rate<input value="${fmt(record.base_rate)}" readonly /></label>`;
+  const basePayLabel = isPieceRate ? 'Piece Earnings' : 'Base Pay';
   const workOutput = record.wage_type === 'Hourly'
     ? `${number(record.hours_worked).toLocaleString('en-US')} hours`
     : record.wage_type === 'Daily'
@@ -1075,7 +971,7 @@ function showCalculationBreakdown(record) {
         <label>Department<input value="${record.department || '-'}" readonly /></label>
         <label>Status<input value="${record.status || 'Draft'}" readonly /></label>
         <label>Wage Type<input value="${record.wage_type || '-'}" readonly /></label>
-        <label>Base Rate<input value="${fmt(record.base_rate)}" readonly /></label>
+        ${baseRateField}
         <label>Work Output<input value="${workOutput}" readonly /></label>
         <label>Payroll Date<input value="${calculationDate}" readonly /></label>
       </div>
@@ -1084,7 +980,7 @@ function showCalculationBreakdown(record) {
         <h3>Calculation Summary</h3>
         <table class="payroll-breakdown-table">
           <tbody>
-            ${row('Base Pay', fmt(basePay))}
+            ${row(basePayLabel, fmt(basePay))}
             ${row('Allowances', fmt(totalAllowances))}
             ${row('Gross Pay', fmt(record.gross_pay), 'is-positive')}
             ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
@@ -1109,23 +1005,27 @@ function showCalculationBreakdown(record) {
 }
 
 function switchPayrollTab(tab) {
+  const targetTab = tab === 'payslips' ? 'records' : tab;
   document.querySelectorAll('.payroll-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.payrollTab === tab);
   });
   document.querySelectorAll('.payroll-panel').forEach(panel => {
-    panel.classList.toggle('active', panel.id === `payroll-tab-${tab}`);
+    panel.classList.toggle('active', panel.id === `payroll-tab-${targetTab}`);
   });
 
-  if (tab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
-  if (tab === 'piece-config') loadPieceRateConfig();
-  if (tab === 'deductions') loadPayrollSettings('deduction');
-  if (tab === 'allowances') loadPayrollSettings('allowance');
-  if (tab === 'policies') loadPayrollPolicySettings();
-  if (tab === 'reports') {
+  if (targetTab === 'dashboard') loadPayrollDashboard();
+  if (targetTab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
+  if (targetTab === 'piece-config') loadPieceRateConfig();
+  if (targetTab === 'deductions') loadPayrollSettings('deduction');
+  if (targetTab === 'cash-advances') loadEmployeeDeductionAccounts('cash_advance');
+  if (targetTab === 'employee-loans') loadEmployeeDeductionAccounts('loan');
+  if (targetTab === 'allowances') loadPayrollSettings('allowance');
+  if (targetTab === 'policies') loadPayrollPolicySettings();
+  if (targetTab === 'reports') {
     loadPayrollAudit();
     renderPayrollReportLibrary();
   }
-  if (tab === 'records') loadSalaryCalculations();
+  if (targetTab === 'records') loadSalaryCalculations();
 }
 
 async function loadPieceRateConfig() {
@@ -1768,7 +1668,7 @@ async function generatePiecePayrollRegister() {
 
 function refreshPayrollDashboard() {
   const month = document.getElementById('payroll-filter-month')?.value;
-  loadPayrollRecords(month || null);
+  loadPayrollDashboard(month || null);
   loadSalaryCalculations();
 }
 
@@ -1834,6 +1734,156 @@ function renderAllowanceSettings(rows) {
   `;
 }
 
+let payrollDeductionEmployees = [];
+
+async function ensureEmployeeDeductionDropdowns() {
+  if (!payrollDeductionEmployees.length) {
+    const res = await apiFetch('/api/employees');
+    if (!res.ok) throw new Error('Failed to load employees');
+    payrollDeductionEmployees = await res.json();
+  }
+  const options = '<option value="">Select employee</option>' + payrollDeductionEmployees.map(emp => {
+    const name = emp.name || [emp.first_name, emp.middle_name, emp.last_name].filter(Boolean).join(' ') || emp.employee_name || `Employee ${emp.id}`;
+    const code = emp.employee_code || emp.empCode || emp.code || '';
+    return `<option value="${emp.id}">${code ? `${code} - ` : ''}${name}</option>`;
+  }).join('');
+  document.querySelectorAll('.employee-deduction-employee').forEach(select => {
+    const current = select.value;
+    select.innerHTML = options;
+    if (current) select.value = current;
+  });
+}
+
+async function loadEmployeeDeductionAccounts(type) {
+  const grid = document.getElementById(type === 'cash_advance' ? 'cash-advance-grid' : 'employee-loan-grid');
+  if (!grid) return;
+  try {
+    await ensureEmployeeDeductionDropdowns();
+    const res = await apiFetch(`/api/payroll/employee-deductions?type=${encodeURIComponent(type)}`);
+    if (!res.ok) throw new Error('Failed to load employee deductions');
+    const rows = await res.json();
+    grid.innerHTML = renderEmployeeDeductionAccounts(rows, type);
+  } catch (err) {
+    grid.innerHTML = `<div style="padding:30px; color:var(--red); text-align:center;">${err.message}</div>`;
+  }
+}
+
+function renderEmployeeDeductionAccounts(rows, type) {
+  if (!rows.length) {
+    return `<div style="padding:30px; color:var(--muted); text-align:center;">No ${type === 'cash_advance' ? 'cash advances' : 'employee loans'} assigned.</div>`;
+  }
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Employee</th>
+          <th>Name</th>
+          <th>Original Amount</th>
+          <th>Remaining</th>
+          <th>Installment</th>
+          <th>Period</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr>
+            <td>${row.employee_code || '-'}</td>
+            <td>${row.employee_name || '-'}</td>
+            <td>${money(row.original_amount)}</td>
+            <td>${money(row.remaining_balance)}</td>
+            <td>${money(row.installment_amount)}</td>
+            <td>${(row.start_date || '').slice(0, 10)} - ${row.end_date ? String(row.end_date).slice(0, 10) : 'Open'}</td>
+            <td>${payrollBadge(row.status)}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" type="button" onclick='editEmployeeDeductionAccount(${JSON.stringify(row).replace(/'/g, '&#39;')}, "${type}")'>Edit</button>
+              ${row.status === 'Active'
+                ? `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, '${type}', 'Paused')">Pause</button>`
+                : `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, '${type}', 'Active')">Activate</button>`}
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function editEmployeeDeductionAccount(row, type) {
+  const form = document.getElementById(type === 'cash_advance' ? 'cash-advance-form' : 'employee-loan-form');
+  if (!form) return;
+  form.elements.id.value = row.id || '';
+  form.elements.employee_id.value = row.employee_id || '';
+  form.elements.deduction_name.value = row.deduction_name || '';
+  if (form.elements.loan_type) form.elements.loan_type.value = row.loan_type || 'Employee Loan';
+  form.elements.amount.value = row.original_amount || '';
+  form.elements.remaining_balance.value = row.remaining_balance || '';
+  form.elements.installment_amount.value = row.installment_amount || '';
+  form.elements.start_date.value = (row.start_date || '').slice(0, 10);
+  form.elements.end_date.value = row.end_date ? String(row.end_date).slice(0, 10) : '';
+  form.elements.status.value = row.status || 'Active';
+  form.elements.remarks.value = row.remarks || '';
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function saveEmployeeDeductionAccount(event, type) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const statusEl = document.getElementById(type === 'cash_advance' ? 'cash-advance-save-status' : 'employee-loan-save-status');
+  const data = Object.fromEntries(new FormData(form).entries());
+  if (!data.remaining_balance) data.remaining_balance = data.amount;
+  if (statusEl) {
+    statusEl.className = 'payroll-form-status';
+    statusEl.textContent = 'Saving...';
+  }
+  try {
+    const endpoint = type === 'cash_advance' ? '/api/payroll/employee-cash-advances' : '/api/payroll/employee-loans';
+    const res = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to save employee deduction');
+    }
+    form.reset();
+    if (type === 'cash_advance' && form.elements.deduction_name) form.elements.deduction_name.value = 'Cash Advance';
+    if (type === 'loan' && form.elements.deduction_name) form.elements.deduction_name.value = 'Employee Loan';
+    if (statusEl) {
+      statusEl.className = 'payroll-form-status success';
+      statusEl.textContent = 'Saved successfully.';
+    }
+    await loadEmployeeDeductionAccounts(type);
+    if (typeof showAlert === 'function') await showAlert('Employee deduction saved.', 'Saved', 'success');
+  } catch (err) {
+    if (statusEl) {
+      statusEl.className = 'payroll-form-status error';
+      statusEl.textContent = err.message;
+    }
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
+async function updateEmployeeDeductionStatus(id, type, status) {
+  try {
+    const res = await apiFetch(`/api/payroll/employee-deductions/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update status');
+    }
+    await loadEmployeeDeductionAccounts(type);
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
+}
+
 async function savePayrollSetting(event, type) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1846,8 +1896,11 @@ async function savePayrollSetting(event, type) {
   if (type === 'deduction') {
     data.name = data.category === 'Government'
       ? data.government_name
+      : data.category === 'Company'
+        ? data.company_name
       : data.custom_name;
     delete data.government_name;
+    delete data.company_name;
     delete data.custom_name;
   }
   const endpoint = type === 'deduction' ? '/api/payroll/deduction-settings' : '/api/payroll/allowance-settings';
@@ -1885,15 +1938,20 @@ async function savePayrollSetting(event, type) {
 function toggleDeductionNameField() {
   const category = document.getElementById('deduction-category')?.value || 'Government';
   const governmentGroup = document.getElementById('deduction-government-name-group');
+  const companyGroup = document.getElementById('deduction-company-name-group');
   const customGroup = document.getElementById('deduction-custom-name-group');
   const governmentName = document.getElementById('deduction-government-name');
+  const companyName = document.getElementById('deduction-company-name');
   const customName = document.getElementById('deduction-custom-name');
   const isGovernment = category === 'Government';
+  const isCompany = category === 'Company';
 
   if (governmentGroup) governmentGroup.style.display = isGovernment ? 'block' : 'none';
-  if (customGroup) customGroup.style.display = isGovernment ? 'none' : 'block';
+  if (companyGroup) companyGroup.style.display = isCompany ? 'block' : 'none';
+  if (customGroup) customGroup.style.display = (!isGovernment && !isCompany) ? 'block' : 'none';
   if (governmentName) governmentName.required = isGovernment;
-  if (customName) customName.required = !isGovernment;
+  if (companyName) companyName.required = isCompany;
+  if (customName) customName.required = !isGovernment && !isCompany;
 }
 
 async function loadPayrollPolicySettings() {
@@ -2200,19 +2258,22 @@ function initializePayrollModule() {
   const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
   const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
   const splitDate = document.querySelector('#production-split-form [name="effective_date"]');
+  const cashAdvanceDate = document.querySelector('#cash-advance-form [name="start_date"]');
+  const loanDate = document.querySelector('#employee-loan-form [name="start_date"]');
   const today = new Date().toISOString().split('T')[0];
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
   if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
   if (splitDate && !splitDate.value) splitDate.value = today;
+  if (cashAdvanceDate && !cashAdvanceDate.value) cashAdvanceDate.value = today;
+  if (loanDate && !loanDate.value) loanDate.value = today;
   toggleDeductionNameField();
 }
 
 // Export functions to global scope FIRST
 window.loadPayrollRecords = loadPayrollRecords;
+window.loadPayrollDashboard = loadPayrollDashboard;
 window.renderPayroll = renderPayroll;
 window.updatePayrollStats = updatePayrollStats;
-window.openRunPayrollModal = openRunPayrollModal;
-window.runPayroll = runPayroll;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
@@ -2224,6 +2285,10 @@ window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;
 window.toggleDeductionNameField = toggleDeductionNameField;
+window.loadEmployeeDeductionAccounts = loadEmployeeDeductionAccounts;
+window.saveEmployeeDeductionAccount = saveEmployeeDeductionAccount;
+window.editEmployeeDeductionAccount = editEmployeeDeductionAccount;
+window.updateEmployeeDeductionStatus = updateEmployeeDeductionStatus;
 window.loadPayrollPolicySettings = loadPayrollPolicySettings;
 window.savePayrollPolicySettings = savePayrollPolicySettings;
 window.loadPayrollAudit = loadPayrollAudit;
@@ -2244,7 +2309,7 @@ window.generatePiecePayrollRegister = generatePiecePayrollRegister;
 // Load data when DOM is ready or if already ready
 function initializePayroll() {
   initializePayrollModule();
-  loadPayrollRecords();
+  loadPayrollDashboard();
   loadSalaryCalculations();
 
   // Add filter event listeners

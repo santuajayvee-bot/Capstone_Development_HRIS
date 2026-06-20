@@ -724,6 +724,17 @@ router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
   try {
     await ensureAttendancePolicySettings(pool);
     const body = req.body || {};
+    const allowedDeductionMethods = new Set(['auto_compute', 'fixed_per_minute', 'fixed_per_hour', 'none']);
+    const lateDeductionMethod = cleanText(body.late_deduction_method || 'auto_compute', 30);
+    const undertimeDeductionMethod = cleanText(body.undertime_deduction_method || 'auto_compute', 30);
+    const lateFixedAmount = Number(body.late_fixed_deduction_amount || 0);
+    const undertimeFixedAmount = Number(body.undertime_fixed_deduction_amount || 0);
+    if (!allowedDeductionMethods.has(lateDeductionMethod) || !allowedDeductionMethods.has(undertimeDeductionMethod)) {
+      return res.status(400).json({ error: 'Deduction method is invalid.' });
+    }
+    if (!Number.isFinite(lateFixedAmount) || lateFixedAmount < 0 || !Number.isFinite(undertimeFixedAmount) || undertimeFixedAmount < 0) {
+      return res.status(400).json({ error: 'Fixed late and undertime deduction amounts must be zero or greater.' });
+    }
     const [startTime, endTime] = cleanText(body.work_schedule, 50).split('-');
     const normalized = {
       ...body,
@@ -735,6 +746,10 @@ router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
       overtime_threshold_minutes: String(Math.max(0, Math.round(Number(body.overtime_threshold_hours || 0) * 60) || Number(body.overtime_threshold_minutes || 0))),
       missing_timeout_handling: cleanText(body.missing_timeout_handling, 80) || 'Needs Review',
       payroll_attendance_source: body.payroll_attendance_source || (String(body.payroll_ready_rules || '').toLowerCase().includes('validated') ? 'validated' : 'payroll_ready'),
+      late_deduction_method: lateDeductionMethod,
+      late_fixed_deduction_amount: String(lateFixedAmount),
+      undertime_deduction_method: undertimeDeductionMethod,
+      undertime_fixed_deduction_amount: String(undertimeFixedAmount),
     };
     const { changes, policy } = await saveAttendancePolicyValues(pool, normalized, req.user.id);
     await writeAuditLog(

@@ -579,6 +579,7 @@ async function turnstileConfig(req, res) {
     enabled: config.enabled,
     siteKey: config.siteKey,
     testMode: config.testMode,
+    localDevelopmentBypass: config.localDevelopmentBypass,
   });
 }
 

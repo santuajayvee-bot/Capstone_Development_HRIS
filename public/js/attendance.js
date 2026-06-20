@@ -1306,6 +1306,14 @@ async function loadAttendancePolicies() {
     setPolicyValue('policy-minimum-overtime', data.minimum_overtime_minutes ?? 30);
     document.getElementById('policy-missing-timeout').value = data.missing_timeout_handling || 'Needs Review';
     setPolicyValue('policy-payroll-source', data.payroll_attendance_source || 'payroll_ready');
+    setPolicyValue('policy-working-days-month', data.working_days_per_month ?? 26);
+    setPolicyValue('policy-late-deduction-method', data.late_deduction_method || 'auto_compute');
+    setPolicyValue('policy-late-fixed-amount', data.late_fixed_deduction_amount ?? 0);
+    setPolicyValue('policy-late-apply-grace', String(data.late_apply_grace_period ?? true));
+    setPolicyValue('policy-late-approval', String(data.late_require_hr_approval ?? true));
+    setPolicyValue('policy-undertime-deduction-method', data.undertime_deduction_method || 'auto_compute');
+    setPolicyValue('policy-undertime-fixed-amount', data.undertime_fixed_deduction_amount ?? 0);
+    setPolicyValue('policy-undertime-approval', String(data.undertime_require_hr_approval ?? true));
     setPolicyValue('policy-enable-holiday', String(data.enable_holiday_rules ?? false));
     setPolicyValue('policy-regular-holiday', data.regular_holiday_multiplier ?? 2);
     setPolicyValue('policy-special-holiday', data.special_holiday_multiplier ?? 1.3);
@@ -1362,6 +1370,14 @@ async function saveAttendancePolicies(event) {
     minimum_overtime_minutes: document.getElementById('policy-minimum-overtime')?.value,
     missing_timeout_handling: document.getElementById('policy-missing-timeout')?.value,
     payroll_attendance_source: document.getElementById('policy-payroll-source')?.value,
+    working_days_per_month: document.getElementById('policy-working-days-month')?.value,
+    late_deduction_method: document.getElementById('policy-late-deduction-method')?.value,
+    late_fixed_deduction_amount: document.getElementById('policy-late-fixed-amount')?.value,
+    late_apply_grace_period: document.getElementById('policy-late-apply-grace')?.value,
+    late_require_hr_approval: document.getElementById('policy-late-approval')?.value,
+    undertime_deduction_method: document.getElementById('policy-undertime-deduction-method')?.value,
+    undertime_fixed_deduction_amount: document.getElementById('policy-undertime-fixed-amount')?.value,
+    undertime_require_hr_approval: document.getElementById('policy-undertime-approval')?.value,
     enable_holiday_rules: document.getElementById('policy-enable-holiday')?.value,
     regular_holiday_multiplier: document.getElementById('policy-regular-holiday')?.value,
     special_holiday_multiplier: document.getElementById('policy-special-holiday')?.value,
