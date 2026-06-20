@@ -117,101 +117,101 @@ WHERE NOT EXISTS (SELECT 1 FROM logistics_locations WHERE location_category = 'S
 
 -- Closed Van rates.
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Driver', 750.00, 0.00, 1.00, 'Closed Van provincial first trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Driver', 750.00, 0.00, 1.00, 'Closed Van provincial first trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Helper', 650.00, 0.00, 1.00, 'Closed Van provincial first trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Helper', 650.00, 0.00, 1.00, 'Closed Van provincial first trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Driver', 650.00, 0.00, 1.00, 'Closed Van Manila first trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Driver', 650.00, 0.00, 1.00, 'Closed Van Manila first trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Helper', 600.00, 0.00, 1.00, 'Closed Van Manila first trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Helper', 600.00, 0.00, 1.00, 'Closed Van Manila first trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Driver', 750.00, 0.00, 1.00, 'Closed Van provincial second trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Driver', 750.00, 0.00, 1.00, 'Closed Van provincial second trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Helper', 650.00, 0.00, 0.50, 'Closed Van provincial second-trip helper half rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Helper', 650.00, 0.00, 0.50, 'Closed Van provincial second-trip helper half rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Driver', 650.00, 0.00, 1.00, 'Closed Van Manila second trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Driver', 650.00, 0.00, 1.00, 'Closed Van Manila second trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Helper', 600.00, 0.00, 0.50, 'Closed Van Manila second-trip helper half rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Helper', 600.00, 0.00, 0.50, 'Closed Van Manila second-trip helper half rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Driver', 800.00, 0.00, 1.00, 'Closed Van Tiaong special rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Driver', 800.00, 0.00, 1.00, 'Closed Van Tiaong special rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Tiaong'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Helper', 700.00, 0.00, 1.00, 'Closed Van Tiaong special rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Helper', 700.00, 0.00, 1.00, 'Closed Van Tiaong special rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Tiaong'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Driver', 1150.00, 0.00, 1.00, 'Closed Van Pangasinan special rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Driver', 1150.00, 0.00, 1.00, 'Closed Van Pangasinan special rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Pangasinan'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Helper', 800.00, 0.00, 1.00, 'Closed Van Pangasinan special rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Helper', 800.00, 0.00, 1.00, 'Closed Van Pangasinan special rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Pangasinan'
 WHERE tt.name = 'Closed Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Helper' AND r.status = 'Active');
 
 -- Wing Van rates.
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Driver', 1100.00, 300.00, 1.00, 'Wing Van provincial first trip with additional rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Driver', 1100.00, 300.00, 1.00, 'Wing Van provincial first trip with additional rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Helper', 900.00, 300.00, 1.00, 'Wing Van provincial first trip with applicable additional rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Helper', 900.00, 300.00, 1.00, 'Wing Van provincial first trip with applicable additional rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Driver', 950.00, 250.00, 1.00, 'Wing Van Manila first trip with additional rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Driver', 950.00, 250.00, 1.00, 'Wing Van Manila first trip with additional rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '1st Trip', 'Helper', 750.00, 250.00, 1.00, 'Wing Van Manila first trip with applicable additional rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '1st Trip', 'Helper', 750.00, 250.00, 1.00, 'Wing Van Manila first trip with applicable additional rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '1st Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Driver', 1100.00, 0.00, 1.00, 'Wing Van provincial second trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Driver', 1100.00, 0.00, 1.00, 'Wing Van provincial second trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Helper', 900.00, 0.00, 0.50, 'Wing Van provincial second-trip helper half rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Helper', 900.00, 0.00, 0.50, 'Wing Van provincial second-trip helper half rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Province'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Driver', 950.00, 0.00, 1.00, 'Wing Van Manila second trip', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Driver', 950.00, 0.00, 1.00, 'Wing Van Manila second trip', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, '2nd Trip', 'Helper', 750.00, 0.00, 0.50, 'Wing Van Manila second-trip helper half rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, '2nd Trip', 'Helper', 750.00, 0.00, 0.50, 'Wing Van Manila second-trip helper half rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'Manila'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = '2nd Trip' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Driver', 1100.00, 0.00, 2.00, 'Wing Van La Union x2 rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Driver', 1100.00, 0.00, 2.00, 'Wing Van La Union x2 rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'La Union'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Helper', 900.00, 0.00, 2.00, 'Wing Van La Union x2 rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Helper', 900.00, 0.00, 2.00, 'Wing Van La Union x2 rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name = 'La Union'
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Helper' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Driver', 1500.00, 0.00, 1.00, 'Wing Van special route rate', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Driver', 1500.00, 0.00, 1.00, 'Wing Van special route rate', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name IN ('Tayabas', 'Pangasinan')
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Driver' AND r.status = 'Active');
 INSERT INTO logistics_rates (truck_type_id, location_id, trip_type, role, base_rate, additional_rate, multiplier, special_rule_description, status, effective_date)
-SELECT tt.id, ll.id, 'Any', 'Helper', 1100.00, 366.67, 1.00, 'Wing Van special route helper rate with additional amount', 'Active', CURDATE()
+SELECT tt.id, ll.id, 'Any', 'Helper', 1100.00, 366.67, 1.00, 'Wing Van special route helper rate with additional amount', 'Active', '2026-01-01'
 FROM truck_types tt JOIN logistics_locations ll ON ll.name IN ('Tayabas', 'Pangasinan')
 WHERE tt.name = 'Wing Van' AND NOT EXISTS (SELECT 1 FROM logistics_rates r WHERE r.truck_type_id = tt.id AND r.location_id = ll.id AND r.trip_type = 'Any' AND r.role = 'Helper' AND r.status = 'Active');
 
