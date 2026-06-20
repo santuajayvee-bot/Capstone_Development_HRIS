@@ -13,6 +13,7 @@
     "migrate:attendance-biometric": "node database/migrate-biometric-attendance.js",
     "migrate:onboarding": "node database/migrate-onboarding-lifecycle.js",
     "migrate:lifecycle": "node database/migrate-employee-lifecycle-routing.js",
+    "migrate:weekly-payroll": "node database/migrate-multi-pay-type-weekly-payroll.js up",
     "test:attendance-biometric": "node test-biometric-attendance.js",
     "test:onboarding": "node test-onboarding.js"
   },

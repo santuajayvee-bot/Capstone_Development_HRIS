@@ -34,6 +34,8 @@
   function setDefaultDates() {
     const tripDate = document.getElementById('delivery-trip-date');
     if (tripDate && !tripDate.value) tripDate.value = today();
+    const tripQuantity = document.getElementById('delivery-trip-output-quantity');
+    if (tripQuantity && !tripQuantity.value) tripQuantity.value = '1';
     const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');
     if (rateDate && !rateDate.value) rateDate.value = today();
     const registryPeriod = document.getElementById('swr-fxr-period');
@@ -101,9 +103,9 @@
   function renderTrips() {
     const target = document.getElementById('delivery-trips-grid');
     if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Date</th><th>Employee</th><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Plate</th><th>Computation</th><th>Trip Pay</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.trips.map(row => `
-      <tr><td>${escapeHtml(String(row.trip_date || '').slice(0, 10))}</td><td>${escapeHtml(row.employee_code || '')}<br>${escapeHtml(row.employee_name || '')}</td><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${escapeHtml(row.plate_number || '-')}</td><td>(${money(row.base_rate)} × ${Number(row.multiplier).toFixed(2)}) + ${money(row.additional_rate)}</td><td>${money(row.total_trip_pay)}</td><td><span class="status-badge ${escapeHtml(String(row.status).toLowerCase().replace(/\s+/g, '-'))}">${escapeHtml(row.status)}</span></td><td class="button-row">${tripActions(row)}</td></tr>
-    `).join('') || '<tr><td colspan="11">No delivery trips found.</td></tr>'}</tbody></table>`;
+    target.innerHTML = `<table><thead><tr><th>Date</th><th>Employee</th><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Qty</th><th>Plate</th><th>Computation</th><th>Trip Pay</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.trips.map(row => `
+      <tr><td>${escapeHtml(String(row.trip_date || '').slice(0, 10))}</td><td>${escapeHtml(row.employee_code || '')}<br>${escapeHtml(row.employee_name || '')}</td><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${Number(row.output_quantity || 1)}</td><td>${escapeHtml(row.plate_number || '-')}</td><td>(${money(row.base_rate)} × ${Number(row.multiplier).toFixed(2)}) + ${money(row.additional_rate)} × ${Number(row.output_quantity || 1)}</td><td>${money(row.total_trip_pay)}</td><td><span class="status-badge ${escapeHtml(String(row.status).toLowerCase().replace(/\s+/g, '-'))}">${escapeHtml(row.status)}</span></td><td class="button-row">${tripActions(row)}</td></tr>
+    `).join('') || '<tr><td colspan="12">No delivery trips found.</td></tr>'}</tbody></table>`;
   }
 
   async function loadLogisticsPayrollModule() {
@@ -199,6 +201,8 @@
       }
       form.reset();
       document.getElementById('delivery-trip-date').value = today();
+      const quantity = document.getElementById('delivery-trip-output-quantity');
+      if (quantity) quantity.value = '1';
       await loadLogisticsPayrollModule();
       await showMessage(status === 'Submitted' ? 'Delivery trip submitted for approval.' : 'Delivery trip saved as draft.');
     } catch (error) { await showMessage(error.message, 'error'); }
@@ -212,14 +216,16 @@
     const tripType = document.getElementById('delivery-trip-type')?.value;
     const role = document.getElementById('delivery-trip-role')?.value;
     const tripDate = document.getElementById('delivery-trip-date')?.value;
+    const quantity = Math.max(1, Number(document.getElementById('delivery-trip-output-quantity')?.value || 1));
     const rateLabel = document.getElementById('delivery-trip-rate-preview');
     const payLabel = document.getElementById('delivery-trip-pay-preview');
     if (!truck || !location || !tripType || !role || !tripDate) return;
     try {
       const params = new URLSearchParams({ truck_type_id: truck, location_id: location, trip_type: tripType, role, trip_date: tripDate });
       const rate = await request(`/api/payroll/logistics/rates/preview?${params}`);
-      if (rateLabel) rateLabel.textContent = `(${money(rate.base_rate)} × ${Number(rate.multiplier).toFixed(2)}) + ${money(rate.additional_rate)}${rate.special_rule_description ? ` — ${rate.special_rule_description}` : ''}`;
-      if (payLabel) payLabel.textContent = money(rate.total_trip_pay);
+      const unitPay = Number(rate.total_trip_pay || 0);
+      if (rateLabel) rateLabel.textContent = `(${money(rate.base_rate)} × ${Number(rate.multiplier).toFixed(2)}) + ${money(rate.additional_rate)} × ${quantity}${rate.special_rule_description ? ` — ${rate.special_rule_description}` : ''}`;
+      if (payLabel) payLabel.textContent = money(unitPay * quantity);
     } catch (error) {
       if (rateLabel) rateLabel.textContent = error.message;
       if (payLabel) payLabel.textContent = money(0);
@@ -260,6 +266,7 @@
     form.elements.id.value = row.id; form.elements.employee_id.value = row.employee_id; form.elements.truck_type_id.value = row.truck_type_id;
     form.elements.location_id.value = row.location_id; form.elements.trip_date.value = String(row.trip_date).slice(0, 10); form.elements.trip_type.value = row.trip_type;
     form.elements.role.value = row.role; form.elements.plate_number.value = row.plate_number || '';
+    if (form.elements.output_quantity) form.elements.output_quantity.value = row.output_quantity || 1;
     refreshTripPreview();
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -398,10 +405,10 @@
   }
 
   function bindTripPreview() {
-    ['delivery-trip-truck-type', 'delivery-trip-location', 'delivery-trip-date', 'delivery-trip-type', 'delivery-trip-role'].forEach(id => {
+    ['delivery-trip-truck-type', 'delivery-trip-location', 'delivery-trip-date', 'delivery-trip-type', 'delivery-trip-role', 'delivery-trip-output-quantity'].forEach(id => {
       const element = document.getElementById(id);
       if (element && !element.dataset.logisticsBound) {
-        element.addEventListener('change', refreshTripPreview);
+        element.addEventListener(id === 'delivery-trip-output-quantity' ? 'input' : 'change', refreshTripPreview);
         element.dataset.logisticsBound = '1';
       }
     });

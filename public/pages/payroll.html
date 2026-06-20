@@ -129,8 +129,36 @@
   <div class="page-header compact">
     <div>
       <div class="section-title small">Salary Calculation</div>
-      <div class="section-sub">Select a payroll period, choose an employee, then calculate based on wage type.</div>
+      <div class="section-sub">Generate weekly payroll by pay type, or calculate a single employee manually.</div>
     </div>
+  </div>
+
+  <div class="table-wrap weekly-payroll-generator">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>Weekly Payroll Processing</h3>
+        <p>Processes Monthly, Daily, Hourly, Piece Rate, and Logistics employees using approved source records only.</p>
+      </div>
+    </div>
+    <form id="weekly-payroll-form" class="payroll-field-row" onsubmit="generateWeeklyPayroll(event)">
+      <label>Week Start<input name="start_date" id="weekly-payroll-start" type="date" required /></label>
+      <label>Week End<input name="end_date" id="weekly-payroll-end" type="date" required /></label>
+      <label>Department<select name="department_id" id="weekly-payroll-department"><option value="">All departments</option></select></label>
+      <label>Pay Type<select name="pay_type" id="weekly-payroll-pay-type"><option value="">All pay types</option><option value="Monthly">Monthly</option><option value="Daily">Daily</option><option value="Hourly">Hourly</option><option value="Piece Rate">Piece Rate</option><option value="Logistics">Logistics / Trip-Based</option></select></label>
+      <label class="span-2">Employee ID / Code<input name="employee_search" id="weekly-payroll-employee" placeholder="Optional; leave blank for all employees" /></label>
+      <div class="payroll-form-actions">
+        <button class="btn btn-outline" type="button" onclick="loadWeeklyPayrollRegistry()">Load Registry</button>
+        <button class="btn btn-primary" type="submit">Generate Weekly Payroll</button>
+      </div>
+    </form>
+    <div id="weekly-payroll-result" class="payroll-form-status"></div>
+    <div id="weekly-payroll-registry" class="weekly-payroll-registry">
+      <div class="payroll-empty-state">Generate weekly payroll or load an existing registry for the selected week.</div>
+    </div>
+  </div>
+
+  <div class="salary-form">
+    <h3>Manual Salary Calculation</h3>
   </div>
 
   <div class="salary-form">
@@ -339,6 +367,7 @@
         <label>Trip Date<input name="trip_date" id="delivery-trip-date" type="date" required /></label>
         <label>Trip Type<select name="trip_type" id="delivery-trip-type" required><option>1st Trip</option><option>2nd Trip</option><option>Additional Trip</option></select></label>
         <label>Role<select name="role" id="delivery-trip-role" required><option>Driver</option><option>Helper</option></select></label>
+        <label>Output Quantity<input name="output_quantity" id="delivery-trip-output-quantity" type="number" min="1" step="1" value="1" required /></label>
         <label>Plate Number<input name="plate_number" maxlength="30" placeholder="ABC 1234" /></label>
         <label>Rate Preview<span class="salary-readonly" id="delivery-trip-rate-preview">Select the trip details.</span></label>
         <label>Trip Pay<span class="salary-readonly" id="delivery-trip-pay-preview">PHP 0.00</span></label>

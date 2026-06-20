@@ -109,20 +109,31 @@ async function assertLogisticsTripSchema(pool) {
       throw new Error('Logistics trip payroll is not configured. Apply the logistics trip payroll migration first.');
     }
   }
+  const columns = await payrollTableColumns(pool, 'delivery_trips');
+  if (!columns.has('output_quantity')) {
+    await pool.execute('ALTER TABLE delivery_trips ADD COLUMN output_quantity DECIMAL(10,2) NOT NULL DEFAULT 1 AFTER plate_number');
+  }
+  if (!columns.has('paid_at')) {
+    await pool.execute('ALTER TABLE delivery_trips ADD COLUMN paid_at DATETIME NULL AFTER approved_at');
+  }
 }
 
 async function getApprovedDeliveryTripPayroll(pool, employeeId, period) {
   const [trips] = await pool.execute(`
-    SELECT id, total_trip_pay, trip_date, trip_type, role, truck_type_id, location_id
+    SELECT id, total_trip_pay, trip_date, trip_type, role, truck_type_id, location_id,
+           COALESCE(output_quantity, 1) AS output_quantity,
+           base_rate, additional_rate, multiplier
       FROM delivery_trips
      WHERE employee_id = ?
        AND trip_date BETWEEN ? AND ?
        AND status = 'Approved'
+       AND payroll_run_id IS NULL
      ORDER BY trip_date, id
   `, [employeeId, period.start, period.end]);
   return {
     trips,
-    total: trips.reduce((sum, trip) => sum + numeric(trip.total_trip_pay), 0)
+    total: trips.reduce((sum, trip) => sum + numeric(trip.total_trip_pay), 0),
+    quantity: trips.reduce((sum, trip) => sum + numeric(trip.output_quantity || 1), 0)
   };
 }
 
@@ -300,6 +311,65 @@ function numeric(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundMoney(value) {
+  return Math.round((numeric(value) + Number.EPSILON) * 100) / 100;
+}
+
+function payrollDate(value, label = 'Date') {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error(`${label} must use YYYY-MM-DD.`);
+  return text;
+}
+
+function weeklyPayrollKey(startDate, endDate) {
+  const start = payrollDate(startDate, 'Payroll start date');
+  const end = payrollDate(endDate, 'Payroll end date');
+  return `${start.slice(0, 7)}-W${payrollWeekFromDate(end)}`;
+}
+
+function payrollPeriodFromRequest(body = {}) {
+  const requestedMonth = monthRange(body.month_year);
+  const start = body.start_date ? payrollDate(body.start_date, 'Payroll start date') : requestedMonth.start;
+  const end = body.end_date ? payrollDate(body.end_date, 'Payroll end date') : requestedMonth.end;
+  if (start > end) throw new Error('Period start must be before or equal to period end.');
+  const hasExplicitWeek = Boolean(body.start_date || body.end_date || body.weekly);
+  const key = String(body.payroll_period || body.period_key || (hasExplicitWeek ? weeklyPayrollKey(start, end) : requestedMonth.month_year)).trim();
+  if (!/^\d{4}-\d{2}(?:-W[1-5])?$/.test(key)) throw new Error('Payroll period must use YYYY-MM or YYYY-MM-W# format.');
+  return {
+    month_year: key,
+    base_month: start.slice(0, 7),
+    start,
+    end,
+    period_label: `${start} to ${end}`,
+    is_weekly: hasExplicitWeek || /-W[1-5]$/.test(key)
+  };
+}
+
+function periodFilterSql(columnSql, periodValue) {
+  const value = String(periodValue || '').trim();
+  if (/^\d{4}-\d{2}$/.test(value)) {
+    return { sql: `${columnSql} LIKE ?`, params: [`${value}%`] };
+  }
+  return { sql: `${columnSql} = ?`, params: [value] };
+}
+
+function payrollTypePattern(payType) {
+  const normalized = normalizePayrollWageType(payType);
+  if (normalized === 'Monthly') return '%month%';
+  if (normalized === 'Daily') return '%day%';
+  if (normalized === 'Hourly') return '%hour%';
+  if (normalized === 'Per-Piece') return '%piece%';
+  if (normalized === 'Per-Trip') return '%trip%';
+  return '';
+}
+
+function sourceIdList(rows, prefix = '') {
+  return rows
+    .map(row => row.id || row.summary_id || row.attendance_id)
+    .filter(Boolean)
+    .map(id => `${prefix}${id}`);
+}
+
 async function payrollTableColumns(pool, tableName) {
   const [rows] = await pool.execute(
     `SELECT COLUMN_NAME
@@ -351,6 +421,20 @@ async function payrollEnumValues(pool, tableName, columnName) {
 
 function monthRange(monthYear) {
   const raw = String(monthYear || '').trim();
+  const weekMatch = raw.match(/^(\d{4})-(\d{2})-W([1-5])$/);
+  if (weekMatch) {
+    const year = Number(weekMatch[1]);
+    const month = Number(weekMatch[2]);
+    const week = Number(weekMatch[3]);
+    const monthEndDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const startDay = Math.min(monthEndDay, ((week - 1) * 7) + 1);
+    const endDay = Math.min(monthEndDay, week * 7);
+    return {
+      month_year: `${year}-${String(month).padStart(2, '0')}-W${week}`,
+      start: `${year}-${String(month).padStart(2, '0')}-${String(startDay).padStart(2, '0')}`,
+      end: `${year}-${String(month).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`,
+    };
+  }
   const match = raw.match(/^(\d{4})-(\d{2})$/);
   const now = new Date();
   const year = match ? Number(match[1]) : now.getFullYear();
@@ -371,6 +455,14 @@ async function findOrCreatePayrollRun(pool, req, period) {
   const columns = await payrollTableColumns(pool, 'payroll_runs');
   const fields = ['month_year', 'start_date', 'end_date'];
   const values = [period.month_year, period.start, period.end];
+  if (columns.has('period_label')) {
+    fields.push('period_label');
+    values.push(period.period_label || `${period.start} to ${period.end}`);
+  }
+  if (columns.has('payroll_type')) {
+    fields.push('payroll_type');
+    values.push(period.payroll_type || 'All Pay Types');
+  }
   if (columns.has('status')) {
     fields.push('status');
     values.push('Draft');
@@ -381,6 +473,18 @@ async function findOrCreatePayrollRun(pool, req, period) {
   } else if (columns.has('processed_by')) {
     fields.push('processed_by');
     values.push(currentUserId(req));
+  }
+  if (columns.has('processed_by') && !fields.includes('processed_by')) {
+    fields.push('processed_by');
+    values.push(currentUserId(req));
+  }
+  if (columns.has('processed_at')) {
+    fields.push('processed_at');
+    values.push(new Date());
+  }
+  if (columns.has('source_summary')) {
+    fields.push('source_summary');
+    values.push(JSON.stringify({ period_start: period.start, period_end: period.end, filters: period.filters || {} }));
   }
   const placeholders = fields.map(() => '?').join(', ');
   const [result] = await pool.execute(
@@ -583,6 +687,12 @@ function buildPayslipPayload(record) {
       share_percentage: snapshot.worker1_share || snapshot.share_percentage || null,
       trip_count: tripCount,
       trip_rate: wageType === 'Per-Trip' ? numeric(record.base_rate) : 0,
+      monthly_salary: wageType === 'Monthly' ? numeric(snapshot.monthly_salary || record.base_rate) : 0,
+      monthly_conversion_method: snapshot.monthly_conversion_method || null,
+      weekly_from_monthly_amount: numeric(snapshot.weekly_from_monthly_amount),
+      working_days_per_month: snapshot.working_days_per_month || null,
+      source_records: Array.isArray(snapshot.records) ? snapshot.records : [],
+      logistics_trips: Array.isArray(snapshot.trips) ? snapshot.trips : [],
     },
     deductions: deductionRows,
     summary: {
@@ -685,6 +795,12 @@ function drawPayslipPdf(doc, payslip) {
   }
   if (payslip.wage_type === 'Per-Trip') {
     earnings.splice(1, 0, ['Trip Count', payslip.earnings.trip_count], ['Driver/Helper Rate', peso(payslip.earnings.trip_rate)]);
+  }
+  if (payslip.wage_type === 'Monthly') {
+    earnings.splice(1, 0,
+      ['Monthly Salary', peso(payslip.earnings.monthly_salary)],
+      ['Conversion', payslip.earnings.monthly_conversion_method === 'daily_equivalent' ? 'Daily Equivalent' : 'Monthly / 4']
+    );
   }
 
   const maxRows = Math.max(earnings.length, payslip.deductions.length);
@@ -810,6 +926,12 @@ async function getPayrollPolicy(pool) {
       undertime_deduction_method: attendancePolicy.undertime_deduction_method,
       undertime_fixed_deduction_amount: attendancePolicy.undertime_fixed_deduction_amount,
       undertime_require_hr_approval: attendancePolicy.undertime_require_hr_approval,
+    },
+    monthly: {
+      conversion_method: ['weekly_from_monthly', 'daily_equivalent'].includes(String(map.monthly_conversion_method || '').toLowerCase())
+        ? String(map.monthly_conversion_method || '').toLowerCase()
+        : 'weekly_from_monthly',
+      working_days_per_month: num('monthly_working_days_per_month', attendancePolicy.working_days_per_month || 26)
     }
   };
 }
@@ -831,7 +953,13 @@ async function validateDailyHourlyPayroll(pool, options) {
   const employeeId = Number(options.employee_id);
   const payrollPeriod = options.payroll_period || options.calculation_date?.slice(0, 7);
   const calcDate = options.calculation_date || new Date().toISOString().slice(0, 10);
-  const range = periodRange(payrollPeriod, calcDate);
+  const range = options.start_date && options.end_date
+    ? {
+      start: payrollDate(options.start_date, 'Payroll start date'),
+      end: payrollDate(options.end_date, 'Payroll end date'),
+      payroll_period: payrollPeriod || weeklyPayrollKey(options.start_date, options.end_date)
+    }
+    : periodRange(payrollPeriod, calcDate);
   const policy = await getPayrollPolicy(pool);
 
   const [employeeRows] = await pool.execute(`
@@ -879,10 +1007,10 @@ async function validateDailyHourlyPayroll(pool, options) {
 
   const rateRow = rateRows[0] || {};
   const configuredRate = Number(rateRow.rate || rateRow.base_rate || 0);
-  const monthlySalary = isMonthly ? configuredRate : 0;
+  const monthlySalary = isMonthly ? Number(rateRow.monthly_salary || rateRow.rate || rateRow.base_rate || 0) : 0;
   const dailyRate = isMonthly
-    ? monthlySalary / Math.max(1, Number(policy.daily.working_days_per_month || 26))
-    : isDaily ? configuredRate : 0;
+    ? monthlySalary / Math.max(1, Number(policy.monthly.working_days_per_month || policy.daily.working_days_per_month || 26))
+    : isDaily ? Number(rateRow.daily_rate || rateRow.rate || rateRow.base_rate || 0) : 0;
   const rate = (isDaily || isMonthly)
     ? dailyRate
     : Number(rateRow.hourly_rate || rateRow.rate || rateRow.base_rate || 0);
@@ -895,7 +1023,8 @@ async function validateDailyHourlyPayroll(pool, options) {
     'ats.employee_id = ?',
     'ats.attendance_date BETWEEN ? AND ?',
     "ats.verification_status = 'PAYROLL_READY'",
-    'COALESCE(ats.payroll_eligible, 0) = 1'
+    'COALESCE(ats.payroll_eligible, 0) = 1',
+    'ats.payroll_run_id IS NULL'
   ];
   const attendanceValues = [employeeId, range.start, range.end];
   if (isHourly) {
@@ -921,6 +1050,7 @@ async function validateDailyHourlyPayroll(pool, options) {
        AND (
          ats.verification_status IN ('PENDING_VALIDATION','REJECTED','NEEDS_REVIEW','INCOMPLETE')
          OR COALESCE(ats.payroll_eligible, 0) = 0
+         OR ats.payroll_run_id IS NOT NULL
          OR (? = 'Hourly' AND (al.time_in IS NULL OR al.time_out IS NULL))
        )
      ORDER BY ats.attendance_date
@@ -972,9 +1102,12 @@ async function validateDailyHourlyPayroll(pool, options) {
   if ((isDaily || isMonthly) && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
 
-  const grossPay = (isDaily || isMonthly)
-    ? rate * daysWorked
-    : rate * hoursWorked;
+  const monthlyConversionMethod = isMonthly ? policy.monthly.conversion_method : null;
+  const grossPay = isMonthly && monthlyConversionMethod === 'weekly_from_monthly'
+    ? monthlySalary / 4
+    : (isDaily || isMonthly)
+      ? rate * daysWorked
+      : rate * hoursWorked;
   const result = {
     ok: errors.length === 0,
     errors,
@@ -989,7 +1122,9 @@ async function validateDailyHourlyPayroll(pool, options) {
     daily_rate: Number(((isDaily || isMonthly) ? dailyRate : 0).toFixed(2)),
     hourly_rate: Number((isHourly ? rate : attendanceDeductions.hourly_rate_used).toFixed(2)),
     minute_rate: Number((attendanceDeductions.hourly_rate_used / 60).toFixed(4)),
-    working_days_per_month: isMonthly ? Number(policy.daily.working_days_per_month || 26) : null,
+    monthly_conversion_method: monthlyConversionMethod,
+    weekly_from_monthly_amount: isMonthly ? Number((monthlySalary / 4).toFixed(2)) : null,
+    working_days_per_month: isMonthly ? Number(policy.monthly.working_days_per_month || policy.daily.working_days_per_month || 26) : null,
     active_rate_count: rateRows.length,
     effective_date: rateRow.effective_date || null,
     attendance_count: attendanceRows.length,
@@ -1013,6 +1148,9 @@ async function validateDailyHourlyPayroll(pool, options) {
     validation_status: errors.length ? 'Blocked' : 'Ready',
     policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
     attendance_rows: attendanceRows.map(row => ({
+      id: row.id || row.summary_id,
+      summary_id: row.summary_id,
+      attendance_id: row.attendance_id,
       attendance_date: row.attendance_date,
       attendance_status: row.attendance_status,
       verification_status: row.verification_status,
@@ -1150,6 +1288,29 @@ async function ensurePieceRatePayrollSchema(pool) {
 
   await ensureColumn('salary_calculations', 'agency_name', 'VARCHAR(180) NULL AFTER payroll_period');
   await ensureColumn('salary_calculations', 'validation_snapshot', 'LONGTEXT NULL AFTER agency_name');
+  await ensureColumn('salary_calculations', 'payroll_run_id', 'INT NULL AFTER wage_type_id');
+  await ensureColumn('salary_calculations', 'period_start', 'DATE NULL AFTER payroll_period');
+  await ensureColumn('salary_calculations', 'period_end', 'DATE NULL AFTER period_start');
+  await ensureColumn('salary_calculations', 'source_type', 'VARCHAR(40) NULL AFTER validation_snapshot');
+  await ensureColumn('salary_calculations', 'source_record_ids', 'TEXT NULL AFTER source_type');
+  await ensureColumn('salary_calculations', 'employee_deduction_total', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  try { await pool.execute('ALTER TABLE salary_calculations MODIFY COLUMN payroll_period VARCHAR(20) NULL'); } catch (_) {}
+  await ensureColumn('payslips', 'salary_calculation_id', 'INT NULL AFTER payroll_run_id');
+  await ensureColumn('payslips', 'payroll_period', 'VARCHAR(20) NULL AFTER wage_type_id');
+  await ensureColumn('payslips', 'source_summary', 'TEXT NULL AFTER notes');
+  await ensureColumn('payroll_runs', 'period_label', 'VARCHAR(80) NULL AFTER month_year');
+  await ensureColumn('payroll_runs', 'payroll_type', 'VARCHAR(40) NULL AFTER end_date');
+  await ensureColumn('payroll_runs', 'processed_by', 'INT NULL AFTER created_by');
+  await ensureColumn('payroll_runs', 'processed_at', 'DATETIME NULL AFTER processed_by');
+  await ensureColumn('payroll_runs', 'source_summary', 'TEXT NULL AFTER processed_at');
+  await ensureColumn('employee_wage_rates', 'monthly_salary', 'DECIMAL(12,2) NULL AFTER base_rate');
+  await ensureColumn('employee_wage_rates', 'daily_rate', 'DECIMAL(12,2) NULL AFTER monthly_salary');
+  await ensureColumn('employee_wage_rates', 'default_role', 'VARCHAR(60) NULL AFTER logistics_region_id');
+  await ensureColumn('employees', 'default_payroll_role', 'VARCHAR(60) NULL AFTER wage_type_id');
+  if (await payrollTableExists(pool, 'attendance_summary')) {
+    await ensureColumn('attendance_summary', 'payroll_run_id', 'INT NULL AFTER payroll_eligible');
+    await ensureColumn('attendance_summary', 'paid_at', 'DATETIME NULL AFTER payroll_run_id');
+  }
   await ensureColumn('logistics_transactions', 'truck_type', 'VARCHAR(80) NULL AFTER logistics_region_id');
   await ensureColumn('logistics_transactions', 'crew_status', "ENUM('Complete','Incomplete') NULL AFTER truck_type");
   await ensureColumn('logistics_transactions', 'crew_role', "ENUM('Driver','Helper 1','Helper 2') NULL AFTER crew_status");
@@ -1190,7 +1351,9 @@ async function ensurePieceRatePayrollSchema(pool) {
     ['hourly_maximum_regular_hours', '8', 'Hourly Rules', 'Maximum regular payable hours per day.'],
     ['hourly_round_off_rule', 'none', 'Hourly Rules', 'Round off rule: none, nearest_quarter, nearest_half.'],
     ['hourly_require_hr_validation', 'true', 'Hourly Rules', 'Hourly payroll requires HR validation.'],
-    ['hourly_require_payroll_ready_attendance', 'true', 'Hourly Rules', 'Hourly payroll requires payroll-ready attendance.']
+    ['hourly_require_payroll_ready_attendance', 'true', 'Hourly Rules', 'Hourly payroll requires payroll-ready attendance.'],
+    ['monthly_conversion_method', 'weekly_from_monthly', 'Monthly Rules', 'Monthly conversion: weekly_from_monthly or daily_equivalent.'],
+    ['monthly_working_days_per_month', '26', 'Monthly Rules', 'Working days per month for daily-equivalent monthly payroll.']
   ];
   for (const row of policyDefaults) {
     await pool.execute(`
@@ -1198,6 +1361,22 @@ async function ensurePieceRatePayrollSchema(pool) {
       SELECT ?, ?, ?, ?
        WHERE NOT EXISTS (SELECT 1 FROM payroll_policy_settings WHERE setting_key = ?)
     `, [...row, row[0]]);
+  }
+
+  const wageTypeDefaults = [
+    ['Monthly', 'Monthly salary converted for weekly payroll'],
+    ['Daily', 'Daily rate based on approved days worked'],
+    ['Hourly', 'Hourly rate based on approved hours worked'],
+    ['Piece Rate', 'Production output-based payroll'],
+    ['Logistics', 'Delivery trip/output-based payroll'],
+    ['Trip-Based', 'Logistics: paid from approved delivery trips']
+  ];
+  for (const row of wageTypeDefaults) {
+    await pool.execute(`
+      INSERT INTO wage_types (name, description)
+      SELECT ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM wage_types WHERE LOWER(name) = LOWER(?))
+    `, [row[0], row[1], row[0]]);
   }
 
   await pool.execute(`
@@ -1392,8 +1571,25 @@ async function ensurePieceRatePayrollSchema(pool) {
 
   await ensureColumn('payroll_production_outputs', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
   await ensureColumn('payroll_production_outputs', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
+  await ensureColumn('payroll_production_outputs', 'remarks', 'VARCHAR(255) NULL AFTER final_gross_pay');
+  await ensureColumn('payroll_production_outputs', 'status', "VARCHAR(30) NOT NULL DEFAULT 'Approved' AFTER remarks");
+  await ensureColumn('payroll_production_outputs', 'payroll_run_id', 'INT NULL AFTER status');
+  await ensureColumn('payroll_production_outputs', 'approved_by', 'INT NULL AFTER payroll_run_id');
+  await ensureColumn('payroll_production_outputs', 'approved_at', 'DATETIME NULL AFTER approved_by');
+  await ensureColumn('payroll_production_outputs', 'paid_at', 'DATETIME NULL AFTER approved_at');
+  await ensureColumn('payroll_production_outputs', 'updated_by', 'INT NULL AFTER paid_at');
   await ensureColumn('payroll_production_pairs', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
   await ensureColumn('payroll_production_pairs', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
+  await ensureColumn('payroll_production_pairs', 'status', "VARCHAR(30) NOT NULL DEFAULT 'Approved' AFTER rule_snapshot");
+  await ensureColumn('payroll_production_pairs', 'payroll_run_id', 'INT NULL AFTER status');
+  await ensureColumn('payroll_production_pairs', 'approved_by', 'INT NULL AFTER payroll_run_id');
+  await ensureColumn('payroll_production_pairs', 'approved_at', 'DATETIME NULL AFTER approved_by');
+  await ensureColumn('payroll_production_pairs', 'paid_at', 'DATETIME NULL AFTER approved_at');
+  await ensureColumn('payroll_production_pairs', 'updated_by', 'INT NULL AFTER paid_at');
+  if (await payrollTableExists(pool, 'delivery_trips')) {
+    await ensureColumn('delivery_trips', 'output_quantity', 'DECIMAL(10,2) NOT NULL DEFAULT 1 AFTER plate_number');
+    await ensureColumn('delivery_trips', 'paid_at', 'DATETIME NULL AFTER approved_at');
+  }
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS payroll_piece_incentive_entries (
@@ -1707,6 +1903,208 @@ async function computePieceRatePayroll(pool, input) {
     output_date: outputDate,
     config_snapshot: { rate, share, quota: quota || null, sunday: sunday || null, special: special || null }
   };
+}
+
+async function getApprovedPieceRatePayroll(pool, employeeId, period) {
+  await ensurePieceRatePayrollSchema(pool);
+  const [outputs] = await pool.execute(`
+    SELECT id, output_date, payroll_period, product_type, product_category, sew_type_code, size_range,
+           worker_category, quantity_produced, piece_rate, production_value, share_percentage,
+           quota_incentive, sunday_incentive, special_incentive, final_gross_pay
+      FROM payroll_production_outputs
+     WHERE employee_id = ?
+       AND output_date BETWEEN ? AND ?
+       AND status = 'Approved'
+       AND payroll_run_id IS NULL
+     ORDER BY output_date, id
+  `, [employeeId, period.start, period.end]);
+
+  const [pairs] = await pool.execute(`
+    SELECT id, production_date, payroll_period, pairing_type, product_type, product_category,
+           sew_type_code, size_range, quantity_produced, piece_rate, production_value,
+           worker1_employee_id, worker2_employee_id, worker1_share, worker2_share,
+           worker1_earnings, worker2_earnings
+      FROM payroll_production_pairs
+     WHERE (worker1_employee_id = ? OR worker2_employee_id = ?)
+       AND production_date BETWEEN ? AND ?
+       AND status = 'Approved'
+       AND payroll_run_id IS NULL
+     ORDER BY production_date, id
+  `, [employeeId, employeeId, period.start, period.end]);
+
+  const directRecords = outputs.map(row => ({
+    id: row.id,
+    source: 'output',
+    date: row.output_date,
+    role: row.worker_category,
+    quantity: numeric(row.quantity_produced),
+    piece_rate: numeric(row.piece_rate),
+    gross_pay: numeric(row.final_gross_pay),
+    details: row
+  }));
+  const pairRecords = pairs.map(row => {
+    const isWorker1 = Number(row.worker1_employee_id) === Number(employeeId);
+    return {
+      id: row.id,
+      source: 'pair',
+      date: row.production_date,
+      role: isWorker1 ? 'Sewer' : 'Fixer',
+      quantity: numeric(row.quantity_produced),
+      piece_rate: numeric(row.piece_rate),
+      gross_pay: numeric(isWorker1 ? row.worker1_earnings : row.worker2_earnings),
+      share_percentage: numeric(isWorker1 ? row.worker1_share : row.worker2_share),
+      details: row
+    };
+  });
+  const records = [...directRecords, ...pairRecords];
+  const total = roundMoney(records.reduce((sum, row) => sum + numeric(row.gross_pay), 0));
+  const quantity = records.reduce((sum, row) => sum + numeric(row.quantity), 0);
+  const productionValue = records.reduce((sum, row) => sum + numeric(row.quantity) * numeric(row.piece_rate), 0);
+  return {
+    outputs,
+    pairs,
+    records,
+    total,
+    quantity,
+    average_rate: quantity > 0 ? roundMoney(productionValue / quantity) : 0
+  };
+}
+
+function deductionBreakdown(applied = []) {
+  const result = { sss: 0, pagibig: 0, philhealth: 0 };
+  for (const item of applied) {
+    const name = String(item.name || item.deduction_name || item.category || '').toLowerCase();
+    const amount = numeric(item.amount);
+    if (name.includes('sss')) result.sss += amount;
+    else if (name.includes('pag') || name.includes('hdmf')) result.pagibig += amount;
+    else if (name.includes('phil') || name.includes('phic')) result.philhealth += amount;
+  }
+  return result;
+}
+
+function summarizePayrollSource(snapshot = {}) {
+  const wageType = normalizePayrollWageType(snapshot.wage_type || snapshot.pay_type);
+  if (wageType === 'Monthly') {
+    return `${snapshot.monthly_conversion_method === 'daily_equivalent'
+      ? `${numeric(snapshot.monthly_salary).toFixed(2)} / ${snapshot.working_days_per_month || 26} × ${snapshot.days_worked || 0} day(s)`
+      : `${numeric(snapshot.monthly_salary).toFixed(2)} / 4 weekly conversion`}`;
+  }
+  if (wageType === 'Daily') return `${snapshot.days_worked || 0} approved day(s) × ${peso(snapshot.daily_rate || snapshot.base_rate)}`;
+  if (wageType === 'Hourly') return `${snapshot.hours_worked || 0} approved hour(s) × ${peso(snapshot.hourly_rate || snapshot.base_rate)}`;
+  if (wageType === 'Per-Piece') return `${snapshot.output_quantity || snapshot.quantity || 0} approved piece/output qty`;
+  if (wageType === 'Per-Trip') return `${snapshot.trip_count || 0} approved trip output(s)`;
+  return 'Payroll source details';
+}
+
+async function createSalaryCalculationRecord(pool, req, input) {
+  const deductions = deductionBreakdown(input.deductions?.applied || []);
+  const snapshot = {
+    ...input.snapshot,
+    wage_type: input.wage_type,
+    pay_type: input.wage_type,
+    period_start: input.period.start,
+    period_end: input.period.end,
+    total_allowances: input.allowances?.total || 0,
+    deductions: input.deductions?.applied || []
+  };
+  const sourceRecordIds = JSON.stringify(input.source_record_ids || []);
+  const validationSnapshot = JSON.stringify(snapshot);
+  const [result] = await pool.execute(`
+    INSERT INTO salary_calculations (
+      employee_id, wage_type_id, payroll_run_id, base_rate, quantity,
+      housing_allowance, meal_allowance, transport_allowance, bonus_allowance, total_allowances,
+      overtime_hours, overtime_amount, gross_pay,
+      sss_deduction, pagibig_deduction, philhealth_deduction, total_deductions,
+      net_pay, calculation_date, notes, status, hours_worked, days_worked, daily_rate, hourly_rate,
+      payroll_period, period_start, period_end, agency_name, validation_snapshot,
+      source_type, source_record_ids, calculated_by, submitted_at, employee_deduction_total
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+  `, [
+    input.employee_id,
+    input.wage_type_id,
+    input.payroll_run_id,
+    roundMoney(input.base_rate),
+    numeric(input.quantity),
+    0,
+    0,
+    0,
+    0,
+    roundMoney(input.allowances?.total || 0),
+    numeric(input.overtime_hours),
+    roundMoney(input.overtime_amount),
+    roundMoney(input.gross_pay),
+    roundMoney(deductions.sss),
+    roundMoney(deductions.pagibig),
+    roundMoney(deductions.philhealth),
+    roundMoney(input.total_deductions),
+    roundMoney(input.net_pay),
+    input.period.end,
+    summarizePayrollSource(snapshot),
+    numeric(input.hours_worked),
+    numeric(input.days_worked),
+    roundMoney(input.daily_rate),
+    roundMoney(input.hourly_rate),
+    input.period.month_year,
+    input.period.start,
+    input.period.end,
+    input.agency_name || null,
+    validationSnapshot,
+    input.source_type,
+    sourceRecordIds,
+    currentUserId(req),
+    roundMoney(input.deductions?.employeeTotal || 0)
+  ]);
+  return result.insertId;
+}
+
+async function markAttendanceRowsPaid(pool, attendanceRows, payrollRunId) {
+  const ids = attendanceRows.map(row => row.summary_id || row.id).filter(Boolean);
+  if (!ids.length) return;
+  const columns = await payrollTableColumns(pool, 'attendance_summary');
+  const keyColumn = columns.has('summary_id') ? 'summary_id' : columns.has('id') ? 'id' : null;
+  if (!keyColumn) return;
+  await pool.execute(`
+    UPDATE attendance_summary
+       SET payroll_run_id = ?, paid_at = NOW()
+     WHERE ${keyColumn} IN (${ids.map(() => '?').join(', ')})
+       AND payroll_run_id IS NULL
+  `, [payrollRunId, ...ids]);
+}
+
+async function markPieceRecordsPaid(pool, piecePayroll, payrollRunId, userId) {
+  const outputIds = piecePayroll.outputs.map(row => row.id);
+  if (outputIds.length) {
+    await pool.execute(`
+      UPDATE payroll_production_outputs
+         SET status = 'Paid', payroll_run_id = ?, paid_at = NOW(), updated_by = ?
+       WHERE id IN (${outputIds.map(() => '?').join(', ')})
+         AND status = 'Approved'
+         AND payroll_run_id IS NULL
+    `, [payrollRunId, userId, ...outputIds]);
+  }
+  const pairIds = piecePayroll.pairs.map(row => row.id);
+  if (pairIds.length) {
+    await pool.execute(`
+      UPDATE payroll_production_pairs
+         SET status = 'Paid', payroll_run_id = ?, paid_at = NOW(), updated_by = ?
+       WHERE id IN (${pairIds.map(() => '?').join(', ')})
+         AND status = 'Approved'
+         AND payroll_run_id IS NULL
+    `, [payrollRunId, userId, ...pairIds]);
+  }
+}
+
+async function markDeliveryTripsPaid(pool, trips, payrollRunId, userId) {
+  const ids = trips.map(row => row.id).filter(Boolean);
+  if (!ids.length) return;
+  await pool.execute(`
+    UPDATE delivery_trips
+       SET status = 'Paid', payroll_run_id = ?, paid_at = NOW(), updated_by = ?
+     WHERE id IN (${ids.map(() => '?').join(', ')})
+       AND status = 'Approved'
+       AND payroll_run_id IS NULL
+  `, [payrollRunId, userId, ...ids]);
 }
 
 // Get all wage types
@@ -2212,6 +2610,7 @@ async function logisticsTripPayload(pool, body) {
   const tripDate = logisticsDate(body.trip_date, 'Trip date');
   const tripType = normalizeTripType(body.trip_type);
   const role = normalizeTripRole(body.role);
+  const outputQuantity = Math.max(1, numeric(body.output_quantity || 1));
   const plateNumber = logisticsText(body.plate_number, 'Plate number', 30);
   if (plateNumber && !/^[A-Za-z0-9 -]+$/.test(plateNumber)) throw new Error('Plate number may contain letters, numbers, spaces, and hyphens only.');
   const [employees] = await pool.execute(`
@@ -2233,7 +2632,9 @@ async function logisticsTripPayload(pool, body) {
     baseRate: logisticsMoney(rate.base_rate, 'Base rate'),
     additionalRate: logisticsMoney(rate.additional_rate, 'Additional rate'),
     multiplier: Number(rate.multiplier),
-    totalTripPay: computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }),
+    outputQuantity,
+    unitTripPay: computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }),
+    totalTripPay: roundMoney(computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }) * outputQuantity),
     specialRuleDescription: rate.special_rule_description || null,
     employeeCode: employee.employee_code
   };
@@ -2279,11 +2680,11 @@ router.post('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
     const [result] = await pool.execute(`
       INSERT INTO delivery_trips
         (employee_id, truck_type_id, location_id, logistics_rate_id, trip_date, trip_type, role, plate_number,
-         base_rate, additional_rate, multiplier, total_trip_pay, special_rule_description, status,
+         output_quantity, base_rate, additional_rate, multiplier, total_trip_pay, special_rule_description, status,
          submitted_by, submitted_at, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [trip.employeeId, trip.truckTypeId, trip.locationId, trip.rateId, trip.tripDate, trip.tripType, trip.role, trip.plateNumber,
-      trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, submitNow ? 'Submitted' : 'Draft',
+      trip.outputQuantity, trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, submitNow ? 'Submitted' : 'Draft',
       submitNow ? currentUserId(req) : null, submitNow ? new Date() : null, currentUserId(req), currentUserId(req)]);
     await logPayrollAudit(pool, req, submitNow ? 'delivery_trip_submitted' : 'delivery_trip_drafted', {
       employee_id: trip.employeeId,
@@ -2311,10 +2712,10 @@ router.put('/logistics/trips/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMI
     await pool.execute(`
       UPDATE delivery_trips
          SET employee_id = ?, truck_type_id = ?, location_id = ?, logistics_rate_id = ?, trip_date = ?, trip_type = ?, role = ?, plate_number = ?,
-             base_rate = ?, additional_rate = ?, multiplier = ?, total_trip_pay = ?, special_rule_description = ?, updated_by = ?
+             output_quantity = ?, base_rate = ?, additional_rate = ?, multiplier = ?, total_trip_pay = ?, special_rule_description = ?, updated_by = ?
        WHERE id = ?
     `, [trip.employeeId, trip.truckTypeId, trip.locationId, trip.rateId, trip.tripDate, trip.tripType, trip.role, trip.plateNumber,
-      trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, currentUserId(req), id]);
+      trip.outputQuantity, trip.baseRate, trip.additionalRate, trip.multiplier, trip.totalTripPay, trip.specialRuleDescription, currentUserId(req), id]);
     await logPayrollAudit(pool, req, 'delivery_trip_updated', { employee_id: trip.employeeId, remarks: `Updated delivery trip ${id}`, metadata: { delivery_trip_id: id, old_value: oldTrip, new_value: trip } });
     res.json({ total_trip_pay: trip.totalTripPay, message: 'Delivery trip updated.' });
   } catch (err) {
@@ -2409,7 +2810,7 @@ router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP
              COUNT(*) AS approved_trip_count, COALESCE(SUM(dt.total_trip_pay), 0) AS total_logistics_pay
         FROM delivery_trips dt
         JOIN employees e ON e.id = dt.employee_id
-       WHERE dt.status IN ('Approved', 'Included in Payroll')
+       WHERE dt.status IN ('Approved', 'Included in Payroll', 'Paid')
          AND dt.trip_date BETWEEN ? AND ?
        GROUP BY dt.employee_id, e.employee_code, e.last_name, e.first_name, e.position
        ORDER BY e.last_name, e.first_name
@@ -3653,9 +4054,10 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
       return Number(Object.values(rows[0] || { value: 0 })[0] || 0);
     };
 
+    const runFilter = periodFilterSql('month_year', period.month_year);
     const [runRows] = await pool.execute(
-      'SELECT * FROM payroll_runs WHERE month_year = ? ORDER BY id DESC LIMIT 1',
-      [period.month_year]
+      `SELECT * FROM payroll_runs WHERE ${runFilter.sql} ORDER BY start_date DESC, id DESC LIMIT 1`,
+      runFilter.params
     );
     const payrollRun = runRows[0] || null;
     const activeEmployeeWhere = await employeeActiveCondition(pool);
@@ -3685,19 +4087,21 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
       [period.start, period.end]
     );
     const missingAttendanceRecords = Math.max(0, totalEmployees - employeesWithAnyAttendance);
+    const calcPeriodColumn = 'COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, \'%Y-%m\'))';
+    const calcPeriodFilter = periodFilterSql(calcPeriodColumn, period.month_year);
     const draftPayrolls = await scalar(
       `SELECT COUNT(*) AS value
          FROM salary_calculations sc
-        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+        WHERE ${calcPeriodFilter.sql}
           AND sc.status = 'Draft'`,
-      [period.month_year]
+      calcPeriodFilter.params
     );
     const submittedPayrolls = await scalar(
       `SELECT COUNT(*) AS value
          FROM salary_calculations sc
-        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+        WHERE ${calcPeriodFilter.sql}
           AND sc.status = 'Submitted'`,
-      [period.month_year]
+      calcPeriodFilter.params
     );
 
     const [estimateRows] = await pool.execute(
@@ -3705,9 +4109,9 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
               COALESCE(SUM(sc.total_deductions), 0) AS deductions,
               COALESCE(SUM(sc.net_pay), 0) AS net
          FROM salary_calculations sc
-        WHERE COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) = ?
+        WHERE ${calcPeriodFilter.sql}
           ${salaryStatusSql}`,
-      [period.month_year, ...statusParams]
+      [...calcPeriodFilter.params, ...statusParams]
     );
     const estimate = estimateRows[0] || {};
 
@@ -3721,11 +4125,11 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
          JOIN employees e ON e.id = ps.employee_id
          LEFT JOIN departments d ON d.id = e.department_id
          LEFT JOIN wage_types w ON w.id = ps.wage_type_id
-        WHERE pr.month_year = ?
+        WHERE ${periodFilterSql('pr.month_year', period.month_year).sql}
           ${payslipStatusSql}
         ORDER BY ps.created_at DESC, ps.id DESC
         LIMIT 15`,
-      [period.month_year, ...statusParams]
+      [...periodFilterSql('pr.month_year', period.month_year).params, ...statusParams]
     );
 
     res.json({
@@ -3756,43 +4160,226 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
   }
 });
 
-// Generate payroll for a month
-router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+async function buildWeeklyPayrollRegistry(pool, query = {}) {
+  await ensurePieceRatePayrollSchema(pool);
+  const params = [];
+  const where = ['1 = 1'];
+  if (query.payroll_run_id) {
+    where.push('pr.id = ?');
+    params.push(Number(query.payroll_run_id));
+  } else if (query.month_year) {
+    const filter = periodFilterSql('pr.month_year', query.month_year);
+    where.push(filter.sql);
+    params.push(...filter.params);
+  }
+  if (query.department) {
+    where.push('d.name = ?');
+    params.push(String(query.department).trim());
+  }
+  if (query.employee) {
+    where.push('(CONCAT(e.first_name, " ", e.last_name) LIKE ? OR e.employee_code LIKE ?)');
+    params.push(`%${query.employee}%`, `%${query.employee}%`);
+  }
+  if (query.pay_type || query.wage_type) {
+    const pattern = payrollTypePattern(query.pay_type || query.wage_type);
+    if (pattern) {
+      if (normalizePayrollWageType(query.pay_type || query.wage_type) === 'Per-Trip') {
+        where.push('(LOWER(w.name) LIKE ? OR LOWER(w.name) LIKE ?)');
+        params.push('%trip%', '%logistics%');
+      } else {
+        where.push('LOWER(w.name) LIKE ?');
+        params.push(pattern);
+      }
+    }
+  }
+
+  const [rows] = await pool.execute(`
+    SELECT pr.id AS payroll_run_id,
+           pr.month_year,
+           pr.period_label,
+           pr.start_date,
+           pr.end_date,
+           pr.status AS payroll_run_status,
+           pr.created_at AS date_processed,
+           processor.username AS processed_by,
+           ps.id AS payslip_id,
+           ps.status AS payroll_status,
+           ps.total_earning,
+           ps.total_deduction,
+           ps.net_pay,
+           sc.id AS salary_calculation_id,
+           sc.days_worked,
+           sc.hours_worked,
+           sc.quantity,
+           sc.total_allowances,
+           sc.bonus_allowance,
+           sc.validation_snapshot,
+           e.id AS employee_id,
+           e.employee_code,
+           CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+           d.name AS department,
+           w.name AS wage_type
+      FROM payslips ps
+      JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
+      JOIN employees e ON e.id = ps.employee_id
+      LEFT JOIN departments d ON d.id = e.department_id
+      LEFT JOIN wage_types w ON w.id = ps.wage_type_id
+      LEFT JOIN users processor ON processor.id = COALESCE(pr.processed_by, pr.created_by)
+      LEFT JOIN salary_calculations sc
+        ON sc.id = ps.salary_calculation_id
+        OR (sc.payroll_run_id = pr.id AND sc.employee_id = ps.employee_id)
+     WHERE ${where.join(' AND ')}
+     ORDER BY pr.start_date DESC, pr.id DESC, d.name, e.last_name, e.first_name
+     LIMIT 1000
+  `, params);
+
+  const registry = rows.map(row => {
+    const snapshot = parseJsonSafe(row.validation_snapshot);
+    const payType = normalizePayrollWageType(row.wage_type || snapshot.wage_type);
+    return {
+      payroll_run_id: row.payroll_run_id,
+      salary_calculation_id: row.salary_calculation_id,
+      payslip_id: row.payslip_id,
+      employee_id: row.employee_id,
+      employee_code: row.employee_code,
+      employee_name: row.employee_name,
+      department: row.department || '-',
+      pay_type: payType,
+      payroll_period: row.period_label || `${String(row.start_date).slice(0, 10)} to ${String(row.end_date).slice(0, 10)}`,
+      approved_days_worked: numeric(row.days_worked) || numeric(snapshot.days_worked),
+      approved_hours_worked: numeric(row.hours_worked) || numeric(snapshot.hours_worked),
+      approved_output_quantity: payType === 'Per-Piece' ? numeric(row.quantity) || numeric(snapshot.output_quantity || snapshot.quantity) : 0,
+      approved_logistics_trips: payType === 'Per-Trip' ? numeric(snapshot.trip_count || row.quantity) : 0,
+      gross_pay: numeric(row.total_earning),
+      allowances: numeric(row.total_allowances),
+      bonuses: numeric(row.bonus_allowance),
+      deductions: numeric(row.total_deduction),
+      net_pay: numeric(row.net_pay),
+      payroll_status: row.payroll_status || row.payroll_run_status,
+      processed_by: row.processed_by || '-',
+      date_processed: row.date_processed
+    };
+  });
+
+  return {
+    rows: registry,
+    totals: {
+      employees: registry.length,
+      gross_pay: roundMoney(registry.reduce((sum, row) => sum + numeric(row.gross_pay), 0)),
+      allowances: roundMoney(registry.reduce((sum, row) => sum + numeric(row.allowances), 0)),
+      deductions: roundMoney(registry.reduce((sum, row) => sum + numeric(row.deductions), 0)),
+      net_pay: roundMoney(registry.reduce((sum, row) => sum + numeric(row.net_pay), 0))
+    }
+  };
+}
+
+router.get('/registry', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const pool = require('../config/db');
-    await ensurePieceRatePayrollSchema(pool);
-    const requestedPeriod = monthRange(req.body.month_year);
+    const registry = await buildWeeklyPayrollRegistry(pool, req.query);
+    res.json(registry);
+  } catch (err) {
+    console.error('Error loading weekly payroll registry:', err);
+    res.status(500).json({ error: 'Failed to load weekly payroll registry.' });
+  }
+});
+
+router.get('/filter-options', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const activeEmployeeWhere = await employeeActiveCondition(pool, 'e');
+    const [departments] = await pool.execute(`
+      SELECT DISTINCT d.id, d.name
+        FROM employees e
+        JOIN departments d ON d.id = e.department_id
+       WHERE ${activeEmployeeWhere}
+       ORDER BY d.name
+    `);
+    const [wageTypes] = await pool.execute('SELECT id, name FROM wage_types ORDER BY name');
+    res.json({
+      departments,
+      pay_types: wageTypes.map(row => ({ id: row.id, name: row.name, normalized: normalizePayrollWageType(row.name) }))
+    });
+  } catch (err) {
+    console.error('Error loading payroll filter options:', err);
+    res.status(500).json({ error: 'Failed to load payroll filter options.' });
+  }
+});
+
+// Generate weekly/monthly payroll by employee pay type.
+router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  const pool = require('../config/db');
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await ensurePieceRatePayrollSchema(connection);
+    const payTypeFilter = String(req.body.pay_type || req.body.payroll_type || '').trim();
     const period = {
-      month_year: requestedPeriod.month_year,
-      start: req.body.start_date || requestedPeriod.start,
-      end: req.body.end_date || requestedPeriod.end
+      ...payrollPeriodFromRequest(req.body),
+      payroll_type: payTypeFilter ? normalizePayrollWageType(payTypeFilter) : 'All Pay Types',
+      filters: {
+        employee_id: req.body.employee_id || null,
+        department_id: req.body.department_id || null,
+        department: req.body.department || null,
+        pay_type: payTypeFilter || null
+      }
     };
 
     if (!period.month_year || !period.start || !period.end) {
-      return res.status(400).json({ error: 'Payroll period, start date, and end date are required.' });
-    }
-    if (period.start > period.end) {
-      return res.status(400).json({ error: 'Period start must be before or equal to period end.' });
+      throw new Error('Payroll period, start date, and end date are required.');
     }
 
-    const payrollRun = await findOrCreatePayrollRun(pool, req, period);
+    const payrollRun = await findOrCreatePayrollRun(connection, req, period);
     const payrollRunId = payrollRun.id;
-    const activeEmployeeWhere = await employeeActiveCondition(pool, 'e');
-    const [employees] = await pool.execute(`
-      SELECT e.id, e.wage_type_id, w.name AS wage_type
+    const activeEmployeeWhere = await employeeActiveCondition(connection, 'e');
+    const employeeWhere = [activeEmployeeWhere];
+    const employeeParams = [];
+    if (req.body.employee_id) {
+      employeeWhere.push('e.id = ?');
+      employeeParams.push(Number(req.body.employee_id));
+    }
+    if (req.body.employee_code) {
+      employeeWhere.push('e.employee_code = ?');
+      employeeParams.push(String(req.body.employee_code).trim());
+    }
+    if (req.body.department_id) {
+      employeeWhere.push('e.department_id = ?');
+      employeeParams.push(Number(req.body.department_id));
+    }
+    if (req.body.department) {
+      employeeWhere.push('d.name = ?');
+      employeeParams.push(String(req.body.department).trim());
+    }
+    const payTypeLike = payrollTypePattern(payTypeFilter);
+    if (payTypeLike) {
+      if (normalizePayrollWageType(payTypeFilter) === 'Per-Trip') {
+        employeeWhere.push('(LOWER(w.name) LIKE ? OR LOWER(w.name) LIKE ?)');
+        employeeParams.push('%trip%', '%logistics%');
+      } else {
+        employeeWhere.push('LOWER(w.name) LIKE ?');
+        employeeParams.push(payTypeLike);
+      }
+    }
+
+    const [employees] = await connection.execute(`
+      SELECT e.id, e.employee_code, e.first_name, e.last_name, e.position, e.department_id,
+             COALESCE(NULLIF(e.agency_name, ''), NULL) AS agency_name,
+             e.wage_type_id, w.name AS wage_type, d.name AS department
       FROM employees e
       LEFT JOIN wage_types w ON w.id = e.wage_type_id
-      WHERE ${activeEmployeeWhere}
+      LEFT JOIN departments d ON d.id = e.department_id
+      WHERE ${employeeWhere.join(' AND ')}
       ORDER BY e.employee_code, e.id
-    `);
+    `, employeeParams);
 
     let processedCount = 0;
     let skippedCount = 0;
     const skipped = [];
+    const registry = [];
 
     for (const emp of employees) {
       try {
-        const [duplicate] = await pool.execute(
+        const [duplicate] = await connection.execute(
           'SELECT id FROM payslips WHERE payroll_run_id = ? AND employee_id = ? LIMIT 1',
           [payrollRunId, emp.id]
         );
@@ -3802,39 +4389,34 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
           continue;
         }
 
-        const tripBasedEmployee = isTripBasedWageType(emp.wage_type);
-        let calculationRows = [];
-        if (!tripBasedEmployee) {
-          const [rows] = await pool.execute(`
-            SELECT *
-            FROM salary_calculations
-            WHERE employee_id = ?
-              AND COALESCE(payroll_period, DATE_FORMAT(calculation_date, '%Y-%m')) = ?
-              AND status IN ('Submitted','Approved','Released','Paid')
-            ORDER BY FIELD(status, 'Approved','Released','Paid','Submitted'), updated_at DESC, id DESC
-            LIMIT 1
-          `, [emp.id, period.month_year]);
-          calculationRows = rows;
-        }
-
+        const normalizedWageType = normalizePayrollWageType(emp.wage_type);
         let totalEarning = 0;
         let totalDeduction = 0;
         let netPay = 0;
         let salaryCalculationId = null;
         let employeeDeductions = [];
-        let approvedDeliveryTrips = [];
+        let sourceType = '';
+        let sourceRecordIds = [];
+        let quantity = 0;
+        let baseRate = 0;
+        let daysWorked = 0;
+        let hoursWorked = 0;
+        let overtimeHours = 0;
+        let overtimePay = 0;
+        let dailyRate = 0;
+        let hourlyRate = 0;
+        let allowances = { total: 0, applied: [] };
+        let payrollDeductions = { total: 0, employeeTotal: 0, employee: [], applied: [] };
+        let snapshot = {};
+        let finalizeSourceRecords = async () => {};
 
-        if (calculationRows.length) {
-          const calc = calculationRows[0];
-          salaryCalculationId = calc.id;
-          totalEarning = numeric(calc.gross_pay);
-          totalDeduction = numeric(calc.total_deductions);
-          netPay = numeric(calc.net_pay);
-        } else if (['Daily', 'Hourly', 'Monthly'].includes(normalizePayrollWageType(emp.wage_type))) {
-          const validation = await validateDailyHourlyPayroll(pool, {
+        if (['Daily', 'Hourly', 'Monthly'].includes(normalizedWageType)) {
+          const validation = await validateDailyHourlyPayroll(connection, {
             employee_id: emp.id,
             payroll_period: period.month_year,
             calculation_date: period.end,
+            start_date: period.start,
+            end_date: period.end,
             wage_type: emp.wage_type
           });
           if (!validation.ok) {
@@ -3843,67 +4425,172 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
             continue;
           }
 
-          const overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
+          overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
           const baseGross = numeric(validation.gross_pay) + overtimePay;
-          const allowances = await computeConfiguredAllowances(pool, baseGross, period.end);
+          allowances = await computeConfiguredAllowances(connection, baseGross, period.end);
           const grossWithAllowances = baseGross + allowances.total;
-          const payrollDeductions = await computePayrollDeductions(pool, emp.id, grossWithAllowances, period.end);
+          payrollDeductions = await computePayrollDeductions(connection, emp.id, grossWithAllowances, period.end);
           totalEarning = grossWithAllowances;
           totalDeduction = payrollDeductions.total + numeric(validation.tardy_ut_deduction);
           netPay = totalEarning - totalDeduction;
           employeeDeductions = payrollDeductions.employee;
-        } else if (emp.wage_type === 'Per-Piece') {
-          const [prods] = await pool.execute(`
-            SELECT COALESCE(SUM(amount), 0) AS total
-            FROM production_transactions
-            WHERE employee_id = ? AND month_year = ?
-          `, [emp.id, period.month_year]);
-          totalEarning = numeric(prods[0]?.total);
-        } else if (tripBasedEmployee) {
-          await assertLogisticsTripSchema(pool);
-          const approvedTrips = await getApprovedDeliveryTripPayroll(pool, emp.id, period);
+          sourceType = 'attendance';
+          sourceRecordIds = sourceIdList(validation.attendance_rows || [], 'attendance:');
+          quantity = normalizedWageType === 'Hourly' ? validation.hours_worked : validation.days_worked;
+          baseRate = normalizedWageType === 'Monthly' ? validation.monthly_salary : validation.rate;
+          daysWorked = validation.days_worked;
+          hoursWorked = validation.hours_worked;
+          overtimeHours = validation.overtime_hours;
+          dailyRate = validation.daily_rate;
+          hourlyRate = validation.hourly_rate;
+          snapshot = {
+            ...validation,
+            monthly_salary: validation.monthly_salary,
+            base_rate: baseRate,
+            attendance_rows: validation.attendance_rows,
+            allowances: allowances.applied
+          };
+          finalizeSourceRecords = async () => markAttendanceRowsPaid(connection, validation.attendance_rows || [], payrollRunId);
+        } else if (normalizedWageType === 'Per-Piece') {
+          const piecePayroll = await getApprovedPieceRatePayroll(connection, emp.id, period);
+          if (!piecePayroll.records.length) {
+            skippedCount++;
+            skipped.push({ employee_id: emp.id, reason: 'No approved unpaid piece-rate output exists for this payroll period.' });
+            continue;
+          }
+          allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
+          totalEarning = piecePayroll.total + allowances.total;
+          payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, period.end);
+          totalDeduction = payrollDeductions.total;
+          netPay = totalEarning - totalDeduction;
+          employeeDeductions = payrollDeductions.employee;
+          sourceType = 'piece_rate_output';
+          sourceRecordIds = [
+            ...sourceIdList(piecePayroll.outputs, 'output:'),
+            ...sourceIdList(piecePayroll.pairs, 'pair:')
+          ];
+          quantity = piecePayroll.quantity;
+          baseRate = piecePayroll.average_rate;
+          snapshot = {
+            wage_type: normalizedWageType,
+            output_quantity: piecePayroll.quantity,
+            quantity: piecePayroll.quantity,
+            piece_rate: piecePayroll.average_rate,
+            records: piecePayroll.records,
+            allowances: allowances.applied
+          };
+          finalizeSourceRecords = async () => markPieceRecordsPaid(connection, piecePayroll, payrollRunId, currentUserId(req));
+        } else if (isTripBasedWageType(emp.wage_type)) {
+          await assertLogisticsTripSchema(connection);
+          const approvedTrips = await getApprovedDeliveryTripPayroll(connection, emp.id, period);
           if (!approvedTrips.trips.length) {
             skippedCount++;
             skipped.push({ employee_id: emp.id, reason: 'No approved delivery trips exist for this payroll period.' });
             continue;
           }
-          totalEarning = approvedTrips.total;
-          approvedDeliveryTrips = approvedTrips.trips;
-        }
-
-        if (!calculationRows.length && !['Daily', 'Hourly', 'Monthly'].includes(normalizePayrollWageType(emp.wage_type))) {
-          const allowances = await computeConfiguredAllowances(pool, totalEarning, period.end);
-          totalEarning += allowances.total;
-          const payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, period.end);
+          allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
+          totalEarning = approvedTrips.total + allowances.total;
+          payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, period.end);
           totalDeduction = payrollDeductions.total;
           netPay = totalEarning - totalDeduction;
           employeeDeductions = payrollDeductions.employee;
+          sourceType = 'logistics_trips';
+          sourceRecordIds = sourceIdList(approvedTrips.trips, 'trip:');
+          quantity = approvedTrips.quantity || approvedTrips.trips.length;
+          baseRate = approvedTrips.trips.length ? roundMoney(approvedTrips.total / approvedTrips.trips.length) : 0;
+          snapshot = {
+            wage_type: normalizedWageType,
+            trip_count: approvedTrips.trips.length,
+            output_quantity: approvedTrips.quantity,
+            logistics_total: approvedTrips.total,
+            trips: approvedTrips.trips,
+            allowances: allowances.applied
+          };
+          finalizeSourceRecords = async () => markDeliveryTripsPaid(connection, approvedTrips.trips, payrollRunId, currentUserId(req));
+        } else {
+          skippedCount++;
+          skipped.push({ employee_id: emp.id, reason: `Unsupported or unconfigured pay type: ${emp.wage_type || 'Not set'}.` });
+          continue;
         }
 
-        await pool.execute(`
-          INSERT INTO payslips (payroll_run_id, employee_id, wage_type_id, total_earning, total_deduction, net_pay)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [payrollRunId, emp.id, emp.wage_type_id || 1, totalEarning, totalDeduction, netPay]);
+        salaryCalculationId = await createSalaryCalculationRecord(connection, req, {
+          employee_id: emp.id,
+          wage_type_id: emp.wage_type_id || 1,
+          wage_type: normalizedWageType,
+          payroll_run_id: payrollRunId,
+          period,
+          base_rate: baseRate,
+          quantity,
+          gross_pay: totalEarning,
+          total_deductions: totalDeduction,
+          net_pay: netPay,
+          allowances,
+          deductions: payrollDeductions,
+          overtime_hours: overtimeHours,
+          overtime_amount: overtimePay,
+          hours_worked: hoursWorked,
+          days_worked: daysWorked,
+          daily_rate: dailyRate,
+          hourly_rate: hourlyRate,
+          source_type: sourceType,
+          source_record_ids: sourceRecordIds,
+          agency_name: emp.agency_name,
+          snapshot
+        });
+
+        const payslipColumns = await payrollTableColumns(connection, 'payslips');
+        const payslipFields = ['payroll_run_id', 'employee_id', 'wage_type_id', 'total_earning', 'total_deduction', 'net_pay'];
+        const payslipValues = [payrollRunId, emp.id, emp.wage_type_id || 1, roundMoney(totalEarning), roundMoney(totalDeduction), roundMoney(netPay)];
+        if (payslipColumns.has('salary_calculation_id')) {
+          payslipFields.splice(1, 0, 'salary_calculation_id');
+          payslipValues.splice(1, 0, salaryCalculationId);
+        }
+        if (payslipColumns.has('payroll_period')) {
+          payslipFields.push('payroll_period');
+          payslipValues.push(period.month_year);
+        }
+        if (payslipColumns.has('source_summary')) {
+          payslipFields.push('source_summary');
+          payslipValues.push(JSON.stringify({ source_type: sourceType, source_record_ids: sourceRecordIds, snapshot }));
+        }
+        await connection.execute(`
+          INSERT INTO payslips (${payslipFields.join(', ')})
+          VALUES (${payslipFields.map(() => '?').join(', ')})
+        `, payslipValues);
 
         if (employeeDeductions.length) {
-          await applyEmployeeDeductionBalances(pool, req, emp.id, salaryCalculationId, period.month_year, employeeDeductions);
+          await applyEmployeeDeductionBalances(connection, req, emp.id, salaryCalculationId, period.month_year, employeeDeductions);
         }
+        await finalizeSourceRecords();
 
-        if (tripBasedEmployee && approvedDeliveryTrips.length) {
-          const ids = approvedDeliveryTrips.map(trip => trip.id);
-          await pool.execute(`
-            UPDATE delivery_trips
-               SET status = 'Included in Payroll', payroll_run_id = ?, updated_by = ?
-             WHERE id IN (${ids.map(() => '?').join(', ')})
-               AND status = 'Approved'
-          `, [payrollRunId, currentUserId(req), ...ids]);
-          await logPayrollAudit(pool, req, 'delivery_trips_included_in_payroll', {
-            employee_id: emp.id,
-            payroll_run_id: payrollRunId,
-            remarks: `Included ${ids.length} approved delivery trip(s) in payroll for ${period.start} to ${period.end}.`,
-            metadata: { delivery_trip_ids: ids, total_logistics_pay: totalEarning }
-          });
-        }
+        await logPayrollAudit(connection, req, 'salary_calculation_generated', {
+          employee_id: emp.id,
+          payroll_run_id: payrollRunId,
+          salary_calculation_id: salaryCalculationId,
+          remarks: `Generated ${normalizedWageType} payroll for ${emp.employee_code}`,
+          metadata: { source_type: sourceType, source_record_ids: sourceRecordIds, gross_pay: totalEarning, net_pay: netPay }
+        });
+
+        registry.push({
+          employee_id: emp.id,
+          employee_code: emp.employee_code,
+          employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+          department: emp.department,
+          pay_type: normalizedWageType,
+          payroll_period: period.period_label,
+          approved_days_worked: daysWorked,
+          approved_hours_worked: hoursWorked,
+          approved_output_quantity: normalizedWageType === 'Per-Piece' ? quantity : 0,
+          approved_logistics_trips: normalizedWageType === 'Per-Trip' ? quantity : 0,
+          gross_pay: roundMoney(totalEarning),
+          allowances: roundMoney(allowances.total),
+          bonuses: 0,
+          deductions: roundMoney(totalDeduction),
+          net_pay: roundMoney(netPay),
+          payroll_status: 'Pending',
+          processed_by: req.user?.username || req.user?.email || currentUserId(req),
+          date_processed: new Date().toISOString()
+        });
 
         processedCount++;
       } catch (slipErr) {
@@ -3913,30 +4600,35 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
       }
     }
 
-    const summary = await updatePayrollRunTotals(pool, payrollRunId);
-    await logPayrollAudit(pool, req, 'payroll_generated', {
+    const summary = await updatePayrollRunTotals(connection, payrollRunId);
+    await logPayrollAudit(connection, req, 'payroll_generated', {
       payroll_run_id: payrollRunId,
-      remarks: `Generated payroll for ${period.month_year}`,
+      remarks: `Generated payroll for ${period.period_label || period.month_year}`,
       metadata: { processedCount, skippedCount, totalEmployees: employees.length, skipped }
     });
+    await connection.commit();
 
     res.json({ 
       success: true, 
       payrollRunId,
+      payroll_period: period.month_year,
+      period_start: period.start,
+      period_end: period.end,
       employeesProcessed: processedCount,
       totalEmployees: employees.length,
       skippedCount,
       skipped,
       summary,
-      message: `Payroll generated for ${period.month_year}. ${processedCount} employee(s) processed, ${skippedCount} skipped.`
+      registry,
+      message: `Payroll generated for ${period.period_label || period.month_year}. ${processedCount} employee(s) processed, ${skippedCount} skipped.`
     });
   } catch (err) {
+    try { await connection.rollback(); } catch (_) {}
     console.error('Error generating payroll:', err);
-    res.status(500).json({ 
-      error: 'Failed to generate payroll',
-      details: err.message,
-      message: err.message
-    });
+    const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
+    res.status(status).json({ error: status === 400 ? err.message : 'Failed to generate payroll', message: err.message });
+  } finally {
+    connection.release();
   }
 });
 
@@ -4177,7 +4869,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
           JOIN logistics_locations ll ON ll.id = dt.location_id
          WHERE dt.employee_id = ?
            AND dt.trip_date BETWEEN ? AND ?
-           AND dt.status IN ('Approved', 'Included in Payroll')
+           AND dt.status IN ('Approved', 'Included in Payroll', 'Paid')
          GROUP BY ll.name, ll.location_category, tt.name, dt.trip_type, dt.role
          ORDER BY ll.name, tt.name, dt.trip_type, dt.role
       `, [empId, range.start, range.end]);
@@ -5127,6 +5819,49 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
         }));
         rows.push({ employee: 'TOTAL', role: '', payroll_amount: register.totals.combined_payroll });
       }
+    } else if (report === 'weekly-payroll-registry') {
+      const registry = await buildWeeklyPayrollRegistry(pool, {
+        month_year,
+        department,
+        pay_type: wage_type,
+        employee
+      });
+      rows = registry.rows.map(row => ({
+        employee_code: row.employee_code,
+        employee: row.employee_name,
+        department: row.department,
+        pay_type: row.pay_type,
+        payroll_period: row.payroll_period,
+        approved_days_worked: row.approved_days_worked,
+        approved_hours_worked: row.approved_hours_worked,
+        approved_output_quantity: row.approved_output_quantity,
+        approved_logistics_trips: row.approved_logistics_trips,
+        gross_pay: row.gross_pay,
+        allowances: row.allowances,
+        deductions: row.deductions,
+        net_pay: row.net_pay,
+        payroll_status: row.payroll_status,
+        processed_by: row.processed_by,
+        date_processed: row.date_processed
+      }));
+      rows.push({
+        employee_code: 'TOTAL',
+        employee: '',
+        department: '',
+        pay_type: '',
+        payroll_period: '',
+        approved_days_worked: '',
+        approved_hours_worked: '',
+        approved_output_quantity: '',
+        approved_logistics_trips: '',
+        gross_pay: registry.totals.gross_pay,
+        allowances: registry.totals.allowances,
+        deductions: registry.totals.deductions,
+        net_pay: registry.totals.net_pay,
+        payroll_status: '',
+        processed_by: '',
+        date_processed: ''
+      });
     } else if ([
       'daily-rate-register',
       'daily-rate-summary',

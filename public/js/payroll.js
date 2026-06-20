@@ -419,6 +419,192 @@ function formatDateValue(value) {
   return date.toISOString().slice(0, 10);
 }
 
+function dateInputValue(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function payrollWeekKeyFromDates(startDate, endDate) {
+  const end = new Date(`${endDate}T00:00:00`);
+  const week = Math.min(5, Math.max(1, Math.ceil(end.getDate() / 7)));
+  return `${String(startDate || endDate).slice(0, 7)}-W${week}`;
+}
+
+function setDefaultWeeklyPayrollDates() {
+  const startInput = document.getElementById('weekly-payroll-start');
+  const endInput = document.getElementById('weekly-payroll-end');
+  if (!startInput || !endInput || (startInput.value && endInput.value)) return;
+  const now = new Date();
+  const day = now.getDay() || 7;
+  const start = new Date(now);
+  start.setDate(now.getDate() - day + 1);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  startInput.value = dateInputValue(start);
+  endInput.value = dateInputValue(end);
+}
+
+async function loadWeeklyPayrollFilterOptions() {
+  const departmentSelect = document.getElementById('weekly-payroll-department');
+  const payTypeSelect = document.getElementById('weekly-payroll-pay-type');
+  if (!departmentSelect && !payTypeSelect) return;
+  try {
+    const response = await apiFetch('/api/payroll/filter-options');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to load payroll filter options.');
+    if (departmentSelect) {
+      const current = departmentSelect.value;
+      departmentSelect.innerHTML = '<option value="">All departments</option>' + (data.departments || [])
+        .map(row => `<option value="${row.id}">${payrollEscape(row.name)}</option>`)
+        .join('');
+      if ([...departmentSelect.options].some(option => option.value === current)) departmentSelect.value = current;
+    }
+    if (payTypeSelect) {
+      const normalized = new Map([
+        ['Monthly', 'Monthly'],
+        ['Daily', 'Daily'],
+        ['Hourly', 'Hourly'],
+        ['Per-Piece', 'Piece Rate'],
+        ['Per-Trip', 'Logistics / Trip-Based']
+      ]);
+      (data.pay_types || []).forEach(row => {
+        if (row.normalized && normalized.has(row.normalized)) return;
+        const label = row.normalized || row.name;
+        if (label) normalized.set(label, row.name);
+      });
+      const current = payTypeSelect.value;
+      payTypeSelect.innerHTML = '<option value="">All pay types</option>' + [...normalized.entries()]
+        .map(([value, label]) => `<option value="${payrollEscape(value)}">${payrollEscape(label)}</option>`)
+        .join('');
+      if ([...payTypeSelect.options].some(option => option.value === current)) payTypeSelect.value = current;
+    }
+  } catch (error) {
+    console.warn('Weekly payroll filter options skipped:', error.message);
+  }
+}
+
+function renderWeeklyPayrollRegistry(payload = {}) {
+  const target = document.getElementById('weekly-payroll-registry');
+  if (!target) return;
+  const rows = payload.rows || payload.registry || [];
+  if (!rows.length) {
+    target.innerHTML = '<div class="payroll-empty-state">No weekly payroll registry rows found for this selection.</div>';
+    return;
+  }
+  const totals = payload.totals || {
+    gross_pay: rows.reduce((sum, row) => sum + Number(row.gross_pay || 0), 0),
+    allowances: rows.reduce((sum, row) => sum + Number(row.allowances || 0), 0),
+    deductions: rows.reduce((sum, row) => sum + Number(row.deductions || 0), 0),
+    net_pay: rows.reduce((sum, row) => sum + Number(row.net_pay || 0), 0)
+  };
+  target.innerHTML = `
+    <div class="table-wrap">
+      <table class="payroll-erp-table weekly-payroll-table">
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Pay Type</th>
+            <th>Payroll Period</th>
+            <th>Days</th>
+            <th>Hours</th>
+            <th>Output Qty</th>
+            <th>Trips</th>
+            <th class="text-right">Gross Pay</th>
+            <th class="text-right">Allowances</th>
+            <th class="text-right">Deductions</th>
+            <th class="text-right">Net Pay</th>
+            <th>Status</th>
+            <th>Processed By</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${payrollEscape(row.employee_name || '-')}<br><span class="muted-small">${payrollEscape(row.employee_code || '')}</span></td>
+              <td>${payrollEscape(row.pay_type || '-')}</td>
+              <td>${payrollEscape(row.payroll_period || '-')}</td>
+              <td>${Number(row.approved_days_worked || 0).toLocaleString()}</td>
+              <td>${Number(row.approved_hours_worked || 0).toLocaleString()}</td>
+              <td>${Number(row.approved_output_quantity || 0).toLocaleString()}</td>
+              <td>${Number(row.approved_logistics_trips || 0).toLocaleString()}</td>
+              <td class="text-right">${money(row.gross_pay)}</td>
+              <td class="text-right">${money(row.allowances)}</td>
+              <td class="text-right">${money(row.deductions)}</td>
+              <td class="text-right payroll-net">${money(row.net_pay)}</td>
+              <td>${payrollBadge(row.payroll_status || 'Pending')}</td>
+              <td>${payrollEscape(row.processed_by || '-')}<br><span class="muted-small">${row.date_processed ? new Date(row.date_processed).toLocaleString() : ''}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="7">Totals</th>
+            <th class="text-right">${money(totals.gross_pay)}</th>
+            <th class="text-right">${money(totals.allowances)}</th>
+            <th class="text-right">${money(totals.deductions)}</th>
+            <th class="text-right">${money(totals.net_pay)}</th>
+            <th colspan="2"></th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
+}
+
+async function loadWeeklyPayrollRegistry() {
+  const start = document.getElementById('weekly-payroll-start')?.value;
+  const end = document.getElementById('weekly-payroll-end')?.value;
+  const departmentId = document.getElementById('weekly-payroll-department')?.value;
+  const payType = document.getElementById('weekly-payroll-pay-type')?.value;
+  if (!start || !end) return;
+  const params = new URLSearchParams({ month_year: payrollWeekKeyFromDates(start, end) });
+  if (departmentId) {
+    const departmentText = document.getElementById('weekly-payroll-department')?.selectedOptions?.[0]?.textContent || '';
+    if (departmentText) params.set('department', departmentText);
+  }
+  if (payType) params.set('pay_type', payType);
+  try {
+    const response = await apiFetch(`/api/payroll/registry?${params.toString()}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to load weekly payroll registry.');
+    renderWeeklyPayrollRegistry(data);
+  } catch (error) {
+    const target = document.getElementById('weekly-payroll-registry');
+    if (target) target.innerHTML = `<div class="payroll-empty-state text-danger">${payrollEscape(error.message)}</div>`;
+  }
+}
+
+async function generateWeeklyPayroll(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('weekly-payroll-result');
+  const data = Object.fromEntries(new FormData(form).entries());
+  const employeeSearch = String(data.employee_search || '').trim();
+  delete data.employee_search;
+  if (employeeSearch) {
+    if (/^\d+$/.test(employeeSearch)) data.employee_id = Number(employeeSearch);
+    else data.employee_code = employeeSearch;
+  }
+  data.weekly = true;
+  data.month_year = payrollWeekKeyFromDates(data.start_date, data.end_date);
+  if (status) status.textContent = 'Generating weekly payroll...';
+  try {
+    const response = await apiFetch('/api/payroll/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || result.message || 'Failed to generate weekly payroll.');
+    if (status) status.textContent = result.message || 'Weekly payroll generated.';
+    renderWeeklyPayrollRegistry({ rows: result.registry || [] });
+    await loadPayrollDashboard(document.getElementById('payroll-filter-month')?.value || null);
+    await loadSalaryCalculations();
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
+  }
+}
+
 // Load and display salary calculation records
 async function loadSalaryCalculations() {
   try {
@@ -847,6 +1033,10 @@ function showPayslipPreview(payslip) {
     ...(payslip.wage_type === 'Per-Trip' ? [
       ['Trip Count', payslip.earnings.trip_count || 0],
       ['Driver/Helper Rate', payslipMoney(payslip.earnings.trip_rate)]
+    ] : []),
+    ...(payslip.wage_type === 'Monthly' ? [
+      ['Monthly Salary', payslipMoney(payslip.earnings.monthly_salary)],
+      ['Conversion', payslip.earnings.monthly_conversion_method === 'daily_equivalent' ? 'Daily Equivalent' : 'Monthly / 4']
     ] : []),
     ['Basic Pay', payslipMoney(payslip.earnings.basic_pay)],
     ['ROT/SOT', payslipMoney(payslip.earnings.rot_sot)],
@@ -2084,6 +2274,7 @@ const PAYROLL_REPORTS = [
   { id: 'summary', name: 'Payroll Summary Report', category: 'General', description: 'Payroll totals, employee count, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
   { id: 'employee', name: 'Employee Payroll Report', category: 'General', description: 'Employee-level wage type, gross pay, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
   { id: 'monthly', name: 'Monthly Payroll Report', category: 'General', description: 'Monthly payroll records based on the selected payroll period.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'weekly-payroll-registry', name: 'Weekly Payroll Registry', category: 'General', description: 'All pay types with approved days, hours, outputs, trips, deductions and net pay.', formats: ['CSV', 'Excel'] },
   { id: 'daily-rate-register', name: 'Daily Rate Payroll Register', category: 'Attendance', description: 'Daily-rate calculations with days worked and payroll-ready attendance validation.', formats: ['CSV', 'Excel'] },
   { id: 'per-hour-register', name: 'Per-Hour Payroll Register', category: 'Attendance', description: 'Hourly calculations with hours worked, overtime, and attendance validation.', formats: ['CSV', 'Excel'] },
   { id: 'attendance-payroll-validation', name: 'Attendance-to-Payroll Validation', category: 'Attendance', description: 'Validation status, excluded attendance, warnings, and blocking errors.', formats: ['CSV', 'Excel'] },
@@ -2091,7 +2282,7 @@ const PAYROLL_REPORTS = [
   { id: 'piece-sewer-register', name: 'Sewer Payroll Register', category: 'Production', description: 'Sewer production amount and payroll share.', formats: ['CSV', 'Excel'] },
   { id: 'piece-fixer-register', name: 'Fixer Payroll Register', category: 'Production', description: 'Fixer production amount and payroll share.', formats: ['CSV', 'Excel'] },
   { id: 'deductions', name: 'Deduction Report', category: 'Government', description: 'Configured deductions and deduction totals.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'government', name: 'Government Contribution Report', category: 'Government', description: 'SSS, PhilHealth, Pag-IBIG and withholding tax summary.', formats: ['CSV', 'Excel', 'PDF'] },
+  { id: 'government', name: 'Government Contribution Report', category: 'Government', description: 'SSS, PhilHealth, and Pag-IBIG summary.', formats: ['CSV', 'Excel', 'PDF'] },
   { id: 'audit', name: 'Audit Trail', category: 'Audit', description: 'Salary calculations, approvals, releases, settings updates and report activity.', formats: ['CSV'] }
 ];
 
@@ -2286,6 +2477,7 @@ function initializePayrollModule() {
     const today = new Date();
     monthInput.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
   }
+  setDefaultWeeklyPayrollDates();
 
   const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
   const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
@@ -2338,10 +2530,14 @@ window.initializePayrollModule = initializePayrollModule;
 window.saveProductionSplit = saveProductionSplit;
 window.editProductionSplit = editProductionSplit;
 window.generatePiecePayrollRegister = generatePiecePayrollRegister;
+window.generateWeeklyPayroll = generateWeeklyPayroll;
+window.loadWeeklyPayrollRegistry = loadWeeklyPayrollRegistry;
+window.renderWeeklyPayrollRegistry = renderWeeklyPayrollRegistry;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {
   initializePayrollModule();
+  loadWeeklyPayrollFilterOptions();
   loadPayrollDashboard();
   loadSalaryCalculations();
 
