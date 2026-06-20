@@ -3677,9 +3677,9 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       query += ' AND sc.calculation_date <= ?';
       params.push(to_date);
     }
-
-    query += ' ORDER BY sc.created_at DESC LIMIT ?';
-    params.push(parseInt(limit) || 100);
+    const safeLimit = Number.parseInt(limit, 10) || 100;
+ 
+    query += ` ORDER BY sc.created_at DESC LIMIT ${safeLimit}`;
 
     const [records] = await pool.execute(query, params);
 

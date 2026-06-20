@@ -586,7 +586,16 @@ router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) 
 
 router.get('/my-summary', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
-    if (!req.user.employeeId) return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    if (!req.user.employeeId) {
+	return res.json ({
+		total_days: 0,
+		present_days: 0,
+		late_days: 0,
+		absent_days: 0,
+		total_overtime: 0,
+		total_hours: 0
+	});
+}
     const [rows] = await pool.execute(
       `SELECT COUNT(*) AS total_days,
               SUM(CASE WHEN attendance_status IN ('Present','Late') THEN 1 ELSE 0 END) AS present_days,
