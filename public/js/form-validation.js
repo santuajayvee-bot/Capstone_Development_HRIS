@@ -48,38 +48,39 @@
       || /(?:'|\")\s*(?:or|and)\s+(?:'|\"|\d)/i.test(value);
   }
 
-  function validationMessage(element) {
+  function validationMessage(element, { commit = false } = {}) {
     if (!element || element.disabled || element.type === 'hidden' || element.type === 'file') return '';
     if (typeof element.value !== 'string') return '';
 
+    // Preserve a trailing space while typing so multi-word names remain enterable.
     const value = element.value.trim();
-    if (element.value !== value) element.value = value;
+    if (commit && element.value !== value) element.value = value;
     if (!value) return element.required ? 'This field is required.' : '';
     if (unsafe(value)) return UNSAFE_MESSAGE;
 
     const type = fieldType(element);
-    if (type === 'name' && !/^[\p{L}]+(?:[\s'-][\p{L}]+)*$/u.test(value)) return NAME_MESSAGE;
+    if (type === 'name' && !/^[\p{L}]+(?:[ '-][\p{L}]+)*$/u.test(value.replace(/\s+/g, ' '))) return NAME_MESSAGE;
     if (type === 'integer' && !/^\d+$/.test(value)) return NUMERIC_MESSAGE;
     if (type === 'decimal' && !/^\d+(?:\.\d+)?$/.test(value)) return NUMERIC_MESSAGE;
     if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(value)) return EMAIL_MESSAGE;
     return '';
   }
 
-  function validateElement(element) {
+  function validateElement(element, options) {
     if (!element || typeof element.setCustomValidity !== 'function') return true;
-    const message = validationMessage(element);
+    const message = validationMessage(element, options);
     element.setCustomValidity(message);
     element.classList.toggle('input-validation-error', Boolean(message));
     return !message;
   }
 
-  function validateScope(scope) {
+  function validateScope(scope, options = { commit: true }) {
     const elements = scope?.querySelectorAll
       ? scope.querySelectorAll('input, select, textarea')
       : [];
     let firstInvalid = null;
     for (const element of elements) {
-      if (!validateElement(element) && !firstInvalid) firstInvalid = element;
+      if (!validateElement(element, options) && !firstInvalid) firstInvalid = element;
     }
     if (firstInvalid) {
       const section = firstInvalid.closest('.form-section');
@@ -93,9 +94,9 @@
     return true;
   }
 
-  document.addEventListener('input', event => validateElement(event.target), true);
-  document.addEventListener('change', event => validateElement(event.target), true);
-  document.addEventListener('blur', event => validateElement(event.target), true);
+  document.addEventListener('input', event => validateElement(event.target, { commit: false }), true);
+  document.addEventListener('change', event => validateElement(event.target, { commit: true }), true);
+  document.addEventListener('blur', event => validateElement(event.target, { commit: true }), true);
   document.addEventListener('submit', event => {
     if (!validateScope(event.target)) {
       event.preventDefault();

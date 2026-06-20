@@ -31,6 +31,10 @@ const accepted = validate({
 assert.strictEqual(accepted.nextCalled, true);
 assert.strictEqual(accepted.req.body.first_name, 'Anne-Marie');
 
+const multiWordName = validate({ first_name: '  Juan   Dela Cruz  ' });
+assert.strictEqual(multiWordName.nextCalled, true);
+assert.strictEqual(multiWordName.req.body.first_name, 'Juan Dela Cruz');
+
 const authenticationSecret = validate({ password: '  Exact password value  ' });
 assert.strictEqual(authenticationSecret.nextCalled, true);
 assert.strictEqual(authenticationSecret.req.body.password, '  Exact password value  ');

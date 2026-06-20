@@ -110,7 +110,7 @@ function isSafeText(value) {
 }
 
 function isName(value) {
-  return typeof value === 'string' && /^[\p{L}]+(?:[\s'-][\p{L}]+)*$/u.test(value);
+  return typeof value === 'string' && /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u.test(value);
 }
 
 function isIntegerText(value) {
@@ -135,6 +135,7 @@ function validateAndSanitize(value, fieldName, errors, path = fieldName) {
 
   if (typeof value === 'string') {
     value = value.trim();
+    if (NAME_FIELDS.has(normalizedField)) value = value.replace(/\s+/g, ' ');
     if (!isSafeText(value)) {
       errors.push({ field: path, message: UNSAFE_INPUT_MESSAGE });
       return value;
