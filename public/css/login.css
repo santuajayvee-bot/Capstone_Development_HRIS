@@ -100,13 +100,6 @@
 
 .login-field input::placeholder { color: #98a2b3; }
 
-.login-turnstile-wrap {
-  display: flex;
-  justify-content: center;
-  min-height: 70px;
-  margin: 4px 0 14px;
-}
-
 .btn-login {
   width: 100%;
   min-height: 46px;
@@ -142,44 +135,6 @@
   box-shadow: none;
 }
 
-.login-mfa-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #111827;
-  text-align: center;
-  margin: 4px 0 6px;
-}
-
-.login-mfa-subtitle {
-  color: #667085;
-  font-size: 12px;
-  line-height: 1.5;
-  text-align: center;
-  margin-bottom: 18px;
-}
-
-.login-mfa-actions {
-  display: flex;
-  justify-content: center;
-  gap: 14px;
-  margin-top: 14px;
-  flex-wrap: wrap;
-}
-
-.login-mfa-actions button {
-  border: 0;
-  background: transparent;
-  color: #b4232a;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.login-mfa-actions button:disabled {
-  color: #98a2b3;
-  cursor: not-allowed;
-}
-
 .login-err {
   color: #c1121f;
   font-size: 12px;
@@ -210,12 +165,4 @@
     padding: 34px 26px 30px;
     background: rgba(255, 255, 255, 0.84);
   }
-}
-.login-turnstile-local-note {
-  padding: 10px 12px;
-  border: 1px solid #d7dde8;
-  color: #52627c;
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 12px;
-  text-align: center;
 }

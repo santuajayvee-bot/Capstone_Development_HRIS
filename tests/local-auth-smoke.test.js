@@ -7,13 +7,11 @@ async function run() {
     body: JSON.stringify({
       username: 'hr.admin',
       password: 'hr123admin',
-      turnstileToken: 'local-development-bypass',
     }),
   });
   const body = await response.json();
   assert.strictEqual(response.status, 200, body.message || body.error || 'Local admin login failed.');
   assert.strictEqual(body.success, true);
-  assert.strictEqual(body.mfaRequired, false);
   console.log('Local HR admin authentication smoke test: PASS');
 }
 

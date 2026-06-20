@@ -74,11 +74,11 @@ function runSqlFile(db, fileName) {
 }
 
 exports.up = function(db) {
-  return runSqlFile(db, '20260619103000_semaphore_sms_otp_fields-up.sql');
+  return runSqlFile(db, '20260620103000_remove_captcha_mfa_artifacts-up.sql');
 };
 
 exports.down = function(db) {
-  return runSqlFile(db, '20260619103000_semaphore_sms_otp_fields-down.sql');
+  return runSqlFile(db, '20260620103000_remove_captcha_mfa_artifacts-down.sql');
 };
 
 exports._meta = {

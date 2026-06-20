@@ -11,8 +11,7 @@ async function run() {
     role: user.role_name,
     active: user.is_active,
     account_status: user.account_status,
-    mfa_enabled: user.mfa_enabled,
-    has_phone: Boolean(user.phone_number),
+    force_password_change: Boolean(Number(user.force_password_change)),
   }]);
 }
 

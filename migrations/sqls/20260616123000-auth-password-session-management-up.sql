@@ -19,7 +19,6 @@ ALTER TABLE employees
   ADD COLUMN IF NOT EXISTS Password_Changed_At DATETIME NULL,
   ADD COLUMN IF NOT EXISTS Failed_Login_Attempts INT NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS Locked_Until DATETIME NULL,
-  ADD COLUMN IF NOT EXISTS MFA_Enabled BOOLEAN NOT NULL DEFAULT TRUE,
   ADD COLUMN IF NOT EXISTS Last_Login_At DATETIME NULL;
 
 -- Placeholder for legacy rows so Password_Hash can be enforced as NOT NULL.

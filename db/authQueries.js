@@ -51,21 +51,12 @@ const USER_SELECT_FIELDS = `
   r.access_level AS Access_Level,
   COALESCE(e.Failed_Login_Attempts, u.failed_login_attempts, 0) AS Failed_Login_Attempts,
   COALESCE(e.Locked_Until, u.account_locked_until) AS Locked_Until,
-  e.MFA_Enabled,
   COALESCE(u.password_changed_at, e.Password_Changed_At) AS Password_Changed_At,
   COALESCE(e.Last_Login_At, u.last_login_at, u.last_login) AS Last_Login_At,
   (COALESCE(u.force_password_change, 0) OR COALESCE(e.force_password_change, 0)) AS force_password_change,
   u.username,
   u.is_active,
   u.account_status,
-  u.phone_number,
-  u.mfa_enabled,
-  u.mfa_method,
-  u.otp_hash,
-  u.otp_expires_at,
-  u.otp_attempt_count,
-  u.otp_last_sent_at,
-  u.mfa_verified_at,
   r.name AS role_name,
   r.label AS role_label
 `;
@@ -509,86 +500,6 @@ async function markPasswordResetTokenUsed(resetId) {
   }
 }
 
-async function saveUserOtpChallenge(userId, otpHash, otpExpiresAt) {
-  ensureEmployeeId(userId);
-  ensureNonEmptyString(otpHash);
-
-  if (!otpExpiresAt) {
-    throw new Error(AUTH_INPUT_ERROR);
-  }
-
-  try {
-    const [result] = await pool.execute(
-      `UPDATE users
-          SET otp_hash = ?,
-              otp_expires_at = ?,
-              otp_attempt_count = 0,
-              otp_last_sent_at = NOW()
-        WHERE id = ?`,
-      [otpHash, otpExpiresAt, userId]
-    );
-
-    return result.affectedRows;
-  } catch (error) {
-    logAndThrow(error, 'saveUserOtpChallenge');
-  }
-}
-
-async function incrementUserOtpAttempts(userId) {
-  ensureEmployeeId(userId);
-
-  try {
-    await pool.execute(
-      `UPDATE users
-          SET otp_attempt_count = COALESCE(otp_attempt_count, 0) + 1
-        WHERE id = ?`,
-      [userId]
-    );
-
-    const user = await findUserByUserId(userId);
-    return Number(user?.otp_attempt_count || 0);
-  } catch (error) {
-    logAndThrow(error, 'incrementUserOtpAttempts');
-  }
-}
-
-async function clearUserOtpChallenge(userId) {
-  ensureEmployeeId(userId);
-
-  try {
-    const [result] = await pool.execute(
-      `UPDATE users
-          SET otp_hash = NULL,
-              otp_expires_at = NULL,
-              otp_attempt_count = 0,
-              otp_last_sent_at = NULL
-        WHERE id = ?`,
-      [userId]
-    );
-
-    return result.affectedRows;
-  } catch (error) {
-    logAndThrow(error, 'clearUserOtpChallenge');
-  }
-}
-
-async function updateUserMfaVerifiedAt(userId) {
-  ensureEmployeeId(userId);
-
-  try {
-    const [result] = await pool.execute(
-      `UPDATE users
-          SET mfa_verified_at = NOW()
-        WHERE id = ?`,
-      [userId]
-    );
-
-    return result.affectedRows;
-  } catch (error) {
-    logAndThrow(error, 'updateUserMfaVerifiedAt');
-  }
-}
-
 async function createAuditLog(logData) {
   const {
     Employee_ID,
@@ -644,9 +555,5 @@ module.exports = {
   createPasswordResetToken,
   findValidPasswordResetToken,
   markPasswordResetTokenUsed,
-  saveUserOtpChallenge,
-  incrementUserOtpAttempts,
-  clearUserOtpChallenge,
-  updateUserMfaVerifiedAt,
   createAuditLog,
 };

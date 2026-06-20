@@ -101,8 +101,7 @@ async function resetEmployeeAuth(connection, employeeId, passwordHash, employees
             Password_Hash = ?,
             Password_Changed_At = NOW(),
             Failed_Login_Attempts = 0,
-            Locked_Until = NULL,
-            MFA_Enabled = COALESCE(MFA_Enabled, 1)
+            Locked_Until = NULL
       WHERE id = ?`,
     [passwordHash, employeeId]
   );
@@ -128,8 +127,8 @@ async function ensureEmployee(connection, user, passwordHash, employeesHasForceP
     `INSERT INTO employees
        (employee_code, first_name, last_name, email, position, employment_type,
         status, Password_Hash, Password_Changed_At, Failed_Login_Attempts,
-        Locked_Until, MFA_Enabled)
-     VALUES (?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL, 1)`,
+        Locked_Until)
+     VALUES (?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL)`,
     [
       employee.employee_code,
       employee.first_name,
@@ -160,9 +159,6 @@ async function seedUsers() {
     const roleIdByName = new Map(roles.map(role => [role.name, role.id]));
     const usersHasEmail = await hasColumn(conn, 'users', 'email');
     const usersHasAccountStatus = await hasColumn(conn, 'users', 'account_status');
-    const usersHasPhoneNumber = await hasColumn(conn, 'users', 'phone_number');
-    const usersHasMfaEnabled = await hasColumn(conn, 'users', 'mfa_enabled');
-    const usersHasMfaMethod = await hasColumn(conn, 'users', 'mfa_method');
     const usersHasPasswordChangedAt = await hasColumn(conn, 'users', 'password_changed_at');
     const usersHasForcePasswordChange = await hasColumn(conn, 'users', 'force_password_change');
     const usersHasFailedLoginAttempts = await hasColumn(conn, 'users', 'failed_login_attempts');
@@ -202,24 +198,6 @@ async function seedUsers() {
         columns.push('account_status');
         values.push('Active');
         updates.push("account_status = 'Active'");
-      }
-
-      if (usersHasPhoneNumber) {
-        columns.push('phone_number');
-        values.push(user.phone_number || null);
-        updates.push('phone_number = COALESCE(VALUES(phone_number), phone_number)');
-      }
-
-      if (usersHasMfaEnabled) {
-        columns.push('mfa_enabled');
-        values.push(user.role === 'employee' ? 0 : 1);
-        updates.push('mfa_enabled = VALUES(mfa_enabled)');
-      }
-
-      if (usersHasMfaMethod) {
-        columns.push('mfa_method');
-        values.push('sms');
-        updates.push('mfa_method = VALUES(mfa_method)');
       }
 
       if (usersHasPasswordChangedAt) {

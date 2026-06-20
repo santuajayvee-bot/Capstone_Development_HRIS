@@ -40,9 +40,9 @@ async function repair() {
         `INSERT INTO employees
            (employee_code, first_name, last_name, email, position, employment_type,
             status, Password_Hash, Password_Changed_At, Failed_Login_Attempts,
-            Locked_Until, MFA_Enabled)
+            Locked_Until)
          VALUES ('HR-ADMIN', 'HR', 'Administrator', ?, 'HR Admin', 'Full-time',
-                 'Active', ?, NOW(), 0, NULL, 1)`,
+                 'Active', ?, NOW(), 0, NULL)`,
         [user.email || 'hr.admin@lgsv.local', user.password_hash]
       );
       employee = { id: created.insertId, Employee_ID: null };

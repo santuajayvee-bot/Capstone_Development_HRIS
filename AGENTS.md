@@ -313,6 +313,33 @@ Use consistent route style:
 - `/api/audit-logs`
 - `/api/blockchain/verify`
 
+## Database Schema and AWS Compatibility Rule
+
+Whenever coding database schemas, migrations, models, seeders, or SQL scripts, always make them compatible with both the local development database and the AWS production environment.
+
+The project uses MySQL locally and is intended to run on AWS RDS MySQL in deployment. Therefore, all schema changes must be readable and executable by AWS RDS MySQL.
+
+Rules:
+
+* Use standard MySQL-compatible SQL syntax.
+* Avoid SQLite-only, PostgreSQL-only, or local-only schema syntax.
+* Always create both `up` and `down` migrations for schema changes.
+* Use clear and consistent table and column names.
+* Use AWS RDS-compatible data types such as `BIGINT`, `VARCHAR`, `TEXT`, `DECIMAL(10,2)`, `BOOLEAN`, `DATETIME`, and `TIMESTAMP`.
+* Use `InnoDB` for tables that require foreign keys.
+* Use `utf8mb4` character encoding when defining tables.
+* Avoid hardcoded local database names, local paths, ports, usernames, or passwords.
+* Database credentials and AWS connection settings must come from environment variables.
+* Do not expose secrets, AWS keys, database passwords, or connection strings in code.
+* Make sure foreign keys, indexes, and constraints are valid in MySQL/AWS RDS.
+* If adding new schema fields, update the related model, controller, validation, and API response carefully.
+* If the schema change affects existing users, include safe defaults or nullable fields to avoid breaking current data.
+* Before finalizing, ensure the migration can run cleanly on a fresh database and on an existing database.
+
+When unsure, prioritize AWS RDS MySQL compatibility over local-only convenience.
+
+
+
 ## Coding Standards
 
 - Keep code modular.

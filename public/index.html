@@ -41,23 +41,7 @@
       <div class="login-field">
         <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
       </div>
-      <div class="login-turnstile-wrap">
-        <div id="login-turnstile"></div>
-      </div>
       <button class="btn-login" onclick="doLogin()">Login</button>
-    </div>
-
-    <div id="login-mfa-step" class="login-mfa" style="display:none;">
-      <div class="login-mfa-title">SMS Verification</div>
-      <div class="login-mfa-subtitle">Enter the verification code sent to your registered phone number.</div>
-      <div class="login-field">
-        <input type="text" id="mfa-code" placeholder="Verification code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" />
-      </div>
-      <button class="btn-login" id="btn-mfa-verify" onclick="verifySmsMfa()">Verify code</button>
-      <div class="login-mfa-actions">
-        <button type="button" id="btn-mfa-resend" onclick="resendSmsMfa()">Resend code</button>
-        <button type="button" onclick="cancelSmsMfa()">Use another account</button>
-      </div>
     </div>
 
     <div class="login-err" id="login-err"></div>
@@ -223,8 +207,7 @@
 <script src="js/auth.js?v=5"></script>
 <script src="js/app.js?v=3"></script>
 <script src="js/draft-session.js?v=3"></script>
-<script src="js/login.js?v=3"></script>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileScriptLoaded" async defer></script>
+<script src="js/login.js?v=4"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/ph-address.js"></script>
 <script src="js/register.js?v=2"></script>

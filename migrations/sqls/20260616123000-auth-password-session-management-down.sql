@@ -27,7 +27,6 @@ ALTER TABLE system_audit_log
 
 ALTER TABLE employees
   DROP COLUMN IF EXISTS Last_Login_At,
-  DROP COLUMN IF EXISTS MFA_Enabled,
   DROP COLUMN IF EXISTS Locked_Until,
   DROP COLUMN IF EXISTS Failed_Login_Attempts,
   DROP COLUMN IF EXISTS Password_Changed_At,
@@ -38,4 +37,3 @@ DROP INDEX IF EXISTS uq_employees_employee_id
 
 ALTER TABLE employees
   DROP COLUMN IF EXISTS Employee_ID;
-
