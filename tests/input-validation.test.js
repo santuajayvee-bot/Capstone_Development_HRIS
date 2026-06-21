@@ -1,4 +1,5 @@
 const assert = require('assert');
+process.env.NODE_ENV = 'test';
 const { validateRequestBody, NAME_MESSAGE, NUMERIC_MESSAGE, EMAIL_MESSAGE, UNSAFE_INPUT_MESSAGE } = require('../validators/inputValidation');
 
 function validate(body) {
@@ -55,4 +56,18 @@ assert.strictEqual(invalidEmail.response.payload.message, EMAIL_MESSAGE);
 const unsafe = validate({ emergency_contact_name: '<script>alert(1)</script>' });
 assert.strictEqual(unsafe.response.payload.message, UNSAFE_INPUT_MESSAGE);
 
+const unsafeSql = validate({ remarks: "' OR 1=1 --" });
+assert.strictEqual(unsafeSql.response.payload.message, UNSAFE_INPUT_MESSAGE);
+
+const unsafeEventHandler = validate({ residential_address: '<img src=x onerror=alert(1)>' });
+assert.strictEqual(unsafeEventHandler.response.payload.message, UNSAFE_INPUT_MESSAGE);
+
+const invalidInfinity = validate({ base_rate: 'Infinity' });
+assert.strictEqual(invalidInfinity.response.payload.message, NUMERIC_MESSAGE);
+
+const excessivePayrollAmount = validate({ gross_pay: '999999999999' });
+assert.strictEqual(excessivePayrollAmount.response.code, 400);
+
 console.log('Input validation tests: PASS');
+
+require('../config/db').end();

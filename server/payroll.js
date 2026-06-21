@@ -16,6 +16,11 @@ const {
   computeTripPay,
   findActiveLogisticsRate,
 } = require('./services/logisticsTripPayroll');
+const {
+  COMPUTED_PAYROLL_FIELDS,
+  auditSecurityEvent,
+  rejectForbiddenFields,
+} = require('./security-controls');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
@@ -32,6 +37,31 @@ const LOGISTICS_TRIP_PERMISSIONS = {
   approve: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
   configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval, ...ROLES.admin_any],
 };
+
+const PAYROLL_COMPUTED_FIELD_GUARD = rejectForbiddenFields(COMPUTED_PAYROLL_FIELDS, {
+  action: 'blocked_payroll_parameter_tampering_attempt',
+  module: 'PAYROLL_SECURITY',
+  targetTable: 'salary_calculations',
+});
+
+const PAYROLL_SETTINGS_TAMPER_FIELDS = new Set([
+  'gross_pay',
+  'net_pay',
+  'base_pay',
+  'total_deductions',
+  'sss_deduction',
+  'philhealth_deduction',
+  'pagibig_deduction',
+  'payroll_status',
+  'role',
+  'access_level',
+  'employee_id_override',
+]);
+
+const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIELDS, {
+  action: 'blocked_payroll_settings_parameter_tampering_attempt',
+  module: 'PAYROLL_SECURITY',
+});
 
 function currentUserId(req) {
   return req.user?.id || req.user?.userId || req.user?.sub || null;
@@ -2461,7 +2491,7 @@ router.get('/employees/:id/payroll-validation', requireAuth, requireRole(PAYROLL
   }
 });
 
-router.post('/logistics-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/logistics-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -2509,7 +2539,7 @@ router.get('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PER
   }
 });
 
-router.post('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.post('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -2527,7 +2557,7 @@ router.post('/logistics/truck-types', requireAuth, requireRole(LOGISTICS_TRIP_PE
   }
 });
 
-router.put('/logistics/truck-types/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.put('/logistics/truck-types/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -2580,7 +2610,7 @@ router.get('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERMI
   }
 });
 
-router.post('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.post('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -2600,7 +2630,7 @@ router.post('/logistics/locations', requireAuth, requireRole(LOGISTICS_TRIP_PERM
   }
 });
 
-router.put('/logistics/locations/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.put('/logistics/locations/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -2675,7 +2705,7 @@ router.get('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
   }
 });
 
-router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -2693,7 +2723,7 @@ router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
   }
 });
 
-router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), async (req, res) => {
+router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -3711,7 +3741,7 @@ router.post('/production-share-rules', requireAuth, requireRole(PAYROLL_PERMISSI
   }
 });
 
-router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3852,7 +3882,7 @@ router.post('/production-shares', requireAuth, requireRole(PAYROLL_PERMISSIONS.s
   }
 });
 
-router.post('/piece-incentives', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/piece-incentives', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3894,7 +3924,7 @@ router.post('/piece-incentives', requireAuth, requireRole(PAYROLL_PERMISSIONS.se
   }
 });
 
-router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -4089,7 +4119,7 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
   }
 }
 
-router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   const pool = require('../config/db');
   let connection;
   try {
@@ -4130,7 +4160,7 @@ router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), 
   } finally { if (connection) connection.release(); }
 });
 
-router.patch('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.patch('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   const pool = require('../config/db');
   let connection;
   try {
@@ -4484,6 +4514,36 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       : { total: 0, employeeTotal: 0, employee: [], configured: [], applied: [], rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
     const computedTotalDeductions = shouldPersistDeductions ? computedDeductions.total : 0;
     const computedNetPay = serverGrossPay - computedTotalDeductions;
+    if (calculationStatus === 'Submitted') {
+      const submittedComputedFields = [
+        ['gross_pay', gross_pay, serverGrossPay],
+        ['total_deductions', total_deductions, computedTotalDeductions],
+        ['net_pay', net_pay, computedNetPay],
+        ['sss_deduction', sss_deduction, computedDeductions.configuredBreakdown.sss || 0],
+        ['pagibig_deduction', pagibig_deduction, computedDeductions.configuredBreakdown.pagibig || 0],
+        ['philhealth_deduction', philhealth_deduction, computedDeductions.configuredBreakdown.philhealth || 0],
+      ].filter(([field, submitted, computed]) => (
+        submitted !== undefined
+        && submitted !== null
+        && submitted !== ''
+        && Math.abs(numeric(submitted) - numeric(computed)) > 0.01
+      ));
+      if (submittedComputedFields.length) {
+        await auditSecurityEvent(req, {
+          action: 'blocked_salary_calculation_parameter_tampering_attempt',
+          module: 'PAYROLL_SECURITY',
+          targetTable: 'salary_calculations',
+          targetRecord: salary_calculation_id || null,
+          newValue: {
+            fields: submittedComputedFields.map(([field]) => field),
+            submitted: Object.fromEntries(submittedComputedFields.map(([field, submitted]) => [field, submitted])),
+            computed: Object.fromEntries(submittedComputedFields.map(([field, , computed]) => [field, computed])),
+          },
+          result: 'blocked',
+        });
+        return res.status(403).json({ error: 'Submitted payroll totals do not match server computation.' });
+      }
+    }
     const snapshotForStorage = {
       ...(validationSnapshot || {}),
       deduction_status: shouldPersistDeductions ? 'Applied' : 'Not Applied',
@@ -4534,6 +4594,15 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       );
       if (!draftRows.length) return res.status(404).json({ error: 'Draft salary calculation was not found.' });
       if (['Finalized', 'Paid', 'Released'].includes(draftRows[0].status)) {
+        await auditSecurityEvent(req, {
+          action: 'blocked_locked_salary_calculation_update_attempt',
+          module: 'PAYROLL_SECURITY',
+          targetTable: 'salary_calculations',
+          targetRecord: salary_calculation_id,
+          oldValue: { status: draftRows[0].status },
+          newValue: { requested_status: calculationStatus },
+          result: 'blocked',
+        });
         return res.status(409).json({ error: 'Finalized or paid salary calculations are locked.' });
       }
       await pool.execute(`
@@ -4577,6 +4646,29 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       ]);
       salaryCalculationId = Number(salary_calculation_id);
     } else {
+      if (calculationStatus === 'Submitted') {
+        const [duplicates] = await pool.execute(
+          `SELECT id, status
+             FROM salary_calculations
+            WHERE employee_id = ?
+              AND payroll_period = ?
+              AND COALESCE(status, '') IN ('Submitted', 'Approved', 'Finalized', 'Released', 'Paid')
+            LIMIT 1`,
+          [employee_id, payroll_period || calcDate.slice(0, 7)]
+        );
+        if (duplicates.length) {
+          await auditSecurityEvent(req, {
+            action: 'blocked_duplicate_salary_calculation_submission',
+            module: 'PAYROLL_SECURITY',
+            targetTable: 'salary_calculations',
+            targetRecord: duplicates[0].id,
+            oldValue: { status: duplicates[0].status },
+            newValue: { employee_id, payroll_period: payroll_period || calcDate.slice(0, 7) },
+            result: 'blocked',
+          });
+          return res.status(409).json({ error: 'A submitted payroll calculation already exists for this employee and period.' });
+        }
+      }
       const [result] = await pool.execute(`
         INSERT INTO salary_calculations (
           employee_id,
@@ -4703,7 +4795,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     });
   } catch (err) {
     console.error('❌ Error saving salary calculation:', err);
-    res.status(500).json({ error: 'Failed to save salary calculation: ' + err.message });
+    res.status(500).json({ error: 'Failed to save salary calculation.' });
   }
 });
 
@@ -5046,7 +5138,7 @@ router.get('/filter-options', requireAuth, requireRole(PAYROLL_PERMISSIONS.view)
 });
 
 // Generate weekly/monthly payroll by employee pay type.
-router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   const pool = require('../config/db');
   const connection = await pool.getConnection();
   try {
@@ -5929,7 +6021,7 @@ router.get('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.v
   }
 });
 
-router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const { name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date, remarks } = req.body;
@@ -6152,15 +6244,15 @@ async function saveEmployeeDeduction(req, res, moduleType) {
   }
 }
 
-router.post('/employee-cash-advances', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) => {
+router.post('/employee-cash-advances', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, (req, res) => {
   saveEmployeeDeduction(req, res, 'Cash Advance');
 });
 
-router.post('/employee-loans', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) => {
+router.post('/employee-loans', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, (req, res) => {
   saveEmployeeDeduction(req, res, 'Employee Loan');
 });
 
-router.patch('/employee-deductions/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.patch('/employee-deductions/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const allowed = ['Active', 'Paused', 'Paid', 'Cancelled'];
@@ -6193,7 +6285,7 @@ router.get('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.v
   }
 });
 
-router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const { name, allowance_type, amount_or_rate, is_taxable, is_active, effective_date } = req.body;
@@ -6225,7 +6317,7 @@ router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
   }
 });
 
-router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.approve), async (req, res) => {
+router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.approve), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -6243,6 +6335,15 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL
     const record = records[0];
     if (!record) return res.status(404).json({ error: 'Salary calculation not found.' });
     if (['Finalized', 'Paid', 'Released'].includes(record.status) && record.status !== status) {
+      await auditSecurityEvent(req, {
+        action: 'blocked_finalized_payroll_status_update_attempt',
+        module: 'PAYROLL_SECURITY',
+        targetTable: 'salary_calculations',
+        targetRecord: id,
+        oldValue: { status: record.status },
+        newValue: { requested_status: status },
+        result: 'blocked',
+      });
       return res.status(409).json({ error: 'Locked salary calculations require an authorized correction flow.' });
     }
 
@@ -6447,6 +6548,15 @@ async function buildPiecePayrollRegister(pool, monthYear) {
 async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
   await ensurePieceRatePayrollSchema(pool);
   if (!/^\d{4}-\d{2}$/.test(String(payrollPeriod || ''))) throw new Error('A valid payroll period is required.');
+  const registryDateKey = value => {
+    if (!value) return '';
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    const text = String(value).trim();
+    const mysqlDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (mysqlDate) return mysqlDate[1];
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+  };
   const shareFilter = kind === '55' ? 'AND s.share_percentage = 55.00' : kind === '45' ? 'AND s.share_percentage = 45.00' : '';
   const [rows] = await pool.execute(`
     SELECT o.id, o.output_date, o.operation_type, o.size_range, o.quantity_produced,
@@ -6460,9 +6570,11 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
      WHERE o.payroll_period_id = ? AND o.status <> 'Voided' ${shareFilter}
      ORDER BY e.last_name, e.first_name, o.operation_type, o.size_range, o.output_date, o.id
   `, [payrollPeriod]);
-  const dates = [...new Set(rows.map(row => String(row.output_date).slice(0, 10)))].sort();
+  const dates = [...new Set(rows.map(row => registryDateKey(row.output_date)).filter(Boolean))].sort();
   const grouped = new Map();
   for (const row of rows) {
+    const outputDate = registryDateKey(row.output_date);
+    if (!outputDate) continue;
     const key = [row.employee_id, row.operation_type, row.size_range || '', row.rate_per_piece].join('|');
     const current = grouped.get(key) || {
       employee_id: row.employee_id, employee_name: row.employee_name, employee_code: row.employee_code,
@@ -6470,7 +6582,7 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
       rate_per_piece: Number(row.rate_per_piece), partner_roles: new Set(), daily: {}, total_output: 0, amount: 0
     };
     const dayValue = kind === 'main' ? Number(row.quantity_produced) : Number(row.share_amount);
-    current.daily[String(row.output_date).slice(0, 10)] = roundMoney((current.daily[String(row.output_date).slice(0, 10)] || 0) + dayValue);
+    current.daily[outputDate] = roundMoney((current.daily[outputDate] || 0) + dayValue);
     current.total_output += Number(row.quantity_produced);
     current.amount += kind === 'main' ? Number(row.full_amount) : Number(row.share_amount);
     current.partner_roles.add(row.partner_role);
@@ -6478,19 +6590,39 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
   }
   const employees = new Map();
   for (const row of grouped.values()) {
-    const employee = employees.get(row.employee_id) || { employee_id: row.employee_id, employee_name: row.employee_name, employee_code: row.employee_code, agency: row.agency, rows: [], total_output: 0, total_amount: 0 };
+    const employee = employees.get(row.employee_id) || {
+      employee_id: row.employee_id,
+      employee_name: row.employee_name,
+      employee_code: row.employee_code,
+      agency: row.agency,
+      rows: [],
+      daily_totals: {},
+      total_output: 0,
+      total_amount: 0
+    };
     row.partner_roles = [...row.partner_roles].join(', ');
     row.total_output = roundMoney(row.total_output);
     row.amount = roundMoney(row.amount);
     employee.rows.push(row);
+    dates.forEach(date => {
+      employee.daily_totals[date] = roundMoney((employee.daily_totals[date] || 0) + Number(row.daily[date] || 0));
+    });
     employee.total_output += row.total_output;
     employee.total_amount += row.amount;
     employees.set(row.employee_id, employee);
   }
   const employeeRows = [...employees.values()].map(employee => ({ ...employee, total_output: roundMoney(employee.total_output), total_amount: roundMoney(employee.total_amount) }));
+  const dailyTotals = dates.reduce((totals, date) => {
+    totals[date] = roundMoney(employeeRows.reduce((sum, employee) => sum + Number(employee.daily_totals?.[date] || 0), 0));
+    return totals;
+  }, {});
   return {
     payroll_period: payrollPeriod, kind, dates, employees: employeeRows,
-    totals: { total_output: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_output, 0)), total_amount: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_amount, 0)) }
+    totals: {
+      daily_totals: dailyTotals,
+      total_output: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_output, 0)),
+      total_amount: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_amount, 0))
+    }
   };
 }
 

@@ -30,11 +30,33 @@ const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
+const {
+  auditSecurityEvent,
+  multerFileFilter,
+  randomSafeFilename,
+  rejectForbiddenFields,
+  secureUploadedFile,
+}                                             = require('./server/security-controls');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const EMPLOYEE_ID_ADMIN_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
+const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
+  'role',
+  'role_id',
+  'access_level',
+  'is_admin',
+  'password_hash',
+  'gross_pay',
+  'net_pay',
+  'total_deductions',
+  'payroll_status',
+]), {
+  action: 'blocked_employee_parameter_tampering_attempt',
+  module: 'EMPLOYEE_SECURITY',
+  targetTable: 'employees',
+});
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
 let philippineAddressCache = null;
@@ -93,37 +115,32 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    cb(null, randomSafeFilename(file.originalname));
   }
 });
 
 const upload = multer({
   storage: storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    // Allowed file types
-    const allowedTypes = /pdf|doc|docx|jpg|jpeg|png/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only PDF, DOC, DOCX, JPG, JPEG, and PNG are allowed.'));
-    }
-  }
+  fileFilter: multerFileFilter
 });
 
 function uploadSingle(fieldName) {
   return (req, res, next) => {
     upload.single(fieldName)(req, res, (err) => {
-      if (!err) return next();
+      if (!err) return secureUploadedFile(req, res, next);
 
       const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
         ? 'File is too large. Maximum size is 5MB.'
         : err.message || 'File upload failed.';
 
+      auditSecurityEvent(req, {
+        action: 'blocked_file_upload_tampering_attempt',
+        module: 'FILE_UPLOAD_SECURITY',
+        targetTable: 'documents',
+        newValue: { message, path: req.originalUrl },
+        result: 'blocked',
+      }).catch(() => {});
       return res.status(400).json({ error: message });
     });
   };
@@ -165,6 +182,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+  );
   next();
 });
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1430,7 +1451,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
 });
 
 // Add new employee
-app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -1834,7 +1855,7 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
 });
 
 // Update Employee
-app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -2060,7 +2081,7 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
 });
 
 // Update Employee Status
-app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
@@ -2115,7 +2136,7 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
 });
 
 // Upload employee document
-app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), uploadSingle('file'), async (req, res) => {
+app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('file'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params; // id = employee_code
@@ -2624,7 +2645,7 @@ app.delete('/api/employees/:id/skills/:skillId', requireAuth, requireRole(ROLES.
 // ============================================================
 
 // Upload employee photo (store as base64 in database)
-app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), upload.single('photo'), async (req, res) => {
+app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('photo'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params; // numeric employee ID

@@ -2094,17 +2094,21 @@ function togglePiecePartnerFields() {
 let currentSewingRegistry = null;
 
 function sewingRegistryDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return '-';
   return new Date(`${date}T00:00:00`).toLocaleDateString('en-PH', { day: '2-digit', month: 'short' });
 }
 
 function renderSewingRegistry(registry) {
   const title = registry.kind === '55' ? '55% Sewing Payroll Registry' : registry.kind === '45' ? '45% Sewing Payroll Registry' : 'Main Sewing Payroll Registry';
-  const dailyHeaders = registry.dates.map(date => `<th>${payrollEscape(sewingRegistryDate(date))}</th>`).join('');
+  const dates = Array.isArray(registry.dates) ? registry.dates : [];
+  const dailyHeaders = dates.map(date => `<th class="sewing-registry-date"><span>${payrollEscape(sewingRegistryDate(date))}</span><small>Daily Output</small></th>`).join('');
   const employees = registry.employees.map(employee => {
-    const body = employee.rows.map(row => `<tr><td>${payrollEscape(row.operation_type)}</td><td>${payrollEscape(row.size_range || '-')}</td><td>${money(row.rate_per_piece)}</td>${registry.dates.map(date => `<td>${Number(row.daily[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td>`).join('')}<td>${Number(row.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.partner_roles || 'Solo')}</td></tr>`).join('');
-    return `<tr class="sewing-registry-employee"><th colspan="${registry.dates.length + 7}">${payrollEscape(employee.employee_name)}${employee.agency ? ` · ${payrollEscape(employee.agency)}` : ''}</th></tr>${body}<tr class="sewing-registry-total"><th colspan="${registry.dates.length + 4}">Employee Total</th><th>${Number(employee.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(employee.total_amount)}</th><th></th></tr>`;
+    const body = employee.rows.map(row => `<tr><td>${payrollEscape(row.operation_type)}</td><td>${payrollEscape(row.size_range || '-')}</td><td>${money(row.rate_per_piece)}</td>${dates.map(date => `<td>${Number(row.daily?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td>`).join('')}<td>${Number(row.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.partner_roles || 'Solo')}</td></tr>`).join('');
+    const dailyTotals = dates.map(date => `<th>${Number(employee.daily_totals?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th>`).join('');
+    return `<tr class="sewing-registry-employee"><th colspan="${dates.length + 7}">${payrollEscape(employee.employee_name)}${employee.agency ? ` · ${payrollEscape(employee.agency)}` : ''}</th></tr>${body}<tr class="sewing-registry-total"><th colspan="3">Employee Daily Total</th>${dailyTotals}<th>${Number(employee.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(employee.total_amount)}</th><th></th></tr>`;
   }).join('');
-  return `<div class="sewing-registry-print"><h3>${title}</h3><p>PAYROLL PERIOD: ${payrollEscape(registry.payroll_period)}</p><div class="table-wrap"><table><thead><tr><th>Sew Type</th><th>Size</th><th>Rate/Piece</th>${dailyHeaders}<th>Total Output</th><th>Amount</th><th>Partner Role</th></tr></thead><tbody>${employees || `<tr><td colspan="${registry.dates.length + 7}">No daily sewing output was encoded for this period.</td></tr>`}</tbody><tfoot><tr><th colspan="${registry.dates.length + 4}">Grand Total</th><th>${Number(registry.totals.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(registry.totals.total_amount)}</th><th></th></tr></tfoot></table></div></div>`;
+  const grandDailyTotals = dates.map(date => `<th>${Number(registry.totals?.daily_totals?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th>`).join('');
+  return `<div class="sewing-registry-print"><h3>${title}</h3><p>PAYROLL PERIOD: ${payrollEscape(registry.payroll_period)}</p><div class="table-wrap"><table><thead><tr><th>Sew Type</th><th>Size</th><th>Rate/Piece</th>${dailyHeaders}<th>Total Output</th><th>Amount</th><th>Partner Role</th></tr></thead><tbody>${employees || `<tr><td colspan="${dates.length + 7}">No daily sewing output was encoded for this period.</td></tr>`}</tbody><tfoot><tr><th colspan="3">Grand Daily Total</th>${grandDailyTotals}<th>${Number(registry.totals.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(registry.totals.total_amount)}</th><th></th></tr></tfoot></table></div></div>`;
 }
 
 async function generateSewingRegistry(kind) {
@@ -2125,7 +2129,7 @@ function printSewingRegistry() {
   if (!currentSewingRegistry || !content) return;
   const popup = window.open('', '_blank', 'width=1200,height=800');
   if (!popup) return;
-  popup.document.write(`<html><head><title>Sewing Payroll Registry</title><style>body{font-family:Arial,sans-serif;padding:18px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #222;padding:4px;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.sewing-registry-employee th{text-align:left;background:#eee}.sewing-registry-total th{background:#f7f7f7}</style></head><body>${content}</body></html>`);
+  popup.document.write(`<html><head><title>Sewing Payroll Registry</title><style>body{font-family:Arial,sans-serif;padding:18px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #222;padding:4px;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.sewing-registry-date span,.sewing-registry-date small{display:block;line-height:1.2}.sewing-registry-date small{font-size:9px;font-weight:400}.sewing-registry-employee th{text-align:left;background:#eee}.sewing-registry-total th{background:#f7f7f7}@page{size:landscape;margin:10mm}</style></head><body>${content}</body></html>`);
   popup.document.close(); popup.focus(); popup.print();
 }
 

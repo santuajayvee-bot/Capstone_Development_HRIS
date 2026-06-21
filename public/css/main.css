@@ -1880,6 +1880,24 @@ input.lgsv-date-native[type="date"] {
   min-width: 760px;
 }
 
+.swr-fxr-registry .sewing-registry-date {
+  min-width: 86px;
+}
+
+.swr-fxr-registry .sewing-registry-date span,
+.swr-fxr-registry .sewing-registry-date small {
+  display: block;
+  line-height: 1.25;
+}
+
+.swr-fxr-registry .sewing-registry-date small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: none;
+}
+
 #logistics-truck-types-grid table,
 #logistics-locations-grid table {
   min-width: 640px;

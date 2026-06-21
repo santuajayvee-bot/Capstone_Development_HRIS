@@ -334,17 +334,37 @@ function primaryAttendanceStatus(record) {
 }
 
 function attendanceSummary(record) {
-  const items = [];
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
   const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
-  if (lateMinutes > 0) items.push(`Late ${formatMinutes(lateMinutes)}`);
-  if (undertimeMinutes > 0) items.push(`Undertime ${formatMinutes(undertimeMinutes)}`);
-  if (overtimeMinutes > 0) items.push(`Overtime ${formatMinutes(overtimeMinutes)}`);
+  const items = [
+    { label: 'Late', value: formatMinutes(lateMinutes), tone: lateMinutes > 0 ? 'warn' : 'neutral' },
+    { label: 'Undertime', value: formatMinutes(undertimeMinutes), tone: undertimeMinutes > 0 ? 'bad' : 'neutral' },
+    { label: 'Overtime', value: formatMinutes(overtimeMinutes), tone: overtimeMinutes > 0 ? 'info' : 'neutral' }
+  ].filter(item => item.value !== '-');
   return {
-    text: items.length ? items.join(' · ') : 'Normal',
+    items,
+    text: items.length ? items.map(item => `${item.label} ${item.value}`).join(' · ') : 'Normal',
     title: `Late: ${formatMinutes(lateMinutes)} | Undertime: ${formatMinutes(undertimeMinutes)} | Overtime: ${formatMinutes(overtimeMinutes)}`
   };
+}
+
+function renderAttendanceSummaryCell(primaryStatus, summary) {
+  const metricHtml = summary.items.length
+    ? summary.items.map(item => `
+        <span class="att-summary-chip att-summary-chip-${esc(item.tone)}">
+          <span>${esc(item.label)}</span>
+          <strong>${esc(item.value)}</strong>
+        </span>
+      `).join('')
+    : '<span class="att-summary-normal">No late, undertime, or overtime</span>';
+
+  return `
+    <div class="att-summary-card">
+      <div class="att-summary-status">${attendanceBadge(primaryStatus)}</div>
+      <div class="att-summary-metrics">${metricHtml}</div>
+    </div>
+  `;
 }
 
 function validationLabel(value) {
@@ -419,7 +439,7 @@ async function initAttendance() {
     switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
   } else {
     setText('att-page-title', 'Attendance Management');
-    setText('att-page-subtitle', 'ERP-style attendance records, validation, exceptions, biometric enrollment, policies, and audit trail.');
+    setText('att-page-subtitle', '');
     setText('att-banner-title', 'Attendance Overview');
     setText('att-banner-copy', 'Summary metrics only. Validate and correct attendance from Attendance Records.');
   }
@@ -614,8 +634,7 @@ function renderAttRecords() {
       <td>${esc(record.time_in || '-')} - ${esc(record.time_out || '-')}</td>
       <td>${esc(hours)}</td>
       <td class="att-summary-cell" title="${esc(summary.title)}">
-        ${attendanceBadge(primaryStatus)}
-        <span class="att-summary-text">${esc(summary.text)}</span>
+        ${renderAttendanceSummaryCell(primaryStatus, summary)}
       </td>
       <td>${badge(verification)}</td>
       <td>${badge(payrollReady)}</td>
