@@ -16,6 +16,11 @@
 .att-card-heading h3, .att-title { margin:0; font-size:16px; font-weight:700; }
 .att-card-heading p { margin:4px 0 0; }
 .att-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.att-biometric-diagnostics .att-card-heading {
+  align-items:flex-start;
+  padding-bottom:14px;
+  border-bottom:1px solid var(--border);
+}
 .att-records-actionbar {
   display:flex;
   justify-content:space-between;
@@ -93,6 +98,80 @@
 #page-attendance .table-wrap table th { color:#b9c7ee; }
 #att-records .table-wrap { overflow:visible; }
 #att-records table { position:relative; }
+#att-records .att-summary-cell {
+  min-width: 300px;
+  white-space: normal;
+}
+.att-summary-card {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+.att-summary-status {
+  display: flex;
+  align-items: center;
+}
+.att-summary-status .badge {
+  margin: 0;
+}
+.att-summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.att-summary-chip,
+.att-summary-normal {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+}
+.att-summary-chip {
+  gap: 8px;
+  padding: 6px 9px;
+}
+.att-summary-chip span {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+.att-summary-chip strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+.att-summary-chip-warn {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+.att-summary-chip-warn strong {
+  color: #92400e;
+}
+.att-summary-chip-bad {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+.att-summary-chip-bad strong {
+  color: #b91c1c;
+}
+.att-summary-chip-info {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+.att-summary-chip-info strong {
+  color: #1d4ed8;
+}
+.att-summary-normal {
+  padding: 7px 10px;
+  color: #475569;
+  background: #f8fafc;
+}
 #biometric-attendance-card table td { color:#f8fbff !important; }
 #biometric-attendance-card table th { color:#b9c7ee !important; }
 #bio-device-status,
@@ -108,10 +187,51 @@
 .bio-status-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:14px; margin-top:16px; }
 .bio-status-grid > div, .bio-steps { padding:12px; border:1px solid var(--border); border-radius:8px; background:rgba(11,18,32,.45); }
 .bio-status-grid label { display:block; margin-bottom:6px; color:#b9c7ee; font-size:11px; letter-spacing:.03em; text-transform:uppercase; }
+.att-biometric-diagnostics { margin-bottom:20px; }
+.bio-diagnostic-grid {
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:14px;
+  margin-top:16px;
+}
+.bio-diagnostic-item {
+  min-height:112px;
+  display:grid;
+  align-content:start;
+  gap:10px;
+  padding:14px;
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:#ffffff;
+}
+.bio-diagnostic-item label {
+  display:block;
+  margin:0;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+.bio-diagnostic-item small {
+  display:block;
+  margin:0;
+  color:#475569;
+  font-size:12px;
+  line-height:1.45;
+}
 .bio-pill { display:inline-flex; align-items:center; min-height:30px; padding:6px 10px; border-radius:999px; font-size:12px; border:1px solid transparent; }
-.bio-success { color:#bbf7d0; border-color:rgba(34,197,94,.35); background:rgba(34,197,94,.14); }
-.bio-warning { color:#fde68a; border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.13); }
-.bio-danger, .bio-error { color:#fecaca; border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.13); }
+.bio-diagnostic-item .bio-pill {
+  width:max-content;
+  min-height:32px;
+  padding:7px 11px;
+  font-weight:800;
+}
+.bio-success { color:#047857; border-color:#bbf7d0; background:#ecfdf5; }
+.bio-warning { color:#92400e; border-color:#fde68a; background:#fffbeb; }
+.bio-danger, .bio-error { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
+.att-note.att-success { color:#bbf7d0; border:1px solid rgba(34,197,94,.25); background:rgba(34,197,94,.1); }
+.att-note.att-error { color:#fecaca; border:1px solid rgba(239,68,68,.25); background:rgba(239,68,68,.1); }
 .bio-steps { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin:14px 0; }
 .bio-step { padding:9px 10px; border:1px solid var(--border); border-radius:7px; color:#9aa8d1; font-size:12px; }
 .bio-step.active { color:#fff; border-color:rgba(80,120,255,.55); background:rgba(80,120,255,.16); }
@@ -180,7 +300,7 @@
 .att-menu-panel button:hover { background:rgba(79,124,255,.12); }
 .att-menu-panel span { min-width:18px; text-align:center; }
 @media (max-width: 1000px) {
-  .att-stats, .records-summary, .att-sync-layout, .bio-status-grid, .bio-steps { grid-template-columns:repeat(2, 1fr); }
+  .att-stats, .records-summary, .att-sync-layout, .bio-status-grid, .bio-diagnostic-grid, .bio-steps { grid-template-columns:repeat(2, 1fr); }
   .att-detail-grid, .att-metric-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
   .att-detail-grid > div, .att-metric { border-right:1px solid var(--border); border-bottom:1px solid var(--border); }
   .att-detail-grid > div:nth-child(2n), .att-metric:nth-child(2n) { border-right:0; }
@@ -188,9 +308,12 @@
   .att-form-grid-5 { grid-template-columns:repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
-  .att-stats, .records-summary, .att-bottom, .att-sync-layout, .att-form-grid, .att-form-grid-5, .bio-status-grid, .bio-steps { grid-template-columns:1fr; }
+  .att-stats, .records-summary, .att-bottom, .att-sync-layout, .att-form-grid, .att-form-grid-5, .bio-status-grid, .bio-diagnostic-grid, .bio-steps { grid-template-columns:1fr; }
   .att-records-actionbar { display:grid; }
   .att-overview-row { padding:14px; }
+  #att-records .att-summary-cell {
+    min-width: 240px;
+  }
   .att-detail-grid, .att-metric-grid { grid-template-columns:1fr; }
   .att-detail-grid > div, .att-metric, .att-detail-grid > div:nth-child(2n), .att-metric:nth-child(2n) { border-right:0; border-bottom:1px solid var(--border); }
   .att-detail-grid > div:last-child, .att-metric:last-child { border-bottom:0; }

@@ -34,15 +34,18 @@ const pool = mysql.createPool({
   ssl:                getSslConfig(),
 });
 
-// Test connection on startup
-pool.getConnection()
-  .then(conn => {
-    console.log('✅  MySQL connected:', conn.config.database);
-    conn.release();
-  })
-  .catch(err => {
-    console.error('❌  MySQL connection failed:', err.message);
-    process.exit(1);
-  });
+// Test connection on startup. Unit tests that only exercise validators/helpers
+// can import modules without requiring a live MySQL service.
+if (process.env.NODE_ENV !== 'test') {
+  pool.getConnection()
+    .then(conn => {
+      console.log('✅  MySQL connected:', conn.config.database);
+      conn.release();
+    })
+    .catch(err => {
+      console.error('❌  MySQL connection failed:', err.message);
+      process.exit(1);
+    });
+}
 
 module.exports = pool;

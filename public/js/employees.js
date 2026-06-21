@@ -5,6 +5,8 @@
 let EMPLOYEES = []; // Will be populated from API
 let EMPLOYEES_RAW = []; // Store raw API data for editing
 let wageTypesForPayroll = [];
+let EMPLOYEE_DIRECTORY_PAGE = 1;
+const EMPLOYEE_DIRECTORY_PAGE_SIZE = 10;
 const ORG_SETUP_DEFAULT_PAGE_SIZE = 10;
 const ORG_SETUP_PAGINATION = {
   departments: 1,
@@ -531,8 +533,15 @@ async function fetchEmployees() {
 function renderEmployees(list) {
   const tbody = document.getElementById('emp-tbody');
   if (!tbody) return;
+
+  const totalEmployees = list.length;
+  const totalPages = Math.max(1, Math.ceil(totalEmployees / EMPLOYEE_DIRECTORY_PAGE_SIZE));
+  EMPLOYEE_DIRECTORY_PAGE = Math.min(Math.max(EMPLOYEE_DIRECTORY_PAGE, 1), totalPages);
+  const startIndex = (EMPLOYEE_DIRECTORY_PAGE - 1) * EMPLOYEE_DIRECTORY_PAGE_SIZE;
+  const endIndex = Math.min(startIndex + EMPLOYEE_DIRECTORY_PAGE_SIZE, totalEmployees);
+  const pageEmployees = list.slice(startIndex, endIndex);
   
-  const renderedRows = list.map(e => {
+  const renderedRows = pageEmployees.map(e => {
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     
@@ -561,7 +570,7 @@ function renderEmployees(list) {
   `;
   }).join('');
   
-  tbody.innerHTML = renderedRows;
+  tbody.innerHTML = renderedRows || '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;">No employees found.</td></tr>';
   
   console.log('✅ Rendered', list.length, 'employees in table');
   if (list.length > 0) {
@@ -575,7 +584,60 @@ function renderEmployees(list) {
   }
 
   const countEl = document.getElementById('emp-count');
-  if (countEl) countEl.textContent = `Showing ${list.length} of ${EMPLOYEES.length} employees`;
+  if (countEl) countEl.textContent = totalEmployees
+    ? `Showing ${startIndex + 1}-${endIndex} of ${totalEmployees} employees`
+    : 'Showing 0 employees';
+  updateEmployeeDirectoryPagination(totalEmployees, startIndex, endIndex, totalPages);
+}
+
+function updateEmployeeDirectoryPagination(totalEmployees, startIndex, endIndex, totalPages) {
+  const pagination = document.getElementById('employee-directory-pagination');
+  const info = document.getElementById('employee-directory-page-info');
+  const label = document.getElementById('employee-directory-page-label');
+  const prev = document.getElementById('employee-directory-prev');
+  const next = document.getElementById('employee-directory-next');
+  if (!pagination || !info || !label || !prev || !next) return;
+
+  pagination.style.display = totalEmployees > EMPLOYEE_DIRECTORY_PAGE_SIZE ? '' : 'none';
+  info.textContent = totalEmployees
+    ? `Showing ${startIndex + 1}-${endIndex} of ${totalEmployees} employees`
+    : 'Showing 0 employees';
+  label.textContent = `Page ${EMPLOYEE_DIRECTORY_PAGE} of ${totalPages}`;
+  prev.disabled = EMPLOYEE_DIRECTORY_PAGE <= 1;
+  next.disabled = EMPLOYEE_DIRECTORY_PAGE >= totalPages;
+}
+
+function getFilteredEmployeeList() {
+  const search = document.getElementById('emp-search')?.value.toLowerCase() || '';
+  const status = document.getElementById('emp-status')?.value || '';
+  const dept = document.getElementById('emp-dept')?.value || '';
+
+  return EMPLOYEES.filter(e => {
+    const matchSearch = e.name.toLowerCase().includes(search) || e.email.toLowerCase().includes(search);
+    const matchStatus = !status || status === 'All Status' || e.status === status;
+    const matchDept = !dept || dept === 'All Departments' || e.dept === dept;
+    return matchSearch && matchStatus && matchDept;
+  });
+}
+
+function changeEmployeeDirectoryPage(direction) {
+  const filtered = getFilteredEmployeeList();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / EMPLOYEE_DIRECTORY_PAGE_SIZE));
+  EMPLOYEE_DIRECTORY_PAGE = Math.min(Math.max(EMPLOYEE_DIRECTORY_PAGE + direction, 1), totalPages);
+  renderEmployees(filtered);
+}
+
+function bindEmployeeDirectoryPagination() {
+  const prev = document.getElementById('employee-directory-prev');
+  const next = document.getElementById('employee-directory-next');
+  if (prev && prev.dataset.bound !== '1') {
+    prev.addEventListener('click', () => changeEmployeeDirectoryPage(-1));
+    prev.dataset.bound = '1';
+  }
+  if (next && next.dataset.bound !== '1') {
+    next.addEventListener('click', () => changeEmployeeDirectoryPage(1));
+    next.dataset.bound = '1';
+  }
 }
 
 function closeEmployeeActionMenus() {
@@ -727,19 +789,11 @@ function prefillEmployeeForm(employee) {
 }
 
 function filterEmployees() {
-  const search = document.getElementById('emp-search')?.value.toLowerCase() || '';
-  const status = document.getElementById('emp-status')?.value || '';
-  const dept   = document.getElementById('emp-dept')?.value || '';
+  const filtered = getFilteredEmployeeList();
 
-  const filtered = EMPLOYEES.filter(e => {
-    const matchSearch = e.name.toLowerCase().includes(search) || e.email.toLowerCase().includes(search);
-    const matchStatus = !status || status === 'All Status' || e.status === status;
-    const matchDept   = !dept   || dept   === 'All Departments' || e.dept   === dept;
-    return matchSearch && matchStatus && matchDept;
-  });
-
-  console.log(`Filtered: ${filtered.length} employees (search: "${search}", status: "${status}", dept: "${dept}")`);
+  console.log(`Filtered: ${filtered.length} employees`);
   
+  EMPLOYEE_DIRECTORY_PAGE = 1;
   renderEmployees(filtered);
 }
 
@@ -1385,6 +1439,7 @@ function initializeEmployeePage() {
   document.getElementById('emp-search') ?.addEventListener('input',  filterEmployees);
   document.getElementById('emp-dept')   ?.addEventListener('change', filterEmployees);
   document.getElementById('emp-status') ?.addEventListener('change', filterEmployees);
+  bindEmployeeDirectoryPagination();
 }
 
 function initializeOrganizationSetupPage() {
@@ -1399,6 +1454,7 @@ document.addEventListener('DOMContentLoaded', initializeOrganizationSetupPage);
 document.addEventListener('partialsLoaded', initializeOrganizationSetupPage);
 
 window.initializeEmployeePage = initializeEmployeePage;
+window.changeEmployeeDirectoryPage = changeEmployeeDirectoryPage;
 window.initializeOrganizationSetupPage = initializeOrganizationSetupPage;
 window.changeOrganizationSetupPage = changeOrganizationSetupPage;
 window.saveEmployeeIdConfig = saveEmployeeIdConfig;
@@ -2926,6 +2982,10 @@ function populateProfileEditForm(employee) {
     if (input) input.value = value || '';
   });
 
+  updateProfileBaseSalaryVisibility();
+  const profileWageType = document.getElementById('profile-edit-wage-type');
+  if (profileWageType) profileWageType.onchange = updateProfileBaseSalaryVisibility;
+
   bindProfileAgencyFields();
   toggleProfileAgencyFields();
 
@@ -2955,6 +3015,15 @@ function populateProfileEditForm(employee) {
   }
   currentSame?.dispatchEvent(new Event('change'));
   mailingSame?.dispatchEvent(new Event('change'));
+}
+
+function updateProfileBaseSalaryVisibility() {
+  const wageType = document.getElementById('profile-edit-wage-type')?.value || '';
+  const field = document.getElementById('profile-edit-basic-salary-field');
+  const input = document.getElementById('profile-edit-basic-salary');
+  const shouldShow = usesPayrollBaseRate(wageType);
+  if (field) field.style.display = shouldShow ? '' : 'none';
+  if (!shouldShow && input) input.value = '';
 }
 
 function toggleProfileAgencyFields() {
@@ -3098,7 +3167,9 @@ async function saveProfilePageChanges() {
     education_college_year_graduated: document.getElementById('profile-edit-education-college-year-graduated')?.value || null,
     department_id: getDepartmentId(document.getElementById('profile-edit-department')?.value || currentProfileEmployee.department) || currentProfileEmployee.department_id || null,
     wage_type: document.getElementById('profile-edit-wage-type')?.value || null,
-    base_rate: document.getElementById('profile-edit-basic-salary')?.value || null,
+    base_rate: usesPayrollBaseRate(document.getElementById('profile-edit-wage-type')?.value || '')
+      ? (document.getElementById('profile-edit-basic-salary')?.value || null)
+      : null,
     allowances: document.getElementById('profile-edit-allowances')?.value || null,
     payroll_schedule: document.getElementById('profile-edit-payroll-schedule')?.value || null,
     sss_number: document.getElementById('profile-edit-sss')?.value || null,

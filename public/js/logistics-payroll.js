@@ -1,6 +1,6 @@
 /* Trip-based logistics payroll UI. All financial values are calculated server-side. */
 (function logisticsPayrollModule() {
-  const state = { truckTypes: [], locations: [], rates: [], employees: [], trips: [] };
+  const state = { truckTypes: [], locations: [], rates: [], ratesPage: 1, ratesPageSize: 10, employees: [], trips: [] };
 
   const money = value => `PHP ${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -86,12 +86,50 @@
     `).join('') || '<tr><td colspan="5">No logistics locations configured.</td></tr>'}</tbody></table>`;
   }
 
-  function renderRates() {
+  function renderRatesLegacy() {
     const target = document.getElementById('logistics-rates-grid');
     if (!target) return;
     target.innerHTML = `<table><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Trip Rate</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.rates.map(row => `
       <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} — ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}×</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateLogisticsRate', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="11">No logistics rates configured.</td></tr>'}</tbody></table>`;
+  }
+
+  function renderRates() {
+    const target = document.getElementById('logistics-rates-grid');
+    if (!target) return;
+    const totalRows = state.rates.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / state.ratesPageSize));
+    state.ratesPage = Math.min(Math.max(Number(state.ratesPage || 1), 1), totalPages);
+    const start = (state.ratesPage - 1) * state.ratesPageSize;
+    const end = Math.min(start + state.ratesPageSize, totalRows);
+    const pageRows = state.rates.slice(start, end);
+
+    target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Trip Rate</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${pageRows.map(row => `
+      <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} - ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}x</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateLogisticsRate', row.id) : ''}</td></tr>
+    `).join('') || '<tr><td colspan="11">No logistics rates configured.</td></tr>'}</tbody></table>`;
+
+    const tableWrap = target.closest('.table-wrap');
+    const existingPager = tableWrap?.nextElementSibling;
+    if (existingPager?.classList.contains('logistics-rates-pagination')) existingPager.remove();
+    if (!tableWrap || totalRows <= state.ratesPageSize) return;
+
+    const pager = document.createElement('div');
+    pager.className = 'table-pagination table-pagination-auto logistics-rates-pagination';
+    pager.innerHTML = `
+      <span>Showing ${start + 1}-${end} of ${totalRows}</span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" onclick="changeLogisticsRatesPage(-1)" ${state.ratesPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${state.ratesPage} of ${totalPages}</span>
+        <button class="btn btn-outline btn-sm" type="button" onclick="changeLogisticsRatesPage(1)" ${state.ratesPage >= totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    `;
+    tableWrap.insertAdjacentElement('afterend', pager);
+  }
+
+  function changeLogisticsRatesPage(direction) {
+    const totalPages = Math.max(1, Math.ceil(state.rates.length / state.ratesPageSize));
+    state.ratesPage = Math.min(Math.max(Number(state.ratesPage || 1) + Number(direction || 0), 1), totalPages);
+    renderRates();
   }
 
   function tripActions(trip) {
@@ -443,7 +481,7 @@
     saveDeliveryTrip, submitDeliveryTripForm, refreshTripPreview, editLogisticsTruckType, editLogisticsLocation,
     editLogisticsRate, editDeliveryTrip, deactivateLogisticsTruckType, deactivateLogisticsLocation,
     deactivateLogisticsRate, submitDeliveryTrip, approveDeliveryTrip, rejectDeliveryTrip, deleteDeliveryTrip,
-    loadLogisticsPayrollSummary, prepareSwrFxrRegistry, generateSwrFxrRegistry,
+    loadLogisticsPayrollSummary, prepareSwrFxrRegistry, generateSwrFxrRegistry, changeLogisticsRatesPage,
     loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
   });
 })();

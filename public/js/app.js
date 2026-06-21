@@ -89,12 +89,15 @@ function enhanceTablePagination(table) {
   const tbody = table.tBodies?.[0];
   if (!tbody) return;
   const pageSize = Number(table.dataset.pageSize || AUTO_TABLE_PAGE_SIZE);
+  const paginationAnchor = table.closest('.table-wrap') || table;
+  const inlinePagination = table.nextElementSibling;
+  const anchoredPagination = paginationAnchor.nextElementSibling;
   let rows = [...tbody.rows].filter(row => !row.classList.contains('table-empty'));
   const hasOnlyEmptyRow = rows.length === 1 && rows[0].children.length <= 1;
   if (!shouldAutoPaginateTable(table) || hasOnlyEmptyRow) {
     rows.forEach(row => { row.hidden = false; });
-    const existing = table.nextElementSibling;
-    if (existing?.classList.contains('table-pagination')) existing.remove();
+    if (inlinePagination?.classList.contains('table-pagination') && inlinePagination.dataset.autoPagination === '1') inlinePagination.remove();
+    if (anchoredPagination?.classList.contains('table-pagination') && anchoredPagination.dataset.autoPagination === '1') anchoredPagination.remove();
     table.dataset.paginationReady = '0';
     return;
   }
@@ -110,13 +113,20 @@ function enhanceTablePagination(table) {
   const end = start + pageSize;
   rows.forEach((row, index) => { row.hidden = index < start || index >= end; });
 
-  let controls = table.nextElementSibling;
+  if (inlinePagination?.classList.contains('table-pagination') && inlinePagination.dataset.autoPagination === '1') {
+    inlinePagination.remove();
+  }
+
+  let controls = paginationAnchor.nextElementSibling;
   if (!controls?.classList.contains('table-pagination')) {
     controls = document.createElement('div');
-    controls.className = 'table-pagination';
-    table.insertAdjacentElement('afterend', controls);
+    controls.className = 'table-pagination table-pagination-auto';
+    paginationAnchor.insertAdjacentElement('afterend', controls);
   }
+  controls.classList.add('table-pagination-auto');
+  controls.dataset.autoPagination = '1';
   controls.dataset.for = table.dataset.paginationId;
+  controls.__paginationTable = table;
   controls.innerHTML = `
     <span>Showing ${start + 1}-${Math.min(end, rows.length)} of ${rows.length}</span>
     <div class="table-pagination-actions">
@@ -125,14 +135,25 @@ function enhanceTablePagination(table) {
       <button class="btn btn-outline btn-sm" type="button" data-page-action="next" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
     </div>
   `;
-  controls.querySelector('[data-page-action="prev"]')?.addEventListener('click', () => {
-    table.dataset.paginationPage = String(Math.max(1, currentPage - 1));
-    enhanceTablePagination(table);
-  });
-  controls.querySelector('[data-page-action="next"]')?.addEventListener('click', () => {
-    table.dataset.paginationPage = String(Math.min(totalPages, currentPage + 1));
-    enhanceTablePagination(table);
-  });
+  if (controls.dataset.paginationBound !== '1') {
+    controls.addEventListener('click', event => {
+      const button = event.target.closest('[data-page-action]');
+      if (!button || button.disabled) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const paginatedTable = controls.__paginationTable;
+      if (!paginatedTable) return;
+      const liveRows = [...(paginatedTable.tBodies?.[0]?.rows || [])].filter(row => !row.classList.contains('table-empty'));
+      const livePageSize = Number(paginatedTable.dataset.pageSize || AUTO_TABLE_PAGE_SIZE);
+      const liveTotalPages = Math.max(1, Math.ceil(liveRows.length / livePageSize));
+      const livePage = Math.min(Math.max(Number(paginatedTable.dataset.paginationPage || 1), 1), liveTotalPages);
+      const direction = button.dataset.pageAction === 'next' ? 1 : -1;
+      paginatedTable.dataset.paginationPage = String(Math.min(Math.max(livePage + direction, 1), liveTotalPages));
+      enhanceTablePagination(paginatedTable);
+    });
+    controls.dataset.paginationBound = '1';
+  }
 }
 
 function navigate(pageId, navEl, params = null) {

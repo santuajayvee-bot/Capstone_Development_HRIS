@@ -77,17 +77,33 @@ body *:not(code):not(pre) {
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 20px 24px;
+  gap: 8px;
+  padding: 0 16px 20px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
 }
 .sidebar-logo .logo-icon { width: 36px; height: 36px; font-size: 12px; border-radius: 8px; }
+.app-logo {
+  display: block;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.app-logo-sidebar {
+  width: 58px;
+  height: 58px;
+}
 .sidebar-logo span {
-  font-family: var(--font-main);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 2px;
+  font-family: "Poppins", var(--font-main), Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
   color: var(--accent);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: uppercase;
 }
 .nav-items { flex: 1; padding: 16px 0; }
 .nav-item {
@@ -1070,6 +1086,7 @@ input.lgsv-date-native[type="date"] {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 12px 14px;
   color: var(--muted);
@@ -1758,7 +1775,10 @@ input.lgsv-date-native[type="date"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   border-top: 1px solid var(--border);
   background: var(--card);
@@ -1766,14 +1786,67 @@ input.lgsv-date-native[type="date"] {
   font-size: 12px;
   font-weight: 700;
 }
+.table-pagination > span,
+.table-pagination > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .table-pagination-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+.table-pagination-auto {
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  margin-top: -1px;
+}
+.table-wrap + .table-pagination-auto {
+  margin-bottom: 12px;
 }
 .table-pagination .btn[disabled] {
   cursor: not-allowed;
   opacity: .55;
+}
+.leave-pagination {
+  margin-top: 12px;
+}
+.employee-directory-pagination {
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .table-pagination,
+  .report-pagination {
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding: 10px;
+  }
+  .table-pagination > span,
+  .report-pagination > span {
+    text-align: center;
+    width: 100%;
+  }
+  .table-pagination-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .table-pagination-actions > span {
+    grid-column: 1 / -1;
+    order: -1;
+    text-align: center;
+  }
+  .table-pagination .btn,
+  .report-pagination .btn {
+    justify-content: center;
+    min-width: 0;
+    width: 100%;
+  }
 }
 .payroll-form-status {
   margin-right: auto;
@@ -1798,11 +1871,88 @@ input.lgsv-date-native[type="date"] {
 .logistics-payroll-page .button-row {
   align-items: center;
   flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-top: 0;
 }
 
 .logistics-payroll-page table,
 .swr-fxr-registry table {
   min-width: 760px;
+}
+
+.swr-fxr-registry .sewing-registry-date {
+  min-width: 86px;
+}
+
+.swr-fxr-registry .sewing-registry-date span,
+.swr-fxr-registry .sewing-registry-date small {
+  display: block;
+  line-height: 1.25;
+}
+
+.swr-fxr-registry .sewing-registry-date small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+#logistics-truck-types-grid table,
+#logistics-locations-grid table {
+  min-width: 640px;
+}
+
+.logistics-payroll-page td,
+.logistics-payroll-page th {
+  vertical-align: middle;
+}
+
+.logistics-payroll-page td .button-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  margin: 0;
+  gap: 8px;
+  min-width: 132px;
+  white-space: nowrap;
+}
+
+.logistics-payroll-page td:last-child,
+.logistics-payroll-page th:last-child {
+  width: 176px;
+  min-width: 176px;
+}
+
+.logistics-payroll-page td:last-child {
+  background: inherit;
+}
+
+.logistics-payroll-page td:last-child .btn {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.logistics-payroll-page td:last-child .btn-outline {
+  background: #fff;
+}
+
+.logistics-payroll-page tbody td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.logistics-payroll-page .table-wrap {
+  overflow-x: auto;
+}
+
+.logistics-payroll-page .table-wrap table.responsive-card-table,
+.logistics-payroll-page .table-wrap table.responsive-scroll-table {
+  display: table;
 }
 
 .swr-fxr-sheet {
@@ -2454,6 +2604,40 @@ video {
 
   table.responsive-scroll-table {
     min-width: 760px;
+  }
+
+  .logistics-payroll-page table.responsive-card-table {
+    min-width: 760px;
+  }
+
+  .logistics-payroll-page table.responsive-card-table thead {
+    display: table-header-group;
+  }
+
+  .logistics-payroll-page table.responsive-card-table,
+  .logistics-payroll-page table.responsive-card-table tbody {
+    display: table;
+    width: 100%;
+  }
+
+  .logistics-payroll-page table.responsive-card-table tr {
+    display: table-row;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .logistics-payroll-page table.responsive-card-table td {
+    display: table-cell;
+    width: auto;
+    min-height: 0;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .logistics-payroll-page table.responsive-card-table td::before {
+    content: none;
   }
 
   .modal-dialog,

@@ -10,6 +10,8 @@ let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
 let ATT_SELECTED_DETAIL_ID = null;
 let ATT_ACTIVE_DATE_PICKER = null;
+const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
+const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 
 const ATT_DATE_PICKER_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -229,6 +231,34 @@ function setText(id, value) {
   if (element) element.textContent = value;
 }
 
+function setBiometricDiagnostic(id, state, text, detail = '') {
+  const pill = document.getElementById(`bio-diag-${id}`);
+  const detailEl = document.getElementById(`bio-diag-${id}-detail`);
+  const tone = state === 'ok' ? 'bio-success' : state === 'bad' ? 'bio-danger' : 'bio-warning';
+  if (pill) {
+    pill.className = `bio-pill ${tone}`;
+    pill.textContent = text;
+  }
+  if (detailEl && detail) detailEl.textContent = detail;
+}
+
+function setBiometricActionStatus(message, tone = '') {
+  const status = document.getElementById('bio-action-status');
+  if (!status) return;
+  status.textContent = message;
+  status.className = `att-note${tone ? ` ${tone}` : ''}`;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function formatDate(value) {
   if (!value) return '-';
   return new Date(value).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -304,17 +334,37 @@ function primaryAttendanceStatus(record) {
 }
 
 function attendanceSummary(record) {
-  const items = [];
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
   const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
-  if (lateMinutes > 0) items.push(`Late ${formatMinutes(lateMinutes)}`);
-  if (undertimeMinutes > 0) items.push(`Undertime ${formatMinutes(undertimeMinutes)}`);
-  if (overtimeMinutes > 0) items.push(`Overtime ${formatMinutes(overtimeMinutes)}`);
+  const items = [
+    { label: 'Late', value: formatMinutes(lateMinutes), tone: lateMinutes > 0 ? 'warn' : 'neutral' },
+    { label: 'Undertime', value: formatMinutes(undertimeMinutes), tone: undertimeMinutes > 0 ? 'bad' : 'neutral' },
+    { label: 'Overtime', value: formatMinutes(overtimeMinutes), tone: overtimeMinutes > 0 ? 'info' : 'neutral' }
+  ].filter(item => item.value !== '-');
   return {
-    text: items.length ? items.join(' · ') : 'Normal',
+    items,
+    text: items.length ? items.map(item => `${item.label} ${item.value}`).join(' · ') : 'Normal',
     title: `Late: ${formatMinutes(lateMinutes)} | Undertime: ${formatMinutes(undertimeMinutes)} | Overtime: ${formatMinutes(overtimeMinutes)}`
   };
+}
+
+function renderAttendanceSummaryCell(primaryStatus, summary) {
+  const metricHtml = summary.items.length
+    ? summary.items.map(item => `
+        <span class="att-summary-chip att-summary-chip-${esc(item.tone)}">
+          <span>${esc(item.label)}</span>
+          <strong>${esc(item.value)}</strong>
+        </span>
+      `).join('')
+    : '<span class="att-summary-normal">No late, undertime, or overtime</span>';
+
+  return `
+    <div class="att-summary-card">
+      <div class="att-summary-status">${attendanceBadge(primaryStatus)}</div>
+      <div class="att-summary-metrics">${metricHtml}</div>
+    </div>
+  `;
 }
 
 function validationLabel(value) {
@@ -389,7 +439,7 @@ async function initAttendance() {
     switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
   } else {
     setText('att-page-title', 'Attendance Management');
-    setText('att-page-subtitle', 'ERP-style attendance records, validation, exceptions, biometric enrollment, policies, and audit trail.');
+    setText('att-page-subtitle', '');
     setText('att-banner-title', 'Attendance Overview');
     setText('att-banner-copy', 'Summary metrics only. Validate and correct attendance from Attendance Records.');
   }
@@ -584,8 +634,7 @@ function renderAttRecords() {
       <td>${esc(record.time_in || '-')} - ${esc(record.time_out || '-')}</td>
       <td>${esc(hours)}</td>
       <td class="att-summary-cell" title="${esc(summary.title)}">
-        ${attendanceBadge(primaryStatus)}
-        <span class="att-summary-text">${esc(summary.text)}</span>
+        ${renderAttendanceSummaryCell(primaryStatus, summary)}
       </td>
       <td>${badge(verification)}</td>
       <td>${badge(payrollReady)}</td>
@@ -952,6 +1001,7 @@ async function loadBiometricWorkspace() {
   }
   await Promise.all([loadEmployees(), loadBiometricHealth(), loadBiometricMappings(), loadBiometricEvents()]);
   updateFingerprintEnrollmentView();
+  runBiometricDiagnostics();
 }
 
 async function loadBiometricHealth() {
@@ -992,6 +1042,94 @@ function populateDeviceSelect() {
   const select = document.getElementById('bio-map-device');
   if (!select) return;
   select.value = ATT_DEVICES[0]?.device_id || '';
+}
+
+async function checkLocalBiometricBridge() {
+  try {
+    const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/health`, {}, 2500);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Bridge health check failed.');
+    setBiometricDiagnostic('bridge', 'ok', 'Online', `${data.device_id || LOCAL_BIOMETRIC_DEVICE_REFERENCE} - ${data.status || 'Bridge running'}`);
+    return data;
+  } catch (err) {
+    setBiometricDiagnostic('bridge', 'bad', 'Offline', 'Start tools/biometric-bridge/start-bridge-admin.ps1 as Administrator.');
+    return null;
+  }
+}
+
+async function runBiometricDiagnostics() {
+  setBiometricActionStatus('Checking biometric setup...');
+  const button = document.getElementById('bio-local-device-button');
+  if (button) button.style.display = isSystemAdmin() ? '' : 'none';
+
+  const bridge = await checkLocalBiometricBridge();
+  if (!ATT_DEVICES.length) await loadBiometricHealth();
+  const localDevice = ATT_DEVICES.find(device => device.device_reference === LOCAL_BIOMETRIC_DEVICE_REFERENCE) || ATT_DEVICES[0] || null;
+  if (!localDevice) {
+    setBiometricDiagnostic('device', 'bad', 'Missing', 'Register the local ZK9500 device in HRIS.');
+  } else if (!Number(localDevice.is_active)) {
+    setBiometricDiagnostic('device', 'bad', 'Inactive', `${localDevice.device_name || localDevice.device_reference} is disabled.`);
+  } else {
+    setBiometricDiagnostic('device', localDevice.last_error_message ? 'warn' : 'ok', localDevice.last_error_message ? 'Warning' : 'Registered', localDevice.last_error_message || `${localDevice.device_name || 'ZK9500'} is active.`);
+  }
+
+  if (!ATT_BIOMETRIC_MAPPINGS.length) await loadBiometricMappings();
+  const activeMappings = ATT_BIOMETRIC_MAPPINGS.filter(item => Number(item.is_active) === 1).length;
+  setBiometricDiagnostic(
+    'mappings',
+    activeMappings > 0 ? 'ok' : 'warn',
+    String(activeMappings),
+    activeMappings > 0 ? `${activeMappings} active fingerprint enrollment(s).` : 'Enroll at least one employee fingerprint.'
+  );
+
+  try {
+    const res = await apiFetch('/api/biometric/status');
+    const data = await res.json();
+    const latest = data.latest_scan || null;
+    if (latest) {
+      setBiometricDiagnostic('scan', latest.error_message ? 'warn' : 'ok', latest.verification_status || 'Recorded', `${latest.employee_name || latest.employee_code || 'Unknown'} - ${formatDateTime(latest.scan_timestamp)}`);
+    } else {
+      setBiometricDiagnostic('scan', 'warn', 'No scans', 'No biometric scan has reached HRIS yet.');
+    }
+  } catch (err) {
+    setBiometricDiagnostic('scan', 'warn', 'Unknown', 'Could not load latest biometric scan.');
+  }
+
+  if (!bridge) {
+    setBiometricActionStatus('Bridge is offline. Start the ZK9500 bridge as Administrator, then run the check again.', 'att-error');
+  } else if (!localDevice) {
+    setBiometricActionStatus('Bridge is online, but HRIS has no local ZK9500 device. Use Local ZK9500 or register it in System Administration.', 'att-error');
+  } else if (!activeMappings) {
+    setBiometricActionStatus('Device is ready. Select an employee and enroll their fingerprint before scanning attendance.');
+  } else {
+    setBiometricActionStatus('Biometric setup looks ready. You can enroll, verify, or use the Attendance Station.');
+  }
+}
+
+async function createLocalBiometricDevice() {
+  if (!isSystemAdmin()) return alert('Only System Administrator can create biometric devices.');
+  try {
+    const res = await apiFetch('/api/attendance/biometric/devices', {
+      method: 'POST',
+      body: JSON.stringify({
+        device_reference: LOCAL_BIOMETRIC_DEVICE_REFERENCE,
+        device_name: 'Local ZK9500 Fingerprint Scanner',
+        vendor: 'ZKTeco',
+        api_base_url: '',
+        logs_endpoint: '/scan',
+        auth_type: 'NONE',
+        auth_header_name: 'x-biometric-api-key',
+        auth_secret: '',
+      })
+    });
+    const data = await res.json();
+    if (!res.ok && !/already exists/i.test(data.error || '')) throw new Error(data.error || 'Failed to create local biometric device.');
+    await loadBiometricHealth();
+    await runBiometricDiagnostics();
+    alert(/already exists/i.test(data.error || '') ? 'Local ZK9500 device is already registered.' : 'Local ZK9500 device is registered.');
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 async function saveBiometricDevice() {
@@ -1172,13 +1310,16 @@ async function enrollFingerprintFromBridge() {
   const employeeId = employeeSelect?.value;
   if (!deviceId || !employeeId) return alert('Select an employee first. Make sure the scanner is connected.');
 
-  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
   const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
   const codeMatch = selectedText.match(/\(([^)]+)\)/);
 
   try {
+    setBiometricActionStatus('Checking local bridge before enrollment...');
+    const bridge = await checkLocalBiometricBridge();
+    if (!bridge) throw new Error('Local ZK9500 bridge is offline.');
     setBiometricStep(2);
-    const res = await fetch(`${bridgeUrl}/enroll`, {
+    setBiometricActionStatus('Place the employee finger on the scanner. Capture requires three clean reads.');
+    const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/enroll`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1186,15 +1327,18 @@ async function enrollFingerprintFromBridge() {
         employee_code: codeMatch ? codeMatch[1] : '',
         employee_name: selectedText.replace(/\s*\([^)]+\)\s*$/, ''),
       }),
-    });
+    }, 30000);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Fingerprint enrollment failed.');
     setBiometricStep(3);
     document.getElementById('bio-map-user-id').value = data.reference_id;
     await saveBiometricMapping();
     setBiometricStep(4);
+    setBiometricActionStatus('Fingerprint enrolled and securely mapped to the employee.', 'att-success');
+    runBiometricDiagnostics();
   } catch (err) {
     updateFingerprintEnrollmentView();
+    setBiometricActionStatus(`Enrollment failed: ${err.message}`, 'att-error');
     alert(`Bridge enrollment failed: ${err.message}\n\nStart the LGSV ZK9500 bridge as Administrator, then try again.`);
   }
 }
@@ -1205,21 +1349,27 @@ async function verifyBiometricEnrollment() {
   const deviceId = document.getElementById('bio-map-device')?.value;
   if (!employeeId || !deviceId) return alert('Select an employee first. Make sure the scanner is connected.');
 
-  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
   const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
   try {
-    const res = await fetch(`${bridgeUrl}/verify`, {
+    setBiometricActionStatus('Checking local bridge before verification...');
+    const bridge = await checkLocalBiometricBridge();
+    if (!bridge) throw new Error('Local ZK9500 bridge is offline.');
+    setBiometricActionStatus('Place the enrolled finger on the scanner to verify.');
+    const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employee_id: Number(employeeId) }),
-    });
+    }, 15000);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Fingerprint verification failed.');
     if (!data.matched) {
+      setBiometricActionStatus('Fingerprint matched a different employee.', 'att-error');
       return alert(`Fingerprint matched a different employee.\n\nSelected: ${selectedText}\nMatched: ${data.employee_name || data.employee_id}\nScore: ${data.score}`);
     }
+    setBiometricActionStatus(`Fingerprint verified. Score: ${data.score}`, 'att-success');
     alert(`Fingerprint verified successfully.\n\nEmployee: ${selectedText}\nScore: ${data.score}`);
   } catch (err) {
+    setBiometricActionStatus(`Verification failed: ${err.message}`, 'att-error');
     alert(`Bridge verification failed: ${err.message}\n\nMake sure the bridge is running and the employee fingerprint is enrolled.`);
   }
 }
@@ -1235,9 +1385,8 @@ async function requestBiometricScan(scanType) {
     return alert('Your account is not linked to an employee record.');
   }
 
-  const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787/scan';
   try {
-    await fetch(bridgeUrl, {
+    await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/scan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1246,7 +1395,7 @@ async function requestBiometricScan(scanType) {
         hris_api_url: `${window.location.origin}/api/biometric/attendance`,
         auth_token: typeof getToken === 'function' ? getToken() : '',
       }),
-    });
+    }, 15000);
     if (status) status.textContent = 'Scan request sent. Place finger on the ZK9500 scanner.';
   } catch (err) {
     if (status) status.textContent = 'Local biometric bridge is not reachable. Start the C# ZK9500 bridge, then try again.';
@@ -1431,6 +1580,8 @@ window.loadBiometricExceptions = loadBiometricExceptions;
 window.loadBiometricHealth = loadBiometricHealth;
 window.loadBiometricWorkspace = loadBiometricWorkspace;
 window.loadBiometricEvents = loadBiometricEvents;
+window.runBiometricDiagnostics = runBiometricDiagnostics;
+window.createLocalBiometricDevice = createLocalBiometricDevice;
 window.updateFingerprintEnrollmentView = updateFingerprintEnrollmentView;
 window.removeSelectedFingerprint = removeSelectedFingerprint;
 window.loadBiometricAttendanceStatus = loadBiometricAttendanceStatus;

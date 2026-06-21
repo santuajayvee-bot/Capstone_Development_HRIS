@@ -4,6 +4,7 @@
 
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { auditSecurityEvent } = require('./security-controls');
 
 const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
   '/api/account/password',
@@ -149,6 +150,18 @@ async function requireAuth(req, res, next) {
 function requireRole(allowedRoles) {
   return (req, res, next) => {
     if (!req.user || !allowedRoles.includes(req.user.role)) {
+      auditSecurityEvent(req, {
+        action: 'failed_unauthorized_access_attempt',
+        module: 'RBAC_SECURITY',
+        targetTable: req.originalUrl || null,
+        newValue: {
+          method: req.method,
+          path: req.originalUrl,
+          required_roles: allowedRoles,
+          actual_role: req.user?.role || 'anonymous',
+        },
+        result: 'blocked',
+      }).catch(() => {});
       return res.status(403).json({
         error: `Access denied. Required role: ${allowedRoles.join(' or ')}.`,
       });

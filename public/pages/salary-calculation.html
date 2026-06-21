@@ -8,8 +8,8 @@
   </div>
   <div class="page-header-right">
     <button class="btn btn-outline" id="save-daily-output-btn" onclick="saveCalculation()" style="display:none;">Save Daily Output</button>
-    <button class="btn btn-outline" onclick="saveSalaryAsDraft()">💾 Save Draft</button>
-    <button class="btn btn-primary" onclick="saveCalculation()">✓ Save Calculation</button>
+    <button class="btn btn-outline" id="save-salary-draft-btn" onclick="saveSalaryAsDraft()">Save Draft</button>
+    <button class="btn btn-primary" id="save-salary-calculation-btn" onclick="saveCalculation()">Save Calculation</button>
   </div>
 </div>
 
@@ -138,6 +138,7 @@
 
       <!-- PER-TRIP Wage Structure Form -->
       <div id="per-trip-section" style="display: none;">
+        <h5 style="margin:0 0 12px;font-size:13px;font-weight:600;color:var(--text);">Delivery Crew</h5>
         <div style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:12px;">
           <div>
             <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Trip Date</label>
@@ -164,25 +165,24 @@
             <input id="salary-truck-type" value="Standard Truck" placeholder="Standard Truck" style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;" oninput="calculateSalaryNow()" />
           </div>
           <div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Driver Employee</label>
+            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Driver</label>
             <select id="salary-driver-employee" style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;" onchange="calculateSalaryNow()"></select>
           </div>
           <div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Helper 1 Employee</label>
+            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Delivery Helper 1</label>
             <select id="salary-helper1-employee" style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;" onchange="calculateSalaryNow()"></select>
           </div>
           <div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Helper 2 Employee</label>
+            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;font-weight:600;">Delivery Helper 2 (Optional)</label>
             <select id="salary-helper2-employee" style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;" onchange="calculateSalaryNow()"></select>
           </div>
         </div>
         <div class="table-wrap" style="margin-top:12px;">
           <table style="min-width:720px;">
             <tbody>
-              <tr><th>Driver Rate</th><td id="salary-driver-rate-view">PHP 0.00</td><th>Helper Rate</th><td id="salary-helper-rate-view">PHP 0.00</td></tr>
               <tr><th>Crew Status</th><td id="salary-crew-status-view">-</td><th>Missing Helper Share</th><td id="salary-missing-helper-share-view">PHP 0.00</td></tr>
               <tr><th>Driver Gross Pay</th><td id="salary-driver-gross-view">PHP 0.00</td><th>Helper 1 Gross Pay</th><td id="salary-helper1-gross-view">PHP 0.00</td></tr>
-              <tr><th>Helper 2 Gross Pay</th><td id="salary-helper2-gross-view">PHP 0.00</td><th>Computation</th><td id="salary-logistics-note">Select crew and region.</td></tr>
+              <tr><th>Helper 2 Gross Pay</th><td id="salary-helper2-gross-view">-</td><th>Computation</th><td id="salary-logistics-note">Select the delivery crew and region.</td></tr>
             </tbody>
           </table>
         </div>

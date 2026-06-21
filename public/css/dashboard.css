@@ -110,13 +110,16 @@
 
 .dashboard-list {
   display: grid;
-  gap: 10px;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .dashboard-list-item {
   display: grid;
   gap: 4px;
-  padding: 10px 0;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
 }
 

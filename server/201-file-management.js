@@ -9,6 +9,28 @@ const path = require('path');
 const fs = require('fs');
 const router = express.Router();
 const pool = require('../config/db');
+const {
+  auditSecurityEvent,
+  multerFileFilter,
+  randomSafeFilename,
+  rejectForbiddenFields,
+  secureUploadedFile,
+} = require('./security-controls');
+
+const DOCUMENT_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
+  'role',
+  'role_id',
+  'access_level',
+  'salary',
+  'base_rate',
+  'gross_pay',
+  'net_pay',
+  'payroll_status',
+]), {
+  action: 'blocked_201_file_parameter_tampering_attempt',
+  module: 'DOCUMENT_SECURITY',
+  targetTable: 'documents',
+});
 
 const uploadsDir = path.join(__dirname, '..', 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -18,24 +40,32 @@ if (!fs.existsSync(uploadsDir)) {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    cb(null, randomSafeFilename(file.originalname));
   }
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /pdf|doc|docx|jpg|jpeg|png/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error('Invalid file type. Only PDF, DOC, DOCX, JPG, JPEG, and PNG are allowed.'));
-  }
+  fileFilter: multerFileFilter
 });
+
+function uploadDocument(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return secureUploadedFile(req, res, next);
+    const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+      ? 'File is too large. Maximum size is 5MB.'
+      : err.message || 'File upload failed.';
+    auditSecurityEvent(req, {
+      action: 'blocked_file_upload_tampering_attempt',
+      module: 'FILE_UPLOAD_SECURITY',
+      targetTable: 'documents',
+      newValue: { message, path: req.originalUrl },
+      result: 'blocked',
+    }).catch(() => {});
+    return res.status(400).json({ error: message });
+  });
+}
 
 function isHrDocumentRole(role) {
   return ['hr_admin', 'hr_manager', 'admin'].includes(role);
@@ -232,7 +262,7 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
 });
 
 // PUT /api/201-files/:employeeId/sensitive-data → Create or update sensitive employee data
-router.put('/:employeeId/sensitive-data', async (req, res) => {
+router.put('/:employeeId/sensitive-data', DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
@@ -280,7 +310,7 @@ router.put('/:employeeId/sensitive-data', async (req, res) => {
 });
 
 // POST /api/201-files/:employeeId/documents → Upload a document to the 201-file
-router.post('/:employeeId/documents', upload.single('file'), async (req, res) => {
+router.post('/:employeeId/documents', DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDocument, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
@@ -364,7 +394,7 @@ router.delete('/:employeeId/documents/:docId', async (req, res) => {
 });
 
 // PUT /api/201-files/:employeeId/verify-document/:docId → Verify or reject a document
-router.put('/:employeeId/verify-document/:docId', async (req, res) => {
+router.put('/:employeeId/verify-document/:docId', DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const { employeeId, docId } = req.params;
     const userId = req.user.id;
