@@ -77,17 +77,33 @@ body *:not(code):not(pre) {
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 20px 24px;
+  gap: 8px;
+  padding: 0 16px 20px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
 }
 .sidebar-logo .logo-icon { width: 36px; height: 36px; font-size: 12px; border-radius: 8px; }
+.app-logo {
+  display: block;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.app-logo-sidebar {
+  width: 58px;
+  height: 58px;
+}
 .sidebar-logo span {
-  font-family: var(--font-main);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 2px;
+  font-family: "Poppins", var(--font-main), Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
   color: var(--accent);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: uppercase;
 }
 .nav-items { flex: 1; padding: 16px 0; }
 .nav-item {

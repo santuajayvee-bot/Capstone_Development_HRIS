@@ -3,14 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LGSV_HR System</title>
+  <title>LGSV HR System</title>
 
   <!-- CSS Modules -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-<link rel="stylesheet" href="css/main.css?v=9" />
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png?v=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png?v=1" />
+  <link rel="shortcut icon" type="image/png" href="assets/favicon-32.png?v=1" />
+  <link rel="apple-touch-icon" href="assets/lgsv-logo.png?v=1" />
+<link rel="stylesheet" href="css/main.css?v=10" />
   <link rel="stylesheet" href="css/login.css?v=6" />
   <link rel="stylesheet" href="css/auth.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
@@ -29,7 +33,7 @@
 <div id="login-screen">
   <div class="login-card">
     <div class="login-logo">
-      <div class="logo-icon" style="width:64px;height:64px;font-size:22px;margin:0 auto 8px;">LG</div>
+      <img class="app-logo app-logo-login" src="assets/lgsv-logo.png?v=1" alt="Marulas HRIS logo" />
       <div class="login-brand">MARULAS HRIS</div>
     </div>
     <div class="login-welcome">Sign in to your account</div>
@@ -61,8 +65,8 @@
     <!-- SIDEBAR -->
     <div class="sidebar">
       <div class="sidebar-logo">
-        <div class="logo-icon" style="width:36px;height:36px;font-size:12px;border-radius:8px;">LG</div>
-        <span>LGSV_HR</span>
+        <img class="app-logo app-logo-sidebar" src="assets/lgsv-logo.png?v=1" alt="Marulas HRIS logo" />
+        <span>LGSV HR</span>
       </div>
 
       <!-- Nav items injected by auth.js buildSidebar() -->
