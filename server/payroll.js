@@ -215,31 +215,9 @@ async function computePayrollDeductions(pool, employeeId, grossPay, calculationD
 }
 
 async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
-  if (!(await payrollTableExists(pool, 'payroll_allowance_settings'))) {
-    return { total: 0, applied: [] };
-  }
-  const effectiveDate = calculationDate || new Date().toISOString().slice(0, 10);
-  const [settings] = await pool.execute(`
-    SELECT name, allowance_type, amount_or_rate, is_taxable
-    FROM payroll_allowance_settings
-    WHERE is_active = 1 AND effective_date <= ?
-    ORDER BY name
-  `, [effectiveDate]);
-
-  const applied = [];
-  let total = 0;
-  for (const setting of settings) {
-    let amount = 0;
-    if (setting.allowance_type === 'Percentage') {
-      amount = numeric(grossPay) * (numeric(setting.amount_or_rate) / 100);
-    } else if (setting.allowance_type === 'Fixed') {
-      amount = numeric(setting.amount_or_rate);
-    }
-    if (amount <= 0) continue;
-    total += amount;
-    applied.push({ ...setting, amount });
-  }
-  return { total, applied };
+  // Allowance settings are a catalog/configuration list only. Do not apply
+  // these rows globally because allowance amounts can differ per employee.
+  return { total: 0, applied: [] };
 }
 
 async function applyEmployeeDeductionBalances(pool, req, employeeId, salaryCalculationId, payrollPeriod, employeeDeductions) {
@@ -1295,6 +1273,12 @@ async function ensurePieceRatePayrollSchema(pool) {
   await ensureColumn('salary_calculations', 'source_record_ids', 'TEXT NULL AFTER source_type');
   await ensureColumn('salary_calculations', 'employee_deduction_total', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
   try { await pool.execute('ALTER TABLE salary_calculations MODIFY COLUMN payroll_period VARCHAR(20) NULL'); } catch (_) {}
+  try {
+    await pool.execute(`
+      ALTER TABLE salary_calculations
+      MODIFY COLUMN status ENUM('Draft','Submitted','Approved','Finalized','Paid','Released','Superseded','Cancelled') DEFAULT 'Submitted'
+    `);
+  } catch (_) {}
   await ensureColumn('payslips', 'salary_calculation_id', 'INT NULL AFTER payroll_run_id');
   await ensureColumn('payslips', 'payroll_period', 'VARCHAR(20) NULL AFTER wage_type_id');
   await ensureColumn('payslips', 'source_summary', 'TEXT NULL AFTER notes');
@@ -1569,6 +1553,47 @@ async function ensurePieceRatePayrollSchema(pool) {
     )
   `);
 
+  // Daily sewing outputs are kept separate from their employee shares.  This
+  // preserves the actual production amount while making partner splits auditable.
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS piece_rate_outputs (
+      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      payroll_period_id VARCHAR(20) NOT NULL,
+      output_date DATE NOT NULL,
+      sew_type_id BIGINT NULL,
+      operation_type VARCHAR(40) NOT NULL,
+      size_range VARCHAR(40) NULL,
+      quantity_produced DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      rate_per_piece DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      full_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      output_mode ENUM('solo','partner') NOT NULL DEFAULT 'solo',
+      split_rule VARCHAR(40) NOT NULL DEFAULT 'SOLO',
+      status VARCHAR(30) NOT NULL DEFAULT 'Draft',
+      created_by BIGINT NULL,
+      approved_by BIGINT NULL,
+      approved_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_piece_rate_outputs_period_date (payroll_period_id, output_date),
+      INDEX idx_piece_rate_outputs_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS piece_rate_output_shares (
+      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      piece_rate_output_id BIGINT NOT NULL,
+      employee_id BIGINT NOT NULL,
+      partner_role VARCHAR(40) NOT NULL,
+      share_percentage DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+      share_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT fk_piece_rate_output_shares_output
+        FOREIGN KEY (piece_rate_output_id) REFERENCES piece_rate_outputs(id) ON DELETE CASCADE,
+      INDEX idx_piece_rate_output_shares_employee (employee_id, piece_rate_output_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   await ensureColumn('payroll_production_outputs', 'sew_type_code', 'VARCHAR(40) NULL AFTER product_category');
   await ensureColumn('payroll_production_outputs', 'size_range', 'VARCHAR(40) NULL AFTER sew_type_code');
   await ensureColumn('payroll_production_outputs', 'remarks', 'VARCHAR(255) NULL AFTER final_gross_pay');
@@ -1647,7 +1672,7 @@ async function ensurePieceRatePayrollSchema(pool) {
       `INSERT INTO payroll_sew_types (code, description, effective_date, is_active)
        VALUES
          ('UL', 'UL sewing operation', ?, 1),
-         ('MT', 'MT sewing operation', ?, 1),
+         ('MS', 'MS sewing operation', ?, 1),
          ('HL', 'HL sewing operation', ?, 1),
          ('AL', 'AL sewing operation', ?, 1),
          ('DF', 'DF sewing operation', ?, 1)`,
@@ -2927,6 +2952,16 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
     console.log('Wage Type ID:', wage_type_id);
     console.log('Rates to save:', rates);
 
+    const [wageTypeRows] = await pool.execute('SELECT name FROM wage_types WHERE id = ? LIMIT 1', [wage_type_id]);
+    if (!wageTypeRows.length) {
+      return res.status(400).json({ error: 'Invalid wage type.' });
+    }
+    const normalizedWageType = normalizePayrollWageType(wageTypeRows[0].name);
+    const usesBaseRate = normalizedWageType === 'Daily' || normalizedWageType === 'Hourly';
+    if (!Array.isArray(rates) || rates.length === 0) {
+      return res.status(400).json({ error: 'At least one wage rate is required.' });
+    }
+
     // First verify employee exists
     const [empCheck] = await pool.execute(
       'SELECT id, employee_code, first_name, last_name FROM employees WHERE id = ?',
@@ -2959,6 +2994,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
     // Add new rates
     for (const rate of rates) {
       console.log('Adding rate:', rate);
+      const baseRate = usesBaseRate ? (rate.base_rate || rate.rate || null) : null;
       const [insertRes] = await pool.execute(`
         INSERT INTO employee_wage_rates 
         (employee_id, wage_type_id, base_rate, hourly_rate, overtime_rate, sewing_type_id, logistics_region_id, rate, effective_date)
@@ -2966,7 +3002,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
       `, [
         empId,
         wage_type_id,
-        rate.base_rate || null,
+        baseRate,
         rate.hourly_rate || null,
         rate.overtime_rate || null,
         rate.sewing_type_id || null,
@@ -3040,12 +3076,60 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
   }
 });
 
+async function upsertLogisticsPeriodCalculation(pool, employeeId, payrollPeriod, wageTypeId, userId, calculationStatus = 'Draft') {
+  const requestedStatus = calculationStatus === 'Submitted' ? 'Submitted' : 'Draft';
+  const [totals] = await pool.execute(`
+    SELECT COALESCE(SUM(gross_pay), 0) AS gross_pay,
+           COALESCE(SUM(net_pay), 0) AS net_pay,
+           COALESCE(SUM(gross_pay - net_pay), 0) AS total_deductions,
+           COALESCE(SUM(CASE WHEN crew_status IS NULL THEN 1 ELSE 1 END), 0) AS transaction_count,
+           MAX(transaction_date) AS calculation_date
+      FROM logistics_transactions
+     WHERE employee_id = ? AND month_year = ?
+  `, [employeeId, payrollPeriod]);
+  const summary = totals[0];
+  const [existingRows] = await pool.execute(`
+    SELECT id, status FROM salary_calculations
+     WHERE employee_id = ? AND payroll_period = ? AND wage_type_id = ?
+       AND COALESCE(status, '') <> 'Superseded'
+     ORDER BY id DESC LIMIT 1
+  `, [employeeId, payrollPeriod, wageTypeId]);
+  if (existingRows[0] && ['Finalized', 'Paid', 'Released'].includes(existingRows[0].status)) {
+    throw new Error('A finalized or paid logistics calculation cannot be updated. Reopen it through the authorized correction flow.');
+  }
+  if (existingRows[0]) {
+    const nextStatus = existingRows[0].status === 'Draft' && requestedStatus === 'Submitted'
+      ? 'Submitted'
+      : existingRows[0].status;
+    await pool.execute(`
+      UPDATE salary_calculations
+         SET base_rate = 0, quantity = ?, gross_pay = ?, total_deductions = ?, net_pay = ?,
+             calculation_date = ?, calculated_by = ?, source_type = 'logistics_transaction',
+             status = ?
+       WHERE id = ?
+    `, [summary.transaction_count || 0, summary.gross_pay || 0,
+      summary.total_deductions || 0, summary.net_pay || 0,
+      summary.calculation_date || `${payrollPeriod}-01`, userId || null, nextStatus, existingRows[0].id]);
+    return existingRows[0].id;
+  }
+  const [created] = await pool.execute(`
+    INSERT INTO salary_calculations
+      (employee_id, wage_type_id, base_rate, quantity, gross_pay, total_deductions, net_pay,
+       calculation_date, payroll_period, status, calculated_by, source_type)
+    VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'logistics_transaction')
+  `, [employeeId, wageTypeId, summary.transaction_count || 0,
+    summary.gross_pay || 0, summary.total_deductions || 0, summary.net_pay || 0,
+    summary.calculation_date || `${payrollPeriod}-01`, payrollPeriod, requestedStatus, userId || null]);
+  return created.insertId;
+}
+
 // Record logistics transaction (trips completed)
 router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
     const {
+      salary_calculation_id,
       employee_id,
       logistics_region_id,
       rate,
@@ -3053,7 +3137,8 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
       transaction_date,
       driver_employee_id,
       helper1_employee_id,
-      helper2_employee_id
+      helper2_employee_id,
+      calculation_status
     } = req.body;
 
     // Calculate week and month
@@ -3109,28 +3194,13 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
           JSON.stringify(snapshot)
         ]);
 
-        const [salCalcResult] = await pool.execute(`
-          INSERT INTO salary_calculations
-            (employee_id, wage_type_id, base_rate, quantity, gross_pay, total_deductions, net_pay,
-             calculation_date, payroll_period, notes, status, calculated_by, submitted_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, NOW())
-        `, [
-          row.employee.id,
-          wage_type_id,
-          row.base_rate,
-          crew.trip_count,
-          row.gross_pay,
-          totalDeductions,
-          netPay,
-          crew.transaction_date,
-          monthYear,
-          JSON.stringify(snapshot),
-          currentUserId(req)
-        ]);
+        const salaryCalculationId = await upsertLogisticsPeriodCalculation(
+          pool, row.employee.id, monthYear, wage_type_id, currentUserId(req), calculation_status
+        );
 
         savedRows.push({
           logistics_transaction_id: logResult.insertId,
-          salary_calculation_id: salCalcResult.insertId,
+          salary_calculation_id: salaryCalculationId,
           employee_id: row.employee.id,
           role: row.role,
           base_rate: row.base_rate,
@@ -3169,20 +3239,18 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [employee_id, logistics_region_id, rate, rate, trip_reference, transaction_date, week, monthYear, grossPay, netPay, rate]);
 
-    // Also save to salary_calculations for display in records
+    // Recalculate the one logistics payroll record for this employee and period.
     const wage_type_id = 4; // Per-Trip wage type ID
-    const [salCalcResult] = await pool.execute(`
-      INSERT INTO salary_calculations 
-      (employee_id, wage_type_id, base_rate, quantity, gross_pay, sss_deduction, pagibig_deduction, philhealth_deduction, total_deductions, net_pay, calculation_date, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [employee_id, wage_type_id, rate, 1, grossPay, sssDeduction, pagibigDeduction, philhealthDeduction, totalDeductions, netPay, transaction_date, 'Submitted']);
+    const salaryCalculationId = await upsertLogisticsPeriodCalculation(
+      pool, employee_id, monthYear, wage_type_id, currentUserId(req), calculation_status
+    );
 
     res.json({ 
       success: true, 
       id: logResult.insertId,
       amount: rate,
       message: `Recorded 1 trip to ${trip_reference || 'destination'} at ₱${rate}`,
-      salary_calculation_id: salCalcResult.insertId
+      salary_calculation_id: salaryCalculationId
     });
   } catch (err) {
     console.error('Error recording logistics transaction:', err);
@@ -3559,6 +3627,233 @@ router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_a
   }
 });
 
+async function resolveDailyPieceOutput(pool, input) {
+  const outputDate = String(input.output_date || input.production_date || '').slice(0, 10);
+  const payrollPeriod = String(input.payroll_period || input.payroll_period_id || '').trim();
+  const operationType = String(input.operation_type || input.sew_type_code || '').trim().toUpperCase();
+  const sizeRange = String(input.size_range || '').trim();
+  const quantity = Number(input.quantity_produced || 0);
+  const outputMode = String(input.output_mode || (input.partner_employee_id || input.worker2_employee_id ? 'partner' : 'solo')).toLowerCase();
+  const primaryEmployeeId = Number(input.employee_id || input.worker1_employee_id || 0);
+  const partnerEmployeeId = Number(input.partner_employee_id || input.worker2_employee_id || 0) || null;
+  if (!/^\d{4}-\d{2}$/.test(payrollPeriod)) throw new Error('A valid payroll period is required.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(outputDate)) throw new Error('A valid output date is required.');
+  if (outputDate.slice(0, 7) !== payrollPeriod) throw new Error('Output date must fall within the selected payroll period.');
+  if (!operationType || !sizeRange || !(quantity > 0) || !primaryEmployeeId) {
+    throw new Error('Employee, output date, Type of Sew, Size Range, and quantity are required.');
+  }
+  if (!['solo', 'partner'].includes(outputMode)) throw new Error('Output mode must be solo or partner.');
+  if (outputMode === 'partner' && (!partnerEmployeeId || partnerEmployeeId === primaryEmployeeId)) {
+    throw new Error('A different partner employee is required for partner output.');
+  }
+  const rate = await activePieceRate(pool, operationType, sizeRange, outputDate);
+  if (!rate) throw new Error('No active configured rate exists for this Type of Sew, Size Range, and output date.');
+  const fullAmount = roundMoney(quantity * Number(rate.piece_rate));
+  if (outputMode === 'solo') {
+    return { payrollPeriod, outputDate, operationType, sizeRange, quantity, rate, fullAmount, outputMode, splitRule: 'SOLO', shares: [{ employee_id: primaryEmployeeId, partner_role: 'Solo', share_percentage: 100, share_amount: fullAmount }] };
+  }
+  const pairingType = String(input.split_rule || input.pairing_type || 'Standard Sewer-Fixer');
+  const pair = await computeProductionPairPayroll(pool, {
+    payroll_period: payrollPeriod,
+    production_date: outputDate,
+    worker1_employee_id: primaryEmployeeId,
+    worker2_employee_id: partnerEmployeeId,
+    pairing_type: pairingType,
+    sew_type_code: operationType,
+    size_range: sizeRange,
+    quantity_produced: quantity
+  });
+  return {
+    payrollPeriod, outputDate, operationType, sizeRange, quantity, rate, fullAmount,
+    outputMode, splitRule: pairingType,
+    shares: [
+      { employee_id: pair.worker1_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 1' : 'Sewer', share_percentage: pair.worker1_share, share_amount: roundMoney(pair.worker1_earnings) },
+      { employee_id: pair.worker2_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 2' : 'Fixer', share_percentage: pair.worker2_share, share_amount: roundMoney(pair.worker2_earnings) }
+    ]
+  };
+}
+
+async function assertPieceCalculationsMutable(pool, employeeIds, payrollPeriod) {
+  const uniqueIds = [...new Set(employeeIds.map(Number).filter(Boolean))];
+  if (!uniqueIds.length) return;
+  const placeholders = uniqueIds.map(() => '?').join(',');
+  const [rows] = await pool.execute(`
+    SELECT id, employee_id, status FROM salary_calculations
+     WHERE payroll_period = ? AND employee_id IN (${placeholders})
+       AND status IN ('Finalized', 'Paid', 'Released')
+  `, [payrollPeriod, ...uniqueIds]);
+  if (rows.length) throw new Error('A finalized or paid salary calculation exists for this output. Reopen it through an authorized correction flow before editing production.');
+}
+
+async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, userId, calculationStatus = 'Draft') {
+  const uniqueIds = [...new Set(employeeIds.map(Number).filter(Boolean))];
+  const requestedStatus = calculationStatus === 'Submitted' ? 'Submitted' : 'Draft';
+  const [wageTypes] = await pool.execute(`
+    SELECT id FROM wage_types
+     WHERE LOWER(name) IN ('per-piece', 'piece rate')
+     ORDER BY CASE WHEN LOWER(name) = 'per-piece' THEN 0 ELSE 1 END
+     LIMIT 1
+  `);
+  if (!wageTypes[0]) throw new Error('Piece Rate wage type is not configured.');
+  for (const employeeId of uniqueIds) {
+    const [totals] = await pool.execute(`
+      SELECT COALESCE(SUM(s.share_amount), 0) AS gross_pay,
+             COALESCE(SUM(o.quantity_produced), 0) AS total_output
+        FROM piece_rate_output_shares s
+        JOIN piece_rate_outputs o ON o.id = s.piece_rate_output_id
+       WHERE s.employee_id = ? AND o.payroll_period_id = ?
+         AND o.status NOT IN ('Voided')
+    `, [employeeId, payrollPeriod]);
+    const outputGrossPay = roundMoney(totals[0]?.gross_pay || 0);
+    const outputTotal = Number(totals[0]?.total_output || 0);
+    const [existing] = await pool.execute(`
+      SELECT id, status, source_record_ids, total_deductions FROM salary_calculations
+       WHERE employee_id = ? AND payroll_period = ? AND wage_type_id = ?
+         AND status <> 'Superseded'
+       ORDER BY id DESC LIMIT 1
+    `, [employeeId, payrollPeriod, wageTypes[0].id]);
+    if (existing[0]) {
+      if (['Finalized', 'Paid', 'Released'].includes(existing[0].status)) throw new Error('A finalized or paid salary calculation cannot be recomputed.');
+      let baseline = { gross_pay: 0, total_output: 0, total_deductions: Number(existing[0].total_deductions || 0) };
+      try {
+        const source = existing[0].source_record_ids ? JSON.parse(existing[0].source_record_ids) : {};
+        baseline = { ...baseline, ...(source.legacy_baseline || {}) };
+      } catch (_) {}
+      const grossPay = roundMoney(Number(baseline.gross_pay || 0) + outputGrossPay);
+      const totalOutput = Number(baseline.total_output || 0) + outputTotal;
+      const totalDeductions = roundMoney(Number(baseline.total_deductions || 0));
+      const nextStatus = existing[0].status === 'Draft' && requestedStatus === 'Submitted'
+        ? 'Submitted'
+        : existing[0].status;
+      await pool.execute(`
+        UPDATE salary_calculations
+           SET base_rate = 0, quantity = ?, gross_pay = ?, net_pay = ?,
+               total_deductions = ?, calculation_date = ?, calculated_by = ?,
+               source_type = 'piece_rate_output', source_record_ids = ?, status = ?
+         WHERE id = ?
+      `, [totalOutput, grossPay, grossPay - totalDeductions, totalDeductions, `${payrollPeriod}-01`, userId || null,
+        JSON.stringify({ legacy_baseline: baseline }), nextStatus, existing[0].id]);
+    } else {
+      await pool.execute(`
+        INSERT INTO salary_calculations
+          (employee_id, wage_type_id, base_rate, quantity, hours_worked, days_worked,
+           total_allowances, overtime_hours, overtime_amount, gross_pay, sss_deduction,
+           pagibig_deduction, philhealth_deduction, total_deductions, net_pay,
+           calculation_date, payroll_period, status, calculated_by)
+        VALUES (?, ?, 0, ?, 0, 0, 0, 0, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?)
+      `, [employeeId, wageTypes[0].id, outputTotal, outputGrossPay, outputGrossPay, `${payrollPeriod}-01`, payrollPeriod, requestedStatus, userId || null]);
+    }
+  }
+}
+
+router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  const pool = require('../config/db');
+  let connection;
+  try {
+    await ensurePieceRatePayrollSchema(pool);
+    const output = await resolveDailyPieceOutput(pool, req.body);
+    await assertPieceCalculationsMutable(pool, output.shares.map(row => row.employee_id), output.payrollPeriod);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute(`
+      INSERT INTO piece_rate_outputs
+        (payroll_period_id, output_date, operation_type, size_range, quantity_produced,
+         rate_per_piece, full_amount, output_mode, split_rule, status, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?)
+    `, [output.payrollPeriod, output.outputDate, output.operationType, output.sizeRange, output.quantity,
+      output.rate.piece_rate, output.fullAmount, output.outputMode, output.splitRule, currentUserId(req)]);
+    for (const share of output.shares) {
+      await connection.execute(`
+        INSERT INTO piece_rate_output_shares
+          (piece_rate_output_id, employee_id, partner_role, share_percentage, share_amount)
+        VALUES (?, ?, ?, ?, ?)
+      `, [result.insertId, share.employee_id, share.partner_role, share.share_percentage, share.share_amount]);
+    }
+    await recomputePieceRateCalculations(
+      connection, output.shares.map(row => row.employee_id), output.payrollPeriod,
+      currentUserId(req), req.body.calculation_status
+    );
+    await connection.commit();
+    await logPayrollAudit(pool, req, 'piece_rate_daily_output_encoded', {
+      employee_id: output.shares[0].employee_id,
+      remarks: `Encoded ${output.operationType} daily output for ${output.outputDate}`,
+      metadata: { piece_rate_output_id: result.insertId, output }
+    });
+    res.status(201).json({ id: result.insertId, ...output });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('Error encoding daily piece-rate output:', err);
+    res.status(400).json({ error: err.message || 'Failed to encode daily piece-rate output.' });
+  } finally { if (connection) connection.release(); }
+});
+
+router.patch('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  const pool = require('../config/db');
+  let connection;
+  try {
+    await ensurePieceRatePayrollSchema(pool);
+    const [existingRows] = await pool.execute('SELECT * FROM piece_rate_outputs WHERE id = ? LIMIT 1', [req.params.id]);
+    const existing = existingRows[0];
+    if (!existing) return res.status(404).json({ error: 'Daily piece-rate output was not found.' });
+    if (['Finalized', 'Paid', 'Released'].includes(existing.status)) return res.status(409).json({ error: 'Finalized or paid output cannot be edited.' });
+    const [oldShares] = await pool.execute('SELECT employee_id FROM piece_rate_output_shares WHERE piece_rate_output_id = ?', [existing.id]);
+    const output = await resolveDailyPieceOutput(pool, req.body);
+    const affectedEmployees = [...oldShares.map(row => row.employee_id), ...output.shares.map(row => row.employee_id)];
+    await assertPieceCalculationsMutable(pool, affectedEmployees, existing.payroll_period_id);
+    await assertPieceCalculationsMutable(pool, affectedEmployees, output.payrollPeriod);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    await connection.execute(`
+      UPDATE piece_rate_outputs
+         SET payroll_period_id = ?, output_date = ?, operation_type = ?, size_range = ?,
+             quantity_produced = ?, rate_per_piece = ?, full_amount = ?, output_mode = ?,
+             split_rule = ?, updated_at = NOW()
+       WHERE id = ?
+    `, [output.payrollPeriod, output.outputDate, output.operationType, output.sizeRange, output.quantity,
+      output.rate.piece_rate, output.fullAmount, output.outputMode, output.splitRule, existing.id]);
+    await connection.execute('DELETE FROM piece_rate_output_shares WHERE piece_rate_output_id = ?', [existing.id]);
+    for (const share of output.shares) {
+      await connection.execute(`INSERT INTO piece_rate_output_shares
+        (piece_rate_output_id, employee_id, partner_role, share_percentage, share_amount) VALUES (?, ?, ?, ?, ?)`,
+      [existing.id, share.employee_id, share.partner_role, share.share_percentage, share.share_amount]);
+    }
+    const oldEmployeeIds = oldShares.map(row => row.employee_id);
+    const newEmployeeIds = output.shares.map(row => row.employee_id);
+    await recomputePieceRateCalculations(connection, existing.payroll_period_id === output.payrollPeriod ? affectedEmployees : oldEmployeeIds, existing.payroll_period_id, currentUserId(req));
+    if (existing.payroll_period_id !== output.payrollPeriod) await recomputePieceRateCalculations(connection, newEmployeeIds, output.payrollPeriod, currentUserId(req));
+    await connection.commit();
+    await logPayrollAudit(pool, req, 'piece_rate_daily_output_updated', { remarks: `Updated daily piece-rate output ${existing.id}`, metadata: { output } });
+    res.json({ id: existing.id, ...output });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    res.status(400).json({ error: err.message || 'Failed to update daily piece-rate output.' });
+  } finally { if (connection) connection.release(); }
+});
+
+router.delete('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  const pool = require('../config/db');
+  let connection;
+  try {
+    await ensurePieceRatePayrollSchema(pool);
+    const [rows] = await pool.execute('SELECT * FROM piece_rate_outputs WHERE id = ? LIMIT 1', [req.params.id]);
+    const output = rows[0];
+    if (!output) return res.status(404).json({ error: 'Daily piece-rate output was not found.' });
+    if (['Finalized', 'Paid', 'Released'].includes(output.status)) return res.status(409).json({ error: 'Finalized or paid output cannot be deleted.' });
+    const [shares] = await pool.execute('SELECT employee_id FROM piece_rate_output_shares WHERE piece_rate_output_id = ?', [output.id]);
+    await assertPieceCalculationsMutable(pool, shares.map(row => row.employee_id), output.payroll_period_id);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM piece_rate_outputs WHERE id = ?', [output.id]);
+    await recomputePieceRateCalculations(connection, shares.map(row => row.employee_id), output.payroll_period_id, currentUserId(req));
+    await connection.commit();
+    await logPayrollAudit(pool, req, 'piece_rate_daily_output_deleted', { remarks: `Deleted daily piece-rate output ${output.id}` });
+    res.json({ success: true });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    res.status(400).json({ error: err.message || 'Failed to delete daily piece-rate output.' });
+  } finally { if (connection) connection.release(); }
+});
+
 router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
@@ -3699,6 +3994,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     const wageTypeName = wageRows[0]?.name || '';
     const isPieceRate = /piece/i.test(wageTypeName);
     const normalizedWageType = normalizePayrollWageType(wageTypeName);
+    if (isPieceRate) {
+      return res.status(400).json({
+        error: 'Per-Piece payroll must be encoded as daily output records. Use the Piece-Rate Daily Output workflow.'
+      });
+    }
     if (isTripBasedWageType(wageTypeName)) {
       return res.status(400).json({
         error: 'Trip-Based and Logistics payroll must be generated from approved delivery trips. Use the Logistics Trip Payroll workflow.'
@@ -3803,8 +4103,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       serverGrossPay = pieceComputation.final_gross_pay + parseFloat(total_allowances || 0);
     }
 
-    // Validate required fields
-    if (!employee_id || !wage_type_id || (!isPieceRate && !serverBaseRate) || !serverGrossPay) {
+    const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
+
+    // Validate required fields. Drafts may be incomplete so officers can
+    // return later; submitted calculations must have a computed gross pay.
+    if (!employee_id || !wage_type_id || (!isPieceRate && !serverBaseRate) || (calculationStatus !== 'Draft' && !serverGrossPay)) {
       return res.status(400).json({ 
         error: isPieceRate
           ? 'Required fields: employee_id, wage_type_id, Type of Sew, Size Range, worker category, quantity produced'
@@ -3812,7 +4115,6 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       });
     }
 
-    const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
     const submittedAt = calculationStatus === 'Submitted' ? new Date() : null;
     const computedDeductions = await computePayrollDeductions(pool, employee_id, serverGrossPay, calcDate);
     const lateDeduction = numeric(validationSnapshot?.late_deduction);
@@ -3851,38 +4153,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       }))
     };
 
-    // Insert into salary_calculations table
-    const [result] = await pool.execute(`
-      INSERT INTO salary_calculations (
-        employee_id,
-        wage_type_id,
-        base_rate,
-        quantity,
-        hours_worked,
-        days_worked,
-        housing_allowance,
-        meal_allowance,
-        transport_allowance,
-        bonus_allowance,
-        total_allowances,
-        overtime_hours,
-        overtime_amount,
-        gross_pay,
-        sss_deduction,
-        pagibig_deduction,
-        philhealth_deduction,
-        total_deductions,
-        employee_deduction_total,
-        net_pay,
-        calculation_date,
-        payroll_period,
-        agency_name,
-        validation_snapshot,
-        status,
-        calculated_by,
-        submitted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
+    const calculationValues = [
       employee_id,
       wage_type_id,
       serverBaseRate,
@@ -3910,14 +4181,97 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       calculationStatus,
       currentUserId(req),
       submittedAt
-    ]);
+    ];
+
+    let salaryCalculationId = null;
+    if (salary_calculation_id) {
+      const [draftRows] = await pool.execute(
+        'SELECT id, status FROM salary_calculations WHERE id = ? AND employee_id = ? LIMIT 1',
+        [salary_calculation_id, employee_id]
+      );
+      if (!draftRows.length) return res.status(404).json({ error: 'Draft salary calculation was not found.' });
+      if (draftRows[0].status !== 'Draft') return res.status(409).json({ error: 'Only draft salary calculations can be continued or updated.' });
+      await pool.execute(`
+        UPDATE salary_calculations
+           SET wage_type_id = ?, base_rate = ?, quantity = ?, hours_worked = ?, days_worked = ?,
+               housing_allowance = ?, meal_allowance = ?, transport_allowance = ?, bonus_allowance = ?,
+               total_allowances = ?, overtime_hours = ?, overtime_amount = ?, gross_pay = ?,
+               sss_deduction = ?, pagibig_deduction = ?, philhealth_deduction = ?,
+               total_deductions = ?, employee_deduction_total = ?, net_pay = ?, calculation_date = ?,
+               payroll_period = ?, agency_name = ?, validation_snapshot = ?, status = ?,
+               calculated_by = ?, submitted_at = ?, updated_at = NOW()
+         WHERE id = ?
+      `, [
+        wage_type_id,
+        serverBaseRate,
+        serverQuantity,
+        isHourlyRate && validationSnapshot ? validationSnapshot.hours_worked : hours_worked || 0,
+        (isDailyRate || isMonthlyRate) && validationSnapshot ? validationSnapshot.days_worked : days_worked || 0,
+        housing_allowance || 0,
+        meal_allowance || 0,
+        transport_allowance || 0,
+        bonus_allowance || 0,
+        total_allowances || 0,
+        overtime_hours || 0,
+        overtime_amount || 0,
+        serverGrossPay,
+        deductionByName.sss || 0,
+        deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
+        deductionByName.philhealth || 0,
+        computedTotalDeductions,
+        computedDeductions.employeeTotal,
+        computedNetPay,
+        calcDate,
+        payroll_period || calcDate.slice(0, 7),
+        agency_name || null,
+        JSON.stringify(snapshotForStorage),
+        calculationStatus,
+        currentUserId(req),
+        submittedAt,
+        salary_calculation_id
+      ]);
+      salaryCalculationId = Number(salary_calculation_id);
+    } else {
+      const [result] = await pool.execute(`
+        INSERT INTO salary_calculations (
+          employee_id,
+          wage_type_id,
+          base_rate,
+          quantity,
+          hours_worked,
+          days_worked,
+          housing_allowance,
+          meal_allowance,
+          transport_allowance,
+          bonus_allowance,
+          total_allowances,
+          overtime_hours,
+          overtime_amount,
+          gross_pay,
+          sss_deduction,
+          pagibig_deduction,
+          philhealth_deduction,
+          total_deductions,
+          employee_deduction_total,
+          net_pay,
+          calculation_date,
+          payroll_period,
+          agency_name,
+          validation_snapshot,
+          status,
+          calculated_by,
+          submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, calculationValues);
+      salaryCalculationId = result.insertId;
+    }
 
     if (calculationStatus === 'Submitted' && computedDeductions.employee.length) {
       await applyEmployeeDeductionBalances(
         pool,
         req,
         employee_id,
-        result.insertId,
+        salaryCalculationId,
         payroll_period || calcDate.slice(0, 7),
         computedDeductions.employee
       );
@@ -3948,7 +4302,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
           pair.worker2_share,
           pair.worker1_earnings,
           pair.worker2_earnings,
-          JSON.stringify({ ...pair.rule_snapshot, salary_calculation_id: result.insertId }),
+          JSON.stringify({ ...pair.rule_snapshot, salary_calculation_id: salaryCalculationId }),
           currentUserId(req)
         ]);
       }
@@ -3980,21 +4334,21 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       ]);
     }
 
-    console.log('✅ Salary calculation saved with ID:', result.insertId);
+    console.log('✅ Salary calculation saved with ID:', salaryCalculationId);
     await logPayrollAudit(pool, req, calculationStatus === 'Draft' ? 'salary_calculation_draft' : 'salary_calculation_submitted', {
       employee_id,
-      salary_calculation_id: result.insertId,
+      salary_calculation_id: salaryCalculationId,
       remarks: `${calculationStatus} salary calculation`,
       metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.applied, piece_rate: pieceComputation }
     });
     
     res.json({ 
       success: true, 
-      id: result.insertId,
+      id: salaryCalculationId,
       message: `Salary calculation saved for employee ID ${employee_id}`,
       gross_pay: serverGrossPay,
       net_pay: computedNetPay,
-      calculation_id: result.insertId
+      calculation_id: salaryCalculationId
     });
   } catch (err) {
     console.error('❌ Error saving salary calculation:', err);
@@ -4995,6 +5349,7 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
         sc.net_pay,
         sc.status,
         sc.calculation_date,
+        sc.payroll_period,
         sc.agency_name,
         sc.created_at,
         sc.updated_at
@@ -5003,6 +5358,8 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       LEFT JOIN departments d ON d.id = e.department_id
       LEFT JOIN wage_types w ON w.id = sc.wage_type_id
       WHERE 1=1
+        AND COALESCE(sc.status, '') <> 'Superseded'
+        AND COALESCE(sc.status, '') <> ''
     `;
     const params = [];
 
@@ -5670,15 +6027,119 @@ async function buildPiecePayrollRegister(pool, monthYear) {
   };
 }
 
+async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
+  await ensurePieceRatePayrollSchema(pool);
+  if (!/^\d{4}-\d{2}$/.test(String(payrollPeriod || ''))) throw new Error('A valid payroll period is required.');
+  const shareFilter = kind === '55' ? 'AND s.share_percentage = 55.00' : kind === '45' ? 'AND s.share_percentage = 45.00' : '';
+  const [rows] = await pool.execute(`
+    SELECT o.id, o.output_date, o.operation_type, o.size_range, o.quantity_produced,
+           o.rate_per_piece, o.full_amount, o.output_mode, o.split_rule,
+           s.employee_id, s.partner_role, s.share_percentage, s.share_amount,
+           e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
+           COALESCE(NULLIF(e.agency_name, ''), 'Direct') AS agency
+      FROM piece_rate_outputs o
+      JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+      JOIN employees e ON e.id = s.employee_id
+     WHERE o.payroll_period_id = ? AND o.status <> 'Voided' ${shareFilter}
+     ORDER BY e.last_name, e.first_name, o.operation_type, o.size_range, o.output_date, o.id
+  `, [payrollPeriod]);
+  const dates = [...new Set(rows.map(row => String(row.output_date).slice(0, 10)))].sort();
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = [row.employee_id, row.operation_type, row.size_range || '', row.rate_per_piece].join('|');
+    const current = grouped.get(key) || {
+      employee_id: row.employee_id, employee_name: row.employee_name, employee_code: row.employee_code,
+      agency: row.agency, operation_type: row.operation_type, size_range: row.size_range,
+      rate_per_piece: Number(row.rate_per_piece), partner_roles: new Set(), daily: {}, total_output: 0, amount: 0
+    };
+    const dayValue = kind === 'main' ? Number(row.quantity_produced) : Number(row.share_amount);
+    current.daily[String(row.output_date).slice(0, 10)] = roundMoney((current.daily[String(row.output_date).slice(0, 10)] || 0) + dayValue);
+    current.total_output += Number(row.quantity_produced);
+    current.amount += kind === 'main' ? Number(row.full_amount) : Number(row.share_amount);
+    current.partner_roles.add(row.partner_role);
+    grouped.set(key, current);
+  }
+  const employees = new Map();
+  for (const row of grouped.values()) {
+    const employee = employees.get(row.employee_id) || { employee_id: row.employee_id, employee_name: row.employee_name, employee_code: row.employee_code, agency: row.agency, rows: [], total_output: 0, total_amount: 0 };
+    row.partner_roles = [...row.partner_roles].join(', ');
+    row.total_output = roundMoney(row.total_output);
+    row.amount = roundMoney(row.amount);
+    employee.rows.push(row);
+    employee.total_output += row.total_output;
+    employee.total_amount += row.amount;
+    employees.set(row.employee_id, employee);
+  }
+  const employeeRows = [...employees.values()].map(employee => ({ ...employee, total_output: roundMoney(employee.total_output), total_amount: roundMoney(employee.total_amount) }));
+  return {
+    payroll_period: payrollPeriod, kind, dates, employees: employeeRows,
+    totals: { total_output: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_output, 0)), total_amount: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_amount, 0)) }
+  };
+}
+
+async function buildSwrFxrSummary(pool, payrollPeriod) {
+  await ensurePieceRatePayrollSchema(pool);
+  const [rows] = await pool.execute(`
+    SELECT o.id, o.output_date, o.split_rule, o.full_amount,
+           sewer.employee_id AS sewer_id, sewer.share_amount AS sewer_amount,
+           CONCAT(es.last_name, ', ', es.first_name) AS sewer_employee,
+           COALESCE(NULLIF(es.agency_name, ''), 'Direct') AS agency,
+           fixer.employee_id AS fixer_id, fixer.share_amount AS fixer_amount,
+           CONCAT(ef.last_name, ', ', ef.first_name) AS fixer_employee
+      FROM piece_rate_outputs o
+      JOIN piece_rate_output_shares sewer ON sewer.piece_rate_output_id = o.id AND sewer.partner_role = 'Sewer'
+      JOIN piece_rate_output_shares fixer ON fixer.piece_rate_output_id = o.id AND fixer.partner_role = 'Fixer'
+      JOIN employees es ON es.id = sewer.employee_id
+      JOIN employees ef ON ef.id = fixer.employee_id
+     WHERE o.payroll_period_id = ? AND o.output_mode = 'partner'
+       AND o.split_rule = 'Standard Sewer-Fixer' AND o.status <> 'Voided'
+     ORDER BY agency, sewer_employee, fixer_employee, o.output_date
+  `, [payrollPeriod]);
+  const pairs = new Map();
+  for (const row of rows) {
+    const key = `${row.sewer_id}|${row.fixer_id}|${row.agency}`;
+    const current = pairs.get(key) || { agency: row.agency, no_of_days: new Set(), sewer_employee: row.sewer_employee, sewer_amount: 0, fixer_employee: row.fixer_employee, fixer_amount: 0, partner_information: 'Sewer + Fixer (55% / 45%)' };
+    current.no_of_days.add(String(row.output_date).slice(0, 10));
+    current.sewer_amount += Number(row.sewer_amount);
+    current.fixer_amount += Number(row.fixer_amount);
+    pairs.set(key, current);
+  }
+  const summaryRows = [...pairs.values()].map(row => ({ ...row, no_of_days: row.no_of_days.size, sewer_amount: roundMoney(row.sewer_amount), fixer_amount: roundMoney(row.fixer_amount), combined_total: roundMoney(row.sewer_amount + row.fixer_amount) }));
+  return { payroll_period: payrollPeriod, rows: summaryRows, totals: { sewer_amount: roundMoney(summaryRows.reduce((sum, row) => sum + row.sewer_amount, 0)), fixer_amount: roundMoney(summaryRows.reduce((sum, row) => sum + row.fixer_amount, 0)), combined_total: roundMoney(summaryRows.reduce((sum, row) => sum + row.combined_total, 0)) } };
+}
+
+router.get('/sewing-registries', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const kind = String(req.query.kind || 'main');
+    if (!['main', '55', '45'].includes(kind)) return res.status(400).json({ error: 'Registry kind must be main, 55, or 45.' });
+    res.json(await buildSewingRegistry(require('../config/db'), req.query.month_year, kind));
+  } catch (err) { res.status(400).json({ error: err.message || 'Failed to build sewing registry.' }); }
+});
+
+router.get('/swr-fxr-summary', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try { res.json(await buildSwrFxrSummary(require('../config/db'), req.query.month_year)); }
+  catch (err) { res.status(400).json({ error: err.message || 'Failed to build SWR-FXR summary.' }); }
+});
+
 async function listSwrFxrProductionPeriods(pool) {
   await ensurePieceRatePayrollSchema(pool);
   const [rows] = await pool.execute(`
-    SELECT payroll_period,
-           MIN(production_date) AS start_date,
-           MAX(production_date) AS end_date,
-           COUNT(*) AS production_pair_count
-      FROM payroll_production_pairs
-     WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}$'
+    SELECT payroll_period, MIN(start_date) AS start_date, MAX(end_date) AS end_date,
+           SUM(production_pair_count) AS production_pair_count
+      FROM (
+        SELECT payroll_period_id AS payroll_period, MIN(output_date) AS start_date,
+               MAX(output_date) AS end_date, COUNT(*) AS production_pair_count
+          FROM piece_rate_outputs
+         WHERE output_mode = 'partner' AND split_rule = 'Standard Sewer-Fixer'
+           AND payroll_period_id REGEXP '^[0-9]{4}-[0-9]{2}$'
+         GROUP BY payroll_period_id
+        UNION ALL
+        SELECT payroll_period, MIN(production_date) AS start_date,
+               MAX(production_date) AS end_date, COUNT(*) AS production_pair_count
+          FROM payroll_production_pairs
+         WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}$'
+         GROUP BY payroll_period
+      ) periods
      GROUP BY payroll_period
      ORDER BY payroll_period DESC
      LIMIT 24
@@ -5826,6 +6287,29 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
         ORDER BY category, name
       `);
       rows = settings;
+    } else if (report === 'swr-fxr-summary') {
+      const summary = await buildSwrFxrSummary(pool, month_year);
+      rows = summary.rows.map(row => ({
+        agency: row.agency, no_of_days: row.no_of_days, sewer_employee: row.sewer_employee,
+        sewer_amount: row.sewer_amount, fixer_employee: row.fixer_employee, fixer_amount: row.fixer_amount,
+        combined_total: row.combined_total, partner_information: row.partner_information
+      }));
+      rows.push({ agency: 'TOTAL', sewer_amount: summary.totals.sewer_amount, fixer_amount: summary.totals.fixer_amount, combined_total: summary.totals.combined_total });
+    } else if (['sewing-registry', 'sewing-55-registry', 'sewing-45-registry'].includes(report)) {
+      const kind = report === 'sewing-55-registry' ? '55' : report === 'sewing-45-registry' ? '45' : 'main';
+      const registry = await buildSewingRegistry(pool, month_year, kind);
+      rows = registry.employees.flatMap(employee => employee.rows.map(row => ({
+        employee: employee.employee_name,
+        agency: employee.agency,
+        operation_type: row.operation_type,
+        size_range: row.size_range,
+        rate_per_piece: row.rate_per_piece,
+        total_output: row.total_output,
+        amount: row.amount,
+        partner_role: row.partner_roles,
+        ...Object.fromEntries(registry.dates.map(date => [date, row.daily[date] || 0]))
+      })));
+      rows.push({ employee: 'TOTAL', total_output: registry.totals.total_output, amount: registry.totals.total_amount });
     } else if ([
       'piece-production-register',
       'piece-sewer-register',

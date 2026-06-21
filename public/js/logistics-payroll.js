@@ -89,7 +89,7 @@
   function renderRates() {
     const target = document.getElementById('logistics-rates-grid');
     if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Base</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.rates.map(row => `
+    target.innerHTML = `<table><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Trip Rate</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.rates.map(row => `
       <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} — ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}×</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateLogisticsRate', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="11">No logistics rates configured.</td></tr>'}</tbody></table>`;
   }
@@ -324,7 +324,7 @@
     if (!target) return;
     target.innerHTML = `<div class="swr-fxr-sheet">
       <div class="swr-fxr-heading"><strong>MARULAS INDUSTRIAL CORPORATION</strong><span>SWR-FXR-SUM PAYROLL REGISTRY</span><span>PAYROLL PERIOD: ${escapeHtml(result.payroll_period || '')}</span></div>
-      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer, 'Sewer')}${registryCell(row.fixer, 'Fixer')}<td>${money(row.combined_amount)}</td></tr>`).join('') || '<tr><td colspan="10">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="3">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>GRAND TOTAL<br>${money(result.totals?.combined_payroll)}</th></tr></tfoot></table></div>
+      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th><th rowspan="2">PARTNER INFORMATION</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer, 'Sewer')}${registryCell(row.fixer, 'Fixer')}<td>${money(row.combined_amount)}</td><td>${escapeHtml(row.partner_information || 'Sewer + Fixer (55% / 45%)')}</td></tr>`).join('') || '<tr><td colspan="11">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="3">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>GRAND TOTAL<br>${money(result.totals?.combined_payroll)}</th><th></th></tr></tfoot></table></div>
       <div class="swr-fxr-agency-totals"><h3>Agency Totals</h3><table><thead><tr><th>Agency</th><th>Sewer</th><th>Fixer</th><th>Total</th></tr></thead><tbody>${result.agency_totals.map(row => `<tr><td>${escapeHtml(row.agency)}</td><td>${money(row.sewer_amount)}</td><td>${money(row.fixer_amount)}</td><td>${money(row.total_amount)}</td></tr>`).join('') || '<tr><td colspan="4">No agency totals.</td></tr>'}</tbody></table></div>
     </div>`;
   }
@@ -367,14 +367,30 @@
   async function generateSwrFxrRegistry() {
     const period = document.getElementById('swr-fxr-period')?.value || currentMonth();
     try {
-      const result = await request('/api/payroll/swr-fxr-sum/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ month_year: period })
-      });
+      const summary = await request(`/api/payroll/swr-fxr-summary?month_year=${encodeURIComponent(period)}`);
+      const agencyMap = new Map();
+      const result = {
+        payroll_period: summary.payroll_period,
+        rows: (summary.rows || []).map((row, index) => {
+          const agency = agencyMap.get(row.agency) || { agency: row.agency, sewer_amount: 0, fixer_amount: 0, total_amount: 0 };
+          agency.sewer_amount += Number(row.sewer_amount || 0);
+          agency.fixer_amount += Number(row.fixer_amount || 0);
+          agency.total_amount += Number(row.combined_total || 0);
+          agencyMap.set(row.agency, agency);
+          return {
+            line_number: index + 1,
+            sewer: { agency: row.agency, no_of_days: row.no_of_days, employee: row.sewer_employee, payroll_amount: row.sewer_amount },
+            fixer: { agency: row.agency, no_of_days: row.no_of_days, employee: row.fixer_employee, payroll_amount: row.fixer_amount },
+            combined_amount: row.combined_total,
+            partner_information: row.partner_information
+          };
+        }),
+        agency_totals: [...agencyMap.values()],
+        totals: { sewer_share: summary.totals?.sewer_amount || 0, fixer_share: summary.totals?.fixer_amount || 0, combined_payroll: summary.totals?.combined_total || 0 }
+      };
       renderSwrFxrRegistry(result);
       const hint = document.getElementById('swr-fxr-period-hint');
-      if (hint) hint.textContent = `Registry generated from ${Number(result.production_pair_count || 0)} encoded Sewer/Fixer production pair(s).`;
+      if (hint) hint.textContent = `Registry generated from ${Number(result.rows.length || 0)} encoded Sewer/Fixer pair(s).`;
       return result;
     } catch (error) {
       renderSwrFxrRegistryEmpty(error.message);

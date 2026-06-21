@@ -229,7 +229,7 @@ async function migrate() {
         `INSERT INTO payroll_sew_types (code, description, effective_date, is_active)
          VALUES
            ('UL', 'UL sewing operation', ?, 1),
-           ('MT', 'MT sewing operation', ?, 1),
+           ('MS', 'MS sewing operation', ?, 1),
            ('HL', 'HL sewing operation', ?, 1),
            ('AL', 'AL sewing operation', ?, 1),
            ('DF', 'DF sewing operation', ?, 1)`,

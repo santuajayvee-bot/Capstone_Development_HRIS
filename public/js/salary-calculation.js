@@ -13,6 +13,7 @@ let salaryInputListenersAttached = false;
 let salaryPieceRowCounter = 0;
 let salaryPayrollValidation = null;
 let salaryAgencyList = [];
+let currentSalaryDraftId = null;
 
 function salaryEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -68,6 +69,16 @@ async function loadSalaryCalculationPage() {
   }
 
   await fetchSalaryEmpList();
+
+  const pendingDraft = sessionStorage.getItem('continueSalaryDraft');
+  if (pendingDraft) {
+    sessionStorage.removeItem('continueSalaryDraft');
+    try {
+      await restoreSalaryDraftFromRecord(JSON.parse(pendingDraft));
+    } catch (err) {
+      console.error('Failed to restore salary draft:', err);
+    }
+  }
 
   const periodInput = document.getElementById('salary-payroll-period');
   if (periodInput && !periodInput.value) {
@@ -146,6 +157,8 @@ function salaryMoney(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+window.restoreSalaryDraftFromRecord = restoreSalaryDraftFromRecord;
+
 function setSummaryField(id, value) {
   const element = document.getElementById(id);
   if (!element) return;
@@ -155,12 +168,20 @@ function setSummaryField(id, value) {
 
 function updateSalaryRateVisibility(wageType) {
   const normalized = normalizeSalaryWageType(wageType);
-  const hideRate = normalized === 'Per-Piece';
+  const hideRate = normalized === 'Per-Piece' || normalized === 'Per-Trip';
   const rateField = document.getElementById('salary-rate-field');
   const summaryRateWrap = document.getElementById('summary-rate-wrap');
+  const summaryBaseLabel = document.getElementById('summary-base-label');
   const wageInfo = document.getElementById('salary-employee-wage-info');
   if (rateField) rateField.style.display = hideRate ? 'none' : '';
   if (summaryRateWrap) summaryRateWrap.style.display = hideRate ? 'none' : '';
+  if (summaryBaseLabel) {
+    summaryBaseLabel.textContent = normalized === 'Per-Piece'
+      ? 'Piece Earnings'
+      : normalized === 'Per-Trip'
+        ? 'Trip Earnings'
+        : 'Base Pay';
+  }
   if (hideRate && wageInfo && currentSalaryEmployee) {
     wageInfo.textContent = normalized;
   }
@@ -268,6 +289,14 @@ function pieceOptionHtml(type) {
       .filter(row => Number(row.is_active) === 1)
       .map(row => `<option value="${row.code}">${row.code}${row.description ? ` - ${row.description}` : ''}</option>`)
       .join('');
+  }
+  if (type === 'size') {
+    return (window.pieceRateConfig?.size_ranges || [])
+      .filter(row => Number(row.is_active) === 1)
+      .map(row => `<option value="${row.size_range}">${row.size_range}${row.description ? ` - ${row.description}` : ''}</option>`)
+      .join('');
+  }
+  return '';
 }
 
 // A piece row can be created while the payroll configuration is still loading.
@@ -288,11 +317,6 @@ function refreshSalaryPieceRowOptions() {
   });
 
   calculateSalaryNow();
-}
-  return (window.pieceRateConfig?.size_ranges || [])
-    .filter(row => Number(row.is_active) === 1)
-    .map(row => `<option value="${row.size_range}">${row.size_range}${row.description ? ` - ${row.description}` : ''}</option>`)
-    .join('');
 }
 
 function addSalaryPieceRow(row = {}) {
@@ -817,6 +841,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   console.log(`\n=== Employee Selection ===`);
   console.log(`✅ Selected: ${code} - ${first} ${last}`);
   console.log(`Employee ID (from frontend): ${id}`);
+  currentSalaryDraftId = null;
   
   // Hide dropdown
   document.getElementById('salary-employee-dropdown').style.display = 'none';
@@ -905,7 +930,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       document.getElementById('salary-employee-name').textContent = `${code} - ${first} ${last}`;
       document.getElementById('salary-employee-dept-info').textContent = dept || '—';
       document.getElementById('salary-employee-pos-info').textContent = pos || '—';
-      document.getElementById('salary-employee-wage-info').textContent = normalizedWageType === 'Per-Piece'
+      document.getElementById('salary-employee-wage-info').textContent = ['Per-Piece', 'Per-Trip'].includes(normalizedWageType)
         ? normalizedWageType
         : `${config.wage_type} • ₱${currentSalaryEmployee.rate.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
     }
@@ -942,10 +967,46 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   }
 }
 
+async function restoreSalaryDraftFromRecord(record) {
+  if (!record || record.status !== 'Draft') return;
+  if (!salaryEmpList.length) await fetchSalaryEmpList();
+  const employee = salaryEmpList.find(emp => String(emp.id) === String(record.employee_id)) || {};
+  const nameParts = String(record.employee_name || '').trim().split(/\s+/);
+  await clickSalaryEmployee(
+    record.employee_id,
+    record.employee_code || employee.employee_code || '',
+    employee.first_name || nameParts[0] || '',
+    employee.last_name || nameParts.slice(1).join(' ') || '',
+    record.department || employee.department || '',
+    record.position || employee.position || ''
+  );
+
+  currentSalaryDraftId = record.id;
+  const setValue = (id, value) => {
+    const element = document.getElementById(id);
+    if (element) element.value = value ?? '';
+  };
+  setValue('salary-payroll-period', record.payroll_period || String(record.calculation_date || '').slice(0, 7));
+  setValue('salary-hours-worked', Number(record.hours_worked || 0) || '');
+  setValue('salary-days-worked', Number(record.days_worked || 0) || '');
+  setValue('salary-housing', Number(record.housing_allowance || 0));
+  setValue('salary-meal', Number(record.meal_allowance || 0));
+  setValue('salary-transport', Number(record.transport_allowance || 0));
+  setValue('salary-bonus', Number(record.bonus_allowance || 0));
+  setValue('salary-ot-hours', Number(record.overtime_hours || 0));
+  if (record.agency_name) setValue('salary-agency', record.agency_name);
+  calculateSalaryNow();
+  if (typeof showAlert === 'function') {
+    await showAlert('Draft loaded. You can continue editing, save it again, or submit it.', 'Draft Loaded', 'success');
+  }
+}
+
 // Show appropriate wage structure form based on wage type
 function showWageStructureForm(wageType) {
   wageType = normalizeSalaryWageType(wageType);
   updateSalaryRateVisibility(wageType);
+  const dailyOutputButton = document.getElementById('save-daily-output-btn');
+  if (dailyOutputButton) dailyOutputButton.style.display = ['Per-Piece', 'Per-Trip'].includes(wageType) ? 'inline-flex' : 'none';
   console.log('🔄 showWageStructureForm called with:', wageType);
   
   const perPieceSection = document.getElementById('per-piece-section');
@@ -1247,6 +1308,12 @@ function attachSalaryInputListeners() {
       if (currentSalaryEmployee && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
         loadSalaryPayrollValidation();
       }
+      if (currentSalaryEmployee && ['Per-Piece', 'Per-Trip'].includes(currentSalaryEmployee.wageType)
+        && periodInput.dataset.activeEncodingPeriod
+        && periodInput.dataset.activeEncodingPeriod !== periodInput.value) {
+        resetCalculationForm();
+        periodInput.dataset.activeEncodingPeriod = '';
+      }
     });
   }
   salaryInputListenersAttached = attachedAny;
@@ -1259,7 +1326,12 @@ async function saveSalaryAsDraft() {
     alert('❌ Select an employee first');
     return;
   }
-  await saveSalaryRecord('Draft');
+  try {
+    await saveSalaryRecord('Draft');
+  } catch (e) {
+    console.error('Error saving salary draft:', e);
+    alert('Draft was not saved: ' + e.message);
+  }
   return;
   
   console.log('\n═══════════════════════════════════════════════════════════');
@@ -1466,7 +1538,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     hoursWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.hours_worked || 0) : parseFloat(document.getElementById('salary-hours-worked').value) || 0;
     basePayAmount = (hoursWorked + otHours) * currentSalaryEmployee.rate;
     
-    if (hoursWorked === 0) {
+    if (status !== 'Draft' && hoursWorked === 0) {
       await showAlert('Please enter hours worked', 'Warning', 'warning');
       return;
     }
@@ -1474,7 +1546,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     daysWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.days_worked || 0) : parseFloat(document.getElementById('salary-days-worked').value) || 0;
     basePayAmount = daysWorked * currentSalaryEmployee.rate;
     
-    if (daysWorked === 0) {
+    if (status !== 'Draft' && daysWorked === 0) {
       await showAlert('Please enter days worked', 'Warning', 'warning');
       return;
     }
@@ -1548,9 +1620,10 @@ async function saveSalaryRecord(status = 'Submitted') {
   
   const today = new Date();
   const payload = {
+    salary_calculation_id: currentSalaryDraftId || null,
     employee_id: currentSalaryEmployee.id,
     wage_type_id: currentSalaryEmployee.wageTypeId || 1,
-    base_rate: currentSalaryEmployee.rate,
+    base_rate: ['Per-Piece', 'Per-Trip'].includes(currentSalaryEmployee.wageType) ? 0 : currentSalaryEmployee.rate,
     quantity,
     hours_worked: hoursWorked,
     days_worked: daysWorked,
@@ -1584,7 +1657,8 @@ async function saveSalaryRecord(status = 'Submitted') {
       helper2_employee_id: logistics.helper2Id || null,
       driver_rate: logistics.driverRate,
       helper_rate: logistics.helperRate,
-      trip_reference: `Trip-${Date.now()}`
+      trip_reference: `Trip-${Date.now()}`,
+      calculation_status: status
     };
     const logisticsRes = await apiFetch('/api/payroll/transactions/logistics', {
       method: 'POST',
@@ -1594,7 +1668,9 @@ async function saveSalaryRecord(status = 'Submitted') {
     const logisticsResult = await logisticsRes.json().catch(() => ({}));
     if (!logisticsRes.ok) throw new Error(logisticsResult.error || 'Failed to save logistics crew transaction');
     await showAlert(`${logisticsResult.message}\n\nCrew Status: ${logisticsResult.crew_status}\nMissing Helper Share: ${salaryMoney(logisticsResult.missing_helper_share)}`, 'Success', 'success');
-    resetCalculationForm();
+    const tripPeriodInput = document.getElementById('salary-payroll-period');
+    if (tripPeriodInput) tripPeriodInput.dataset.activeEncodingPeriod = payload.payroll_period;
+    resetCalculationForm({ preserveTripConfiguration: true });
     if (typeof loadSalaryCalculations === 'function') loadSalaryCalculations();
     return;
   }
@@ -1614,6 +1690,43 @@ async function saveSalaryRecord(status = 'Submitted') {
     payload.quota_incentive = currentSalaryEmployee.piecePreview?.quota_incentive || 0;
     payload.sunday_incentive = currentSalaryEmployee.piecePreview?.sunday_incentive || 0;
     payload.special_incentive = currentSalaryEmployee.piecePreview?.special_incentive || 0;
+
+    // A per-piece save is a daily output entry, not a new payroll calculation.
+    // The API aggregates each share into the employee's one calculation record
+    // for the selected payroll period.
+    const dailyRows = currentSalaryEmployee.piecePreview?.rows || [];
+    const savedOutputs = [];
+    for (const row of dailyRows) {
+      const outputResponse = await apiFetch('/api/payroll/piece-rate-outputs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payroll_period: payload.payroll_period,
+          production_date: payload.production_date,
+          employee_id: currentSalaryEmployee.id,
+          partner_employee_id: payload.partner_employee_id,
+          output_mode: 'partner',
+          calculation_status: status,
+          pairing_type: payload.pairing_type,
+          sew_type_code: row.sew_type_code,
+          size_range: row.size_range,
+          quantity_produced: row.quantity_produced
+        })
+      });
+      const outputResult = await outputResponse.json().catch(() => ({}));
+      if (!outputResponse.ok) throw new Error(outputResult.error || 'Failed to save daily piece-rate output.');
+      savedOutputs.push(outputResult);
+    }
+    await showAlert(
+      `${savedOutputs.length} daily per-piece output${savedOutputs.length === 1 ? '' : 's'} saved. The payroll record for ${payload.payroll_period} was updated.`,
+      'Daily Output Saved',
+      'success'
+    );
+    const piecePeriodInput = document.getElementById('salary-payroll-period');
+    if (piecePeriodInput) piecePeriodInput.dataset.activeEncodingPeriod = payload.payroll_period;
+    resetCalculationForm({ preservePieceConfiguration: true });
+    if (typeof loadSalaryCalculations === 'function') loadSalaryCalculations();
+    return;
   }
   
   console.log('📤 Sending payload to API:', payload);
@@ -1626,6 +1739,7 @@ async function saveSalaryRecord(status = 'Submitted') {
   
   if (res.ok) {
     const result = await res.json();
+    currentSalaryDraftId = status === 'Draft' ? (result.calculation_id || result.id || currentSalaryDraftId) : null;
     console.log('✅ Salary calculation saved to database:', result);
     
     let wageDetails = '';
@@ -1636,7 +1750,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     }
     
     await showAlert(`Salary calculation ${status === 'Draft' ? 'saved as draft' : 'submitted'}.\n\nEmployee: ${currentSalaryEmployee.first} ${currentSalaryEmployee.last}\nWage Type: ${currentSalaryEmployee.wageType}\n${wageDetails}Gross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 'Success', 'success');
-    resetCalculationForm();
+    if (status !== 'Draft') resetCalculationForm({ preservePieceConfiguration: currentSalaryEmployee.wageType === 'Per-Piece' });
     if (typeof loadSalaryCalculations === 'function') loadSalaryCalculations();
   } else {
     const errText = await res.text();
@@ -1645,38 +1759,45 @@ async function saveSalaryRecord(status = 'Submitted') {
 }
 
 // Reset the calculation form
-function resetCalculationForm() {
-  document.getElementById('salary-employee-search').value = '';
+function resetCalculationForm({ preservePieceConfiguration = false, preserveTripConfiguration = false } = {}) {
+  currentSalaryDraftId = null;
+  // Keep operation, size, employee, and pairing selections after a per-piece
+  // save; clear only quantities for the next daily output entry.
+  const preserveEncodingConfiguration = preservePieceConfiguration || preserveTripConfiguration;
+  if (!preserveEncodingConfiguration) document.getElementById('salary-employee-search').value = '';
   document.getElementById('salary-pieces').value = '';
   const pieceRows = document.getElementById('salary-piece-rows');
-  if (pieceRows) pieceRows.innerHTML = '';
+  if (pieceRows) {
+    if (preservePieceConfiguration) pieceRows.querySelectorAll('.piece-row-qty').forEach(input => { input.value = ''; });
+    else pieceRows.innerHTML = '';
+  }
   const pieceProduct = document.getElementById('salary-piece-product');
-  if (pieceProduct) pieceProduct.value = '';
+  if (pieceProduct && !preservePieceConfiguration) pieceProduct.value = '';
   const pieceSize = document.getElementById('salary-piece-size-range');
-  if (pieceSize) pieceSize.value = '';
+  if (pieceSize && !preservePieceConfiguration) pieceSize.value = '';
   const piecePartner = document.getElementById('salary-piece-partner');
-  if (piecePartner) piecePartner.value = '';
+  if (piecePartner && !preservePieceConfiguration) piecePartner.value = '';
   const piecePartnerSearch = document.getElementById('salary-piece-partner-search');
-  if (piecePartnerSearch) piecePartnerSearch.value = '';
+  if (piecePartnerSearch && !preservePieceConfiguration) piecePartnerSearch.value = '';
   const piecePairing = document.getElementById('salary-piece-pairing');
-  if (piecePairing) piecePairing.value = 'Standard Sewer-Fixer';
+  if (piecePairing && !preservePieceConfiguration) piecePairing.value = 'Standard Sewer-Fixer';
   ['salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive'].forEach(id => {
     const input = document.getElementById(id);
     if (input) input.value = '0';
   });
   const workerCategory = document.getElementById('salary-worker-category');
-  if (workerCategory) workerCategory.value = '';
+  if (workerCategory && !preservePieceConfiguration) workerCategory.value = '';
   const isSunday = document.getElementById('salary-is-sunday');
   if (isSunday) isSunday.checked = false;
-  document.getElementById('salary-trips').value = '';
-  document.getElementById('salary-region').value = '';
+  if (!preserveTripConfiguration) document.getElementById('salary-trips').value = '';
+  if (!preserveTripConfiguration) document.getElementById('salary-region').value = '';
   const tripDate = document.getElementById('salary-trip-date');
-  if (tripDate) tripDate.value = '';
+  if (tripDate && !preserveTripConfiguration) tripDate.value = '';
   const truckType = document.getElementById('salary-truck-type');
-  if (truckType) truckType.value = 'Standard Truck';
+  if (truckType && !preserveTripConfiguration) truckType.value = 'Standard Truck';
   ['salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee'].forEach(id => {
     const select = document.getElementById(id);
-    if (select) select.value = '';
+    if (select && !preserveTripConfiguration) select.value = '';
   });
   document.getElementById('salary-hours-worked').value = '';
   document.getElementById('salary-days-worked').value = '';
@@ -1698,10 +1819,13 @@ function resetCalculationForm() {
   setSummaryField('summary-net', '₱0.00');
   renderSummaryDeductions([]);
   if (currentSalaryEmployee) currentSalaryEmployee.piecePreview = null;
-  updatePieceDetailView();
+  if (preserveEncodingConfiguration) calculateSalaryNow();
+  else updatePieceDetailView();
   updateLogisticsPreview();
   
-  currentSalaryEmployee = null;
-  updateSalaryRateVisibility('');
+  if (!preserveEncodingConfiguration) {
+    currentSalaryEmployee = null;
+    updateSalaryRateVisibility('');
+  }
   console.log('✅ Form reset');
 }

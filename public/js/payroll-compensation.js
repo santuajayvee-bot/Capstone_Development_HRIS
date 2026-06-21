@@ -32,6 +32,16 @@ function isCompWageType(idOrName, target) {
   return name === target;
 }
 
+function usesCompBaseRate(idOrName) {
+  return isCompWageType(idOrName, 'Daily') || isCompWageType(idOrName, 'Hourly');
+}
+
+function formatCompCurrentRate(config) {
+  const wageType = normalizeCompWageType(config?.wage_type);
+  if (wageType === 'Per-Piece' || wageType === 'Per-Trip') return 'Configured per output rate';
+  return `PHP ${parseFloat(config?.current_rate || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
+}
+
 function renderCompWageTypeOptions() {
   const select = document.getElementById('comp-wage-type');
   if (!select || !compWageTypes.length) return;
@@ -123,7 +133,7 @@ async function handleCompEmployeeSelect(e) {
     console.log('📊 Loaded wage config:', config);
     
     document.getElementById('comp-current-wage').textContent = config.wage_type || '—';
-    document.getElementById('comp-current-rate').textContent = `₱${parseFloat(config.current_rate || 0).toLocaleString('en-PH', {minimumFractionDigits: 2})}`;
+    document.getElementById('comp-current-rate').textContent = formatCompCurrentRate(config);
     
     const wageTypeValue = config.wage_type_id ? String(config.wage_type_id) : getCompWageTypeIdByName(config.wage_type);
     document.getElementById('comp-wage-type').value = wageTypeValue;
@@ -133,7 +143,7 @@ async function handleCompEmployeeSelect(e) {
       const firstRate = config.rates[0];
       
       // Set base salary if exists
-      if (firstRate.base_rate) {
+      if (usesCompBaseRate(wageTypeValue) && firstRate.base_rate) {
         document.getElementById('comp-base-salary').value = firstRate.base_rate;
       }
       
@@ -178,9 +188,9 @@ function handleWageTypeChange(e) {
   document.getElementById('comp-logistics-section').style.display = 'none';
   
   // Show appropriate section based on wage type
-  if (isCompWageType(wageTypeId, 'Base Salary') || isCompWageType(wageTypeId, 'Daily')) {
-    // Base Salary
-    console.log('🔧 Showing Base Salary form');
+  if (isCompWageType(wageTypeId, 'Daily')) {
+    // Daily
+    console.log('🔧 Showing Daily rate form');
     document.getElementById('comp-base-section').style.display = 'block';
   } else if (isCompWageType(wageTypeId, 'Hourly')) {
     // Hourly
@@ -271,11 +281,11 @@ async function saveCompensation() {
   
   try {
     // Collect rates based on wage type
-    if (isCompWageType(wageTypeId, 'Base Salary') || isCompWageType(wageTypeId, 'Daily')) {
-      // Base Salary
+    if (isCompWageType(wageTypeId, 'Daily')) {
+      // Daily rate
       const baseSalary = parseFloat(document.getElementById('comp-base-salary').value) || 0;
       if (baseSalary <= 0) {
-        alert('❌ For Base Salary: Please enter a valid amount');
+        alert('❌ For Daily: Please enter a valid daily rate');
         return;
       }
       rates.push({
@@ -286,7 +296,7 @@ async function saveCompensation() {
         sewing_type_id: null,
         logistics_region_id: null
       });
-      console.log('Rate: Base Salary ₱' + baseSalary.toLocaleString('en-PH', {minimumFractionDigits: 2}));
+      console.log('Rate: Daily ₱' + baseSalary.toLocaleString('en-PH', {minimumFractionDigits: 2}));
       
     } else if (isCompWageType(wageTypeId, 'Hourly')) {
       // Hourly
@@ -316,7 +326,7 @@ async function saveCompensation() {
           const sewingId = parseInt(input.getAttribute('data-sewing-id'));
           rates.push({
             rate,
-            base_rate: 0,
+            base_rate: null,
             hourly_rate: null,
             overtime_rate: null,
             sewing_type_id: sewingId,
@@ -339,7 +349,7 @@ async function saveCompensation() {
           const regionId = parseInt(input.getAttribute('data-region-id'));
           rates.push({
             rate,
-            base_rate: 0,
+            base_rate: null,
             hourly_rate: null,
             overtime_rate: null,
             sewing_type_id: null,
@@ -357,6 +367,11 @@ async function saveCompensation() {
     
     console.log('═══════════════════════════════════════════════════════════\n');
     
+    if (rates.length === 0) {
+      alert('Base salary is only supported through Daily or Hourly payroll setup.');
+      return;
+    }
+
     // Send to API
     const res = await apiFetch(`/api/payroll/employees/${selectedCompEmployee.id}/wage-config`, {
       method: 'POST',
@@ -380,7 +395,7 @@ async function saveCompensation() {
         const reloadData = await reloadRes.json();
         
         document.getElementById('comp-current-wage').textContent = reloadData.wage_type || '—';
-        document.getElementById('comp-current-rate').textContent = `₱${parseFloat(reloadData.current_rate || 0).toLocaleString('en-PH', {minimumFractionDigits: 2})}`;
+        document.getElementById('comp-current-rate').textContent = formatCompCurrentRate(reloadData);
       } catch (e) {
         console.error('Could not refresh display:', e);
       }

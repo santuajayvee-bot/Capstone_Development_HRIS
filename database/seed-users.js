@@ -41,8 +41,14 @@ const USERS = [
       position: 'HR Admin',
     },
   },
-  { username: 'payroll.officer', password: 'officer123', role: 'payroll_officer', email: 'payroll.officer@lgsv.local', employee_id: 1 },
-  { username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local', employee_id: 3 },
+  {
+    username: 'payroll.officer', password: 'officer123', role: 'payroll_officer', email: 'payroll.officer@lgsv.local',
+    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer' }
+  },
+  {
+    username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local',
+    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager' }
+  },
   { username: 'serjo.justine', password: 'emp123', role: 'employee', email: 'serjo.justine@lgsv.local', employee_id: 37 },
   { username: 'chris.brown', password: 'emp123', role: 'employee', email: 'chris.brown@lgsv.local', employee_id: 11 },
   { username: 'lebron.james', password: 'emp123', role: 'employee', email: 'lebron.james@lgsv.local', employee_id: 41 },

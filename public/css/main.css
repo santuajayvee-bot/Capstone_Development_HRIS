@@ -1748,6 +1748,33 @@ input.lgsv-date-native[type="date"] {
   align-items: center;
   gap: 10px;
 }
+.form-note {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.table-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.table-pagination .btn[disabled] {
+  cursor: not-allowed;
+  opacity: .55;
+}
 .payroll-form-status {
   margin-right: auto;
   color: var(--muted);
@@ -3896,6 +3923,63 @@ tr:hover td,
 .input-validation-error {
   border-color: #ef4444 !important;
   box-shadow: 0 0 0 2px rgba(239, 68, 68, .16) !important;
+}
+
+/* Payroll salary calculation layout */
+#payroll-tab-salary {
+  padding: 16px;
+}
+
+#payroll-tab-salary .page-header.compact {
+  margin: 0 0 16px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+#payroll-tab-salary .salary-form {
+  margin: 0 0 18px;
+  padding: 18px 16px;
+  border-radius: 0 !important;
+  overflow: visible;
+}
+
+#payroll-tab-salary .salary-form + .salary-form {
+  margin-top: 14px;
+}
+
+#payroll-tab-salary .salary-form h3 {
+  margin: 20px 0 14px;
+}
+
+#payroll-tab-salary .salary-form h3:first-child {
+  margin-top: 0;
+}
+
+#payroll-tab-salary .salary-form-row {
+  gap: 14px 12px;
+  margin-bottom: 18px;
+}
+
+#payroll-tab-salary .salary-selected-strip,
+#payroll-tab-salary .salary-summary-meta,
+#payroll-tab-salary .payroll-deduction-note {
+  margin: 16px 0;
+}
+
+#payroll-tab-salary .salary-summary-form {
+  gap: 14px 12px;
+  margin-bottom: 12px;
+}
+
+#payroll-tab-salary input,
+#payroll-tab-salary select,
+#payroll-tab-salary textarea,
+#payroll-tab-salary .salary-readonly,
+#payroll-tab-salary .salary-summary-input,
+#payroll-tab-salary .payroll-search-dropdown,
+#payroll-tab-salary .salary-summary-breakdown,
+#payroll-tab-salary .payroll-deduction-note {
+  border-radius: 0 !important;
 }
 
 @media (max-width: 960px) {

@@ -21,6 +21,8 @@ const PAGE_TITLES = {
 };
 
 let topbarClockTimer = null;
+const AUTO_TABLE_PAGE_SIZE = 10;
+let autoTablePaginationId = 0;
 
 function formatTopbarDateTime(date = new Date()) {
   return date.toLocaleString('en-US', {
@@ -65,6 +67,71 @@ function enhanceResponsiveTables(root = document) {
         if (!cell.dataset.label) cell.dataset.label = headers[index] || '';
       });
     });
+    enhanceTablePagination(table);
+  });
+}
+
+function shouldAutoPaginateTable(table) {
+  if (!table || table.dataset.noPagination === '1' || table.closest('[data-no-pagination="1"]')) return false;
+  if (table.closest('.salary-form, .payroll-breakdown-modal, .modal, .swal2-container')) return false;
+  if (table.classList.contains('payroll-simple-table')
+    || table.classList.contains('payroll-breakdown-table')
+    || table.classList.contains('salary-summary-table')
+    || table.classList.contains('salary-work-table')) return false;
+  const tbody = table.tBodies?.[0];
+  if (!tbody) return false;
+  const rows = [...tbody.rows].filter(row => !row.classList.contains('table-empty'));
+  if (rows.length <= Number(table.dataset.pageSize || AUTO_TABLE_PAGE_SIZE)) return false;
+  return true;
+}
+
+function enhanceTablePagination(table) {
+  const tbody = table.tBodies?.[0];
+  if (!tbody) return;
+  const pageSize = Number(table.dataset.pageSize || AUTO_TABLE_PAGE_SIZE);
+  let rows = [...tbody.rows].filter(row => !row.classList.contains('table-empty'));
+  const hasOnlyEmptyRow = rows.length === 1 && rows[0].children.length <= 1;
+  if (!shouldAutoPaginateTable(table) || hasOnlyEmptyRow) {
+    rows.forEach(row => { row.hidden = false; });
+    const existing = table.nextElementSibling;
+    if (existing?.classList.contains('table-pagination')) existing.remove();
+    table.dataset.paginationReady = '0';
+    return;
+  }
+
+  if (!table.dataset.paginationId) {
+    table.dataset.paginationId = `auto-table-${++autoTablePaginationId}`;
+  }
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  let currentPage = Math.min(Math.max(Number(table.dataset.paginationPage || 1), 1), totalPages);
+  table.dataset.paginationPage = String(currentPage);
+
+  const start = (currentPage - 1) * pageSize;
+  const end = start + pageSize;
+  rows.forEach((row, index) => { row.hidden = index < start || index >= end; });
+
+  let controls = table.nextElementSibling;
+  if (!controls?.classList.contains('table-pagination')) {
+    controls = document.createElement('div');
+    controls.className = 'table-pagination';
+    table.insertAdjacentElement('afterend', controls);
+  }
+  controls.dataset.for = table.dataset.paginationId;
+  controls.innerHTML = `
+    <span>Showing ${start + 1}-${Math.min(end, rows.length)} of ${rows.length}</span>
+    <div class="table-pagination-actions">
+      <button class="btn btn-outline btn-sm" type="button" data-page-action="prev" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
+      <span>Page ${currentPage} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" data-page-action="next" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>
+  `;
+  controls.querySelector('[data-page-action="prev"]')?.addEventListener('click', () => {
+    table.dataset.paginationPage = String(Math.max(1, currentPage - 1));
+    enhanceTablePagination(table);
+  });
+  controls.querySelector('[data-page-action="next"]')?.addEventListener('click', () => {
+    table.dataset.paginationPage = String(Math.min(totalPages, currentPage + 1));
+    enhanceTablePagination(table);
   });
 }
 

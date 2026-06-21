@@ -37,6 +37,30 @@ function isPayrollWageType(idOrName, target) {
   return normalizeWageTypeName(name) === target;
 }
 
+function usesPayrollBaseRate(idOrName) {
+  return isPayrollWageType(idOrName, 'Daily') || isPayrollWageType(idOrName, 'Hourly');
+}
+
+function setPayrollBaseRateVisibility(wageTypeId, prefix = 'emp-payroll') {
+  const input = document.getElementById(`${prefix}-primary-rate`);
+  if (!input) return;
+  const wrapper = input.closest('div');
+  const shouldShow = usesPayrollBaseRate(wageTypeId);
+  if (wrapper) wrapper.style.display = shouldShow ? '' : 'none';
+  input.required = shouldShow;
+  if (!shouldShow) input.value = '';
+}
+
+function setEditPayrollBaseRateVisibility(wageTypeId) {
+  const input = document.getElementById('edit-payroll-rate');
+  if (!input) return;
+  const wrapper = input.closest('div');
+  const shouldShow = usesPayrollBaseRate(wageTypeId);
+  if (wrapper) wrapper.style.display = shouldShow ? '' : 'none';
+  input.required = shouldShow;
+  if (!shouldShow) input.value = '';
+}
+
 function populatePayrollWageTypeSelects() {
   if (!wageTypesForPayroll.length) return;
   ['edit-payroll-wage-type', 'emp-payroll-wage-select', 'payroll-config-wage-select'].forEach(id => {
@@ -1095,7 +1119,8 @@ async function editEmployee(empId) {
     // Populate Payroll & Compensation Tab
     const wageTypeId = getPayrollWageTypeIdByName(employee.wage_type);
     document.getElementById('edit-payroll-wage-type').value = wageTypeId;
-    document.getElementById('edit-payroll-rate').value = employee.base_rate || '';
+    document.getElementById('edit-payroll-rate').value = usesPayrollBaseRate(wageTypeId) ? (employee.base_rate || '') : '';
+    setEditPayrollBaseRateVisibility(wageTypeId);
     
     // Reset file input
     const photoInput = document.getElementById('edit-emp-photo-input');
@@ -1244,7 +1269,7 @@ async function saveEditedEmployee() {
         supervisor: supervisor,
         work_location: workLocation,
         wage_type: wageTypeName || null,
-        base_rate: baseRate ? parseFloat(baseRate) : null,
+        base_rate: usesPayrollBaseRate(wageType) && baseRate ? parseFloat(baseRate) : null,
         sewingRates: sewingRates,
         status: 'Active'
       })
@@ -1269,6 +1294,7 @@ async function saveEditedEmployee() {
 // Handle wage type change in edit modal
 async function updateEditPayrollWageType(wageTypeValue) {
   const sewingSection = document.getElementById('edit-payroll-sewing-section');
+  setEditPayrollBaseRateVisibility(wageTypeValue);
   
   if (isPayrollWageType(wageTypeValue, 'Per-Piece')) {
     // Per-Piece (Sewing) selected
@@ -1387,6 +1413,7 @@ window.deleteEmployeeSetupPosition = deleteEmployeeSetupPosition;
 document.addEventListener('change', (e) => {
   if (e.target.id === 'payroll-config-wage-select') {
     const wageTypeId = e.target.value;
+    setPayrollBaseRateVisibility(wageTypeId, 'payroll-config');
     document.getElementById('payroll-config-hourly-section').style.display = isPayrollWageType(wageTypeId, 'Hourly') ? 'block' : 'none';
     document.getElementById('payroll-config-sewing-section').style.display = isPayrollWageType(wageTypeId, 'Per-Piece') ? 'block' : 'none';
     document.getElementById('payroll-config-logistics-section').style.display = isPayrollWageType(wageTypeId, 'Per-Trip') ? 'block' : 'none';
@@ -1523,7 +1550,7 @@ async function loadEmpPayrollConfig(employeeId) {
     // Populate base rate
     if (config.rates && config.rates.length > 0) {
       const firstRate = config.rates[0];
-      document.getElementById('emp-payroll-primary-rate').value = firstRate.base_rate || '';
+      document.getElementById('emp-payroll-primary-rate').value = usesPayrollBaseRate(wageValue) ? (firstRate.base_rate || '') : '';
       
       // Populate hourly and overtime rates if they exist
       if (firstRate.hourly_rate) {
@@ -1537,6 +1564,8 @@ async function loadEmpPayrollConfig(employeeId) {
     // Trigger change to show appropriate form
     if (wageValue) {
       document.getElementById('emp-payroll-wage-select').dispatchEvent(new Event('change'));
+    } else {
+      setPayrollBaseRateVisibility('');
     }
   } catch (e) {
     console.error('Error loading payroll config:', e);
@@ -1547,6 +1576,7 @@ async function loadEmpPayrollConfig(employeeId) {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'emp-payroll-wage-select') {
     const wageTypeId = e.target.value;
+    setPayrollBaseRateVisibility(wageTypeId);
     
     // Hide all specialized sections
     document.getElementById('emp-payroll-hourly-section').style.display = 'none';
@@ -1667,7 +1697,7 @@ async function saveEmpPayrollConfig() {
     console.log('   ✅ Hourly rate is valid:', hourlyRate);
     rates.push({
       rate: hourlyRate,
-      base_rate: primaryRate || 0,
+      base_rate: primaryRate || hourlyRate,
       hourly_rate: hourlyRate,
       overtime_rate: overtimeRate || 0,
       sewing_type_id: null,
@@ -1689,7 +1719,7 @@ async function saveEmpPayrollConfig() {
         console.log(`   ✅ Rate ${idx + 1}: ${rate} (sewing: ${sewingId}, region: ${regionId})`);
         rates.push({
           rate,
-          base_rate: primaryRate || 0,
+          base_rate: null,
           hourly_rate: null,
           overtime_rate: null,
           sewing_type_id: sewingId ? parseInt(sewingId) : null,
@@ -1700,6 +1730,10 @@ async function saveEmpPayrollConfig() {
       }
     });
   } else {
+    if (!isPayrollWageType(wageTypeId, 'Daily')) {
+      await showAlert('Base salary is only supported through Daily or Hourly payroll setup.', 'Validation Error', 'warning');
+      return;
+    }
     // Base Salary (1) or others
     console.log('→ Collecting BASE SALARY rates...');
     if (primaryRate <= 0) {
@@ -3380,6 +3414,7 @@ function clearPayrollConfigForm() {
   document.getElementById('payroll-config-hourly-section').style.display = 'none';
   document.getElementById('payroll-config-sewing-section').style.display = 'none';
   document.getElementById('payroll-config-logistics-section').style.display = 'none';
+  setPayrollBaseRateVisibility('', 'payroll-config');
 }
 
 async function loadPayrollConfigForModal(employeeId) {
@@ -3396,7 +3431,8 @@ async function loadPayrollConfigForModal(employeeId) {
     
     if (config.wage_type_id) {
       document.getElementById('payroll-config-wage-select').value = config.wage_type_id;
-      document.getElementById('payroll-config-primary-rate').value = config.base_rate || '';
+      document.getElementById('payroll-config-primary-rate').value = usesPayrollBaseRate(config.wage_type_id) ? (config.base_rate || '') : '';
+      setPayrollBaseRateVisibility(config.wage_type_id, 'payroll-config');
       
       if (isPayrollWageType(config.wage_type_id, 'Hourly')) {
         // Hourly
@@ -3480,7 +3516,7 @@ async function savePayrollConfigFromManage() {
     }
     rates.push({
       rate: hourlyRate,
-      base_rate: primaryRate,
+      base_rate: primaryRate || hourlyRate,
       hourly_rate: hourlyRate,
       overtime_rate: overtimeRate,
       sewing_type_id: null,
@@ -3496,7 +3532,7 @@ async function savePayrollConfigFromManage() {
       if (rate > 0) {
         rates.push({
           rate,
-          base_rate: primaryRate,
+          base_rate: null,
           hourly_rate: null,
           overtime_rate: null,
           sewing_type_id: sewingId ? parseInt(sewingId) : null,
@@ -3510,6 +3546,10 @@ async function savePayrollConfigFromManage() {
       return;
     }
   } else {
+    if (!isPayrollWageType(wageTypeId, 'Daily')) {
+      alert('Base salary is only supported through Daily or Hourly payroll setup.');
+      return;
+    }
     // Base Salary
     if (primaryRate <= 0) {
       alert('Please enter a valid base rate');

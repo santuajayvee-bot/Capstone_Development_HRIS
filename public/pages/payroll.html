@@ -129,31 +129,7 @@
   <div class="page-header compact">
     <div>
       <div class="section-title small">Salary Calculation</div>
-      <div class="section-sub">Generate weekly payroll by pay type, or calculate a single employee manually.</div>
-    </div>
-  </div>
-
-  <div class="table-wrap weekly-payroll-generator">
-    <div class="payroll-card-header-row">
-      <div>
-        <h3>Weekly Payroll Processing</h3>
-        <p>Processes Monthly, Daily, Hourly, Piece Rate, and Logistics employees using approved source records only.</p>
-      </div>
-    </div>
-    <form id="weekly-payroll-form" class="payroll-field-row" onsubmit="generateWeeklyPayroll(event)">
-      <label>Week Start<input name="start_date" id="weekly-payroll-start" type="date" required /></label>
-      <label>Week End<input name="end_date" id="weekly-payroll-end" type="date" required /></label>
-      <label>Department<select name="department_id" id="weekly-payroll-department"><option value="">All departments</option></select></label>
-      <label>Pay Type<select name="pay_type" id="weekly-payroll-pay-type"><option value="">All pay types</option><option value="Monthly">Monthly</option><option value="Daily">Daily</option><option value="Hourly">Hourly</option><option value="Piece Rate">Piece Rate</option><option value="Logistics">Logistics / Trip-Based</option></select></label>
-      <label class="span-2">Employee ID / Code<select name="employee_id" id="weekly-payroll-employee"><option value="">All employees in selected filters</option></select></label>
-      <div class="payroll-form-actions">
-        <button class="btn btn-outline" type="button" onclick="loadWeeklyPayrollRegistry()">Load Registry</button>
-        <button class="btn btn-primary" type="submit">Generate Weekly Payroll</button>
-      </div>
-    </form>
-    <div id="weekly-payroll-result" class="payroll-form-status"></div>
-    <div id="weekly-payroll-registry" class="weekly-payroll-registry">
-      <div class="payroll-empty-state">Generate weekly payroll or load an existing registry for the selected week.</div>
+      <div class="section-sub">Calculate a single employee payroll manually.</div>
     </div>
   </div>
 
@@ -260,7 +236,7 @@
     </div>
     <div class="salary-summary-form">
       <label class="salary-summary-field">
-        <span>Base Pay</span>
+        <span id="summary-base-label">Base Pay</span>
         <input id="summary-base" class="salary-summary-input" type="text" value="PHP 0.00" readonly />
       </label>
       <label class="salary-summary-field">
@@ -345,7 +321,7 @@
           <label>Location<select name="location_id" id="logistics-rate-location" required><option value="">Select location</option></select></label>
           <label>Trip Type<select name="trip_type" required><option>1st Trip</option><option>2nd Trip</option><option>Additional Trip</option><option>Any</option></select></label>
           <label>Role<select name="role" required><option>Driver</option><option>Helper</option></select></label>
-          <label>Base Rate<input name="base_rate" type="number" min="0" step="0.01" required /></label>
+          <label>Trip Rate<input name="base_rate" type="number" min="0" step="0.01" required /></label>
           <label>Additional Rate<input name="additional_rate" type="number" min="0" step="0.01" value="0" required /></label>
           <label>Multiplier<input name="multiplier" type="number" min="0.01" max="100" step="0.01" value="1" required /></label>
           <label>Effective Date<input name="effective_date" type="date" required /></label>
@@ -485,11 +461,12 @@
       </fieldset>
 
       <fieldset>
-        <legend>Worker Pairing</legend>
+        <legend>Employee and Output Mode</legend>
         <div class="payroll-field-row">
-          <label>Pairing Type<select name="pairing_type" id="pair-assignment-type" required><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
-          <label>Sewer Employee<input name="worker1_employee_id" type="number" min="1" required /></label>
-          <label>Partner Employee<input name="worker2_employee_id" type="number" min="1" required /></label>
+          <label>Output Mode<select name="output_mode" id="piece-output-mode" onchange="togglePiecePartnerFields()"><option value="solo">Solo</option><option value="partner">Partner</option></select></label>
+          <label>Employee<input name="worker1_employee_id" type="number" min="1" required /></label>
+          <label class="piece-partner-field">Partner Employee<input name="worker2_employee_id" type="number" min="1" /></label>
+          <label class="piece-partner-field">Split Rule<select name="pairing_type" id="pair-assignment-type"><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
         </div>
       </fieldset>
 
@@ -635,19 +612,20 @@
 
 <section class="payroll-panel" id="payroll-tab-allowances">
   <details class="payroll-collapsible" open>
-    <summary>Configure Allowance</summary>
+    <summary>Allowance Catalog</summary>
     <form id="allowance-setting-form" class="form-grid" onsubmit="savePayrollSetting(event, 'allowance')">
       <input type="hidden" name="id" />
       <div class="form-group"><label>Allowance Name</label><input name="name" required placeholder="Meal Allowance" /></div>
       <div class="form-group"><label>Type</label><select name="allowance_type"><option>Fixed</option><option>Percentage</option><option>Manual</option></select></div>
-      <div class="form-group"><label>Amount or Rate</label><input name="amount_or_rate" type="number" min="0" step="0.01" required /></div>
+      <div class="form-group"><label>Reference Amount or Rate</label><input name="amount_or_rate" type="number" min="0" step="0.01" value="0" /></div>
       <div class="form-group"><label>Taxable</label><select name="is_taxable"><option value="0">No</option><option value="1">Yes</option></select></div>
       <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
       <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
+      <div class="form-note payroll-form-wide">Allowance catalog entries are not applied to every employee automatically. Add the actual allowance amount during employee payroll calculation or an employee-specific allowance workflow.</div>
       <div class="form-actions">
         <span class="payroll-form-status" id="allowance-save-status" aria-live="polite"></span>
         <button class="btn btn-outline" type="reset">Clear</button>
-        <button class="btn btn-primary" type="submit">Save Allowance</button>
+        <button class="btn btn-primary" type="submit">Save Allowance Type</button>
       </div>
     </form>
   </details>
@@ -681,6 +659,19 @@
 </section>
 
 <section class="payroll-panel" id="payroll-tab-reports">
+  <section class="table-wrap swr-fxr-report-card">
+    <div class="payroll-card-header-row">
+      <div><h3>Sewing Payroll Registries</h3><p>Client-style daily operation register: full amount, 55% share, and 45% share.</p></div>
+      <div class="button-row">
+        <input class="form-control" id="sewing-registry-period" type="month" aria-label="Sewing payroll period" />
+        <button class="btn btn-outline" type="button" onclick="generateSewingRegistry('main')">Main Registry</button>
+        <button class="btn btn-outline" type="button" onclick="generateSewingRegistry('55')">55% Registry</button>
+        <button class="btn btn-outline" type="button" onclick="generateSewingRegistry('45')">45% Registry</button>
+        <button class="btn btn-primary" type="button" onclick="printSewingRegistry()">Print</button>
+      </div>
+    </div>
+    <div id="sewing-registry" class="swr-fxr-registry"><div class="payroll-empty-state">Choose a payroll period and generate a sewing registry.</div></div>
+  </section>
   <section class="table-wrap swr-fxr-report-card">
     <div class="payroll-card-header-row">
       <div>

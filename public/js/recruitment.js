@@ -615,8 +615,8 @@ function onbUpdateRateHelp() {
   const copy = {
     'Base Salary': ['Initial monthly salary', 'The fixed monthly salary used to initialize payroll after transfer.'],
     Hourly: ['Initial hourly rate', 'The default amount paid per hour. Overtime settings can be refined in Payroll after transfer.'],
-    'Per-Piece': ['Default per-piece rate', 'The fallback amount paid per produced item. Sewing-type rates can be refined in Payroll after transfer.'],
-    'Per-Trip': ['Default per-trip rate', 'The fallback amount paid per delivery trip. Region-specific rates can be refined in Payroll after transfer.'],
+    'Per-Piece': ['Optional setup note', 'Piece-rate employees are paid from encoded output and configured sewing operation rates. Complete the operation rates in Payroll after transfer.'],
+    'Per-Trip': ['Optional setup note', 'Per-trip employees are paid from encoded trip output and configured logistics trip rates. Complete trip rates in Payroll after transfer.'],
   }[wageType] || ['Initial payroll rate', 'Choose a wage type to see how this starting rate will be used. Detailed payroll rates can still be completed after transfer.'];
   label.textContent = copy[0];
   help.textContent = copy[1];

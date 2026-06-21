@@ -738,7 +738,7 @@ function renderSalaryCalculations(records) {
       </thead>
       <tbody>
         ${records.map(r => {
-          const calcDate = new Date(r.calculation_date).toLocaleDateString('en-US', { 
+          const calcDate = r.payroll_period || new Date(r.calculation_date).toLocaleDateString('en-US', {
             year: 'numeric', month: 'short', day: 'numeric' 
           });
           
@@ -765,6 +765,10 @@ function renderSalaryCalculations(records) {
             calcDetails += ` + ₱${totalAllowances.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
           }
           
+          const recordJson = JSON.stringify(r).replace(/"/g, '&quot;');
+          const draftAction = (r.status || 'Draft') === 'Draft'
+            ? `<button class="btn btn-primary btn-sm" onclick="continueSalaryDraft(${recordJson})">Continue</button>`
+            : '';
           return `
             <tr>
               <td>CALC-${String(r.id).padStart(5, '0')}</td>
@@ -778,7 +782,8 @@ function renderSalaryCalculations(records) {
               <td class="text-right payroll-net">${money(r.net_pay)}</td>
               <td>${payrollBadge(r.status || 'Draft')}</td>
               <td>
-                <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">View</button>
+                ${draftAction}
+                <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${recordJson})">View</button>
               </td>
             </tr>
           `;
@@ -788,6 +793,15 @@ function renderSalaryCalculations(records) {
   `;
 
   grid.innerHTML = table;
+}
+
+async function continueSalaryDraft(record) {
+  if (!record || (record.status || 'Draft') !== 'Draft') return;
+  switchPayrollTab('salary');
+  if (typeof loadSalaryCalculationPage === 'function') await loadSalaryCalculationPage();
+  if (typeof restoreSalaryDraftFromRecord === 'function') {
+    await restoreSalaryDraftFromRecord(record);
+  }
 }
 
 async function generatePayslipsFromRecords() {
@@ -1635,6 +1649,7 @@ function bindProductionPairPreview() {
   });
   form.dataset.previewBound = '1';
   restoreProductionPairDraft();
+  togglePiecePartnerFields();
   updateProductionPairSummary();
 }
 
@@ -1649,13 +1664,14 @@ function updateProductionPairSummary() {
   const sewType = form.elements.sew_type_code?.value || '';
   const sizeRange = form.elements.size_range?.value || '';
   const quantity = Number(form.elements.quantity_produced?.value || 0);
+  const outputMode = form.elements.output_mode?.value || 'solo';
   const pairingType = form.elements.pairing_type?.value || '';
   const rate = getConfiguredPieceRate(sewType, sizeRange);
   const rule = getConfiguredPairRule(pairingType);
   const pieceRate = Number(rate?.piece_rate || 0);
   const raw = quantity * pieceRate;
-  const worker1Share = Number(rule?.worker1_share || 0);
-  const worker2Share = Number(rule?.worker2_share || 0);
+  const worker1Share = outputMode === 'solo' ? 100 : Number(rule?.worker1_share || 0);
+  const worker2Share = outputMode === 'solo' ? 0 : Number(rule?.worker2_share || 0);
   const rateInput = document.getElementById('pair-piece-rate-preview');
   if (rateInput) rateInput.value = money(pieceRate);
   setPairSummary('pair-raw-earnings', money(raw));
@@ -1885,7 +1901,7 @@ async function encodeProductionPair(event) {
   const form = event.currentTarget;
   const status = document.getElementById('production-pair-status');
   const data = Object.fromEntries(new FormData(form).entries());
-  if (String(data.worker1_employee_id || '') === String(data.worker2_employee_id || '')) {
+  if (data.output_mode === 'partner' && String(data.worker1_employee_id || '') === String(data.worker2_employee_id || '')) {
     if (status) status.textContent = 'Sewer and partner cannot be the same employee.';
     return;
   }
@@ -1895,14 +1911,14 @@ async function encodeProductionPair(event) {
     return;
   }
   try {
-    const res = await apiFetch('/api/payroll/production-pairs', {
+    const res = await apiFetch('/api/payroll/piece-rate-outputs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
     const result = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(result.error || 'Failed to encode production pair');
-    if (status) status.textContent = `Saved. Worker 1: ${money(result.worker1_earnings)} | Worker 2: ${money(result.worker2_earnings)}`;
+    if (status) status.textContent = `Saved daily output. Full amount: ${money(result.fullAmount)}.`;
     localStorage.removeItem('payrollProductionPairDraft');
     form.reset();
     updateProductionPairSummary();
@@ -1937,6 +1953,53 @@ function refreshPayrollDashboard() {
   const month = document.getElementById('payroll-filter-month')?.value;
   loadPayrollDashboard(month || null);
   loadSalaryCalculations();
+}
+
+function togglePiecePartnerFields() {
+  const partnerMode = document.getElementById('piece-output-mode')?.value === 'partner';
+  document.querySelectorAll('.piece-partner-field').forEach(field => {
+    field.style.display = partnerMode ? '' : 'none';
+    field.querySelectorAll('input, select').forEach(input => { input.required = partnerMode; });
+  });
+  updateProductionPairSummary();
+}
+
+let currentSewingRegistry = null;
+
+function sewingRegistryDate(date) {
+  return new Date(`${date}T00:00:00`).toLocaleDateString('en-PH', { day: '2-digit', month: 'short' });
+}
+
+function renderSewingRegistry(registry) {
+  const title = registry.kind === '55' ? '55% Sewing Payroll Registry' : registry.kind === '45' ? '45% Sewing Payroll Registry' : 'Main Sewing Payroll Registry';
+  const dailyHeaders = registry.dates.map(date => `<th>${payrollEscape(sewingRegistryDate(date))}</th>`).join('');
+  const employees = registry.employees.map(employee => {
+    const body = employee.rows.map(row => `<tr><td>${payrollEscape(row.operation_type)}</td><td>${payrollEscape(row.size_range || '-')}</td><td>${money(row.rate_per_piece)}</td>${registry.dates.map(date => `<td>${Number(row.daily[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td>`).join('')}<td>${Number(row.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.partner_roles || 'Solo')}</td></tr>`).join('');
+    return `<tr class="sewing-registry-employee"><th colspan="${registry.dates.length + 7}">${payrollEscape(employee.employee_name)}${employee.agency ? ` · ${payrollEscape(employee.agency)}` : ''}</th></tr>${body}<tr class="sewing-registry-total"><th colspan="${registry.dates.length + 4}">Employee Total</th><th>${Number(employee.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(employee.total_amount)}</th><th></th></tr>`;
+  }).join('');
+  return `<div class="sewing-registry-print"><h3>${title}</h3><p>PAYROLL PERIOD: ${payrollEscape(registry.payroll_period)}</p><div class="table-wrap"><table><thead><tr><th>Sew Type</th><th>Size</th><th>Rate/Piece</th>${dailyHeaders}<th>Total Output</th><th>Amount</th><th>Partner Role</th></tr></thead><tbody>${employees || `<tr><td colspan="${registry.dates.length + 7}">No daily sewing output was encoded for this period.</td></tr>`}</tbody><tfoot><tr><th colspan="${registry.dates.length + 4}">Grand Total</th><th>${Number(registry.totals.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(registry.totals.total_amount)}</th><th></th></tr></tfoot></table></div></div>`;
+}
+
+async function generateSewingRegistry(kind) {
+  const period = document.getElementById('sewing-registry-period')?.value || document.getElementById('report-period')?.value;
+  const target = document.getElementById('sewing-registry');
+  if (!period) { if (target) target.innerHTML = '<div class="payroll-empty-state">Select a payroll period first.</div>'; return; }
+  try {
+    const response = await apiFetch(`/api/payroll/sewing-registries?month_year=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind)}`);
+    const registry = await response.json();
+    if (!response.ok) throw new Error(registry.error || 'Failed to generate sewing registry.');
+    currentSewingRegistry = registry;
+    target.innerHTML = renderSewingRegistry(registry);
+  } catch (error) { if (target) target.innerHTML = `<div class="payroll-empty-state">${payrollEscape(error.message)}</div>`; }
+}
+
+function printSewingRegistry() {
+  const content = document.getElementById('sewing-registry')?.innerHTML;
+  if (!currentSewingRegistry || !content) return;
+  const popup = window.open('', '_blank', 'width=1200,height=800');
+  if (!popup) return;
+  popup.document.write(`<html><head><title>Sewing Payroll Registry</title><style>body{font-family:Arial,sans-serif;padding:18px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #222;padding:4px;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.sewing-registry-employee th{text-align:left;background:#eee}.sewing-registry-total th{background:#f7f7f7}</style></head><body>${content}</body></html>`);
+  popup.document.close(); popup.focus(); popup.print();
 }
 
 async function loadPayrollSettings(type) {
@@ -2004,7 +2067,7 @@ async function deleteDeductionSetting(id) {
 function renderAllowanceSettings(rows) {
   return `
     <table>
-      <thead><tr><th>Name</th><th>Type</th><th>Amount/Rate</th><th>Taxable</th><th>Status</th><th>Effective</th></tr></thead>
+      <thead><tr><th>Name</th><th>Type</th><th>Reference Amount/Rate</th><th>Taxable</th><th>Status</th><th>Effective</th></tr></thead>
       <tbody>
         ${rows.map(row => `
           <tr>
@@ -2189,6 +2252,8 @@ async function savePayrollSetting(event, type) {
     delete data.government_name;
     delete data.company_name;
     delete data.custom_name;
+  } else if (type === 'allowance' && !data.amount_or_rate) {
+    data.amount_or_rate = 0;
   }
   const endpoint = type === 'deduction' ? '/api/payroll/deduction-settings' : '/api/payroll/allowance-settings';
 
@@ -2342,6 +2407,10 @@ const PAYROLL_REPORTS = [
   { id: 'daily-rate-register', name: 'Daily Rate Payroll Register', category: 'Attendance', description: 'Daily-rate calculations with days worked and payroll-ready attendance validation.', formats: ['CSV', 'Excel'] },
   { id: 'per-hour-register', name: 'Per-Hour Payroll Register', category: 'Attendance', description: 'Hourly calculations with hours worked, overtime, and attendance validation.', formats: ['CSV', 'Excel'] },
   { id: 'attendance-payroll-validation', name: 'Attendance-to-Payroll Validation', category: 'Attendance', description: 'Validation status, excluded attendance, warnings, and blocking errors.', formats: ['CSV', 'Excel'] },
+  { id: 'sewing-registry', name: 'Main Sewing Payroll Registry', category: 'Production', description: 'Client-style daily sewing quantities, configured rates, totals, and full amounts.', formats: ['CSV', 'Excel'] },
+  { id: 'sewing-55-registry', name: '55% Sewing Registry', category: 'Production', description: 'Daily sewing register showing the sewer 55% share.', formats: ['CSV', 'Excel'] },
+  { id: 'sewing-45-registry', name: '45% Sewing Registry', category: 'Production', description: 'Daily sewing register showing the fixer 45% share.', formats: ['CSV', 'Excel'] },
+  { id: 'swr-fxr-summary', name: 'SWR-FXR Summary', category: 'Production', description: 'Sewer-fixer pairs, agency, days, split amounts, and combined totals.', formats: ['CSV', 'Excel'] },
   { id: 'piece-production-register', name: 'Production Register', category: 'Production', description: 'Production date, sewer, fixer, quantity, rate and production amount.', formats: ['CSV', 'Excel'] },
   { id: 'piece-sewer-register', name: 'Sewer Payroll Register', category: 'Production', description: 'Sewer production amount and payroll share.', formats: ['CSV', 'Excel'] },
   { id: 'piece-fixer-register', name: 'Fixer Payroll Register', category: 'Production', description: 'Fixer production amount and payroll share.', formats: ['CSV', 'Excel'] },
@@ -2575,6 +2644,13 @@ function initializePayrollModule() {
     weeklyEmployee.addEventListener('change', loadWeeklyPayrollRegistry);
     weeklyEmployee.dataset.employeeFilterBound = '1';
   }
+  // Payroll is loaded as an in-page partial. DOMContentLoaded has normally
+  // already fired by the time its controls exist, so load the option data here
+  // as well instead of leaving native selects with only their placeholder.
+  loadWeeklyPayrollFilterOptions();
+  if (document.getElementById('pair-sew-type') || document.getElementById('salary-piece-product')) {
+    loadPieceRateConfig();
+  }
   toggleDeductionNameField();
 }
 
@@ -2586,6 +2662,7 @@ window.updatePayrollStats = updatePayrollStats;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
+window.continueSalaryDraft = continueSalaryDraft;
 window.generatePayslipsFromRecords = generatePayslipsFromRecords;
 window.generatePayslipPreview = generatePayslipPreview;
 window.exportPayslipPdf = exportPayslipPdf;
@@ -2619,6 +2696,9 @@ window.generateWeeklyPayroll = generateWeeklyPayroll;
 window.loadWeeklyPayrollRegistry = loadWeeklyPayrollRegistry;
 window.renderWeeklyPayrollRegistry = renderWeeklyPayrollRegistry;
 window.renderWeeklyPayrollEmployeeOptions = renderWeeklyPayrollEmployeeOptions;
+window.generateSewingRegistry = generateSewingRegistry;
+window.printSewingRegistry = printSewingRegistry;
+window.togglePiecePartnerFields = togglePiecePartnerFields;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {
@@ -2626,6 +2706,8 @@ function initializePayroll() {
   loadWeeklyPayrollFilterOptions();
   loadPayrollDashboard();
   loadSalaryCalculations();
+  const sewingPeriod = document.getElementById('sewing-registry-period');
+  if (sewingPeriod && !sewingPeriod.value) sewingPeriod.value = new Date().toISOString().slice(0, 7);
 
   // Add filter event listeners
   document.getElementById('salary-calc-filter-date')?.addEventListener('change', loadSalaryCalculations);
