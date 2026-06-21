@@ -667,6 +667,9 @@ input.lgsv-date-native[type="date"] {
   margin-top: 5px;
   vertical-align: top;
 }
+.lgsv-date-field.open {
+  z-index: 200000;
+}
 .search-input + .lgsv-date-field,
 .payroll-filter-bar .lgsv-date-field,
 .leave-filters .lgsv-date-field,
@@ -716,7 +719,7 @@ input.lgsv-date-native[type="date"] {
   position: absolute;
   left: 0;
   top: calc(100% + 8px);
-  z-index: 10090;
+  z-index: 200001;
   display: none;
   width: min(286px, calc(100vw - 56px));
   padding: 12px;
@@ -882,7 +885,10 @@ input.lgsv-date-native[type="date"] {
   text-transform: uppercase;
 }
 .payroll-panel { display: none; }
-.payroll-panel.active { display: block; }
+.payroll-panel.active {
+  display: block;
+  overflow: visible;
+}
 .payroll-filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1622,6 +1628,36 @@ input.lgsv-date-native[type="date"] {
 }
 .payroll-field-row .span-2 {
   grid-column: span 2;
+}
+.weekly-payroll-generator {
+  position: relative;
+  z-index: 20;
+  overflow: visible !important;
+  margin-bottom: 16px;
+  padding: 16px;
+}
+.weekly-payroll-generator .payroll-card-header-row {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.weekly-payroll-generator .payroll-field-row {
+  row-gap: 14px;
+}
+.weekly-payroll-generator .payroll-form-actions {
+  padding-top: 10px;
+}
+.weekly-payroll-generator .weekly-payroll-registry {
+  position: relative;
+  z-index: 1;
+  min-height: 78px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  overflow: visible;
+}
+.weekly-payroll-generator .payroll-empty-state {
+  padding: 18px 12px;
 }
 .payroll-form-actions {
   grid-column: 1 / -1;
