@@ -4413,17 +4413,27 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
 
     for (const emp of employees) {
       try {
+        const normalizedWageType = normalizePayrollWageType(emp.wage_type);
+        const skipEmployee = reason => {
+          skippedCount++;
+          skipped.push({
+            employee_id: emp.id,
+            employee_code: emp.employee_code,
+            employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+            department: emp.department || '-',
+            pay_type: normalizedWageType || emp.wage_type || '-',
+            reason
+          });
+        };
         const [duplicate] = await connection.execute(
           'SELECT id FROM payslips WHERE payroll_run_id = ? AND employee_id = ? LIMIT 1',
           [payrollRunId, emp.id]
         );
         if (duplicate.length) {
-          skippedCount++;
-          skipped.push({ employee_id: emp.id, reason: 'Payroll record already exists for this period.' });
+          skipEmployee('Payroll record already exists for this period.');
           continue;
         }
 
-        const normalizedWageType = normalizePayrollWageType(emp.wage_type);
         let totalEarning = 0;
         let totalDeduction = 0;
         let netPay = 0;
@@ -4454,8 +4464,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
             wage_type: emp.wage_type
           });
           if (!validation.ok) {
-            skippedCount++;
-            skipped.push({ employee_id: emp.id, reason: validation.errors.join(' ') || 'Attendance is not payroll-ready.' });
+            skipEmployee(validation.errors.join(' ') || 'Attendance is not payroll-ready.');
             continue;
           }
 
@@ -4488,8 +4497,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
         } else if (normalizedWageType === 'Per-Piece') {
           const piecePayroll = await getApprovedPieceRatePayroll(connection, emp.id, period);
           if (!piecePayroll.records.length) {
-            skippedCount++;
-            skipped.push({ employee_id: emp.id, reason: 'No approved unpaid piece-rate output exists for this payroll period.' });
+            skipEmployee('No approved unpaid piece-rate output exists for this payroll period.');
             continue;
           }
           allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
@@ -4518,8 +4526,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
           await assertLogisticsTripSchema(connection);
           const approvedTrips = await getApprovedDeliveryTripPayroll(connection, emp.id, period);
           if (!approvedTrips.trips.length) {
-            skippedCount++;
-            skipped.push({ employee_id: emp.id, reason: 'No approved delivery trips exist for this payroll period.' });
+            skipEmployee('No approved delivery trips exist for this payroll period.');
             continue;
           }
           allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
@@ -4542,8 +4549,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
           };
           finalizeSourceRecords = async () => markDeliveryTripsPaid(connection, approvedTrips.trips, payrollRunId, currentUserId(req));
         } else {
-          skippedCount++;
-          skipped.push({ employee_id: emp.id, reason: `Unsupported or unconfigured pay type: ${emp.wage_type || 'Not set'}.` });
+          skipEmployee(`Unsupported or unconfigured pay type: ${emp.wage_type || 'Not set'}.`);
           continue;
         }
 
@@ -4630,7 +4636,14 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), async (req
       } catch (slipErr) {
         console.error(`Error creating payroll record for employee ${emp.id}:`, slipErr);
         skippedCount++;
-        skipped.push({ employee_id: emp.id, reason: slipErr.message });
+        skipped.push({
+          employee_id: emp.id,
+          employee_code: emp.employee_code,
+          employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+          department: emp.department || '-',
+          pay_type: normalizePayrollWageType(emp.wage_type) || emp.wage_type || '-',
+          reason: slipErr.message
+        });
       }
     }
 

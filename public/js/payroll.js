@@ -524,7 +524,37 @@ function renderWeeklyPayrollRegistry(payload = {}) {
   if (!target) return;
   const rows = payload.rows || payload.registry || [];
   if (!rows.length) {
-    target.innerHTML = '<div class="payroll-empty-state">No weekly payroll registry rows found for this selection.</div>';
+    const skipped = Array.isArray(payload.skipped) ? payload.skipped : [];
+    target.innerHTML = skipped.length
+      ? `
+        <div class="table-wrap">
+          <div class="payroll-card-header-row">
+            <div>
+              <h3>No Payroll Rows Generated</h3>
+              <p>${Number(payload.employeesProcessed || 0)} employee(s) processed, ${Number(payload.skippedCount || skipped.length)} skipped. Review the reasons below.</p>
+            </div>
+          </div>
+          <table class="payroll-erp-table weekly-payroll-table">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Pay Type</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${skipped.map(row => `
+                <tr>
+                  <td>${payrollEscape(row.employee_name || row.employee_code || `Employee #${row.employee_id || '-'}`)}<br><span class="muted-small">${payrollEscape(row.employee_code || '')}</span></td>
+                  <td>${payrollEscape(row.pay_type || '-')}</td>
+                  <td>${payrollEscape(row.reason || 'Skipped by payroll validation.')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `
+      : '<div class="payroll-empty-state">No weekly payroll registry rows found for this selection.</div>';
     return;
   }
   const totals = payload.totals || {
@@ -630,7 +660,7 @@ async function generateWeeklyPayroll(event) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || result.message || 'Failed to generate weekly payroll.');
     if (status) status.textContent = result.message || 'Weekly payroll generated.';
-    renderWeeklyPayrollRegistry({ rows: result.registry || [] });
+    renderWeeklyPayrollRegistry(result);
     await loadPayrollDashboard(document.getElementById('payroll-filter-month')?.value || null);
     await loadSalaryCalculations();
   } catch (error) {
