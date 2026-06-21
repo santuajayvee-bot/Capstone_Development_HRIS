@@ -62,7 +62,9 @@ function bcShowMessage(message, type = 'info') {
 }
 
 function bcUserRole() {
-  return typeof getUser === 'function' ? getUser()?.role : null;
+  return typeof getUser === 'function'
+    ? String(getUser()?.role || '').trim().toLowerCase()
+    : '';
 }
 
 function bcCanVerify() {
@@ -120,8 +122,9 @@ function renderBlockchainRows() {
     const status = record.Blockchain_Status || 'PENDING';
     const auditStatus = record.Latest_Audit_Status || '-';
     const integrityHash = record.Transaction_Hash || record.Latest_Payload_Hash || record.local_hash || '';
-    const isFinalized = String(record.Approval_Status || '').toUpperCase() === 'FINALIZED';
-    const verifyButton = bcCanVerify() && isFinalized && String(status).toUpperCase() === 'RECORDED'
+    // A Fabric receipt is issued only after finalization. Keep the client rule
+    // resilient to payroll-label changes; the API repeats the finalization and RBAC checks.
+    const verifyButton = bcCanVerify() && String(status).toUpperCase() === 'RECORDED'
       ? `<button class="btn btn-outline btn-sm" onclick="verifyPayrollHash(${payrollId})">Verify</button>`
       : '';
 
