@@ -65,10 +65,6 @@ function bcUserRole() {
   return typeof getUser === 'function' ? getUser()?.role : null;
 }
 
-function bcCanRecord() {
-  return bcUserRole() === 'payroll_manager';
-}
-
 function bcCanVerify() {
   return ['system_admin', 'admin'].includes(bcUserRole());
 }
@@ -90,7 +86,7 @@ async function bcRequest(url, options = {}) {
 function renderBlockchainStats(payload) {
   const records = payload.records || [];
   const recorded = records.filter(row => String(row.Blockchain_Status).toUpperCase() === 'RECORDED').length;
-  const pending = records.filter(row => String(row.Blockchain_Status).toUpperCase() === 'PENDING_ANCHOR').length;
+  const pending = records.filter(row => ['PENDING_APPROVAL', 'PENDING', 'PENDING_ANCHOR'].includes(String(row.Blockchain_Status).toUpperCase())).length;
   const critical = records.filter(row => String(row.Latest_Audit_Status).toUpperCase() === 'CRITICAL').length;
   const latest = records[0]?.Latest_Audit_At || records[0]?.Finalized_At || null;
 
@@ -101,9 +97,11 @@ function renderBlockchainStats(payload) {
   bcSetText('bc-stat-latest', latest ? bcFormatDate(latest) : '-');
 
   const fabric = payload.fabric || {};
-  const status = fabric.enabled && fabric.ready
-    ? `Fabric configured: ${fabric.channelName} / ${fabric.chaincodeName}`
-    : 'Blockchain network is not currently connected. Local audit records are available, but Fabric verification is disabled.';
+  const status = !fabric.enabled
+    ? 'Fabric recording is disabled. Local audit records remain available.'
+    : fabric.ready
+      ? `Fabric Gateway credentials are configured: ${fabric.channelName} / ${fabric.chaincodeName}`
+      : 'Fabric Gateway credentials are incomplete. Local audit records are available, but Fabric recording and verification are disabled.';
   bcSetText('bc-network-status', status);
   if (!fabric.enabled || !fabric.ready) bcShowMessage(status, 'warning');
 }
@@ -113,7 +111,7 @@ function renderBlockchainRows() {
   if (!tbody) return;
 
   if (!BC_RECORDS.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="att-empty">No finalized payroll blockchain records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="att-empty">No payroll integrity records found.</td></tr>';
     return;
   }
 
@@ -121,10 +119,9 @@ function renderBlockchainRows() {
     const payrollId = Number(record.Payroll_ID);
     const status = record.Blockchain_Status || 'PENDING';
     const auditStatus = record.Latest_Audit_Status || '-';
-    const recordButton = bcCanRecord() && String(status).toUpperCase() !== 'RECORDED'
-      ? `<button class="btn btn-primary btn-sm" onclick="recordPayrollHash(${payrollId})">Record Hash</button>`
-      : '';
-    const verifyButton = bcCanVerify()
+    const integrityHash = record.Transaction_Hash || record.Latest_Payload_Hash || record.local_hash || '';
+    const isFinalized = String(record.Approval_Status || '').toUpperCase() === 'FINALIZED';
+    const verifyButton = bcCanVerify() && isFinalized && String(status).toUpperCase() === 'RECORDED'
       ? `<button class="btn btn-outline btn-sm" onclick="verifyPayrollHash(${payrollId})">Verify</button>`
       : '';
 
@@ -135,13 +132,12 @@ function renderBlockchainRows() {
       <td>${bcMoney(record.Net_Pay)}</td>
       <td>${bcBadge(status)}</td>
       <td>${bcBadge(auditStatus)}</td>
-      <td class="tx-hash" title="${bcEsc(record.Transaction_Hash || record.Latest_Payload_Hash || '')}">${bcEsc(bcShortHash(record.Transaction_Hash || record.Latest_Payload_Hash))}</td>
+      <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
       <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          ${recordButton}
           ${verifyButton}
-          <button class="btn btn-outline btn-sm" onclick="loadBlockchainAudit(${payrollId})">Audit</button>
+          <button class="btn btn-outline btn-sm" type="button" onclick="loadBlockchainAudit(${payrollId})">View audit</button>
         </div>
       </td>
     </tr>`;
@@ -158,18 +154,6 @@ async function loadBlockchainRecords() {
   } catch (error) {
     BC_RECORDS = [];
     renderBlockchainRows();
-    bcShowMessage(error.message, 'critical');
-  }
-}
-
-async function recordPayrollHash(payrollId) {
-  try {
-    const { response, data } = await bcRequest(`/api/blockchain/payroll/finalize/${payrollId}`, { method: 'POST' });
-    const warning = response.status === 202;
-    bcShowMessage(data.message || 'Payroll hash recorded.', warning ? 'warning' : 'info');
-    await loadBlockchainRecords();
-    await loadBlockchainAudit(payrollId);
-  } catch (error) {
     bcShowMessage(error.message, 'critical');
   }
 }
@@ -196,23 +180,94 @@ async function verifyPayrollHash(payrollId) {
   }
 }
 
+function closeBlockchainAuditModal() {
+  const modal = document.getElementById('bc-audit-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function openBlockchainAuditModal(payrollId) {
+  let modal = document.getElementById('bc-audit-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'bc-audit-modal';
+    modal.className = 'modal-overlay';
+    modal.style.display = 'none';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'bc-audit-modal-title');
+    modal.innerHTML = `
+      <div class="modal-content" style="width:min(1100px,94vw);max-width:1100px;max-height:82vh;padding:0;border-radius:8px;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border);">
+          <div id="bc-audit-modal-title" style="font-size:16px;font-weight:700;">Audit Trail</div>
+          <button id="bc-audit-modal-close" class="btn btn-outline btn-sm" type="button">Close</button>
+        </div>
+        <div style="padding:16px 18px;overflow:auto;max-height:68vh;">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Event</th>
+                  <th>Status</th>
+                  <th>Payload Hash</th>
+                  <th>Transaction Hash</th>
+                  <th>Actor Role</th>
+                </tr>
+              </thead>
+              <tbody id="bc-audit-modal-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('#bc-audit-modal-close')?.addEventListener('click', closeBlockchainAuditModal);
+    modal.addEventListener('click', event => {
+      if (event.target === modal) closeBlockchainAuditModal();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && modal.style.display !== 'none') closeBlockchainAuditModal();
+    });
+  }
+
+  modal.querySelector('#bc-audit-modal-title').textContent = `Audit Trail - Payroll ${payrollId}`;
+  modal.querySelector('#bc-audit-modal-tbody').innerHTML = '<tr><td colspan="6" class="att-empty">Loading audit trail...</td></tr>';
+  modal.style.display = 'flex';
+  modal.querySelector('#bc-audit-modal-close')?.focus();
+  return modal;
+}
+
+function renderAuditRows(logs) {
+  return logs.length ? logs.map(log => `<tr>
+    <td>${bcEsc(bcFormatDate(log.Created_At))}</td>
+    <td>${bcEsc(log.Event_Type)}</td>
+    <td>${bcBadge(log.Status)}</td>
+    <td class="tx-hash" title="${bcEsc(log.Payload_Hash || '')}">${bcEsc(bcShortHash(log.Payload_Hash))}</td>
+    <td class="tx-hash" title="${bcEsc(log.Transaction_Hash || '')}">${bcEsc(bcShortHash(log.Transaction_Hash))}</td>
+    <td>${bcEsc(log.Actor_Role || '-')}</td>
+  </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No audit entries for this payroll record.</td></tr>';
+}
+
 async function loadBlockchainAudit(payrollId) {
+  const title = document.getElementById('bc-audit-title');
+  const tbody = document.getElementById('bc-audit-tbody');
+  const modal = openBlockchainAuditModal(payrollId);
+  const modalBody = modal.querySelector('#bc-audit-modal-tbody');
+
+  if (title) title.textContent = `Audit Trail - Payroll ${payrollId}`;
+  if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Loading audit trail...</td></tr>';
+
   try {
     const { data } = await bcRequest(`/api/blockchain/payroll/audit/${payrollId}`);
-    const title = document.getElementById('bc-audit-title');
-    if (title) title.textContent = `Audit Trail - Payroll ${payrollId}`;
-    const tbody = document.getElementById('bc-audit-tbody');
-    if (!tbody) return;
     const logs = data.audit_logs || [];
-    tbody.innerHTML = logs.length ? logs.map(log => `<tr>
-      <td>${bcEsc(bcFormatDate(log.Created_At))}</td>
-      <td>${bcEsc(log.Event_Type)}</td>
-      <td>${bcBadge(log.Status)}</td>
-      <td class="tx-hash" title="${bcEsc(log.Payload_Hash || '')}">${bcEsc(bcShortHash(log.Payload_Hash))}</td>
-      <td class="tx-hash" title="${bcEsc(log.Transaction_Hash || '')}">${bcEsc(bcShortHash(log.Transaction_Hash))}</td>
-      <td>${bcEsc(log.Actor_Role || '-')}</td>
-    </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No audit entries for this payroll record.</td></tr>';
+    const rows = renderAuditRows(logs);
+    if (tbody) tbody.innerHTML = rows;
+    if (modalBody) modalBody.innerHTML = rows;
+    bcShowMessage(logs.length
+      ? `Loaded ${logs.length} audit event${logs.length === 1 ? '' : 's'} for payroll ${payrollId}.`
+      : `No audit entries were found for payroll ${payrollId}.`);
   } catch (error) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
+    if (modalBody) modalBody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
     bcShowMessage(error.message, 'critical');
   }
 }
@@ -241,6 +296,6 @@ function watchBlockchainActivation() {
 
 document.addEventListener('DOMContentLoaded', watchBlockchainActivation);
 window.loadBlockchainRecords = loadBlockchainRecords;
-window.recordPayrollHash = recordPayrollHash;
 window.verifyPayrollHash = verifyPayrollHash;
 window.loadBlockchainAudit = loadBlockchainAudit;
+window.closeBlockchainAuditModal = closeBlockchainAuditModal;

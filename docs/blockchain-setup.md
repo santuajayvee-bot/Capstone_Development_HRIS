@@ -1,5 +1,7 @@
 # LGSV HR Permissioned Payroll Blockchain Setup
 
+> New teammates should follow the complete [Team Local Setup Guide](team-local-setup.md) first. This document remains the blockchain-specific reference.
+
 LGSV HR uses Hyperledger Fabric only as a permissioned audit layer for finalized payroll hashes. Sensitive employee files, bank data, payroll breakdowns, addresses, and other PII remain off-chain in MySQL.
 
 The configured Fabric network has three main blockchain nodes:
@@ -41,7 +43,7 @@ FABRIC_MSP_ID=PayrollMSP
 FABRIC_PEER_ENDPOINT=localhost:7051
 FABRIC_PEER_HOST_ALIAS=peer0.payroll.lgsvhr.com
 FABRIC_TLS_CERT_PATH=./fabric-network/organizations/peerOrganizations/payroll.lgsvhr.com/peers/peer0.payroll.lgsvhr.com/tls/ca.crt
-FABRIC_CERT_PATH=./fabric-network/organizations/peerOrganizations/payroll.lgsvhr.com/users/User1@payroll.lgsvhr.com/msp/signcerts/cert.pem
+FABRIC_CERT_PATH=./fabric-network/organizations/peerOrganizations/payroll.lgsvhr.com/users/User1@payroll.lgsvhr.com/msp/signcerts/User1@payroll.lgsvhr.com-cert.pem
 FABRIC_KEY_DIRECTORY_PATH=./fabric-network/organizations/peerOrganizations/payroll.lgsvhr.com/users/User1@payroll.lgsvhr.com/msp/keystore
 BLOCKCHAIN_EMPLOYEE_REF_PEPPER=replace-with-a-long-random-pepper
 ```

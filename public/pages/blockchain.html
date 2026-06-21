@@ -2,13 +2,13 @@
      pages/blockchain.html - Permissioned Payroll Blockchain
      ============================================================ -->
 <div class="section-title">Payroll Blockchain Audit</div>
-<div class="section-sub">Finalized payroll hashes, local pending anchors, Fabric receipts, and integrity verification</div>
+<div class="section-sub">Submitted payroll queue records, finalized hashes, Fabric receipts, and integrity verification</div>
 
 <div id="bc-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
 
 <div class="block-stats">
   <div class="stat-card">
-    <div class="stat-label">Finalized Records</div>
+    <div class="stat-label">Integrity Records</div>
     <div class="stat-val" id="bc-stat-total">-</div>
     <div class="stat-sub">Payroll records</div>
   </div>
@@ -18,7 +18,7 @@
     <div class="stat-sub">Fabric receipts</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Pending Anchor</div>
+    <div class="stat-label">Pending Review / Anchor</div>
     <div class="stat-val" id="bc-stat-pending" style="color:var(--yellow)">-</div>
     <div class="stat-sub">Local fallback queue</div>
   </div>
@@ -41,7 +41,7 @@
 </div>
 
 <div class="card" style="margin-bottom:20px;">
-  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Finalized Payroll Ledger Records</div>
+  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Payroll Integrity Queue</div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -53,7 +53,7 @@
           <th>Blockchain Status</th>
           <th>Latest Audit</th>
           <th>Receipt / Hash</th>
-          <th>Finalized At</th>
+          <th>Queued / Finalized At</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -64,7 +64,7 @@
   </div>
 </div>
 
-<div class="card">
+<div id="bc-audit-panel" class="card" tabindex="-1">
   <div id="bc-audit-title" style="font-size:14px;font-weight:700;margin-bottom:16px;">Audit Trail</div>
   <div class="table-wrap">
     <table>

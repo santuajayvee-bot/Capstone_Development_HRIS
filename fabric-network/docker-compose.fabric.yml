@@ -77,6 +77,7 @@ services:
       - "9444:9444"
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./config:/etc/hyperledger/peercfg:ro
       - ./organizations/peerOrganizations/hr.lgsvhr.com/peers/peer0.hr.lgsvhr.com/msp:/etc/hyperledger/fabric/msp
       - ./organizations/peerOrganizations/hr.lgsvhr.com/peers/peer0.hr.lgsvhr.com/tls:/etc/hyperledger/fabric/tls
       - peer0.hr.lgsvhr.com:/var/hyperledger/production
@@ -114,6 +115,7 @@ services:
       - "9445:9445"
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./config:/etc/hyperledger/peercfg:ro
       - ./organizations/peerOrganizations/payroll.lgsvhr.com/peers/peer0.payroll.lgsvhr.com/msp:/etc/hyperledger/fabric/msp
       - ./organizations/peerOrganizations/payroll.lgsvhr.com/peers/peer0.payroll.lgsvhr.com/tls:/etc/hyperledger/fabric/tls
       - peer0.payroll.lgsvhr.com:/var/hyperledger/production
@@ -130,12 +132,13 @@ services:
     environment:
       - GOPATH=/opt/gopath
       - FABRIC_LOGGING_SPEC=INFO
-      - FABRIC_CFG_PATH=/etc/hyperledger/configtx
+      - FABRIC_CFG_PATH=/etc/hyperledger/peercfg
       - CORE_PEER_TLS_ENABLED=true
     working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
     command: /bin/bash
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock
+      - ./config:/etc/hyperledger/peercfg:ro
       - ./configtx.yaml:/etc/hyperledger/configtx/configtx.yaml
       - ./organizations:/opt/gopath/src/github.com/hyperledger/fabric/peer/organizations
       - ./channel-artifacts:/opt/gopath/src/github.com/hyperledger/fabric/peer/channel-artifacts

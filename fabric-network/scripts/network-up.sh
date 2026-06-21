@@ -72,6 +72,43 @@ docker compose -f "${COMPOSE_FILE}" up -d \
   peer0.payroll.lgsvhr.com \
   cli
 
-echo "LGSV HR Fabric network is starting."
-echo "Main blockchain nodes: orderer.lgsvhr.com, peer0.hr.lgsvhr.com, peer0.payroll.lgsvhr.com"
+verify_main_node() {
+  local service="$1"
+  local max_attempts=20
+  local attempt=1
+  local container_id=""
+  local state=""
+
+  while [ "${attempt}" -le "${max_attempts}" ]; do
+    container_id="$(docker compose -f "${COMPOSE_FILE}" ps -aq "${service}")"
+    if [ -n "${container_id}" ]; then
+      state="$(docker inspect --format '{{.State.Status}}' "${container_id}")"
+      if [ "${state}" = "running" ]; then
+        echo "Verified ${service} is running."
+        return 0
+      fi
+
+      if [ "${state}" = "exited" ] || [ "${state}" = "dead" ]; then
+        echo "ERROR: ${service} exited during LGSV HR Fabric startup." >&2
+        docker compose -f "${COMPOSE_FILE}" logs --tail 100 "${service}" >&2 || true
+        return 1
+      fi
+    fi
+
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  echo "ERROR: ${service} did not reach a running state within $((max_attempts * 2)) seconds." >&2
+  docker compose -f "${COMPOSE_FILE}" ps "${service}" >&2 || true
+  docker compose -f "${COMPOSE_FILE}" logs --tail 100 "${service}" >&2 || true
+  return 1
+}
+
+verify_main_node orderer.lgsvhr.com
+verify_main_node peer0.hr.lgsvhr.com
+verify_main_node peer0.payroll.lgsvhr.com
+
+echo "LGSV HR Fabric network is running."
+echo "Main blockchain nodes verified: orderer.lgsvhr.com, peer0.hr.lgsvhr.com, peer0.payroll.lgsvhr.com"
 echo "Next: ./scripts/create-channel.sh"

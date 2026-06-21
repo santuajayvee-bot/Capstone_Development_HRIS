@@ -20,3 +20,7 @@ build/
 *~
 .next/
 out/
+
+# Generated LGSV HR Hyperledger Fabric identities and channel artifacts.
+fabric-network/organizations/
+fabric-network/channel-artifacts/

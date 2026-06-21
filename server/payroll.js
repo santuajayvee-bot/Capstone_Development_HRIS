@@ -9,6 +9,7 @@ const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
 const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
 const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
+const { computePayrollHash } = require('./utils/payrollHash');
 const {
   isTripBasedWageType,
   normalizeTripType,
@@ -20,8 +21,8 @@ const {
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
   calculate: ROLES.payroll_any,
-  approve: ['payroll_manager', 'hr_manager'],
-  release: ['payroll_manager', 'hr_manager'],
+  approve: ['payroll_manager'],
+  release: ['payroll_manager'],
   settings: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin'],
   reports: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin']
 };
@@ -35,6 +36,12 @@ const LOGISTICS_TRIP_PERMISSIONS = {
 
 function currentUserId(req) {
   return req.user?.id || req.user?.userId || req.user?.sub || null;
+}
+
+function currentRequestIp(req) {
+  return req.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
+    || req.socket?.remoteAddress
+    || null;
 }
 
 async function logPayrollAudit(pool, req, action, options = {}) {
@@ -55,6 +62,158 @@ async function logPayrollAudit(pool, req, action, options = {}) {
   } catch (err) {
     console.warn('Payroll audit logging skipped:', err.message);
   }
+}
+
+async function getPayrollIntegritySource(executor, salaryCalculationId) {
+  const [rows] = await executor.execute(
+    `SELECT id, employee_id, gross_pay, sss_deduction, pagibig_deduction,
+            philhealth_deduction, total_allowances, net_pay, status,
+            approved_by, approved_at
+       FROM salary_calculations
+      WHERE id = ?
+      LIMIT 1`,
+    [salaryCalculationId]
+  );
+  return rows[0] || null;
+}
+
+function buildIntegritySnapshot(record, approvalStatus, finalizedAt = null, approvedBy = null) {
+  return {
+    Payroll_ID: record.id,
+    Employee_ID: record.employee_id,
+    Gross_Pay: record.gross_pay || 0,
+    Total_Statutory_Deductions:
+      Number(record.sss_deduction || 0)
+      + Number(record.pagibig_deduction || 0)
+      + Number(record.philhealth_deduction || 0),
+    Net_Pay: record.net_pay || 0,
+    Non_Taxable_Allowance: record.total_allowances || 0,
+    Approval_Status: approvalStatus,
+    Finalized_At: finalizedAt,
+    Approved_By: approvedBy,
+  };
+}
+
+async function writePayrollBlockchainAudit(executor, req, payrollId, eventType, status, payloadHash, details) {
+  await executor.execute(
+    `INSERT INTO BLOCKCHAIN_AUDIT_LOG
+       (Payroll_ID, Event_Type, Actor_User_ID, Actor_Role, Payload_Hash,
+        Status, IP_Address, Details, Created_At)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      payrollId,
+      eventType,
+      currentUserId(req),
+      req.user?.role || null,
+      payloadHash,
+      status,
+      currentRequestIp(req),
+      JSON.stringify(details),
+    ]
+  );
+}
+
+async function queueSubmittedPayrollRecord(executor, req, salaryCalculationId) {
+  const record = await getPayrollIntegritySource(executor, salaryCalculationId);
+  if (!record || record.status !== 'Submitted') return null;
+
+  const snapshot = buildIntegritySnapshot(record, 'Submitted');
+  const payloadHash = computePayrollHash(snapshot);
+
+  await executor.execute(
+    `INSERT INTO PAYROLL_RECORD
+       (Payroll_ID, Employee_ID, Gross_Pay, Total_Statutory_Deductions,
+        Net_Pay, Non_Taxable_Allowance, Approval_Status, Blockchain_Status,
+        Finalized_At, Approved_By)
+     VALUES (?, ?, ?, ?, ?, ?, 'Submitted', 'PENDING_APPROVAL', NULL, NULL)
+     ON DUPLICATE KEY UPDATE
+       Employee_ID = CASE WHEN Blockchain_Status = 'RECORDED' THEN Employee_ID ELSE VALUES(Employee_ID) END,
+       Gross_Pay = CASE WHEN Blockchain_Status = 'RECORDED' THEN Gross_Pay ELSE VALUES(Gross_Pay) END,
+       Total_Statutory_Deductions = CASE WHEN Blockchain_Status = 'RECORDED' THEN Total_Statutory_Deductions ELSE VALUES(Total_Statutory_Deductions) END,
+       Net_Pay = CASE WHEN Blockchain_Status = 'RECORDED' THEN Net_Pay ELSE VALUES(Net_Pay) END,
+       Non_Taxable_Allowance = CASE WHEN Blockchain_Status = 'RECORDED' THEN Non_Taxable_Allowance ELSE VALUES(Non_Taxable_Allowance) END,
+       Approval_Status = CASE WHEN Blockchain_Status = 'RECORDED' THEN Approval_Status ELSE 'Submitted' END,
+       Blockchain_Status = CASE WHEN Blockchain_Status = 'RECORDED' THEN Blockchain_Status ELSE 'PENDING_APPROVAL' END,
+       Finalized_At = CASE WHEN Blockchain_Status = 'RECORDED' THEN Finalized_At ELSE NULL END,
+       Approved_By = CASE WHEN Blockchain_Status = 'RECORDED' THEN Approved_By ELSE NULL END,
+       updated_at = NOW()`,
+    [
+      snapshot.Payroll_ID,
+      snapshot.Employee_ID,
+      snapshot.Gross_Pay,
+      snapshot.Total_Statutory_Deductions,
+      snapshot.Net_Pay,
+      snapshot.Non_Taxable_Allowance,
+    ]
+  );
+
+  await writePayrollBlockchainAudit(executor, req, snapshot.Payroll_ID, 'PAYROLL_SUBMITTED_QUEUE', 'PENDING_APPROVAL', payloadHash, {
+    source: 'salary_calculations',
+    approval_status: 'Submitted',
+    message: 'Payroll calculation is queued locally and awaits Payroll Manager approval before Fabric anchoring.',
+  });
+
+  return {
+    payroll_id: snapshot.Payroll_ID,
+    employee_id: snapshot.Employee_ID,
+    blockchain_status: 'PENDING_APPROVAL',
+    payload_hash: payloadHash,
+  };
+}
+
+async function syncFinalizedPayrollRecord(executor, req, salaryCalculationId) {
+  const record = await getPayrollIntegritySource(executor, salaryCalculationId);
+  if (!record || !['Approved', 'Released', 'Paid'].includes(record.status)) return null;
+
+  const finalizedAt = record.approved_at || new Date();
+  const finalApprover = record.approved_by || currentUserId(req) || null;
+  const snapshot = buildIntegritySnapshot(record, 'Finalized', finalizedAt, finalApprover);
+  const payloadHash = computePayrollHash(snapshot);
+
+  // PAYROLL_RECORD is the off-chain integrity snapshot used by the Fabric
+  // audit layer. Once a hash has been recorded, do not overwrite integrity
+  // fields through ordinary payroll status updates.
+  await executor.execute(
+    `INSERT INTO PAYROLL_RECORD
+       (Payroll_ID, Employee_ID, Gross_Pay, Total_Statutory_Deductions,
+        Net_Pay, Non_Taxable_Allowance, Approval_Status, Blockchain_Status,
+        Finalized_At, Approved_By)
+     VALUES (?, ?, ?, ?, ?, ?, 'Finalized', 'PENDING', ?, ?)
+     ON DUPLICATE KEY UPDATE
+       Employee_ID = CASE WHEN Blockchain_Status = 'RECORDED' THEN Employee_ID ELSE VALUES(Employee_ID) END,
+       Gross_Pay = CASE WHEN Blockchain_Status = 'RECORDED' THEN Gross_Pay ELSE VALUES(Gross_Pay) END,
+       Total_Statutory_Deductions = CASE WHEN Blockchain_Status = 'RECORDED' THEN Total_Statutory_Deductions ELSE VALUES(Total_Statutory_Deductions) END,
+       Net_Pay = CASE WHEN Blockchain_Status = 'RECORDED' THEN Net_Pay ELSE VALUES(Net_Pay) END,
+       Non_Taxable_Allowance = CASE WHEN Blockchain_Status = 'RECORDED' THEN Non_Taxable_Allowance ELSE VALUES(Non_Taxable_Allowance) END,
+       Approval_Status = CASE WHEN Blockchain_Status = 'RECORDED' THEN Approval_Status ELSE 'Finalized' END,
+       Blockchain_Status = CASE WHEN Blockchain_Status = 'RECORDED' THEN Blockchain_Status ELSE 'PENDING' END,
+       Finalized_At = CASE WHEN Blockchain_Status = 'RECORDED' THEN Finalized_At ELSE VALUES(Finalized_At) END,
+       Approved_By = CASE WHEN Blockchain_Status = 'RECORDED' THEN Approved_By ELSE VALUES(Approved_By) END,
+       updated_at = NOW()`,
+    [
+      snapshot.Payroll_ID,
+      snapshot.Employee_ID,
+      snapshot.Gross_Pay,
+      snapshot.Total_Statutory_Deductions,
+      snapshot.Net_Pay,
+      snapshot.Non_Taxable_Allowance,
+      finalizedAt,
+      finalApprover,
+    ]
+  );
+
+  await writePayrollBlockchainAudit(executor, req, snapshot.Payroll_ID, 'PAYROLL_APPROVED_READY_FOR_ANCHOR', 'PENDING', payloadHash, {
+    source: 'salary_calculations',
+    approval_status: 'Finalized',
+    message: 'Payroll calculation was approved and is ready for Hyperledger Fabric anchoring.',
+  });
+
+  return {
+    payroll_id: snapshot.Payroll_ID,
+    employee_id: snapshot.Employee_ID,
+    blockchain_status: 'PENDING',
+    payload_hash: payloadHash,
+  };
 }
 
 function payrollWeekFromDate(dateValue) {
@@ -2080,7 +2239,16 @@ async function createSalaryCalculationRecord(pool, req, input) {
     currentUserId(req),
     roundMoney(input.deductions?.employeeTotal || 0)
   ]);
-  return result.insertId;
+  const salaryCalculationId = result.insertId;
+  const blockchainQueue = await queueSubmittedPayrollRecord(pool, req, salaryCalculationId);
+  await logPayrollAudit(pool, req, 'salary_calculation_submitted', {
+    employee_id: input.employee_id,
+    payroll_run_id: input.payroll_run_id,
+    salary_calculation_id: salaryCalculationId,
+    remarks: 'Submitted payroll calculation for approval.',
+    metadata: { blockchain_queue: blockchainQueue, source_type: input.source_type }
+  });
+  return salaryCalculationId;
 }
 
 async function markAttendanceRowsPaid(pool, attendanceRows, payrollRunId) {
@@ -3063,12 +3231,21 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [employee_id, wage_type_id, rate, quantity, grossPay, sssDeduction, pagibigDeduction, philhealthDeduction, totalDeductions, netPay, transaction_date, 'Submitted']);
 
+    const blockchainQueue = await queueSubmittedPayrollRecord(pool, req, salCalcResult.insertId);
+    await logPayrollAudit(pool, req, 'salary_calculation_submitted', {
+      employee_id,
+      salary_calculation_id: salCalcResult.insertId,
+      remarks: 'Submitted production payroll calculation for approval.',
+      metadata: { source_type: 'production_transaction', blockchain_queue: blockchainQueue }
+    });
+
     res.json({ 
       success: true, 
       id: prodResult.insertId,
       amount: quantity * rate,
       message: `Recorded ${quantity} pieces at ₱${rate} each`,
-      salary_calculation_id: salCalcResult.insertId
+      salary_calculation_id: salCalcResult.insertId,
+      blockchain_queue: blockchainQueue
     });
   } catch (err) {
     console.error('Error recording production transaction:', err);
@@ -3197,10 +3374,12 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
         const salaryCalculationId = await upsertLogisticsPeriodCalculation(
           pool, row.employee.id, monthYear, wage_type_id, currentUserId(req), calculation_status
         );
+        const blockchainQueue = await queueSubmittedPayrollRecord(pool, req, salaryCalculationId);
 
         savedRows.push({
           logistics_transaction_id: logResult.insertId,
           salary_calculation_id: salaryCalculationId,
+          blockchain_queue: blockchainQueue,
           employee_id: row.employee.id,
           role: row.role,
           base_rate: row.base_rate,
@@ -3244,13 +3423,15 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
     const salaryCalculationId = await upsertLogisticsPeriodCalculation(
       pool, employee_id, monthYear, wage_type_id, currentUserId(req), calculation_status
     );
+    const blockchainQueue = await queueSubmittedPayrollRecord(pool, req, salaryCalculationId);
 
     res.json({ 
       success: true, 
       id: logResult.insertId,
       amount: rate,
       message: `Recorded 1 trip to ${trip_reference || 'destination'} at ₱${rate}`,
-      salary_calculation_id: salaryCalculationId
+      salary_calculation_id: salaryCalculationId,
+      blockchain_queue: blockchainQueue
     });
   } catch (err) {
     console.error('Error recording logistics transaction:', err);
@@ -3688,6 +3869,7 @@ async function assertPieceCalculationsMutable(pool, employeeIds, payrollPeriod) 
 async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, userId, calculationStatus = 'Draft') {
   const uniqueIds = [...new Set(employeeIds.map(Number).filter(Boolean))];
   const requestedStatus = calculationStatus === 'Submitted' ? 'Submitted' : 'Draft';
+  const affectedCalculations = [];
   const [wageTypes] = await pool.execute(`
     SELECT id FROM wage_types
      WHERE LOWER(name) IN ('per-piece', 'piece rate')
@@ -3733,8 +3915,14 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
          WHERE id = ?
       `, [totalOutput, grossPay, grossPay - totalDeductions, totalDeductions, `${payrollPeriod}-01`, userId || null,
         JSON.stringify({ legacy_baseline: baseline }), nextStatus, existing[0].id]);
+      affectedCalculations.push({
+        salary_calculation_id: existing[0].id,
+        employee_id: employeeId,
+        status: nextStatus,
+        submitted_now: existing[0].status !== 'Submitted' && nextStatus === 'Submitted',
+      });
     } else {
-      await pool.execute(`
+      const [created] = await pool.execute(`
         INSERT INTO salary_calculations
           (employee_id, wage_type_id, base_rate, quantity, hours_worked, days_worked,
            total_allowances, overtime_hours, overtime_amount, gross_pay, sss_deduction,
@@ -3742,8 +3930,16 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
            calculation_date, payroll_period, status, calculated_by)
         VALUES (?, ?, 0, ?, 0, 0, 0, 0, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?)
       `, [employeeId, wageTypes[0].id, outputTotal, outputGrossPay, outputGrossPay, `${payrollPeriod}-01`, payrollPeriod, requestedStatus, userId || null]);
+      affectedCalculations.push({
+        salary_calculation_id: created.insertId,
+        employee_id: employeeId,
+        status: requestedStatus,
+        submitted_now: requestedStatus === 'Submitted',
+      });
     }
   }
+
+  return affectedCalculations;
 }
 
 router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
@@ -3769,17 +3965,30 @@ router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), 
         VALUES (?, ?, ?, ?, ?)
       `, [result.insertId, share.employee_id, share.partner_role, share.share_percentage, share.share_amount]);
     }
-    await recomputePieceRateCalculations(
+    const recalculated = await recomputePieceRateCalculations(
       connection, output.shares.map(row => row.employee_id), output.payrollPeriod,
       currentUserId(req), req.body.calculation_status
     );
-    await connection.commit();
-    await logPayrollAudit(pool, req, 'piece_rate_daily_output_encoded', {
+    const queuedCalculations = [];
+    for (const calculation of recalculated.filter(row => row.status === 'Submitted')) {
+      const blockchainQueue = await queueSubmittedPayrollRecord(connection, req, calculation.salary_calculation_id);
+      queuedCalculations.push(blockchainQueue);
+      await logPayrollAudit(connection, req, calculation.submitted_now ? 'salary_calculation_submitted' : 'salary_calculation_requeued', {
+        employee_id: calculation.employee_id,
+        salary_calculation_id: calculation.salary_calculation_id,
+        remarks: calculation.submitted_now
+          ? 'Submitted per-piece payroll calculation for approval.'
+          : 'Refreshed submitted piece-rate payroll calculation in the integrity queue.',
+        metadata: { blockchain_queue: blockchainQueue, source_type: 'piece_rate_output' }
+      });
+    }
+    await logPayrollAudit(connection, req, 'piece_rate_daily_output_encoded', {
       employee_id: output.shares[0].employee_id,
       remarks: `Encoded ${output.operationType} daily output for ${output.outputDate}`,
-      metadata: { piece_rate_output_id: result.insertId, output }
+      metadata: { piece_rate_output_id: result.insertId, output, queued_calculations: queuedCalculations }
     });
-    res.status(201).json({ id: result.insertId, ...output });
+    await connection.commit();
+    res.status(201).json({ id: result.insertId, ...output, queued_calculations: queuedCalculations });
   } catch (err) {
     if (connection) await connection.rollback();
     console.error('Error encoding daily piece-rate output:', err);
@@ -3819,11 +4028,25 @@ router.patch('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_a
     }
     const oldEmployeeIds = oldShares.map(row => row.employee_id);
     const newEmployeeIds = output.shares.map(row => row.employee_id);
-    await recomputePieceRateCalculations(connection, existing.payroll_period_id === output.payrollPeriod ? affectedEmployees : oldEmployeeIds, existing.payroll_period_id, currentUserId(req));
-    if (existing.payroll_period_id !== output.payrollPeriod) await recomputePieceRateCalculations(connection, newEmployeeIds, output.payrollPeriod, currentUserId(req));
+    const recalculated = await recomputePieceRateCalculations(
+      connection,
+      existing.payroll_period_id === output.payrollPeriod ? affectedEmployees : oldEmployeeIds,
+      existing.payroll_period_id,
+      currentUserId(req)
+    );
+    if (existing.payroll_period_id !== output.payrollPeriod) {
+      recalculated.push(...await recomputePieceRateCalculations(connection, newEmployeeIds, output.payrollPeriod, currentUserId(req)));
+    }
+    const queuedCalculations = [];
+    for (const calculation of recalculated.filter(row => row.status === 'Submitted')) {
+      queuedCalculations.push(await queueSubmittedPayrollRecord(connection, req, calculation.salary_calculation_id));
+    }
     await connection.commit();
-    await logPayrollAudit(pool, req, 'piece_rate_daily_output_updated', { remarks: `Updated daily piece-rate output ${existing.id}`, metadata: { output } });
-    res.json({ id: existing.id, ...output });
+    await logPayrollAudit(pool, req, 'piece_rate_daily_output_updated', {
+      remarks: `Updated daily piece-rate output ${existing.id}`,
+      metadata: { output, queued_calculations: queuedCalculations }
+    });
+    res.json({ id: existing.id, ...output, queued_calculations: queuedCalculations });
   } catch (err) {
     if (connection) await connection.rollback();
     res.status(400).json({ error: err.message || 'Failed to update daily piece-rate output.' });
@@ -3844,10 +4067,22 @@ router.delete('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_
     connection = await pool.getConnection();
     await connection.beginTransaction();
     await connection.execute('DELETE FROM piece_rate_outputs WHERE id = ?', [output.id]);
-    await recomputePieceRateCalculations(connection, shares.map(row => row.employee_id), output.payroll_period_id, currentUserId(req));
+    const recalculated = await recomputePieceRateCalculations(
+      connection,
+      shares.map(row => row.employee_id),
+      output.payroll_period_id,
+      currentUserId(req)
+    );
+    const queuedCalculations = [];
+    for (const calculation of recalculated.filter(row => row.status === 'Submitted')) {
+      queuedCalculations.push(await queueSubmittedPayrollRecord(connection, req, calculation.salary_calculation_id));
+    }
     await connection.commit();
-    await logPayrollAudit(pool, req, 'piece_rate_daily_output_deleted', { remarks: `Deleted daily piece-rate output ${output.id}` });
-    res.json({ success: true });
+    await logPayrollAudit(pool, req, 'piece_rate_daily_output_deleted', {
+      remarks: `Deleted daily piece-rate output ${output.id}`,
+      metadata: { queued_calculations: queuedCalculations }
+    });
+    res.json({ success: true, queued_calculations: queuedCalculations });
   } catch (err) {
     if (connection) await connection.rollback();
     res.status(400).json({ error: err.message || 'Failed to delete daily piece-rate output.' });
@@ -4335,11 +4570,15 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     }
 
     console.log('✅ Salary calculation saved with ID:', salaryCalculationId);
+    const blockchainQueue = calculationStatus === 'Submitted'
+      ? await queueSubmittedPayrollRecord(pool, req, salaryCalculationId)
+      : null;
+
     await logPayrollAudit(pool, req, calculationStatus === 'Draft' ? 'salary_calculation_draft' : 'salary_calculation_submitted', {
       employee_id,
       salary_calculation_id: salaryCalculationId,
       remarks: `${calculationStatus} salary calculation`,
-      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.applied, piece_rate: pieceComputation }
+      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.applied, piece_rate: pieceComputation, blockchain_queue: blockchainQueue }
     });
     
     res.json({ 
@@ -4348,7 +4587,8 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       message: `Salary calculation saved for employee ID ${employee_id}`,
       gross_pay: serverGrossPay,
       net_pay: computedNetPay,
-      calculation_id: salaryCalculationId
+      calculation_id: salaryCalculationId,
+      blockchain_queue: blockchainQueue
     });
   } catch (err) {
     console.error('❌ Error saving salary calculation:', err);
@@ -5872,12 +6112,35 @@ router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
 });
 
 router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.approve), async (req, res) => {
+  let connection;
   try {
     const pool = require('../config/db');
     const { id } = req.params;
     const { status, remarks } = req.body;
-    const allowed = ['Submitted', 'Approved', 'Released', 'Paid'];
+    const allowed = ['Approved', 'Released', 'Paid'];
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid payroll status.' });
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [existingRows] = await connection.execute(
+      'SELECT id, status FROM salary_calculations WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Salary calculation not found.' });
+    }
+
+    const transitions = {
+      Submitted: ['Approved'],
+      Approved: ['Released', 'Paid'],
+      Released: ['Paid'],
+    };
+    if (!transitions[existing.status]?.includes(status)) {
+      await connection.rollback();
+      return res.status(409).json({ error: `Cannot change a ${existing.status} payroll calculation to ${status}.` });
+    }
 
     const userId = currentUserId(req);
     const fields = ['status = ?'];
@@ -5893,15 +6156,23 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL
     }
 
     params.push(id);
-    await pool.execute(`UPDATE salary_calculations SET ${fields.join(', ')} WHERE id = ?`, params);
-    await logPayrollAudit(pool, req, `payroll_${status.toLowerCase()}`, {
+    await connection.execute(`UPDATE salary_calculations SET ${fields.join(', ')} WHERE id = ?`, params);
+    const blockchainSnapshot = ['Approved', 'Released', 'Paid'].includes(status)
+      ? await syncFinalizedPayrollRecord(connection, req, id)
+      : null;
+    await logPayrollAudit(connection, req, `payroll_${status.toLowerCase()}`, {
       salary_calculation_id: id,
-      remarks: remarks || `Marked payroll as ${status}`
+      remarks: remarks || `Marked payroll as ${status}`,
+      metadata: blockchainSnapshot ? { blockchain_snapshot: blockchainSnapshot } : null
     });
-    res.json({ success: true });
+    await connection.commit();
+    res.json({ success: true, blockchain_snapshot: blockchainSnapshot });
   } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
     console.error('Error updating payroll status:', err);
     res.status(500).json({ error: 'Failed to update payroll status' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 

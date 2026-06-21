@@ -1,0 +1,92 @@
+# Shared peer configuration for the LGSV HR Fabric network.
+# Per-peer identity, TLS, address, and operations settings are supplied by the
+# CORE_* environment variables in docker-compose.fabric.yml.
+
+peer:
+  id: peer0
+  networkId: lgsvhr-fabric
+  listenAddress: 0.0.0.0:7051
+  address: 0.0.0.0:7051
+  addressAutoDetect: false
+  chaincodeAddress: 0.0.0.0:7052
+  chaincodeListenAddress: 0.0.0.0:7052
+  localMspId: SampleOrg
+  mspConfigPath: /etc/hyperledger/fabric/msp
+  gateway:
+    enabled: true
+    endorsementTimeout: 30s
+    broadcastTimeout: 30s
+    dialTimeout: 2m
+  gossip:
+    bootstrap: 127.0.0.1:7051
+    externalEndpoint: 127.0.0.1:7051
+    useLeaderElection: false
+    orgLeader: true
+  discovery:
+    enabled: true
+    authCacheEnabled: true
+    authCacheMaxSize: 1000
+    authCachePurgeRetentionRatio: 0.75
+    orgMembersAllowedAccess: false
+  tls:
+    enabled: false
+  fileSystemPath: /var/hyperledger/production
+  BCCSP:
+    Default: SW
+    SW:
+      Hash: SHA2
+      Security: 256
+      FileKeyStore:
+        KeyStore:
+  localMspType: bccsp
+  handlers:
+    authFilters:
+      - name: DefaultAuth
+      - name: ExpirationCheck
+    decorators:
+      - name: DefaultDecorator
+    endorsers:
+      escc:
+        name: DefaultEndorsement
+        library:
+    validators:
+      vscc:
+        name: DefaultValidation
+        library:
+
+vm:
+  endpoint: unix:///host/var/run/docker.sock
+  docker:
+    hostConfig:
+      NetworkMode: lgsvhr_fabric
+
+chaincode:
+  builder: hyperledger/fabric-ccenv:2.5
+  pull: false
+  node:
+    runtime: hyperledger/fabric-nodeenv:2.5
+  externalBuilders: []
+  installTimeout: 300s
+  startuptimeout: 300s
+  executetimeout: 30s
+  mode: net
+  keepalive: 0
+  system:
+    _lifecycle: enable
+    cscc: enable
+    lscc: enable
+    qscc: enable
+  logging:
+    level: info
+    shim: warning
+
+ledger:
+  blockchain:
+    state:
+      stateDatabase: goleveldb
+
+operations:
+  listenAddress: 127.0.0.1:9443
+
+metrics:
+  provider: disabled

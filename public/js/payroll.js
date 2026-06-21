@@ -769,6 +769,12 @@ function renderSalaryCalculations(records) {
           const draftAction = (r.status || 'Draft') === 'Draft'
             ? `<button class="btn btn-primary btn-sm" onclick="continueSalaryDraft(${recordJson})">Continue</button>`
             : '';
+          const approvalAction = r.status === 'Submitted' && canApproveSalaryCalculations()
+            ? `<button class="btn btn-primary btn-sm" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
+            : '';
+          const blockchainRecordAction = r.status === 'Approved' && canApproveSalaryCalculations()
+            ? `<button class="btn btn-primary btn-sm" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Record on Blockchain</button>`
+            : '';
           return `
             <tr>
               <td>CALC-${String(r.id).padStart(5, '0')}</td>
@@ -783,6 +789,8 @@ function renderSalaryCalculations(records) {
               <td>${payrollBadge(r.status || 'Draft')}</td>
               <td>
                 ${draftAction}
+                ${approvalAction}
+                ${blockchainRecordAction}
                 <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${recordJson})">View</button>
               </td>
             </tr>
@@ -801,6 +809,56 @@ async function continueSalaryDraft(record) {
   if (typeof loadSalaryCalculationPage === 'function') await loadSalaryCalculationPage();
   if (typeof restoreSalaryDraftFromRecord === 'function') {
     await restoreSalaryDraftFromRecord(record);
+  }
+}
+
+function canApproveSalaryCalculations() {
+  return typeof getUser === 'function' && getUser()?.role === 'payroll_manager';
+}
+
+async function approveSalaryCalculation(calculationId) {
+  if (!Number.isInteger(Number(calculationId))) return;
+  if (!window.confirm('Approve and finalize this payroll calculation?')) return;
+
+  try {
+    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'Approved' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Payroll approval failed.');
+
+    document.getElementById('calc-breakdown-modal')?.remove();
+    alert(data.blockchain_snapshot
+      ? 'Payroll approved. It is now ready for blockchain anchoring.'
+      : 'Payroll approved.');
+    await loadSalaryCalculations();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function recordApprovedPayrollOnBlockchain(calculationId) {
+  if (!Number.isInteger(Number(calculationId))) return;
+  if (!window.confirm('Record the finalized payroll hash on Hyperledger Fabric?')) return;
+
+  try {
+    const response = await apiFetch(`/api/blockchain/payroll/finalize/${calculationId}`, {
+      method: 'POST',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 202) {
+      throw new Error(data.error || 'Blockchain recording failed.');
+    }
+
+    document.getElementById('calc-breakdown-modal')?.remove();
+    alert(response.status === 202
+      ? (data.message || 'Payroll was queued for blockchain anchoring.')
+      : 'Payroll hash was recorded on Hyperledger Fabric. System Administrator verification is now available.');
+    await loadSalaryCalculations();
+    if (typeof loadBlockchainRecords === 'function') await loadBlockchainRecords();
+  } catch (error) {
+    alert(error.message);
   }
 }
 
@@ -1229,6 +1287,12 @@ function showCalculationBreakdown(record) {
       <td class="text-right">${value}</td>
     </tr>
   `;
+  const approvalAction = record.status === 'Submitted' && canApproveSalaryCalculations()
+    ? `<button class="btn btn-primary" type="button" onclick="approveSalaryCalculation(${Number(record.id)})">Approve & Finalize</button>`
+    : '';
+  const blockchainRecordAction = record.status === 'Approved' && canApproveSalaryCalculations()
+    ? `<button class="btn btn-primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(record.id)})">Record on Blockchain</button>`
+    : '';
 
   const modal = document.createElement('div');
   modal.id = modalId;
@@ -1272,6 +1336,8 @@ function showCalculationBreakdown(record) {
         <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
         <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, true)">Print Payslip</button>
         <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, false)">Export Payslip PDF</button>
+        ${approvalAction}
+        ${blockchainRecordAction}
         <button class="btn btn-primary" type="button" onclick="generatePayslipPreview(${Number(record.id)})">Generate Payslip</button>
       </div>
     </div>
@@ -2664,6 +2730,8 @@ window.renderSalaryCalculations = renderSalaryCalculations;
 window.showCalculationBreakdown = showCalculationBreakdown;
 window.continueSalaryDraft = continueSalaryDraft;
 window.generatePayslipsFromRecords = generatePayslipsFromRecords;
+window.approveSalaryCalculation = approveSalaryCalculation;
+window.recordApprovedPayrollOnBlockchain = recordApprovedPayrollOnBlockchain;
 window.generatePayslipPreview = generatePayslipPreview;
 window.exportPayslipPdf = exportPayslipPdf;
 window.switchPayrollTab = switchPayrollTab;

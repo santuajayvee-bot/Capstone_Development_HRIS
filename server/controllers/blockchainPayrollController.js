@@ -242,6 +242,24 @@ async function verifyPayrollIntegrity(req, res) {
       return res.status(404).json({ error: 'Payroll record not found.' });
     }
 
+    // A submitted payroll has no immutable Fabric entry yet, so comparing it
+    // against the ledger would be misleading. It must be approved and anchored first.
+    if (payroll.Approval_Status !== 'Finalized') {
+      await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_NOT_FINALIZED [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', payroll.Employee_ID, {
+        payroll_id: payrollId,
+        approval_status: payroll.Approval_Status,
+        result: 'NOT_FINALIZED',
+      });
+      await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', 'NOT_FINALIZED', payroll.Transaction_Hash, null, {
+        message: 'Verification was requested before payroll finalization.',
+      });
+      return res.status(409).json({
+        error: 'Only finalized and recorded payroll can be verified against the blockchain.',
+        status: 'not_finalized',
+        payroll_id: String(payrollId),
+      });
+    }
+
     payrollHash = computePayrollHash(payroll);
     let fabricResult;
     try {
@@ -466,8 +484,8 @@ async function getFinalizedPayrollLedgerRecords(req, res) {
                 GROUP BY Payroll_ID
              ) picked ON picked.Audit_ID = bal.Audit_ID
          ) latest ON latest.Payroll_ID = pr.Payroll_ID
-        WHERE pr.Approval_Status = 'Finalized'
-           OR pr.Blockchain_Status IN ('RECORDED','PENDING_ANCHOR','FAILED')
+        WHERE pr.Approval_Status IN ('Submitted', 'Finalized')
+           OR pr.Blockchain_Status IN ('PENDING_APPROVAL','PENDING','RECORDED','PENDING_ANCHOR','FAILED')
         ORDER BY COALESCE(pr.Finalized_At, pr.updated_at, pr.created_at) DESC
         LIMIT 500`
     );
