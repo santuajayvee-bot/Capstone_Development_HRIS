@@ -214,6 +214,96 @@ async function computePayrollDeductions(pool, employeeId, grossPay, calculationD
   };
 }
 
+function deductionSnapshotKey(item, index = 0) {
+  if (item?.id) return `config:${item.id}`;
+  const name = String(item?.name || item?.deduction_name || item?.category || `deduction-${index}`).trim().toLowerCase();
+  return name.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `deduction_${index}`;
+}
+
+function configuredDeductionBreakdown(appliedDeductions) {
+  return (appliedDeductions || []).reduce((acc, item) => {
+    const key = String(item.name || '').trim().toLowerCase();
+    if (key === 'sss') acc.sss += numeric(item.amount);
+    else if (key === 'pag-ibig' || key === 'pagibig') acc.pagibig += numeric(item.amount);
+    else if (key === 'philhealth') acc.philhealth += numeric(item.amount);
+    return acc;
+  }, { sss: 0, pagibig: 0, philhealth: 0 });
+}
+
+function buildDeductionSnapshotRows(computedDeductions, extraRows = []) {
+  const rows = [
+    ...(computedDeductions?.configured || []),
+    ...(computedDeductions?.employee || []),
+    ...(extraRows || [])
+  ];
+  return rows
+    .map((item, index) => ({
+      deduction_config_id: item.id || null,
+      deduction_key: deductionSnapshotKey(item, index),
+      name: item.name || item.deduction_name || item.category || 'Deduction',
+      category: item.category || null,
+      computation_type: item.computation_type || null,
+      rate_or_amount: item.rate_or_amount || null,
+      amount: roundMoney(item.amount || 0)
+    }))
+    .filter(item => item.amount > 0);
+}
+
+async function clearSalaryCalculationDeductions(pool, salaryCalculationId) {
+  if (!salaryCalculationId) return;
+  await pool.execute('DELETE FROM salary_calculation_deductions WHERE salary_calculation_id = ?', [salaryCalculationId]);
+}
+
+async function upsertSalaryCalculationDeductions(pool, salaryCalculationId, deductionRows) {
+  if (!salaryCalculationId) return;
+  const seen = new Set();
+  for (const row of deductionRows || []) {
+    const key = row.deduction_config_id ? `config:${row.deduction_config_id}` : row.deduction_key;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await pool.execute(`
+      INSERT INTO salary_calculation_deductions
+        (salary_calculation_id, deduction_config_id, deduction_key, name, category,
+         computation_type, rate_or_amount, amount)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        category = VALUES(category),
+        computation_type = VALUES(computation_type),
+        rate_or_amount = VALUES(rate_or_amount),
+        amount = VALUES(amount),
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      salaryCalculationId,
+      row.deduction_config_id || null,
+      row.deduction_key,
+      row.name,
+      row.category,
+      row.computation_type,
+      row.rate_or_amount,
+      row.amount
+    ]);
+  }
+}
+
+async function applySalaryCalculationDeductionSnapshot(pool, salaryCalculationId, deductionRows) {
+  await clearSalaryCalculationDeductions(pool, salaryCalculationId);
+  await upsertSalaryCalculationDeductions(pool, salaryCalculationId, deductionRows);
+}
+
+async function calculateSalaryDeductionSnapshot(pool, employeeId, grossPay, calculationDate, extraRows = []) {
+  const computed = await computePayrollDeductions(pool, employeeId, grossPay, calculationDate);
+  const rows = buildDeductionSnapshotRows(computed, extraRows);
+  const configuredBreakdown = configuredDeductionBreakdown(computed.configured);
+  return {
+    ...computed,
+    rows,
+    configuredBreakdown,
+    total: rows.reduce((sum, row) => sum + numeric(row.amount), 0),
+    employeeTotal: computed.employeeTotal
+  };
+}
+
 async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
   // Allowance settings are a catalog/configuration list only. Do not apply
   // these rows globally because allowance amounts can differ per employee.
@@ -222,6 +312,14 @@ async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
 
 async function applyEmployeeDeductionBalances(pool, req, employeeId, salaryCalculationId, payrollPeriod, employeeDeductions) {
   for (const item of employeeDeductions || []) {
+    const [existingPayments] = await pool.execute(`
+      SELECT id
+      FROM employee_deduction_payments
+      WHERE deduction_account_id = ? AND salary_calculation_id = ?
+      LIMIT 1
+    `, [item.id, salaryCalculationId]);
+    if (existingPayments.length) continue;
+
     const [accounts] = await pool.execute(`
       SELECT id, remaining_balance
       FROM employee_deduction_accounts
@@ -1151,34 +1249,16 @@ function logisticsPositionKind(position) {
   return '';
 }
 
-async function getLogisticsRate(pool, { logistics_region_id, truck_type, position, calculation_date }) {
-  const truckType = String(truck_type || 'Standard Truck').trim() || 'Standard Truck';
-  const role = position === 'Driver' ? 'Driver' : 'Helper';
-  const [rates] = await pool.execute(`
-    SELECT *
-      FROM payroll_logistics_rates
-     WHERE logistics_region_id = ?
-       AND LOWER(truck_type) = LOWER(?)
-       AND LOWER(position) = LOWER(?)
-       AND is_active = 1
-       AND effective_date <= ?
-     ORDER BY effective_date DESC, id DESC
-     LIMIT 1
-  `, [logistics_region_id, truckType, role, calculation_date || new Date().toISOString().split('T')[0]]);
-  if (rates.length) return Number(rates[0].rate || 0);
-  return 0;
-}
-
 async function computeLogisticsCrewPayroll(pool, body) {
-  const logisticsRegionId = Number(body.logistics_region_id);
   const driverId = Number(body.driver_employee_id);
   const helper1Id = Number(body.helper1_employee_id);
   const helper2Id = body.helper2_employee_id ? Number(body.helper2_employee_id) : null;
   const tripDate = body.transaction_date || new Date().toISOString().split('T')[0];
-  const truckType = String(body.truck_type || 'Standard Truck').trim() || 'Standard Truck';
+  const truckTypeId = logisticsPositiveId(body.truck_type_id, 'Truck type');
+  const locationId = logisticsPositiveId(body.location_id, 'Delivery location');
+  const tripType = normalizeTripType(body.trip_type);
   const tripCount = Math.max(1, Number(body.trip_count || body.trips || 1));
 
-  if (!logisticsRegionId) throw new Error('Region is required.');
   if (!driverId) throw new Error('A logistics transaction must have 1 Driver.');
   if (!helper1Id) throw new Error('A logistics transaction must have at least 1 Helper.');
   const uniqueIds = [driverId, helper1Id, helper2Id].filter(Boolean);
@@ -1203,31 +1283,69 @@ async function computeLogisticsCrewPayroll(pool, body) {
   if (logisticsPositionKind(helper1.position) !== 'Helper') throw new Error('Helper 1 Employee must have a Helper position.');
   if (helper2 && logisticsPositionKind(helper2.position) !== 'Helper') throw new Error('Helper 2 Employee must have a Helper position.');
 
-  const driverRate = await getLogisticsRate(pool, {
-    logistics_region_id: logisticsRegionId,
-    truck_type: truckType,
-    position: 'Driver',
-    calculation_date: tripDate
-  });
-  const helperRate = await getLogisticsRate(pool, {
-    logistics_region_id: logisticsRegionId,
-    truck_type: truckType,
-    position: 'Helper',
-    calculation_date: tripDate
-  });
-  if (!(driverRate > 0) || !(helperRate > 0)) throw new Error('Active logistics Driver and Helper rates are required.');
+  const [truckRows, locationRows] = await Promise.all([
+    pool.execute('SELECT id, name FROM truck_types WHERE id = ? AND is_active = 1 LIMIT 1', [truckTypeId]),
+    pool.execute('SELECT id, name, location_category FROM logistics_locations WHERE id = ? AND is_active = 1 LIMIT 1', [locationId])
+  ]);
+  const truck = truckRows[0][0];
+  const location = locationRows[0][0];
+  if (!truck || !location) throw new Error('Selected truck and delivery location must be active.');
+  const regionName = String(location.location_category) === 'Manila' ? 'Manila' : 'Provincial';
+  const [regionRows] = await pool.execute('SELECT id FROM logistics_regions WHERE LOWER(name) = LOWER(?) LIMIT 1', [regionName]);
+  if (!regionRows.length) throw new Error('Legacy payroll region mapping is unavailable for the selected delivery location.');
+  const logisticsRegionId = Number(regionRows[0].id);
+
+  const [driverRateConfig, helperRateConfig] = await Promise.all([
+    findActiveLogisticsRate(pool, { truckTypeId, locationId, tripType, role: 'Driver', tripDate }),
+    findActiveLogisticsRate(pool, { truckTypeId, locationId, tripType, role: 'Helper', tripDate })
+  ]);
+  if (!driverRateConfig || !helperRateConfig) {
+    throw new Error('Active Driver and Helper logistics rates are required for the selected truck, location, trip type, and date.');
+  }
+  const driverRate = computeTripPay({ baseRate: driverRateConfig.base_rate, multiplier: driverRateConfig.multiplier, additionalRate: driverRateConfig.additional_rate });
+  const helperRate = computeTripPay({ baseRate: helperRateConfig.base_rate, multiplier: helperRateConfig.multiplier, additionalRate: helperRateConfig.additional_rate });
 
   const crewStatus = helper2 ? 'Complete' : 'Incomplete';
   const missingHelperShare = helper2 ? 0 : helperRate / 2;
   const rows = [
-    { employee: driver, role: 'Driver', base_rate: driverRate, gross_pay: (driverRate + missingHelperShare) * tripCount },
-    { employee: helper1, role: 'Helper 1', base_rate: helperRate, gross_pay: (helperRate + missingHelperShare) * tripCount }
+    {
+      employee: driver,
+      role: 'Driver',
+      base_rate: Number(driverRateConfig.base_rate || 0),
+      multiplier: Number(driverRateConfig.multiplier || 1),
+      additional_rate: Number(driverRateConfig.additional_rate || 0),
+      configured_trip_pay: driverRate,
+      computed_trip_pay: driverRate + missingHelperShare,
+      rule_applied: helper2 ? 'Driver full trip rate' : 'Driver full trip rate plus half of missing Helper 2 pay',
+      gross_pay: (driverRate + missingHelperShare) * tripCount
+    },
+    {
+      employee: helper1,
+      role: 'Helper 1',
+      base_rate: Number(helperRateConfig.base_rate || 0),
+      multiplier: Number(helperRateConfig.multiplier || 1),
+      additional_rate: Number(helperRateConfig.additional_rate || 0),
+      configured_trip_pay: helperRate,
+      computed_trip_pay: helperRate + missingHelperShare,
+      rule_applied: helper2 ? 'Helper configured trip rate' : 'Helper 1 configured trip rate plus half of missing Helper 2 pay',
+      gross_pay: (helperRate + missingHelperShare) * tripCount
+    }
   ];
-  if (helper2) rows.push({ employee: helper2, role: 'Helper 2', base_rate: helperRate, gross_pay: helperRate * tripCount });
+  if (helper2) rows.push({
+    employee: helper2,
+    role: 'Helper 2',
+    base_rate: Number(helperRateConfig.base_rate || 0),
+    multiplier: Number(helperRateConfig.multiplier || 1),
+    additional_rate: Number(helperRateConfig.additional_rate || 0),
+    configured_trip_pay: helperRate,
+    computed_trip_pay: helperRate,
+    rule_applied: 'Helper configured trip rate',
+    gross_pay: helperRate * tripCount
+  });
 
   return {
     logistics_region_id: logisticsRegionId,
-    truck_type: truckType,
+    truck_type: truck.name,
     trip_count: tripCount,
     transaction_date: tripDate,
     driver_employee_id: driverId,
@@ -1242,6 +1360,11 @@ async function computeLogisticsCrewPayroll(pool, body) {
       rule: helper2 ? 'complete_crew' : 'missing_helper_split',
       driver_rate: driverRate,
       helper_rate: helperRate,
+      truck_type_id: truckTypeId,
+      location_id: locationId,
+      location_name: location.name,
+      location_category: location.location_category,
+      trip_type: tripType,
       missing_helper_share: missingHelperShare,
       crew_status: crewStatus,
       trip_count: tripCount
@@ -1272,11 +1395,29 @@ async function ensurePieceRatePayrollSchema(pool) {
   await ensureColumn('salary_calculations', 'source_type', 'VARCHAR(40) NULL AFTER validation_snapshot');
   await ensureColumn('salary_calculations', 'source_record_ids', 'TEXT NULL AFTER source_type');
   await ensureColumn('salary_calculations', 'employee_deduction_total', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS salary_calculation_deductions (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      salary_calculation_id BIGINT NOT NULL,
+      deduction_config_id BIGINT NULL,
+      deduction_key VARCHAR(120) NOT NULL,
+      name VARCHAR(160) NOT NULL,
+      category VARCHAR(80) NULL,
+      computation_type VARCHAR(80) NULL,
+      rate_or_amount DECIMAL(12,4) NULL,
+      amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_salary_calc_deduction_config (salary_calculation_id, deduction_config_id),
+      UNIQUE KEY uq_salary_calc_deduction_key (salary_calculation_id, deduction_key),
+      INDEX idx_salary_calc_deductions_calc (salary_calculation_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
   try { await pool.execute('ALTER TABLE salary_calculations MODIFY COLUMN payroll_period VARCHAR(20) NULL'); } catch (_) {}
   try {
     await pool.execute(`
       ALTER TABLE salary_calculations
-      MODIFY COLUMN status ENUM('Draft','Submitted','Approved','Finalized','Paid','Released','Superseded','Cancelled') DEFAULT 'Submitted'
+      MODIFY COLUMN status ENUM('Draft','Calculated','Submitted','Approved','Finalized','Paid','Released','Superseded','Cancelled') DEFAULT 'Submitted'
     `);
   } catch (_) {}
   await ensureColumn('payslips', 'salary_calculation_id', 'INT NULL AFTER payroll_run_id');
@@ -3033,20 +3174,16 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
 router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
-    const { employee_id, sewing_type_id, quantity, rate, transaction_date } = req.body;
+    await ensurePieceRatePayrollSchema(pool);
+    const { employee_id, sewing_type_id, quantity, rate, transaction_date, calculation_status } = req.body;
 
     // Calculate week and month
     const date = new Date(transaction_date);
     const week = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
     const monthYear = date.toISOString().slice(0, 7);
 
-    // Calculate gross and net pay
+    // Source rows store earnings only. Salary calculation submission owns deductions.
     const grossPay = quantity * rate;
-    const sssDeduction = grossPay * 0.045;
-    const pagibigDeduction = grossPay * 0.02;
-    const philhealthDeduction = grossPay * 0.0275;
-    const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
-    const netPay = grossPay - totalDeductions;
 
     // Save to production_transactions
     const [prodResult] = await pool.execute(`
@@ -3055,20 +3192,106 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [employee_id, sewing_type_id, quantity, rate, transaction_date, week, monthYear]);
 
-    // Also save to salary_calculations for display in records
+    // Update the one salary calculation for this employee and period.
     const wage_type_id = 3; // Per-Piece wage type ID
-    const [salCalcResult] = await pool.execute(`
-      INSERT INTO salary_calculations 
-      (employee_id, wage_type_id, base_rate, quantity, gross_pay, sss_deduction, pagibig_deduction, philhealth_deduction, total_deductions, net_pay, calculation_date, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [employee_id, wage_type_id, rate, quantity, grossPay, sssDeduction, pagibigDeduction, philhealthDeduction, totalDeductions, netPay, transaction_date, 'Submitted']);
+    const requestedStatus = ['Calculated', 'Submitted'].includes(calculation_status) ? calculation_status : 'Draft';
+    const shouldPersistDeductions = requestedStatus === 'Submitted';
+    const deductions = shouldPersistDeductions
+      ? await calculateSalaryDeductionSnapshot(pool, employee_id, grossPay, transaction_date)
+      : { total: 0, employeeTotal: 0, rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
+    const totalDeductions = roundMoney(deductions.total || 0);
+    const [existingRows] = await pool.execute(`
+      SELECT id, status, gross_pay
+        FROM salary_calculations
+       WHERE employee_id = ? AND payroll_period = ? AND wage_type_id = ?
+         AND status <> 'Superseded'
+       ORDER BY id DESC
+       LIMIT 1
+    `, [employee_id, monthYear, wage_type_id]);
+    let salaryCalculationId = existingRows[0]?.id || null;
+    if (existingRows[0] && ['Finalized', 'Paid', 'Released'].includes(existingRows[0].status)) {
+      return res.status(409).json({ error: 'A finalized or paid salary calculation cannot be updated.' });
+    }
+    const periodGrossPay = roundMoney(numeric(existingRows[0]?.gross_pay) + grossPay);
+    const periodDeductions = shouldPersistDeductions
+      ? await calculateSalaryDeductionSnapshot(pool, employee_id, periodGrossPay, transaction_date)
+      : deductions;
+    const periodTotalDeductions = roundMoney(periodDeductions.total || 0);
+    if (salaryCalculationId) {
+      const nextStatus = ['Draft', 'Calculated'].includes(existingRows[0].status) && ['Calculated', 'Submitted'].includes(requestedStatus)
+        ? requestedStatus
+        : existingRows[0].status;
+      await pool.execute(`
+        UPDATE salary_calculations
+           SET base_rate = 0,
+               quantity = quantity + ?,
+               gross_pay = gross_pay + ?,
+               sss_deduction = ?,
+               pagibig_deduction = ?,
+               philhealth_deduction = ?,
+               total_deductions = ?,
+               employee_deduction_total = ?,
+               net_pay = (gross_pay + ?) - ?,
+               calculation_date = ?,
+               payroll_period = ?,
+               status = ?,
+               calculated_by = ?,
+               source_type = 'production_transaction',
+               updated_at = NOW()
+         WHERE id = ?
+      `, [
+        quantity,
+        grossPay,
+        periodDeductions.configuredBreakdown.sss || 0,
+        periodDeductions.configuredBreakdown.pagibig || 0,
+        periodDeductions.configuredBreakdown.philhealth || 0,
+        periodTotalDeductions,
+        periodDeductions.employeeTotal || 0,
+        grossPay,
+        periodTotalDeductions,
+        transaction_date,
+        monthYear,
+        nextStatus,
+        currentUserId(req),
+        salaryCalculationId
+      ]);
+    } else {
+      const [salCalcResult] = await pool.execute(`
+        INSERT INTO salary_calculations
+          (employee_id, wage_type_id, base_rate, quantity, gross_pay, sss_deduction,
+           pagibig_deduction, philhealth_deduction, total_deductions, employee_deduction_total,
+           net_pay, calculation_date, payroll_period, status, calculated_by, source_type)
+        VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'production_transaction')
+      `, [
+        employee_id,
+        wage_type_id,
+        quantity,
+        grossPay,
+        deductions.configuredBreakdown.sss || 0,
+        deductions.configuredBreakdown.pagibig || 0,
+        deductions.configuredBreakdown.philhealth || 0,
+        totalDeductions,
+        deductions.employeeTotal || 0,
+        grossPay - totalDeductions,
+        transaction_date,
+        monthYear,
+        requestedStatus,
+        currentUserId(req)
+      ]);
+      salaryCalculationId = salCalcResult.insertId;
+    }
+    if (shouldPersistDeductions) {
+      await applySalaryCalculationDeductionSnapshot(pool, salaryCalculationId, periodDeductions.rows);
+    } else {
+      await clearSalaryCalculationDeductions(pool, salaryCalculationId);
+    }
 
     res.json({ 
       success: true, 
       id: prodResult.insertId,
       amount: quantity * rate,
       message: `Recorded ${quantity} pieces at ₱${rate} each`,
-      salary_calculation_id: salCalcResult.insertId
+      salary_calculation_id: salaryCalculationId
     });
   } catch (err) {
     console.error('Error recording production transaction:', err);
@@ -3077,17 +3300,17 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
 });
 
 async function upsertLogisticsPeriodCalculation(pool, employeeId, payrollPeriod, wageTypeId, userId, calculationStatus = 'Draft') {
-  const requestedStatus = calculationStatus === 'Submitted' ? 'Submitted' : 'Draft';
+  const requestedStatus = ['Calculated', 'Submitted'].includes(calculationStatus) ? calculationStatus : 'Draft';
   const [totals] = await pool.execute(`
     SELECT COALESCE(SUM(gross_pay), 0) AS gross_pay,
-           COALESCE(SUM(net_pay), 0) AS net_pay,
-           COALESCE(SUM(gross_pay - net_pay), 0) AS total_deductions,
            COALESCE(SUM(CASE WHEN crew_status IS NULL THEN 1 ELSE 1 END), 0) AS transaction_count,
            MAX(transaction_date) AS calculation_date
       FROM logistics_transactions
      WHERE employee_id = ? AND month_year = ?
   `, [employeeId, payrollPeriod]);
   const summary = totals[0];
+  const grossPay = roundMoney(summary.gross_pay || 0);
+  const calcDate = summary.calculation_date || `${payrollPeriod}-01`;
   const [existingRows] = await pool.execute(`
     SELECT id, status FROM salary_calculations
      WHERE employee_id = ? AND payroll_period = ? AND wage_type_id = ?
@@ -3097,29 +3320,97 @@ async function upsertLogisticsPeriodCalculation(pool, employeeId, payrollPeriod,
   if (existingRows[0] && ['Finalized', 'Paid', 'Released'].includes(existingRows[0].status)) {
     throw new Error('A finalized or paid logistics calculation cannot be updated. Reopen it through the authorized correction flow.');
   }
+  const shouldPersistDeductions = requestedStatus === 'Submitted' || existingRows[0]?.status === 'Submitted';
+  const deductions = shouldPersistDeductions
+    ? await calculateSalaryDeductionSnapshot(pool, employeeId, grossPay, calcDate)
+    : { total: 0, employeeTotal: 0, rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
+  const totalDeductions = roundMoney(deductions.total || 0);
+  const netPay = roundMoney(grossPay - totalDeductions);
+  const [sourceRows] = await pool.execute(`
+    SELECT id, transaction_date, crew_role, truck_type, base_rate, rate, amount, gross_pay, split_rule_snapshot
+      FROM logistics_transactions
+     WHERE employee_id = ? AND month_year = ?
+     ORDER BY transaction_date, id
+  `, [employeeId, payrollPeriod]);
+  const dailyTotals = sourceRows.reduce((acc, row) => {
+    const key = String(row.transaction_date || '').slice(0, 10);
+    acc[key] = roundMoney((acc[key] || 0) + numeric(row.gross_pay));
+    return acc;
+  }, {});
+  const logisticsBreakdown = sourceRows.map(row => {
+    const rowSnapshot = parseJsonSafe(row.split_rule_snapshot);
+    const tripDate = String(row.transaction_date || '').slice(0, 10);
+    const locationText = [rowSnapshot.location_category, rowSnapshot.location_name].filter(Boolean).join(' - ');
+    return {
+      trip_date: tripDate,
+      employee_role: row.crew_role || rowSnapshot.crew_role || '-',
+      truck_type: row.truck_type || '-',
+      location: locationText || rowSnapshot.location_name || '-',
+      trip_number: rowSnapshot.trip_type || '-',
+      base_rate: numeric(rowSnapshot.base_rate || row.base_rate),
+      multiplier: numeric(rowSnapshot.multiplier || 1),
+      rule_applied: rowSnapshot.rule_applied || rowSnapshot.rule || '-',
+      computed_trip_pay: numeric(rowSnapshot.computed_trip_pay || row.amount || row.gross_pay),
+      daily_total: dailyTotals[tripDate] || numeric(row.gross_pay),
+      payroll_period_total: grossPay
+    };
+  });
+  const snapshot = {
+    source: 'logistics_transaction',
+    logistics_breakdown: logisticsBreakdown,
+    deduction_status: shouldPersistDeductions ? 'Applied' : 'Not Applied',
+    deductions: deductions.rows || []
+  };
   if (existingRows[0]) {
-    const nextStatus = existingRows[0].status === 'Draft' && requestedStatus === 'Submitted'
-      ? 'Submitted'
+    const nextStatus = ['Draft', 'Calculated'].includes(existingRows[0].status) && ['Calculated', 'Submitted'].includes(requestedStatus)
+      ? requestedStatus
       : existingRows[0].status;
     await pool.execute(`
       UPDATE salary_calculations
-         SET base_rate = 0, quantity = ?, gross_pay = ?, total_deductions = ?, net_pay = ?,
+         SET base_rate = 0, quantity = ?, gross_pay = ?,
+             sss_deduction = ?, pagibig_deduction = ?, philhealth_deduction = ?,
+             total_deductions = ?, employee_deduction_total = ?, net_pay = ?,
              calculation_date = ?, calculated_by = ?, source_type = 'logistics_transaction',
-             status = ?
+             validation_snapshot = ?, status = ?
        WHERE id = ?
-    `, [summary.transaction_count || 0, summary.gross_pay || 0,
-      summary.total_deductions || 0, summary.net_pay || 0,
-      summary.calculation_date || `${payrollPeriod}-01`, userId || null, nextStatus, existingRows[0].id]);
+    `, [
+      summary.transaction_count || 0,
+      grossPay,
+      deductions.configuredBreakdown.sss || 0,
+      deductions.configuredBreakdown.pagibig || 0,
+      deductions.configuredBreakdown.philhealth || 0,
+      totalDeductions,
+      deductions.employeeTotal || 0,
+      netPay,
+      calcDate,
+      userId || null,
+      JSON.stringify(snapshot),
+      nextStatus,
+      existingRows[0].id
+    ]);
+    if (shouldPersistDeductions) {
+      await applySalaryCalculationDeductionSnapshot(pool, existingRows[0].id, deductions.rows);
+    } else {
+      await clearSalaryCalculationDeductions(pool, existingRows[0].id);
+    }
     return existingRows[0].id;
   }
   const [created] = await pool.execute(`
     INSERT INTO salary_calculations
       (employee_id, wage_type_id, base_rate, quantity, gross_pay, total_deductions, net_pay,
-       calculation_date, payroll_period, status, calculated_by, source_type)
-    VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'logistics_transaction')
+       sss_deduction, pagibig_deduction, philhealth_deduction, employee_deduction_total,
+       calculation_date, payroll_period, status, calculated_by, source_type, validation_snapshot)
+    VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'logistics_transaction', ?)
   `, [employeeId, wageTypeId, summary.transaction_count || 0,
-    summary.gross_pay || 0, summary.total_deductions || 0, summary.net_pay || 0,
-    summary.calculation_date || `${payrollPeriod}-01`, payrollPeriod, requestedStatus, userId || null]);
+    grossPay, totalDeductions, netPay,
+    deductions.configuredBreakdown.sss || 0,
+    deductions.configuredBreakdown.pagibig || 0,
+    deductions.configuredBreakdown.philhealth || 0,
+    deductions.employeeTotal || 0,
+    calcDate, payrollPeriod, requestedStatus, userId || null, JSON.stringify(snapshot)]);
+  if (shouldPersistDeductions) {
+    await applySalaryCalculationDeductionSnapshot(pool, created.insertId, deductions.rows);
+  }
   return created.insertId;
 }
 
@@ -3153,14 +3444,18 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
       const savedRows = [];
 
       for (const row of crew.rows) {
-        const configuredDeductions = await computeConfiguredDeductions(pool, row.gross_pay, crew.transaction_date);
-        const totalDeductions = configuredDeductions.total;
-        const netPay = row.gross_pay - totalDeductions;
         const snapshot = {
           ...crew.snapshot,
           crew_role: row.role,
           employee_id: row.employee.id,
-          deductions: configuredDeductions.applied
+          base_rate: row.base_rate,
+          multiplier: row.multiplier,
+          additional_rate: row.additional_rate,
+          configured_trip_pay: row.configured_trip_pay,
+          computed_trip_pay: row.computed_trip_pay,
+          rule_applied: row.rule_applied,
+          daily_total: row.gross_pay,
+          deduction_status: 'Not Applied'
         };
 
         const [logResult] = await pool.execute(`
@@ -3184,8 +3479,8 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
           crew.missing_helper_share,
           row.base_rate,
           row.gross_pay,
-          netPay,
-          row.base_rate,
+          row.gross_pay,
+          row.computed_trip_pay,
           row.gross_pay,
           tripReference,
           crew.transaction_date,
@@ -3204,8 +3499,11 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
           employee_id: row.employee.id,
           role: row.role,
           base_rate: row.base_rate,
+          multiplier: row.multiplier,
+          rule_applied: row.rule_applied,
+          computed_trip_pay: row.computed_trip_pay,
           gross_pay: row.gross_pay,
-          net_pay: netPay
+          net_pay: row.gross_pay
         });
       }
 
@@ -3224,13 +3522,9 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
       });
     }
 
-    // Calculate gross and net pay
+    // Source rows store earnings only. Deductions are snapshotted once by the salary calculation submit flow.
     const grossPay = rate;
-    const sssDeduction = grossPay * 0.045;
-    const pagibigDeduction = grossPay * 0.02;
-    const philhealthDeduction = grossPay * 0.0275;
-    const totalDeductions = sssDeduction + pagibigDeduction + philhealthDeduction;
-    const netPay = grossPay - totalDeductions;
+    const netPay = grossPay;
 
     // Save to logistics_transactions
     const [logResult] = await pool.execute(`
@@ -3687,7 +3981,7 @@ async function assertPieceCalculationsMutable(pool, employeeIds, payrollPeriod) 
 
 async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, userId, calculationStatus = 'Draft') {
   const uniqueIds = [...new Set(employeeIds.map(Number).filter(Boolean))];
-  const requestedStatus = calculationStatus === 'Submitted' ? 'Submitted' : 'Draft';
+  const requestedStatus = ['Calculated', 'Submitted'].includes(calculationStatus) ? calculationStatus : 'Draft';
   const [wageTypes] = await pool.execute(`
     SELECT id FROM wage_types
      WHERE LOWER(name) IN ('per-piece', 'piece rate')
@@ -3714,34 +4008,83 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
     `, [employeeId, payrollPeriod, wageTypes[0].id]);
     if (existing[0]) {
       if (['Finalized', 'Paid', 'Released'].includes(existing[0].status)) throw new Error('A finalized or paid salary calculation cannot be recomputed.');
-      let baseline = { gross_pay: 0, total_output: 0, total_deductions: Number(existing[0].total_deductions || 0) };
+      let baseline = { gross_pay: 0, total_output: 0 };
       try {
         const source = existing[0].source_record_ids ? JSON.parse(existing[0].source_record_ids) : {};
         baseline = { ...baseline, ...(source.legacy_baseline || {}) };
       } catch (_) {}
       const grossPay = roundMoney(Number(baseline.gross_pay || 0) + outputGrossPay);
       const totalOutput = Number(baseline.total_output || 0) + outputTotal;
-      const totalDeductions = roundMoney(Number(baseline.total_deductions || 0));
-      const nextStatus = existing[0].status === 'Draft' && requestedStatus === 'Submitted'
-        ? 'Submitted'
+      const shouldPersistDeductions = requestedStatus === 'Submitted' || existing[0].status === 'Submitted';
+      const deductions = shouldPersistDeductions
+        ? await calculateSalaryDeductionSnapshot(pool, employeeId, grossPay, `${payrollPeriod}-01`)
+        : { total: 0, employeeTotal: 0, rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
+      const totalDeductions = roundMoney(deductions.total || 0);
+      const nextStatus = ['Draft', 'Calculated'].includes(existing[0].status) && ['Calculated', 'Submitted'].includes(requestedStatus)
+        ? requestedStatus
         : existing[0].status;
       await pool.execute(`
         UPDATE salary_calculations
            SET base_rate = 0, quantity = ?, gross_pay = ?, net_pay = ?,
-               total_deductions = ?, calculation_date = ?, calculated_by = ?,
-               source_type = 'piece_rate_output', source_record_ids = ?, status = ?
+               sss_deduction = ?, pagibig_deduction = ?, philhealth_deduction = ?,
+               total_deductions = ?, employee_deduction_total = ?, calculation_date = ?, calculated_by = ?,
+               source_type = 'piece_rate_output', source_record_ids = ?, validation_snapshot = ?, status = ?
          WHERE id = ?
-      `, [totalOutput, grossPay, grossPay - totalDeductions, totalDeductions, `${payrollPeriod}-01`, userId || null,
-        JSON.stringify({ legacy_baseline: baseline }), nextStatus, existing[0].id]);
+      `, [
+        totalOutput,
+        grossPay,
+        grossPay - totalDeductions,
+        deductions.configuredBreakdown.sss || 0,
+        deductions.configuredBreakdown.pagibig || 0,
+        deductions.configuredBreakdown.philhealth || 0,
+        totalDeductions,
+        deductions.employeeTotal || 0,
+        `${payrollPeriod}-01`,
+        userId || null,
+        JSON.stringify({ legacy_baseline: baseline }),
+        JSON.stringify({ source: 'piece_rate_output', deduction_status: shouldPersistDeductions ? 'Applied' : 'Not Applied', deductions: deductions.rows || [] }),
+        nextStatus,
+        existing[0].id
+      ]);
+      if (shouldPersistDeductions) {
+        await applySalaryCalculationDeductionSnapshot(pool, existing[0].id, deductions.rows);
+      } else {
+        await clearSalaryCalculationDeductions(pool, existing[0].id);
+      }
     } else {
-      await pool.execute(`
+      const shouldPersistDeductions = requestedStatus === 'Submitted';
+      const deductions = shouldPersistDeductions
+        ? await calculateSalaryDeductionSnapshot(pool, employeeId, outputGrossPay, `${payrollPeriod}-01`)
+        : { total: 0, employeeTotal: 0, rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
+      const totalDeductions = roundMoney(deductions.total || 0);
+      const [created] = await pool.execute(`
         INSERT INTO salary_calculations
           (employee_id, wage_type_id, base_rate, quantity, hours_worked, days_worked,
            total_allowances, overtime_hours, overtime_amount, gross_pay, sss_deduction,
            pagibig_deduction, philhealth_deduction, total_deductions, net_pay,
-           calculation_date, payroll_period, status, calculated_by)
-        VALUES (?, ?, 0, ?, 0, 0, 0, 0, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?)
-      `, [employeeId, wageTypes[0].id, outputTotal, outputGrossPay, outputGrossPay, `${payrollPeriod}-01`, payrollPeriod, requestedStatus, userId || null]);
+           employee_deduction_total, calculation_date, payroll_period, status, calculated_by,
+           source_type, validation_snapshot)
+        VALUES (?, ?, 0, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'piece_rate_output', ?)
+      `, [
+        employeeId,
+        wageTypes[0].id,
+        outputTotal,
+        outputGrossPay,
+        deductions.configuredBreakdown.sss || 0,
+        deductions.configuredBreakdown.pagibig || 0,
+        deductions.configuredBreakdown.philhealth || 0,
+        totalDeductions,
+        outputGrossPay - totalDeductions,
+        deductions.employeeTotal || 0,
+        `${payrollPeriod}-01`,
+        payrollPeriod,
+        requestedStatus,
+        userId || null,
+        JSON.stringify({ source: 'piece_rate_output', deduction_status: shouldPersistDeductions ? 'Applied' : 'Not Applied', deductions: deductions.rows || [] })
+      ]);
+      if (shouldPersistDeductions) {
+        await applySalaryCalculationDeductionSnapshot(pool, created.insertId, deductions.rows);
+      }
     }
   }
 }
@@ -3943,6 +4286,7 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
   try {
     const pool = require('../config/db');
     const {
+      salary_calculation_id,
       employee_id,
       wage_type_id,
       base_rate,
@@ -4103,11 +4447,12 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       serverGrossPay = pieceComputation.final_gross_pay + parseFloat(total_allowances || 0);
     }
 
-    const calculationStatus = ['Draft', 'Submitted'].includes(status) ? status : 'Submitted';
+    const calculationStatus = ['Draft', 'Calculated', 'Submitted'].includes(status) ? status : 'Submitted';
+    const shouldPersistDeductions = calculationStatus === 'Submitted';
 
     // Validate required fields. Drafts may be incomplete so officers can
     // return later; submitted calculations must have a computed gross pay.
-    if (!employee_id || !wage_type_id || (!isPieceRate && !serverBaseRate) || (calculationStatus !== 'Draft' && !serverGrossPay)) {
+    if (!employee_id || !wage_type_id || (!isPieceRate && !serverBaseRate) || (calculationStatus === 'Submitted' && !serverGrossPay)) {
       return res.status(400).json({ 
         error: isPieceRate
           ? 'Required fields: employee_id, wage_type_id, Type of Sew, Size Range, worker category, quantity produced'
@@ -4116,10 +4461,8 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     }
 
     const submittedAt = calculationStatus === 'Submitted' ? new Date() : null;
-    const computedDeductions = await computePayrollDeductions(pool, employee_id, serverGrossPay, calcDate);
     const lateDeduction = numeric(validationSnapshot?.late_deduction);
     const undertimeDeduction = numeric(validationSnapshot?.undertime_deduction);
-    const tardyUtDeduction = lateDeduction + undertimeDeduction;
     const attendanceDeductionRows = [
       ...(lateDeduction > 0 ? [{
         id: null,
@@ -4136,16 +4479,16 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         amount: undertimeDeduction
       }] : [])
     ];
-    const computedTotalDeductions = computedDeductions.total + tardyUtDeduction;
+    const computedDeductions = shouldPersistDeductions
+      ? await calculateSalaryDeductionSnapshot(pool, employee_id, serverGrossPay, calcDate, attendanceDeductionRows)
+      : { total: 0, employeeTotal: 0, employee: [], configured: [], applied: [], rows: [], configuredBreakdown: { sss: 0, pagibig: 0, philhealth: 0 } };
+    const computedTotalDeductions = shouldPersistDeductions ? computedDeductions.total : 0;
     const computedNetPay = serverGrossPay - computedTotalDeductions;
-    const deductionByName = computedDeductions.configured.reduce((acc, item) => {
-      acc[item.name.toLowerCase()] = item.amount;
-      return acc;
-    }, {});
     const snapshotForStorage = {
       ...(validationSnapshot || {}),
-      deductions: [...computedDeductions.applied, ...attendanceDeductionRows].map(item => ({
-        id: item.id || null,
+      deduction_status: shouldPersistDeductions ? 'Applied' : 'Not Applied',
+      deductions: computedDeductions.rows.map(item => ({
+        id: item.deduction_config_id || null,
         name: item.name,
         category: item.category,
         computation_type: item.computation_type,
@@ -4168,9 +4511,9 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       overtime_hours || 0,
       overtime_amount || 0,
       serverGrossPay,
-      deductionByName.sss || 0,
-      deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
-      deductionByName.philhealth || 0,
+      computedDeductions.configuredBreakdown.sss || 0,
+      computedDeductions.configuredBreakdown.pagibig || 0,
+      computedDeductions.configuredBreakdown.philhealth || 0,
       computedTotalDeductions,
       computedDeductions.employeeTotal,
       computedNetPay,
@@ -4190,7 +4533,9 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         [salary_calculation_id, employee_id]
       );
       if (!draftRows.length) return res.status(404).json({ error: 'Draft salary calculation was not found.' });
-      if (draftRows[0].status !== 'Draft') return res.status(409).json({ error: 'Only draft salary calculations can be continued or updated.' });
+      if (['Finalized', 'Paid', 'Released'].includes(draftRows[0].status)) {
+        return res.status(409).json({ error: 'Finalized or paid salary calculations are locked.' });
+      }
       await pool.execute(`
         UPDATE salary_calculations
            SET wage_type_id = ?, base_rate = ?, quantity = ?, hours_worked = ?, days_worked = ?,
@@ -4215,9 +4560,9 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         overtime_hours || 0,
         overtime_amount || 0,
         serverGrossPay,
-        deductionByName.sss || 0,
-        deductionByName['pag-ibig'] || deductionByName.pagibig || 0,
-        deductionByName.philhealth || 0,
+        computedDeductions.configuredBreakdown.sss || 0,
+        computedDeductions.configuredBreakdown.pagibig || 0,
+        computedDeductions.configuredBreakdown.philhealth || 0,
         computedTotalDeductions,
         computedDeductions.employeeTotal,
         computedNetPay,
@@ -4264,6 +4609,12 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, calculationValues);
       salaryCalculationId = result.insertId;
+    }
+
+    if (shouldPersistDeductions) {
+      await applySalaryCalculationDeductionSnapshot(pool, salaryCalculationId, computedDeductions.rows);
+    } else {
+      await clearSalaryCalculationDeductions(pool, salaryCalculationId);
     }
 
     if (calculationStatus === 'Submitted' && computedDeductions.employee.length) {
@@ -4335,11 +4686,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
     }
 
     console.log('✅ Salary calculation saved with ID:', salaryCalculationId);
-    await logPayrollAudit(pool, req, calculationStatus === 'Draft' ? 'salary_calculation_draft' : 'salary_calculation_submitted', {
+    await logPayrollAudit(pool, req, calculationStatus === 'Submitted' ? 'salary_calculation_submitted' : 'salary_calculation_draft', {
       employee_id,
       salary_calculation_id: salaryCalculationId,
       remarks: `${calculationStatus} salary calculation`,
-      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.applied, piece_rate: pieceComputation }
+      metadata: { gross_pay: serverGrossPay, net_pay: computedNetPay, payroll_period, agency_name: agency_name || null, deductions: computedDeductions.rows, piece_rate: pieceComputation }
     });
     
     res.json({ 
@@ -5351,6 +5702,7 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
         sc.calculation_date,
         sc.payroll_period,
         sc.agency_name,
+        sc.validation_snapshot,
         sc.created_at,
         sc.updated_at
       FROM salary_calculations sc
@@ -5371,6 +5723,8 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     if (status) {
       query += ' AND sc.status = ?';
       params.push(status);
+    } else {
+      query += " AND sc.status IN ('Submitted', 'Approved', 'Finalized', 'Paid', 'Released')";
     }
 
     if (from_date) {
@@ -5874,10 +6228,73 @@ router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
 router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL_PERMISSIONS.approve), async (req, res) => {
   try {
     const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
     const { id } = req.params;
     const { status, remarks } = req.body;
-    const allowed = ['Submitted', 'Approved', 'Released', 'Paid'];
+    const allowed = ['Submitted', 'Approved', 'Finalized', 'Released', 'Paid'];
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid payroll status.' });
+
+    const [records] = await pool.execute(`
+      SELECT id, employee_id, gross_pay, calculation_date, payroll_period, status, validation_snapshot
+        FROM salary_calculations
+       WHERE id = ?
+       LIMIT 1
+    `, [id]);
+    const record = records[0];
+    if (!record) return res.status(404).json({ error: 'Salary calculation not found.' });
+    if (['Finalized', 'Paid', 'Released'].includes(record.status) && record.status !== status) {
+      return res.status(409).json({ error: 'Locked salary calculations require an authorized correction flow.' });
+    }
+
+    const existingSnapshot = parseJsonSafe(record.validation_snapshot);
+    const extraDeductionRows = [
+      ...(numeric(existingSnapshot.late_deduction) > 0 ? [{
+        name: 'Late Deduction',
+        category: 'Attendance',
+        computation_type: existingSnapshot?.policy?.late_deduction_method || 'Auto-compute from employee rate',
+        amount: numeric(existingSnapshot.late_deduction)
+      }] : []),
+      ...(numeric(existingSnapshot.undertime_deduction) > 0 ? [{
+        name: 'Undertime Deduction',
+        category: 'Attendance',
+        computation_type: existingSnapshot?.policy?.undertime_deduction_method || 'Auto-compute from employee rate',
+        amount: numeric(existingSnapshot.undertime_deduction)
+      }] : [])
+    ];
+    const deductions = await calculateSalaryDeductionSnapshot(
+      pool,
+      record.employee_id,
+      record.gross_pay,
+      record.calculation_date || `${record.payroll_period || new Date().toISOString().slice(0, 7)}-01`,
+      extraDeductionRows
+    );
+    const totalDeductions = roundMoney(deductions.total || 0);
+    const snapshot = {
+      ...existingSnapshot,
+      deduction_status: 'Applied',
+      deductions: deductions.rows || []
+    };
+    await pool.execute(`
+      UPDATE salary_calculations
+         SET sss_deduction = ?,
+             pagibig_deduction = ?,
+             philhealth_deduction = ?,
+             total_deductions = ?,
+             employee_deduction_total = ?,
+             net_pay = ?,
+             validation_snapshot = ?
+       WHERE id = ?
+    `, [
+      deductions.configuredBreakdown.sss || 0,
+      deductions.configuredBreakdown.pagibig || 0,
+      deductions.configuredBreakdown.philhealth || 0,
+      totalDeductions,
+      deductions.employeeTotal || 0,
+      roundMoney(numeric(record.gross_pay) - totalDeductions),
+      JSON.stringify(snapshot),
+      id
+    ]);
+    await applySalaryCalculationDeductionSnapshot(pool, id, deductions.rows);
 
     const userId = currentUserId(req);
     const fields = ['status = ?'];
@@ -5887,7 +6304,7 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL
       fields.push('approved_by = ?', 'approved_at = NOW()');
       params.push(userId);
     }
-    if (status === 'Released') {
+    if (status === 'Released' || status === 'Paid') {
       fields.push('released_by = ?', 'released_at = NOW()');
       params.push(userId);
     }

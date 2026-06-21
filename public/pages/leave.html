@@ -180,11 +180,11 @@
   <div id="leave-empty-state" style="display:none;padding:28px;text-align:center;color:var(--muted);">No leave records found.</div>
 </div>
 
-<div id="leave-pagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
-  <div id="leave-page-info" style="color:var(--muted);font-size:13px;">Showing 0 results</div>
-  <div style="display:flex;gap:8px;">
-    <button class="btn btn-outline" onclick="prevLeavePage()">Previous</button>
-    <button class="btn btn-outline" onclick="nextLeavePage()">Next</button>
+<div id="leave-pagination" class="table-pagination leave-pagination">
+  <div id="leave-page-info">Showing 0 results</div>
+  <div class="table-pagination-actions leave-pagination-actions">
+    <button class="btn btn-outline btn-sm" type="button" onclick="prevLeavePage()">Previous</button>
+    <button class="btn btn-outline btn-sm" type="button" onclick="nextLeavePage()">Next</button>
   </div>
 </div>
 </div>

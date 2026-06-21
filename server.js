@@ -10,6 +10,7 @@ const path       = require('path');
 const multer     = require('multer');
 const fs         = require('fs');
 const http       = require('http');
+const nodeCrypto = require('crypto');
 
 const { me }                                 = require('./server/auth');
 const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
@@ -28,6 +29,7 @@ const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
 const { validateRequestBody }                = require('./validators/inputValidation');
+const { hashTemporaryPassword }              = require('./services/passwordService');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -660,6 +662,33 @@ function isValidEmployeeCode(value) {
   return /^[A-Z0-9_-]+$/i.test(String(value || '').trim());
 }
 
+async function employeeColumnExists(executor, columnName) {
+  const [rows] = await executor.execute(
+    `SELECT COUNT(*) AS total
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'employees'
+        AND COLUMN_NAME = ?`,
+    [columnName]
+  );
+  return Number(rows[0]?.total || 0) > 0;
+}
+
+async function ensureEmployeeAuthColumns(executor) {
+  if (!(await employeeColumnExists(executor, 'Password_Hash'))) {
+    await executor.execute('ALTER TABLE employees ADD COLUMN Password_Hash VARCHAR(255) NULL');
+  }
+  if (!(await employeeColumnExists(executor, 'Password_Changed_At'))) {
+    await executor.execute('ALTER TABLE employees ADD COLUMN Password_Changed_At DATETIME NULL');
+  }
+  if (!(await employeeColumnExists(executor, 'Failed_Login_Attempts'))) {
+    await executor.execute('ALTER TABLE employees ADD COLUMN Failed_Login_Attempts INT NOT NULL DEFAULT 0');
+  }
+  if (!(await employeeColumnExists(executor, 'force_password_change'))) {
+    await executor.execute('ALTER TABLE employees ADD COLUMN force_password_change BOOLEAN NOT NULL DEFAULT FALSE');
+  }
+}
+
 async function ensureEmployeeIdConfigSchema(executor) {
   const [codeColumn] = await executor.execute("SHOW COLUMNS FROM employees LIKE 'employee_code'");
   if (!codeColumn.length) {
@@ -747,9 +776,6 @@ async function generateNextEmployeeCode(executor, reserve = false) {
 
   if (reserve) {
     const [[config]] = await executor.execute('SELECT * FROM employee_id_config WHERE id = 1 FOR UPDATE');
-    if (!Number(config.auto_generate_enabled)) {
-      throw new Error('Employee ID auto-generation is disabled.');
-    }
     const nextSequence = Math.max(Number(config.current_sequence || 0) + 1, Number(config.starting_number || 1));
     await executor.execute('UPDATE employee_id_config SET current_sequence = ? WHERE id = 1', [nextSequence]);
     return formatEmployeeCode(nextSequence, config);
@@ -876,9 +902,6 @@ app.get('/api/employees/next-code', requireAuth, requireRole([...ROLES.staff_man
   try {
     const pool = require('./config/db');
     const config = await getEmployeeIdConfig(pool);
-    if (!Number(config.auto_generate_enabled)) {
-      return res.status(400).json({ error: 'Employee ID auto-generation is disabled.', config });
-    }
     const employeeCode = await generateNextEmployeeCode(pool);
     res.json({ employee_code: employeeCode, config });
   } catch (err) {
@@ -1414,6 +1437,7 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
     const pool = require('./config/db');
     await ensureOnboardingLifecycleSchema(pool);
     await ensurePhilippineAddressColumns(pool);
+    await ensureEmployeeAuthColumns(pool);
     const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     
     console.log('\n=== POST /api/employees ===');
@@ -1602,11 +1626,13 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
     }
 
     console.log('Executing INSERT for:', { employee_code: finalEmployeeCode, first_name, last_name, email });
+    const generatedTemporaryPassword = nodeCrypto.randomBytes(24).toString('base64');
+    const employeePasswordHash = await hashTemporaryPassword(generatedTemporaryPassword);
     
     const [result] = await pool.execute(
-      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [finalEmployeeCode, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null]
+      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, Password_Hash, Password_Changed_At, Failed_Login_Attempts, force_password_change)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0, 1)`,
+      [finalEmployeeCode, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, employeePasswordHash]
     );
     
     const employee_id = result.insertId;
@@ -1636,65 +1662,73 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
       ]
     );
 
+    const piiUpdateFields = [
+      'hiring_type = ?',
+      'agency_name = ?',
+      'agency_contact_person = ?',
+      'agency_contact_number = ?',
+      'deployment_status = ?',
+      'contract_start_date = ?',
+      'contract_end_date = ?',
+      "lifecycle_status = 'Active'"
+    ];
+    const piiUpdateValues = [
+      normalizedHiringType,
+      normalizedHiringType === 'Agency-Hired' ? agency_name || null : null,
+      normalizedHiringType === 'Agency-Hired' ? agency_contact_person || null : null,
+      normalizedHiringType === 'Agency-Hired' ? agency_contact_number || null : null,
+      normalizedDeploymentStatus,
+      normalizedContractStartDate,
+      normalizedContractEndDate
+    ];
+    if (await employeeColumnExists(pool, 'encrypted_pii')) {
+      piiUpdateFields.unshift('encrypted_pii = ?');
+      piiUpdateValues.unshift(encryptPII({
+        contact_number: contact_number || '',
+        work_email: work_email || '',
+        residential_address: addresses.home.address || '',
+        residential_address_lat: addresses.home.lat == null ? '' : String(addresses.home.lat),
+        residential_address_lng: addresses.home.lng == null ? '' : String(addresses.home.lng),
+        current_address: addresses.current.address || '',
+        current_address_lat: addresses.current.lat == null ? '' : String(addresses.current.lat),
+        current_address_lng: addresses.current.lng == null ? '' : String(addresses.current.lng),
+        current_address_same_as_home: !!addresses.sameCurrent,
+        mailing_address: addresses.mailing.address || '',
+        mailing_address_lat: addresses.mailing.lat == null ? '' : String(addresses.mailing.lat),
+        mailing_address_lng: addresses.mailing.lng == null ? '' : String(addresses.mailing.lng),
+        mailing_address_same_as_home: !!addresses.sameMailing,
+        nationality: nationality || 'Filipino',
+        date_of_birth: date_of_birth || '',
+        place_of_birth: place_of_birth || '',
+        gender: gender || '',
+        civil_status: marital_status || '',
+        blood_type: blood_type || '',
+        religion: religion || '',
+        emergency_contact_name: emergency_contact_name || '',
+        emergency_contact_relationship: emergency_contact_relationship || '',
+        emergency_contact_number: emergency_contact_num || '',
+        emergency_contact_secondary_number: emergency_contact_secondary_num || '',
+        emergency_contact_email: emergency_contact_email || '',
+        emergency_contact_address: emergency_contact_address || '',
+        sss_number: sss_number || '',
+        philhealth_number: philhealth_number || '',
+        pagibig_number: pagibig_number || '',
+        tin: tin || '',
+        tax_status: tax_status || '',
+        bank_name: bank_name || '',
+        bank_account: bank_account || '',
+        hiring_type: normalizedHiringType,
+        agency_name: normalizedHiringType === 'Agency-Hired' ? agency_name || '' : '',
+        agency_contact_person: normalizedHiringType === 'Agency-Hired' ? agency_contact_person || '' : '',
+        agency_contact_number: normalizedHiringType === 'Agency-Hired' ? agency_contact_number || '' : '',
+        deployment_status: normalizedDeploymentStatus || '',
+        contract_start_date: normalizedContractStartDate || '',
+        contract_end_date: normalizedContractEndDate || '',
+      }));
+    }
     await pool.execute(
-      `UPDATE employees SET
-         encrypted_pii = ?, hiring_type = ?, agency_name = ?,
-         agency_contact_person = ?, agency_contact_number = ?,
-         deployment_status = ?, contract_start_date = ?, contract_end_date = ?,
-         lifecycle_status = 'Active'
-       WHERE id = ?`,
-      [
-        encryptPII({
-          contact_number: contact_number || '',
-          work_email: work_email || '',
-          residential_address: addresses.home.address || '',
-          residential_address_lat: addresses.home.lat == null ? '' : String(addresses.home.lat),
-          residential_address_lng: addresses.home.lng == null ? '' : String(addresses.home.lng),
-          current_address: addresses.current.address || '',
-          current_address_lat: addresses.current.lat == null ? '' : String(addresses.current.lat),
-          current_address_lng: addresses.current.lng == null ? '' : String(addresses.current.lng),
-          current_address_same_as_home: !!addresses.sameCurrent,
-          mailing_address: addresses.mailing.address || '',
-          mailing_address_lat: addresses.mailing.lat == null ? '' : String(addresses.mailing.lat),
-          mailing_address_lng: addresses.mailing.lng == null ? '' : String(addresses.mailing.lng),
-          mailing_address_same_as_home: !!addresses.sameMailing,
-          nationality: nationality || 'Filipino',
-          date_of_birth: date_of_birth || '',
-          place_of_birth: place_of_birth || '',
-          gender: gender || '',
-          civil_status: marital_status || '',
-          blood_type: blood_type || '',
-          religion: religion || '',
-          emergency_contact_name: emergency_contact_name || '',
-          emergency_contact_relationship: emergency_contact_relationship || '',
-          emergency_contact_number: emergency_contact_num || '',
-          emergency_contact_secondary_number: emergency_contact_secondary_num || '',
-          emergency_contact_email: emergency_contact_email || '',
-          emergency_contact_address: emergency_contact_address || '',
-          sss_number: sss_number || '',
-          philhealth_number: philhealth_number || '',
-          pagibig_number: pagibig_number || '',
-          tin: tin || '',
-          tax_status: tax_status || '',
-          bank_name: bank_name || '',
-          bank_account: bank_account || '',
-          hiring_type: normalizedHiringType,
-          agency_name: normalizedHiringType === 'Agency-Hired' ? agency_name || '' : '',
-          agency_contact_person: normalizedHiringType === 'Agency-Hired' ? agency_contact_person || '' : '',
-          agency_contact_number: normalizedHiringType === 'Agency-Hired' ? agency_contact_number || '' : '',
-          deployment_status: normalizedDeploymentStatus || '',
-          contract_start_date: normalizedContractStartDate || '',
-          contract_end_date: normalizedContractEndDate || '',
-        }),
-        normalizedHiringType,
-        normalizedHiringType === 'Agency-Hired' ? agency_name || null : null,
-        normalizedHiringType === 'Agency-Hired' ? agency_contact_person || null : null,
-        normalizedHiringType === 'Agency-Hired' ? agency_contact_number || null : null,
-        normalizedDeploymentStatus,
-        normalizedContractStartDate,
-        normalizedContractEndDate,
-        employee_id
-      ]
+      `UPDATE employees SET ${piiUpdateFields.join(', ')} WHERE id = ?`,
+      [...piiUpdateValues, employee_id]
     );
     await writeEmployeeLifecycleAudit(pool, req, `EMPLOYEE_RECORD_CREATED_DIRECT [${finalEmployeeCode}]`, employee_id, null, {
       employee_code: finalEmployeeCode,

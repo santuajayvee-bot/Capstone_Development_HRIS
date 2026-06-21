@@ -4,7 +4,11 @@
 
 let currentPayrollData = [];
 let currentMonthYear = null;
+let payrollRecordsPage = 1;
+const PAYROLL_RECORDS_PAGE_SIZE = 10;
 let currentSalaryCalculationRecords = [];
+let salaryCalculationPage = 1;
+const SALARY_CALCULATION_PAGE_SIZE = 10;
 let payrollReportPage = 1;
 let selectedPayrollReport = null;
 let weeklyPayrollEmployees = [];
@@ -182,6 +186,11 @@ function renderPayroll() {
   const grid = document.getElementById('payroll-grid');
   if (!grid) return;
 
+  const totalPages = Math.max(1, Math.ceil(currentPayrollData.length / PAYROLL_RECORDS_PAGE_SIZE));
+  payrollRecordsPage = Math.min(Math.max(payrollRecordsPage, 1), totalPages);
+  const startIndex = (payrollRecordsPage - 1) * PAYROLL_RECORDS_PAGE_SIZE;
+  const pageRecords = currentPayrollData.slice(startIndex, startIndex + PAYROLL_RECORDS_PAGE_SIZE);
+
   if (currentPayrollData.length === 0) {
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
@@ -209,7 +218,7 @@ function renderPayroll() {
         </tr>
       </thead>
       <tbody>
-        ${currentPayrollData.map(p => `
+        ${pageRecords.map(p => `
           <tr>
             <td>PAY-${String(p.payroll_run_id || p.id || 0).padStart(5, '0')}</td>
             <td>${p.employee_name || '-'}<br><span class="muted-small">${p.employee_code || '-'}</span></td>
@@ -224,9 +233,38 @@ function renderPayroll() {
         `).join('')}
       </tbody>
     </table>
+    ${renderPayrollRecordsPagination(currentPayrollData.length, startIndex, totalPages)}
   `;
 
   grid.innerHTML = table;
+  bindPayrollRecordsPagination(grid);
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(grid);
+}
+
+function renderPayrollRecordsPagination(totalRecords, startIndex, totalPages) {
+  if (totalRecords <= PAYROLL_RECORDS_PAGE_SIZE) return '';
+  const endIndex = Math.min(startIndex + PAYROLL_RECORDS_PAGE_SIZE, totalRecords);
+  return `
+    <div class="table-pagination">
+      <span>Showing ${startIndex + 1}-${endIndex} of ${totalRecords}</span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" data-payroll-page-action="prev" ${payrollRecordsPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${payrollRecordsPage} of ${totalPages}</span>
+        <button class="btn btn-outline btn-sm" type="button" data-payroll-page-action="next" ${payrollRecordsPage >= totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindPayrollRecordsPagination(root) {
+  root.querySelector('[data-payroll-page-action="prev"]')?.addEventListener('click', () => changePayrollRecordsPage(-1));
+  root.querySelector('[data-payroll-page-action="next"]')?.addEventListener('click', () => changePayrollRecordsPage(1));
+}
+
+function changePayrollRecordsPage(direction) {
+  const totalPages = Math.max(1, Math.ceil(currentPayrollData.length / PAYROLL_RECORDS_PAGE_SIZE));
+  payrollRecordsPage = Math.min(Math.max(payrollRecordsPage + direction, 1), totalPages);
+  renderPayroll();
 }
 
 function renderPayrollRecords(records) {
@@ -331,6 +369,7 @@ async function loadPayrollDashboard(monthYear = null) {
     updatePayrollDashboard({});
   }
 
+  payrollRecordsPage = 1;
   renderPayroll();
 }
 
@@ -360,6 +399,7 @@ async function loadPayrollRecords(monthYear = null) {
     currentPayrollData = [];
   }
 
+  payrollRecordsPage = 1;
   renderPayroll();
 }
 
@@ -686,6 +726,7 @@ async function loadSalaryCalculations() {
 
     const data = await response.json();
     currentSalaryCalculationRecords = data.records || [];
+    salaryCalculationPage = 1;
     populatePayrollReportFilters();
     renderSalaryCalculations(currentSalaryCalculationRecords);
   } catch (err) {
@@ -707,6 +748,11 @@ async function loadSalaryCalculations() {
 function renderSalaryCalculations(records) {
   const grid = document.getElementById('salary-calculations-grid');
   if (!grid) return;
+
+  const totalPages = Math.max(1, Math.ceil(records.length / SALARY_CALCULATION_PAGE_SIZE));
+  salaryCalculationPage = Math.min(Math.max(salaryCalculationPage, 1), totalPages);
+  const startIndex = (salaryCalculationPage - 1) * SALARY_CALCULATION_PAGE_SIZE;
+  const pageRecords = records.slice(startIndex, startIndex + SALARY_CALCULATION_PAGE_SIZE);
 
   if (records.length === 0) {
     grid.innerHTML = `
@@ -737,7 +783,7 @@ function renderSalaryCalculations(records) {
         </tr>
       </thead>
       <tbody>
-        ${records.map(r => {
+        ${pageRecords.map(r => {
           const calcDate = r.payroll_period || new Date(r.calculation_date).toLocaleDateString('en-US', {
             year: 'numeric', month: 'short', day: 'numeric' 
           });
@@ -790,9 +836,38 @@ function renderSalaryCalculations(records) {
         }).join('')}
       </tbody>
     </table>
+    ${renderSalaryCalculationPagination(records.length, startIndex, totalPages)}
   `;
 
   grid.innerHTML = table;
+  bindSalaryCalculationPagination(grid);
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(grid);
+}
+
+function renderSalaryCalculationPagination(totalRecords, startIndex, totalPages) {
+  if (totalRecords <= SALARY_CALCULATION_PAGE_SIZE) return '';
+  const endIndex = Math.min(startIndex + SALARY_CALCULATION_PAGE_SIZE, totalRecords);
+  return `
+    <div class="table-pagination">
+      <span>Showing ${startIndex + 1}-${endIndex} of ${totalRecords}</span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" data-salary-page-action="prev" ${salaryCalculationPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${salaryCalculationPage} of ${totalPages}</span>
+        <button class="btn btn-outline btn-sm" type="button" data-salary-page-action="next" ${salaryCalculationPage >= totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindSalaryCalculationPagination(root) {
+  root.querySelector('[data-salary-page-action="prev"]')?.addEventListener('click', () => changeSalaryCalculationPage(-1));
+  root.querySelector('[data-salary-page-action="next"]')?.addEventListener('click', () => changeSalaryCalculationPage(1));
+}
+
+function changeSalaryCalculationPage(direction) {
+  const totalPages = Math.max(1, Math.ceil(currentSalaryCalculationRecords.length / SALARY_CALCULATION_PAGE_SIZE));
+  salaryCalculationPage = Math.min(Math.max(salaryCalculationPage + direction, 1), totalPages);
+  renderSalaryCalculations(currentSalaryCalculationRecords);
 }
 
 async function continueSalaryDraft(record) {
@@ -827,6 +902,56 @@ async function generatePayslipsFromRecords() {
 // Show calculation breakdown in modal
 function showCalculationBreakdown(record) {
   const totalDeductions = parseFloat(record.total_deductions || 0);
+  let snapshot = {};
+  try {
+    snapshot = record.validation_snapshot
+      ? (typeof record.validation_snapshot === 'string' ? JSON.parse(record.validation_snapshot) : record.validation_snapshot)
+      : {};
+  } catch (_) {
+    snapshot = {};
+  }
+  const logisticsBreakdown = Array.isArray(snapshot.logistics_breakdown) ? snapshot.logistics_breakdown : [];
+  const logisticsBreakdownHtml = logisticsBreakdown.length ? `
+    <div style="background: var(--card); border-radius: 10px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border);">
+      <h3 style="margin: 0 0 12px 0; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;">Logistics Trip Breakdown</h3>
+      <div class="table-wrap">
+        <table class="data-table" data-no-pagination="1">
+          <thead>
+            <tr>
+              <th>Trip Date</th>
+              <th>Role</th>
+              <th>Truck</th>
+              <th>Location</th>
+              <th>Trip #</th>
+              <th class="text-right">Base Rate</th>
+              <th class="text-right">Multiplier</th>
+              <th>Rule Applied</th>
+              <th class="text-right">Trip Pay</th>
+              <th class="text-right">Daily Total</th>
+              <th class="text-right">Period Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logisticsBreakdown.map(row => `
+              <tr>
+                <td>${payrollEscape(row.trip_date || '-')}</td>
+                <td>${payrollEscape(row.employee_role || '-')}</td>
+                <td>${payrollEscape(row.truck_type || '-')}</td>
+                <td>${payrollEscape(row.location || '-')}</td>
+                <td>${payrollEscape(row.trip_number || '-')}</td>
+                <td class="text-right">${money(row.base_rate)}</td>
+                <td class="text-right">${Number(row.multiplier || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x</td>
+                <td>${payrollEscape(row.rule_applied || '-')}</td>
+                <td class="text-right">${money(row.computed_trip_pay)}</td>
+                <td class="text-right">${money(row.daily_total)}</td>
+                <td class="text-right">${money(row.payroll_period_total)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  ` : '';
   const deductionRows = [
     { label: 'SSS', amount: parseFloat(record.sss_deduction || 0) },
     { label: 'Pag-IBIG', amount: parseFloat(record.pagibig_deduction || 0) },
@@ -853,7 +978,7 @@ function showCalculationBreakdown(record) {
       justify-content: center; z-index: 10000;
     ">
       <div style="
-        background: var(--bg); border-radius: 14px; max-width: 600px;
+        background: var(--bg); border-radius: 14px; max-width: 1100px;
         width: 90%; max-height: 80vh; overflow-y: auto; 
         padding: 24px; border: 1px solid var(--border); box-shadow: 0 10px 40px rgba(0,0,0,0.3);
       ">
@@ -915,6 +1040,8 @@ function showCalculationBreakdown(record) {
             `}
           </div>
         </div>
+
+        ${logisticsBreakdownHtml}
 
         <!-- Calculation Details -->
         <div style="background: var(--card); border-radius: 10px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border);">
@@ -2492,14 +2619,18 @@ function renderPayrollReportLibrary() {
   if (pagination) {
     pagination.innerHTML = `
       <span>Showing ${reports.length ? (payrollReportPage - 1) * pageSize + 1 : 0}-${Math.min(payrollReportPage * pageSize, reports.length)} of ${reports.length}</span>
-      <button class="btn btn-outline btn-sm" type="button" ${payrollReportPage <= 1 ? 'disabled' : ''} onclick="changePayrollReportPage(-1)">Previous</button>
-      <button class="btn btn-outline btn-sm" type="button" ${payrollReportPage >= pages ? 'disabled' : ''} onclick="changePayrollReportPage(1)">Next</button>
+      <button class="btn btn-outline btn-sm" type="button" data-payroll-report-page-action="prev" ${payrollReportPage <= 1 ? 'disabled' : ''}>Previous</button>
+      <button class="btn btn-outline btn-sm" type="button" data-payroll-report-page-action="next" ${payrollReportPage >= pages ? 'disabled' : ''}>Next</button>
     `;
+    pagination.querySelector('[data-payroll-report-page-action="prev"]')?.addEventListener('click', () => changePayrollReportPage(-1));
+    pagination.querySelector('[data-payroll-report-page-action="next"]')?.addEventListener('click', () => changePayrollReportPage(1));
   }
 }
 
 function changePayrollReportPage(delta) {
-  payrollReportPage += delta;
+  const reports = filteredPayrollReports();
+  const pages = Math.max(1, Math.ceil(reports.length / 10));
+  payrollReportPage = Math.min(Math.max(payrollReportPage + delta, 1), pages);
   renderPayrollReportLibrary();
 }
 
@@ -2658,9 +2789,11 @@ function initializePayrollModule() {
 window.loadPayrollRecords = loadPayrollRecords;
 window.loadPayrollDashboard = loadPayrollDashboard;
 window.renderPayroll = renderPayroll;
+window.changePayrollRecordsPage = changePayrollRecordsPage;
 window.updatePayrollStats = updatePayrollStats;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
+window.changeSalaryCalculationPage = changeSalaryCalculationPage;
 window.showCalculationBreakdown = showCalculationBreakdown;
 window.continueSalaryDraft = continueSalaryDraft;
 window.generatePayslipsFromRecords = generatePayslipsFromRecords;

@@ -4,7 +4,8 @@ let currentSalaryEmployee = null;
 let salaryEmpList = [];
 let sewingTypes = [];
 let logisticsRegions = [];
-let logisticsRates = [];
+let salaryTruckTypes = [];
+let salaryDeliveryLocations = [];
 let payrollDeductionSettings = [];
 let salaryPageInitialized = false;
 let salarySearchListenerAttached = false;
@@ -473,20 +474,19 @@ async function fetchWageTypes() {
       console.log(`✅ Loaded ${logisticsRegions.length} logistics regions:`, logisticsRegions);
     }
 
-    try {
-      const rateRes = await apiFetch('/api/payroll/logistics-rates');
-      logisticsRates = rateRes.ok ? await rateRes.json() : [];
-    } catch (rateErr) {
-      console.warn('Failed to fetch logistics rates:', rateErr.message);
-      logisticsRates = [];
-    }
-    
+    const [truckRes, locationRes] = await Promise.all([
+      apiFetch('/api/payroll/logistics/truck-types'),
+      apiFetch('/api/payroll/logistics/locations')
+    ]);
+    salaryTruckTypes = truckRes.ok ? await truckRes.json() : [];
+    salaryDeliveryLocations = locationRes.ok ? await locationRes.json() : [];
     return { sewingTypes, logisticsRegions };
   } catch (e) {
     console.error('❌ Error loading wage types:', e);
     sewingTypes = [];
     logisticsRegions = [];
-    logisticsRates = [];
+    salaryTruckTypes = [];
+    salaryDeliveryLocations = [];
     return { sewingTypes: [], logisticsRegions: [] };
   }
 }
@@ -765,30 +765,68 @@ function populateLogisticsCrewSelects(selectedEmployee = null) {
     if (kind === 'Driver') driverSelect.value = selectedEmployee.id;
     if (kind === 'Helper') helper1Select.value = selectedEmployee.id;
   }
+
+  updateLogisticsCrewAvailability();
 }
 
-function getActiveLogisticsRate(regionId, truckType, position) {
-  const truck = String(truckType || 'Standard Truck').trim().toLowerCase();
-  const role = position === 'Driver' ? 'Driver' : 'Helper';
-  const rows = logisticsRates
-    .filter(row => Number(row.is_active) === 1)
-    .filter(row => String(row.logistics_region_id) === String(regionId))
-    .filter(row => String(row.position || '').toLowerCase() === role.toLowerCase())
-    .filter(row => String(row.truck_type || 'Standard Truck').toLowerCase() === truck)
-    .sort((a, b) => String(b.effective_date || '').localeCompare(String(a.effective_date || '')));
-  if (rows.length) return Number(rows[0].rate || 0);
-  return 0;
+async function loadSalaryLogisticsCrewConfig() {
+  try {
+    const [truckRes, locationRes] = await Promise.all([
+      apiFetch('/api/payroll/logistics/truck-types'),
+      apiFetch('/api/payroll/logistics/locations')
+    ]);
+    salaryTruckTypes = truckRes.ok ? await truckRes.json() : [];
+    salaryDeliveryLocations = locationRes.ok ? await locationRes.json() : [];
+    populateSalaryDeliveryLocations();
+
+    const truckSelect = document.getElementById('salary-truck-type');
+    if (truckSelect) {
+      const selectedTruck = truckSelect.value;
+      truckSelect.innerHTML = '<option value="">Select truck</option>' + salaryTruckTypes
+        .filter(truck => Number(truck.is_active) === 1)
+        .map(truck => `<option value="${truck.id}">${salaryEscape(truck.name)}</option>`)
+        .join('');
+      if (salaryTruckTypes.some(truck => String(truck.id) === selectedTruck && Number(truck.is_active) === 1)) {
+        truckSelect.value = selectedTruck;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load logistics crew configuration:', error);
+  }
+}
+
+function updateLogisticsCrewAvailability() {
+  const selects = [
+    document.getElementById('salary-driver-employee'),
+    document.getElementById('salary-helper1-employee'),
+    document.getElementById('salary-helper2-employee')
+  ].filter(Boolean);
+  const selectedByControl = new Map(selects.map(select => [select, String(select.value || '')]));
+
+  selects.forEach(select => {
+    const selectedElsewhere = new Set(
+      [...selectedByControl.entries()]
+        .filter(([other]) => other !== select)
+        .map(([, value]) => value)
+        .filter(Boolean)
+    );
+    [...select.options].forEach(option => {
+      option.disabled = Boolean(option.value) && selectedElsewhere.has(String(option.value));
+    });
+  });
 }
 
 function getLogisticsPreview() {
   const tripCount = Math.max(1, Number(document.getElementById('salary-trips')?.value || 1));
-  const regionId = document.getElementById('salary-region')?.value || '';
-  const truckType = document.getElementById('salary-truck-type')?.value || 'Standard Truck';
+  const truckTypeId = document.getElementById('salary-truck-type')?.value || '';
+  const locationId = document.getElementById('salary-delivery-location')?.value || '';
+  const tripType = document.getElementById('salary-trip-type')?.value || '1st Trip';
   const driverId = document.getElementById('salary-driver-employee')?.value || '';
   const helper1Id = document.getElementById('salary-helper1-employee')?.value || '';
   const helper2Id = document.getElementById('salary-helper2-employee')?.value || '';
-  const driverRate = regionId ? getActiveLogisticsRate(regionId, truckType, 'Driver') : 0;
-  const helperRate = regionId ? getActiveLogisticsRate(regionId, truckType, 'Helper') : 0;
+  const configuredRates = currentSalaryEmployee?.logisticsRates || {};
+  const driverRate = Math.max(0, Number(configuredRates.driver || 0));
+  const helperRate = Math.max(0, Number(configuredRates.helper || 0));
   const crewStatus = helper2Id ? 'Complete' : helper1Id ? 'Incomplete' : '-';
   const missingHelperShare = crewStatus === 'Incomplete' ? helperRate / 2 : 0;
   const driverGross = driverId ? (driverRate + missingHelperShare) * tripCount : 0;
@@ -802,8 +840,9 @@ function getLogisticsPreview() {
 
   return {
     tripCount,
-    regionId,
-    truckType,
+    truckTypeId,
+    locationId,
+    tripType,
     driverId,
     helper1Id,
     helper2Id,
@@ -819,21 +858,73 @@ function getLogisticsPreview() {
 }
 
 function updateLogisticsPreview() {
+  updateLogisticsCrewAvailability();
   const preview = getLogisticsPreview();
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   set('salary-driver-rate-view', salaryMoney(preview.driverRate));
   set('salary-helper-rate-view', salaryMoney(preview.helperRate));
-  set('salary-crew-status-view', preview.crewStatus);
+  set('salary-crew-status-view', preview.crewStatus === 'Incomplete' ? '2-person crew' : preview.crewStatus === 'Complete' ? '3-person crew' : '-');
   set('salary-missing-helper-share-view', salaryMoney(preview.missingHelperShare));
   set('salary-driver-gross-view', salaryMoney(preview.driverGross));
   set('salary-helper1-gross-view', salaryMoney(preview.helper1Gross));
   set('salary-helper2-gross-view', preview.helper2Id ? salaryMoney(preview.helper2Gross) : '-');
-  set('salary-logistics-note', preview.crewStatus === 'Incomplete'
-    ? `Missing helper share: ${salaryMoney(preview.helperRate)} / 2 added to Driver and Helper 1.`
-    : preview.crewStatus === 'Complete'
-      ? 'Complete crew: Driver receives Driver Rate; each Helper receives Helper Rate.'
-      : 'Select crew and region.');
+  set('salary-logistics-note', currentSalaryEmployee?.logisticsRateError
+    || (preview.crewStatus === 'Incomplete'
+      ? `Helper 2 salary is split equally: ${salaryMoney(preview.missingHelperShare)} added to Driver and Helper 1.`
+      : preview.crewStatus === 'Complete'
+        ? 'Complete crew: Driver and Helper trip pay are loaded from the active logistics configuration.'
+        : 'Select the delivery crew, area, truck, location, and trip type.'));
   return preview;
+}
+
+function populateSalaryDeliveryLocations() {
+  const locationSelect = document.getElementById('salary-delivery-location');
+  if (!locationSelect) return;
+  const selectedLocation = locationSelect.value;
+  const locations = salaryDeliveryLocations.filter(location => Number(location.is_active) === 1);
+  locationSelect.innerHTML = '<option value="">Select location</option>' + locations
+    .map(location => `<option value="${location.id}">${salaryEscape(location.location_category)} - ${salaryEscape(location.name)}</option>`)
+    .join('');
+  if (locations.some(location => String(location.id) === selectedLocation)) locationSelect.value = selectedLocation;
+}
+
+async function refreshLogisticsConfiguredRates() {
+  if (!currentSalaryEmployee || currentSalaryEmployee.wageType !== 'Per-Trip') return;
+  const preview = getLogisticsPreview();
+  currentSalaryEmployee.logisticsRates = {};
+  currentSalaryEmployee.logisticsRateError = '';
+  if (!preview.truckTypeId || !preview.locationId || !preview.tripType || !document.getElementById('salary-trip-date')?.value) {
+    updateLogisticsPreview();
+    return;
+  }
+
+  const params = new URLSearchParams({
+    truck_type_id: preview.truckTypeId,
+    location_id: preview.locationId,
+    trip_type: preview.tripType,
+    trip_date: document.getElementById('salary-trip-date').value
+  });
+  try {
+    const [driverRes, helperRes] = await Promise.all([
+      apiFetch(`/api/payroll/logistics/rates/preview?${params}&role=Driver`),
+      apiFetch(`/api/payroll/logistics/rates/preview?${params}&role=Helper`)
+    ]);
+    const [driverRate, helperRate] = await Promise.all([
+      driverRes.json().catch(() => ({})),
+      helperRes.json().catch(() => ({}))
+    ]);
+    if (!driverRes.ok || !helperRes.ok) {
+      currentSalaryEmployee.logisticsRateError = driverRate.error || helperRate.error || 'No active logistics rate matches the selected delivery details.';
+    } else {
+      currentSalaryEmployee.logisticsRates = {
+        driver: Number(driverRate.total_trip_pay || 0),
+        helper: Number(helperRate.total_trip_pay || 0)
+      };
+    }
+  } catch (error) {
+    currentSalaryEmployee.logisticsRateError = 'Unable to load the configured logistics rates.';
+  }
+  calculateSalaryNow();
 }
 
 // Handle employee selection
@@ -904,7 +995,10 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     };
     salaryPayrollValidation = null;
     renderSalaryPayrollValidation(null);
+    populateSalaryDeliveryLocations();
     populateLogisticsCrewSelects(currentSalaryEmployee);
+    loadSalaryLogisticsCrewConfig();
+    refreshLogisticsConfiguredRates();
     
     console.log('✅ Current salary employee set:', currentSalaryEmployee);
     
@@ -948,7 +1042,6 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     const tripDate = document.getElementById('salary-trip-date');
     if (tripDate && !tripDate.value) tripDate.value = new Date().toISOString().split('T')[0];
     document.getElementById('salary-trips').value = normalizedWageType === 'Per-Trip' ? '1' : '';
-    document.getElementById('salary-region').value = '';
     document.getElementById('salary-housing').value = '0';
     document.getElementById('salary-meal').value = '0';
     document.getElementById('salary-transport').value = '0';
@@ -1005,8 +1098,12 @@ async function restoreSalaryDraftFromRecord(record) {
 function showWageStructureForm(wageType) {
   wageType = normalizeSalaryWageType(wageType);
   updateSalaryRateVisibility(wageType);
+  const draftButton = document.getElementById('save-salary-draft-btn');
+  const saveButton = document.getElementById('save-salary-calculation-btn');
+  if (draftButton) draftButton.textContent = wageType === 'Per-Trip' ? 'Save Crew Draft' : 'Save Draft';
+  if (saveButton) saveButton.textContent = wageType === 'Per-Trip' ? 'Submit Crew Payroll' : 'Save Calculation';
   const dailyOutputButton = document.getElementById('save-daily-output-btn');
-  if (dailyOutputButton) dailyOutputButton.style.display = ['Per-Piece', 'Per-Trip'].includes(wageType) ? 'inline-flex' : 'none';
+  if (dailyOutputButton) dailyOutputButton.style.display = wageType === 'Per-Piece' ? 'inline-flex' : 'none';
   console.log('🔄 showWageStructureForm called with:', wageType);
   
   const perPieceSection = document.getElementById('per-piece-section');
@@ -1066,23 +1163,34 @@ function showWageStructureForm(wageType) {
     if (hourlySection) hourlySection.style.display = 'none';
     if (dailySection) dailySection.style.display = 'none';
     
-    // Populate regions dropdown
-    const regionSelect = document.getElementById('salary-region');
+    // Keep the legacy region ID internal while exposing only the two areas used for crew payroll.
+    const regionSelect = document.getElementById('salary-region') || document.createElement('select');
     if (!regionSelect) {
       console.error('❌ salary-region select not found');
       return;
     }
     
-    if (!logisticsRegions || logisticsRegions.length === 0) {
-      console.warn('⚠️ No regions loaded');
-      regionSelect.innerHTML = '<option value="">No regions available</option>';
-    } else {
-      regionSelect.innerHTML = '<option value="">— Select region —</option>' +
-        logisticsRegions.map(r => `<option value="${r.id}" data-rate="${r.default_rate || 0}">${r.name} - ₱${parseFloat(r.default_rate || 0).toFixed(2)}</option>`).join('');
+    const manila = logisticsRegions.find(region => String(region.name || '').trim().toLowerCase() === 'manila');
+    const province = logisticsRegions.find(region => String(region.name || '').trim().toLowerCase() === 'provincial')
+      || logisticsRegions.find(region => String(region.name || '').toLowerCase().includes('province'));
+    regionSelect.innerHTML = '<option value="">Select area</option>' +
+      (manila ? `<option value="${manila.id}">Manila</option>` : '') +
+      (province ? `<option value="${province.id}">Province</option>` : '');
+    if (!manila || !province) console.warn('Manila or Province logistics region is missing.');
+
+    const truckSelect = document.getElementById('salary-truck-type');
+    if (truckSelect) {
+      const selectedTruck = truckSelect.value;
+      const activeTrucks = salaryTruckTypes.filter(truck => Number(truck.is_active) === 1);
+      truckSelect.innerHTML = '<option value="">Select truck</option>' + activeTrucks
+        .map(truck => `<option value="${truck.id}">${salaryEscape(truck.name)}</option>`)
+        .join('');
+      if (activeTrucks.some(truck => String(truck.id) === selectedTruck)) truckSelect.value = selectedTruck;
     }
     
-    console.log('✅ Per-Trip form ready with', logisticsRegions.length, 'regions');
+    console.log('✅ Per-Trip crew form ready');
     populateLogisticsCrewSelects(currentSalaryEmployee);
+    loadSalaryLogisticsCrewConfig();
   } else if (wageType === 'Hourly') {
     console.log('✅ Showing form for Hourly wage type');
     perPieceSection.style.display = 'none';
@@ -1290,7 +1398,7 @@ function calculateConfiguredDeductions(gross) {
 function attachSalaryInputListeners() {
   if (salaryInputListenersAttached) return;
 
-  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trip-date', 'salary-trips', 'salary-region', 'salary-truck-type', 'salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked', 'salary-agency'];
+  const ids = ['salary-pieces', 'salary-piece-product', 'salary-piece-size-range', 'salary-worker-category', 'salary-is-sunday', 'salary-piece-pairing', 'salary-piece-partner', 'salary-quota-incentive', 'salary-sunday-incentive', 'salary-special-incentive', 'salary-trip-date', 'salary-trips', 'salary-delivery-location', 'salary-truck-type', 'salary-trip-type', 'salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee', 'salary-housing', 'salary-meal', 'salary-transport', 'salary-bonus', 'salary-ot-hours', 'salary-quantity', 'salary-hours-worked', 'salary-days-worked', 'salary-agency'];
   let attachedAny = false;
   ids.forEach(id => {
     const elem = document.getElementById(id);
@@ -1298,6 +1406,9 @@ function attachSalaryInputListeners() {
       elem.addEventListener('input', calculateSalaryNow);
       elem.addEventListener('change', calculateSalaryNow);
       if (id === 'salary-agency') elem.addEventListener('change', updateSalaryAgencySummary);
+      if (['salary-trip-date', 'salary-delivery-location', 'salary-truck-type', 'salary-trip-type'].includes(id)) {
+        elem.addEventListener('change', refreshLogisticsConfiguredRates);
+      }
       attachedAny = true;
     }
   });
@@ -1579,12 +1690,16 @@ async function saveSalaryRecord(status = 'Submitted') {
     const logistics = updateLogisticsPreview();
     quantity = logistics.tripCount;
     basePayAmount = logistics.selectedGross;
-    if (!logistics.regionId) {
-      await showAlert('Please select a logistics region.', 'Warning', 'warning');
+    if (!logistics.truckTypeId) {
+      await showAlert('Please select the truck used for this delivery.', 'Truck Required', 'warning');
+      return;
+    }
+    if (!logistics.locationId) {
+      await showAlert('Please select the configured delivery location.', 'Delivery Location Required', 'warning');
       return;
     }
     if (!logistics.driverId || !logistics.helper1Id) {
-      await showAlert('A logistics transaction requires 1 Driver and at least 1 Helper.', 'Warning', 'warning');
+      await showAlert('Select the Driver and Delivery Helper 1. Delivery Helper 2 is optional.', 'Delivery Crew Required', 'warning');
       return;
     }
     const crewIds = [logistics.driverId, logistics.helper1Id, logistics.helper2Id].filter(Boolean);
@@ -1593,7 +1708,7 @@ async function saveSalaryRecord(status = 'Submitted') {
       return;
     }
     if (!(basePayAmount > 0)) {
-      await showAlert('The selected employee must be part of the logistics crew and rates must be configured.', 'Warning', 'warning');
+      await showAlert(currentSalaryEmployee.logisticsRateError || 'The selected employee must be part of the delivery crew and active Driver and Helper rates must be configured.', 'Logistics Rate Required', 'warning');
       return;
     }
   }
@@ -1648,15 +1763,14 @@ async function saveSalaryRecord(status = 'Submitted') {
   if (currentSalaryEmployee.wageType === 'Per-Trip') {
     const logistics = updateLogisticsPreview();
     const logisticsPayload = {
-      logistics_region_id: logistics.regionId,
-      truck_type: logistics.truckType,
+      truck_type_id: logistics.truckTypeId,
+      location_id: logistics.locationId,
+      trip_type: logistics.tripType,
       trip_count: logistics.tripCount,
       transaction_date: document.getElementById('salary-trip-date')?.value || payload.calculation_date,
       driver_employee_id: logistics.driverId,
       helper1_employee_id: logistics.helper1Id,
       helper2_employee_id: logistics.helper2Id || null,
-      driver_rate: logistics.driverRate,
-      helper_rate: logistics.helperRate,
       trip_reference: `Trip-${Date.now()}`,
       calculation_status: status
     };
@@ -1790,11 +1904,14 @@ function resetCalculationForm({ preservePieceConfiguration = false, preserveTrip
   const isSunday = document.getElementById('salary-is-sunday');
   if (isSunday) isSunday.checked = false;
   if (!preserveTripConfiguration) document.getElementById('salary-trips').value = '';
-  if (!preserveTripConfiguration) document.getElementById('salary-region').value = '';
+  const deliveryLocation = document.getElementById('salary-delivery-location');
+  if (deliveryLocation && !preserveTripConfiguration) deliveryLocation.value = '';
   const tripDate = document.getElementById('salary-trip-date');
   if (tripDate && !preserveTripConfiguration) tripDate.value = '';
   const truckType = document.getElementById('salary-truck-type');
-  if (truckType && !preserveTripConfiguration) truckType.value = 'Standard Truck';
+  if (truckType && !preserveTripConfiguration) truckType.value = '';
+  const tripType = document.getElementById('salary-trip-type');
+  if (tripType && !preserveTripConfiguration) tripType.value = '1st Trip';
   ['salary-driver-employee', 'salary-helper1-employee', 'salary-helper2-employee'].forEach(id => {
     const select = document.getElementById(id);
     if (select && !preserveTripConfiguration) select.value = '';
@@ -1826,6 +1943,10 @@ function resetCalculationForm({ preservePieceConfiguration = false, preserveTrip
   if (!preserveEncodingConfiguration) {
     currentSalaryEmployee = null;
     updateSalaryRateVisibility('');
+    const draftButton = document.getElementById('save-salary-draft-btn');
+    const saveButton = document.getElementById('save-salary-calculation-btn');
+    if (draftButton) draftButton.textContent = 'Save Draft';
+    if (saveButton) saveButton.textContent = 'Save Calculation';
   }
   console.log('✅ Form reset');
 }
