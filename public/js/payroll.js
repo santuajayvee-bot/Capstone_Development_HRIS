@@ -25,6 +25,8 @@ let pieceRateConfig = {
   production_pairs: []
 };
 let pieceRateRecordsView = 'rates';
+const PIECE_RATE_RECORDS_PAGE_SIZE = 10;
+const pieceRateRecordsPages = {};
 
 function money(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1681,50 +1683,99 @@ function renderPieceRateConfig(config) {
 
 function switchPieceRateRecordsView(view) {
   pieceRateRecordsView = view;
+  pieceRateRecordsPages[view] = pieceRateRecordsPages[view] || 1;
   const target = document.getElementById('piece-rate-record-table');
   if (target) target.innerHTML = renderPieceRateRecordTable(pieceRateConfig, pieceRateRecordsView);
 }
 
+function pieceRecordJson(row) {
+  return payrollEscape(JSON.stringify(row));
+}
+
+function pieceRecordActions(view, row) {
+  const id = Number(row.id);
+  if (!id) return '';
+  const editMap = {
+    sew: 'editSewType',
+    sizes: 'editSizeRange',
+    rules: 'editProductionShareRule',
+    splits: 'editProductionSplit',
+    incentives: 'editPieceIncentive',
+    rates: 'editPieceRate'
+  };
+  const editFn = editMap[view];
+  const edit = editFn
+    ? `<button class="btn btn-outline btn-sm" type="button" onclick='${editFn}(${pieceRecordJson(row)})'>Edit</button>`
+    : '';
+  const del = `<button class="btn btn-danger btn-sm" type="button" onclick="deletePieceRateRecord('${view}', ${id})">Delete</button>`;
+  return `<div class="piece-record-actions">${edit}${del}</div>`;
+}
+
+function pieceRecordTable(columns, rows, rowRenderer, emptyText) {
+  return `
+    <div class="table-wrap piece-record-table-wrap">
+      <table class="piece-record-table" data-no-pagination="1">
+        <thead><tr>${columns.map(column => `<th>${payrollEscape(column)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(rowRenderer).join('') || `<tr class="table-empty"><td colspan="${columns.length}">${payrollEscape(emptyText)}</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+function pieceRecordPagination(totalRows, startIndex, currentPage, totalPages) {
+  if (totalRows <= PIECE_RATE_RECORDS_PAGE_SIZE) return '';
+  const endIndex = Math.min(startIndex + PIECE_RATE_RECORDS_PAGE_SIZE, totalRows);
+  return `
+    <div class="table-pagination piece-record-pagination">
+      <span>Showing ${startIndex + 1}-${endIndex} of ${totalRows}</span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" onclick="changePieceRateRecordsPage(-1)" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${currentPage} of ${totalPages}</span>
+        <button class="btn btn-outline btn-sm" type="button" onclick="changePieceRateRecordsPage(1)" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>`;
+}
+
+function pieceRecordPageRows(allRows) {
+  const totalPages = Math.max(1, Math.ceil(allRows.length / PIECE_RATE_RECORDS_PAGE_SIZE));
+  const currentPage = Math.min(Math.max(pieceRateRecordsPages[pieceRateRecordsView] || 1, 1), totalPages);
+  pieceRateRecordsPages[pieceRateRecordsView] = currentPage;
+  const startIndex = (currentPage - 1) * PIECE_RATE_RECORDS_PAGE_SIZE;
+  return {
+    rows: allRows.slice(startIndex, startIndex + PIECE_RATE_RECORDS_PAGE_SIZE),
+    startIndex,
+    currentPage,
+    totalPages,
+    totalRows: allRows.length
+  };
+}
+
 function renderPieceRateRecordTable(config, view) {
-  const limit = 12;
   if (view === 'sew') {
-    const rows = (config.sew_types || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Code</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${row.code}</td><td>${row.description || '-'}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editSewType(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="4">No Type of Sew configured.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.sew_types || []);
+    return pieceRecordTable(['Code', 'Description', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.code)}</td><td>${payrollEscape(row.description || '-')}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`, 'No Type of Sew configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'sizes') {
-    const rows = (config.size_ranges || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Size Range</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${row.size_range}</td><td>${row.description || '-'}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editSizeRange(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="4">No size ranges configured.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.size_ranges || []);
+    return pieceRecordTable(['Size Range', 'Description', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.size_range)}</td><td>${payrollEscape(row.description || '-')}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`, 'No size ranges configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'rules') {
-    const rows = (config.production_share_rules || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Pairing Type</th><th>Worker 1</th><th>Worker 2</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${row.pairing_type}</td><td>${Number(row.worker1_share || 0)}%</td><td>${Number(row.worker2_share || 0)}%</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editProductionShareRule(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No sharing rules configured.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.production_share_rules || []);
+    return pieceRecordTable(['Pairing Type', 'Worker 1', 'Worker 2', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.pairing_type)}</td><td>${Number(row.worker1_share || 0)}%</td><td>${Number(row.worker2_share || 0)}%</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`, 'No sharing rules configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'splits') {
-    const rows = (config.production_split_configs || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Split Name</th><th>Sewer %</th><th>Fixer %</th><th>Total</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rows.map(row => {
+    const page = pieceRecordPageRows(config.production_split_configs || []);
+    return pieceRecordTable(['Split Name', 'Sewer %', 'Fixer %', 'Total', 'Effective', 'Status', 'Action'], page.rows, row => {
         const total = Number(row.sewer_percentage || 0) + Number(row.fixer_percentage || 0);
-        return `<tr><td>${row.split_name}</td><td>${Number(row.sewer_percentage || 0)}%</td><td>${Number(row.fixer_percentage || 0)}%</td><td>${total}%</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editProductionSplit(${JSON.stringify(row)})'>Edit</button></td></tr>`;
-      }).join('') || '<tr><td colspan="7">No production split configured.</td></tr>'}</tbody></table>`;
+        return `<tr><td>${payrollEscape(row.split_name)}</td><td>${Number(row.sewer_percentage || 0)}%</td><td>${Number(row.fixer_percentage || 0)}%</td><td>${total}%</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`;
+      }, 'No production split configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'incentives') {
-    const rows = (config.incentives || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Name</th><th>Category</th><th>Amount</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${row.incentive_name}</td><td>${row.incentive_category}</td><td>${money(row.amount)}</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editPieceIncentive(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No incentive rules configured.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.incentives || []);
+    return pieceRecordTable(['Name', 'Category', 'Amount', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.incentive_name)}</td><td>${payrollEscape(row.incentive_category)}</td><td>${money(row.amount)}</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`, 'No incentive rules configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'production') {
-    const rows = (config.production_pairs || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Date</th><th>Pairing</th><th>Sewer</th><th>Partner</th><th>Sew / Size</th><th>Qty</th><th>Raw Earnings</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${(row.production_date || '').slice(0, 10)}</td><td>${row.pairing_type}</td><td>${row.worker1_name || row.worker1_employee_id}</td><td>${row.worker2_name || row.worker2_employee_id}</td><td>${row.sew_type_code || row.product_type} / ${row.size_range || row.product_category || '-'}</td><td>${row.quantity_produced}</td><td>${money(row.production_value)}</td></tr>`).join('') || '<tr><td colspan="7">No production encodings yet.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.production_pairs || []);
+    return pieceRecordTable(['Date', 'Pairing', 'Sewer', 'Partner', 'Sew / Size', 'Qty', 'Raw Earnings'], page.rows, row => `<tr><td>${payrollEscape((row.production_date || '').slice(0, 10))}</td><td>${payrollEscape(row.pairing_type)}</td><td>${payrollEscape(row.worker1_name || row.worker1_employee_id)}</td><td>${payrollEscape(row.worker2_name || row.worker2_employee_id)}</td><td>${payrollEscape(row.sew_type_code || row.product_type)} / ${payrollEscape(row.size_range || row.product_category || '-')}</td><td>${payrollEscape(row.quantity_produced)}</td><td>${money(row.production_value)}</td></tr>`, 'No production encodings yet.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   if (view === 'register') {
     const totals = new Map();
@@ -1744,15 +1795,29 @@ function renderPieceRateRecordTable(config, view) {
       ${rows.length ? `<tr><th colspan="2">Total</th><th>${money(grandTotal)}</th></tr>` : ''}</tbody></table>`;
   }
   if (view === 'entries') {
-    const rows = (config.incentive_entries || []).slice(0, limit);
-    return `
-      <table><thead><tr><th>Employee</th><th>Period</th><th>Type</th><th>Amount</th><th>Remarks</th></tr></thead>
-      <tbody>${rows.map(row => `<tr><td>${row.employee_name || row.employee_code || row.employee_id}</td><td>${row.payroll_period}</td><td>${row.incentive_type}</td><td>${money(row.amount)}</td><td>${row.remarks || '-'}</td></tr>`).join('') || '<tr><td colspan="5">No incentive encodings yet.</td></tr>'}</tbody></table>`;
+    const page = pieceRecordPageRows(config.incentive_entries || []);
+    return pieceRecordTable(['Employee', 'Period', 'Type', 'Amount', 'Remarks'], page.rows, row => `<tr><td>${payrollEscape(row.employee_name || row.employee_code || row.employee_id)}</td><td>${payrollEscape(row.payroll_period)}</td><td>${payrollEscape(row.incentive_type)}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.remarks || '-')}</td></tr>`, 'No incentive encodings yet.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
-  const rows = (config.piece_rates || []).slice(0, limit);
-  return `
-    <table><thead><tr><th>Type of Sew</th><th>Size Range</th><th>Rate</th><th>Effective</th><th>Status</th><th>Action</th></tr></thead>
-    <tbody>${rows.map(row => `<tr><td>${row.sew_type_code || row.product_type}</td><td>${row.size_range || row.product_category || '-'}</td><td>${money(row.piece_rate)}</td><td>${(row.effective_date || '').slice(0, 10)}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td><button class="btn btn-outline btn-sm" onclick='editPieceRate(${JSON.stringify(row)})'>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No piece rates configured.</td></tr>'}</tbody></table>`;
+  const page = pieceRecordPageRows(config.piece_rates || []);
+  return pieceRecordTable(['Type of Sew', 'Size Range', 'Rate', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.sew_type_code || row.product_type)}</td><td>${payrollEscape(row.size_range || row.product_category || '-')}</td><td>${money(row.piece_rate)}</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions('rates', row)}</td></tr>`, 'No piece rates configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
+}
+
+function changePieceRateRecordsPage(direction) {
+  const rowsByView = {
+    sew: pieceRateConfig.sew_types || [],
+    sizes: pieceRateConfig.size_ranges || [],
+    rules: pieceRateConfig.production_share_rules || [],
+    splits: pieceRateConfig.production_split_configs || [],
+    incentives: pieceRateConfig.incentives || [],
+    production: pieceRateConfig.production_pairs || [],
+    register: [],
+    entries: pieceRateConfig.incentive_entries || [],
+    rates: pieceRateConfig.piece_rates || []
+  };
+  const totalPages = Math.max(1, Math.ceil((rowsByView[pieceRateRecordsView] || []).length / PIECE_RATE_RECORDS_PAGE_SIZE));
+  pieceRateRecordsPages[pieceRateRecordsView] = Math.min(Math.max((pieceRateRecordsPages[pieceRateRecordsView] || 1) + direction, 1), totalPages);
+  const target = document.getElementById('piece-rate-record-table');
+  if (target) target.innerHTML = renderPieceRateRecordTable(pieceRateConfig, pieceRateRecordsView);
 }
 
 function setFormValues(formId, row) {
@@ -1772,6 +1837,34 @@ function editPieceRate(row) {
     size_range: row.size_range || row.product_category
   });
   document.getElementById('piece-rate-form')?.scrollIntoView({ block: 'nearest' });
+}
+
+async function deletePieceRateRecord(view, id) {
+  const endpointMap = {
+    sew: `/api/payroll/sew-types/${id}`,
+    sizes: `/api/payroll/size-ranges/${id}`,
+    rules: `/api/payroll/production-share-rules/${id}`,
+    splits: `/api/payroll/production-splits/${id}`,
+    incentives: `/api/payroll/piece-incentives/${id}`,
+    rates: `/api/payroll/piece-rates/${id}`
+  };
+  const endpoint = endpointMap[view];
+  if (!endpoint) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Delete this record from the active setup list?', 'Delete Record', 'Delete', 'Cancel')
+    : confirm('Delete this record from the active setup list?');
+  if (!confirmed) return;
+
+  try {
+    const res = await apiFetch(endpoint, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to delete record.');
+    await loadPieceRateConfig();
+    if (typeof showAlert === 'function') await showAlert(data.message || 'Record deleted.', 'Deleted', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
+    else alert(err.message);
+  }
 }
 
 function editSewType(row) {
@@ -2925,6 +3018,15 @@ window.renderWeeklyPayrollEmployeeOptions = renderWeeklyPayrollEmployeeOptions;
 window.generateSewingRegistry = generateSewingRegistry;
 window.printSewingRegistry = printSewingRegistry;
 window.togglePiecePartnerFields = togglePiecePartnerFields;
+window.switchPieceRateRecordsView = switchPieceRateRecordsView;
+window.changePieceRateRecordsPage = changePieceRateRecordsPage;
+window.deletePieceRateRecord = deletePieceRateRecord;
+window.editPieceRate = editPieceRate;
+window.editSewType = editSewType;
+window.editSizeRange = editSizeRange;
+window.editProductionShareRule = editProductionShareRule;
+window.editProductionSplit = editProductionSplit;
+window.editPieceIncentive = editPieceIncentive;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {

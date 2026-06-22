@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { decryptNullable, sha256 } = require('../server/data-protection');
 
 const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_LOCK_MINUTES = 15;
@@ -59,6 +60,7 @@ const USER_SELECT_FIELDS = `
   u.id AS id,
   e.id AS employee_table_id,
   COALESCE(u.email, e.email) AS Email,
+  u.email_encrypted AS User_Email_Encrypted,
   COALESCE(u.password_hash, e.Password_Hash) AS Password_Hash,
   u.role_id AS Role_ID,
   r.access_level AS Access_Level,
@@ -74,6 +76,15 @@ const USER_SELECT_FIELDS = `
   r.label AS role_label
 `;
 
+function hydrateUserRow(row) {
+  if (!row) return row;
+  if (!row.Email && row.User_Email_Encrypted) {
+    row.Email = decryptNullable(row.User_Email_Encrypted);
+  }
+  delete row.User_Email_Encrypted;
+  return row;
+}
+
 async function findUserByEmail(email) {
   if (!isNonEmptyString(email)) return null;
 
@@ -83,14 +94,15 @@ async function findUserByEmail(email) {
          FROM users u
          LEFT JOIN employees e ON e.id = u.employee_id
          LEFT JOIN roles r ON r.id = u.role_id
-        WHERE LOWER(e.email) = LOWER(?)
+        WHERE u.email_hash = ?
+           OR LOWER(e.email) = LOWER(?)
            OR LOWER(u.email) = LOWER(?)
            OR LOWER(u.username) = LOWER(?)
         LIMIT 1`,
-      [email.trim(), email.trim(), email.trim()]
+      [sha256(email), email.trim(), email.trim(), email.trim()]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserByEmail');
   }
@@ -110,7 +122,7 @@ async function findUserById(employeeId) {
       [employeeId, employeeId, employeeId]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserById');
   }
@@ -130,7 +142,7 @@ async function findUserByUserId(userId) {
       [userId]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserByUserId');
   }

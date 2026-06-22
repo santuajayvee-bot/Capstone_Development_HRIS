@@ -1745,6 +1745,28 @@ input.lgsv-date-native[type="date"] {
   color: var(--text);
   font: 13px 'DM Sans', sans-serif;
 }
+.piece-record-table-wrap {
+  overflow-x: auto;
+}
+.piece-record-table {
+  min-width: 760px;
+}
+.piece-record-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.piece-record-actions .btn {
+  min-height: 30px;
+  white-space: nowrap;
+}
+.piece-record-pagination {
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  margin-top: -1px;
+}
 .payroll-collapsible {
   background: var(--card);
   border: 1px solid var(--border);
@@ -1819,6 +1841,17 @@ input.lgsv-date-native[type="date"] {
   margin-top: 12px;
 }
 @media (max-width: 640px) {
+  .piece-records-compact {
+    padding: 10px;
+  }
+  .piece-record-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .piece-record-actions .btn {
+    justify-content: center;
+    width: 100%;
+  }
   .table-pagination,
   .report-pagination {
     align-items: stretch;

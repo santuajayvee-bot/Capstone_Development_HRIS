@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const { requireAuth } = require('./middleware');
+const { decryptColumnValue } = require('./data-protection');
 
 router.use(requireAuth);
 
@@ -47,6 +48,19 @@ function money(value) {
 function dateLabel(value) {
   if (!value) return '-';
   return new Date(value).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function employeeName(row) {
+  const first = decryptColumnValue(row?.first_name);
+  const last = decryptColumnValue(row?.last_name);
+  return [first, last].filter(Boolean).join(' ') || row?.employee_code || '-';
+}
+
+function decryptProfile(profile) {
+  if (!profile) return profile;
+  profile.first_name = decryptColumnValue(profile.first_name);
+  profile.last_name = decryptColumnValue(profile.last_name);
+  return profile;
 }
 
 async function scalar(sql, params = [], fallback = 0) {
@@ -113,7 +127,7 @@ async function getProfile(user) {
       LIMIT 1`,
     [user.employeeId]
   );
-  return result[0] || null;
+  return decryptProfile(result[0] || null);
 }
 
 async function getPermissions(user) {
@@ -190,27 +204,27 @@ async function hrDashboard(profile, permissions) {
     scalar("SELECT COUNT(*) FROM employees WHERE onboarding_status = 'active'"),
     scalar("SELECT COUNT(*) FROM attendance_log WHERE verification_status IN ('PENDING_VALIDATION','INCOMPLETE','NEEDS_REVIEW')"),
     rows(
-      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee, lr.type, lr.date_from, lr.date_to, lr.status
+      `SELECT e.first_name, e.last_name, e.employee_code, lr.type, lr.date_from, lr.date_to, lr.status
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
         ORDER BY lr.created_at DESC
         LIMIT 5`
     ),
     rows(
-      `SELECT employee_code, CONCAT(first_name, ' ', last_name) AS employee, position, date_hired
+      `SELECT employee_code, first_name, last_name, position, date_hired
          FROM employees
         ORDER BY created_at DESC
         LIMIT 5`
     ),
     rows(
-      `SELECT employee_code, CONCAT(first_name, ' ', last_name) AS employee, onboarding_status, date_hired
+      `SELECT employee_code, first_name, last_name, onboarding_status, date_hired
          FROM employees
         WHERE onboarding_status = 'active'
         ORDER BY date_hired DESC
         LIMIT 5`
     ),
     rows(
-      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee,
+      `SELECT e.first_name, e.last_name,
               e.employee_code, al.date, al.time_in, al.time_out, al.status, al.verification_status
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
@@ -233,10 +247,10 @@ async function hrDashboard(profile, permissions) {
   return {
     stats,
     tables: [
-      table('Attendance Validation Queue', ['Employee', 'Date', 'Time In', 'Time Out', 'Attendance', 'Validation'], attendanceRows.map(r => [r.employee, dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-', r.verification_status || '-'])),
-      table('Recent Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [r.employee, r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
-      table('New Employee Registrations', ['Employee ID', 'Employee', 'Position', 'Date Hired'], newHireRows.map(r => [r.employee_code, r.employee, r.position || '-', dateLabel(r.date_hired)])),
-      table('Pending Onboarding Tracking', ['Employee ID', 'Employee', 'Status', 'Date Hired'], onboardingRows.map(r => [r.employee_code, r.employee, r.onboarding_status || '-', dateLabel(r.date_hired)])),
+      table('Attendance Validation Queue', ['Employee', 'Date', 'Time In', 'Time Out', 'Attendance', 'Validation'], attendanceRows.map(r => [employeeName(r), dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-', r.verification_status || '-'])),
+      table('Recent Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [employeeName(r), r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
+      table('New Employee Registrations', ['Employee ID', 'Employee', 'Position', 'Date Hired'], newHireRows.map(r => [r.employee_code, employeeName(r), r.position || '-', dateLabel(r.date_hired)])),
+      table('Pending Onboarding Tracking', ['Employee ID', 'Employee', 'Status', 'Date Hired'], onboardingRows.map(r => [r.employee_code, employeeName(r), r.onboarding_status || '-', dateLabel(r.date_hired)])),
     ],
     actions: [
       action('Add Employee', 'register', 'Register a new employee record'),
@@ -272,14 +286,14 @@ async function payrollDashboard(profile, permissions) {
         LIMIT 5`
     ),
     rows(
-      `SELECT sc.id, CONCAT(e.first_name, ' ', e.last_name) AS employee, sc.payroll_period, sc.status, sc.net_pay
+      `SELECT sc.id, e.first_name, e.last_name, e.employee_code, sc.payroll_period, sc.status, sc.net_pay
          FROM salary_calculations sc
          JOIN employees e ON e.id = sc.employee_id
         ORDER BY sc.calculation_date DESC, sc.id DESC
         LIMIT 5`
     ),
     rows(
-      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee,
+      `SELECT e.first_name, e.last_name, e.employee_code,
               ats.attendance_date, ats.regular_minutes, ats.overtime_minutes,
               ats.attendance_status, ats.verification_status
          FROM attendance_summary ats
@@ -303,9 +317,9 @@ async function payrollDashboard(profile, permissions) {
     stats,
     tables: [
       table('Recent Payroll Runs', ['Run ID', 'Period', 'Run Date', 'Status'], payrollRuns.map(r => [r.id, r.month_year || '-', dateLabel(r.run_date), r.status || '-'])),
-      table('Payroll Ready Attendance', ['Employee', 'Date', 'Regular Hours', 'OT Hours', 'Status'], attendanceRows.map(r => [r.employee, dateLabel(r.attendance_date), (Number(r.regular_minutes || 0) / 60).toFixed(1), (Number(r.overtime_minutes || 0) / 60).toFixed(1), r.verification_status || r.attendance_status || '-'])),
-      table('Pending Salary Calculations', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [r.employee, r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
-      table('Payroll Processing Queue', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [r.employee, r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
+      table('Payroll Ready Attendance', ['Employee', 'Date', 'Regular Hours', 'OT Hours', 'Status'], attendanceRows.map(r => [employeeName(r), dateLabel(r.attendance_date), (Number(r.regular_minutes || 0) / 60).toFixed(1), (Number(r.overtime_minutes || 0) / 60).toFixed(1), r.verification_status || r.attendance_status || '-'])),
+      table('Pending Salary Calculations', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [employeeName(r), r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
+      table('Payroll Processing Queue', ['Employee', 'Period', 'Net Pay', 'Status'], salaryRows.map(r => [employeeName(r), r.payroll_period || '-', money(r.net_pay), r.status || '-'])),
     ],
     actions: [
       action('Salary Calculation', 'payroll', 'Open salary calculation'),
@@ -331,7 +345,7 @@ async function managerDashboard(profile, permissions) {
     scalar(`SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id WHERE e.department_id = ? AND lr.status = 'Pending'`, [departmentId]),
     scalar(`SELECT COUNT(*) FROM attendance_log al JOIN employees e ON e.id = al.employee_id WHERE e.department_id = ? AND al.date = CURDATE() AND al.status IN ('Late','Absent')`, [departmentId]),
     rows(
-      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee, al.date, al.time_in, al.time_out, al.status
+      `SELECT e.first_name, e.last_name, e.employee_code, al.date, al.time_in, al.time_out, al.status
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
         WHERE e.department_id = ?
@@ -340,7 +354,7 @@ async function managerDashboard(profile, permissions) {
       [departmentId]
     ),
     rows(
-      `SELECT CONCAT(e.first_name, ' ', e.last_name) AS employee, lr.type, lr.date_from, lr.date_to, lr.status
+      `SELECT e.first_name, e.last_name, e.employee_code, lr.type, lr.date_from, lr.date_to, lr.status
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
         WHERE e.department_id = ?
@@ -360,8 +374,8 @@ async function managerDashboard(profile, permissions) {
   return {
     stats,
     tables: [
-      table('Team Attendance', ['Employee', 'Date', 'Time In', 'Time Out', 'Status'], attendanceRows.map(r => [r.employee, dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-'])),
-      table('Team Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [r.employee, r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
+      table('Team Attendance', ['Employee', 'Date', 'Time In', 'Time Out', 'Status'], attendanceRows.map(r => [employeeName(r), dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-'])),
+      table('Team Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [employeeName(r), r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
     ],
     actions: [
       action('Approve Leave', 'leave', 'Review team leave requests'),

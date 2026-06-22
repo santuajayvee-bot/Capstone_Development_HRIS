@@ -15,6 +15,27 @@ const router  = express.Router();
 const pool    = require('../config/db');
 const { requireAuth }         = require('./middleware');
 const { decryptPII }          = require('./crypto');
+const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
+
+const EMPLOYEE_STRICT_PII_COLUMNS = [
+  'first_name', 'middle_name', 'last_name', 'suffix',
+  'email', 'contact_number', 'work_email', 'mailing_address',
+  'nationality', 'marital_status', 'date_of_birth', 'place_of_birth', 'gender', 'blood_type', 'religion',
+  'residential_address', 'current_address',
+  'emergency_contact_name', 'emergency_contact_num', 'emergency_contact_relationship',
+  'emergency_contact_secondary_num', 'emergency_contact_email', 'emergency_contact_address',
+  'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account'
+];
+
+function decryptEmployeeStrictPii(row) {
+  if (!row) return row;
+  for (const field of EMPLOYEE_STRICT_PII_COLUMNS) {
+    if (Object.prototype.hasOwnProperty.call(row, field)) {
+      row[field] = decryptColumnValue(row[field]);
+    }
+  }
+  return row;
+}
 
 // ── All routes require authentication ────────────────────────
 router.use(requireAuth);
@@ -144,7 +165,7 @@ router.get('/dashboard', async (req, res) => {
     if (empRows.length === 0) {
       return res.status(404).json({ error: 'Employee profile not found.' });
     }
-    const profile = empRows[0];
+    const profile = decryptEmployeeStrictPii(empRows[0]);
 
     // 2. Latest payslip summary
     const [payslipRows] = await pool.execute(
@@ -235,7 +256,7 @@ router.get('/201-file', async (req, res) => {
       return res.status(404).json({ error: 'Employee record not found.' });
     }
 
-    const employee = rows[0];
+    const employee = decryptEmployeeStrictPii(rows[0]);
 
     // Decrypt PII using AES-256-GCM (no plaintext logging!)
     let decryptedPii = {};
@@ -427,7 +448,7 @@ router.put('/emergency-contact', async (req, res) => {
     // Parameterized query — immune to SQLi by design
     await pool.execute(
       'UPDATE employees SET emergency_contact_name = ?, emergency_contact_num = ? WHERE id = ?',
-      [cleanName, cleanNum, empId]
+      [encryptColumnValue(cleanName), encryptColumnValue(cleanNum), empId]
     );
 
     // Audit

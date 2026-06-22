@@ -7,6 +7,7 @@ const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const { auditSecurityEvent } = require('./security-controls');
+const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 
 const router = express.Router();
 const HR_REVIEW_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
@@ -75,6 +76,13 @@ const SELF_SERVICE_FORBIDDEN_FIELDS = new Set([
 const SELF_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/;
 const SELF_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#/-]+$/;
 const SELF_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
+const SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS = new Set([
+  'email', 'work_email', 'contact_number', 'current_address',
+  'current_address_region', 'current_address_province', 'current_address_city_municipality',
+  'current_address_barangay', 'current_address_street_address', 'current_address_full_address',
+  'current_address_place_id', 'marital_status', 'residential_address',
+  'bank_name', 'first_name', 'middle_name', 'last_name', 'suffix'
+]);
 
 let schemaReady;
 
@@ -338,7 +346,14 @@ async function loadOwnProfile(employeeId, userId) {
       LIMIT 1`,
     [userId, employeeId]
   );
-  return rows[0] || null;
+  const profile = rows[0] || null;
+  if (!profile) return null;
+  for (const column of SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS) {
+    if (Object.prototype.hasOwnProperty.call(profile, column)) {
+      profile[column] = decryptColumnValue(profile[column]);
+    }
+  }
+  return profile;
 }
 
 function safeProfilePayload(row) {
@@ -451,7 +466,7 @@ router.put('/self-service/profile', async (req, res) => {
       const newValue = validateSelfProfileValue(inputName, req.body[inputName]);
       if (String(oldValue ?? '') === String(newValue ?? '')) continue;
       updates.push(`${columnName} = ?`);
-      params.push(newValue);
+      params.push(SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(columnName) ? encryptColumnValue(newValue) : newValue);
       changed.push({ field: inputName, oldValue, newValue });
     }
 
@@ -649,11 +664,12 @@ async function applyApprovedChange(connection, employeeId, fieldName, requestedV
     if (!firstName || !lastName) throw new Error('Full legal name must include first and last name.');
     await connection.execute(
       'UPDATE employees SET first_name = ?, middle_name = NULL, last_name = ?, suffix = NULL WHERE id = ?',
-      [firstName, lastName, employeeId]
+      [encryptColumnValue(firstName), encryptColumnValue(lastName), employeeId]
     );
     return;
   }
-  await connection.execute(`UPDATE employees SET ${config.column} = ? WHERE id = ?`, [requestedValue, employeeId]);
+  const value = SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(config.column) ? encryptColumnValue(requestedValue) : requestedValue;
+  await connection.execute(`UPDATE employees SET ${config.column} = ? WHERE id = ?`, [value, employeeId]);
 }
 
 router.post('/hr/profile-change-requests/:id/approve', requireRole(HR_REVIEW_ROLES), async (req, res) => {

@@ -4125,6 +4125,63 @@ router.post('/piece-incentives', requireAuth, requireRole(PAYROLL_PERMISSIONS.se
   }
 });
 
+async function deactivatePayrollConfigRecord(req, res, table, idColumn, auditAction, label) {
+  try {
+    const pool = require('../config/db');
+    await ensurePieceRatePayrollSchema(pool);
+    const recordId = Number(req.params.id);
+    if (!Number.isInteger(recordId) || recordId <= 0) {
+      return res.status(400).json({ error: 'Valid record id is required.' });
+    }
+
+    const [oldRows] = await pool.execute(`SELECT * FROM ${table} WHERE ${idColumn} = ? LIMIT 1`, [recordId]);
+    const oldValue = oldRows[0] || null;
+    if (!oldValue) return res.status(404).json({ error: `${label} not found.` });
+
+    await pool.execute(
+      `UPDATE ${table}
+          SET is_active = 0,
+              updated_by = ?
+        WHERE ${idColumn} = ?`,
+      [currentUserId(req), recordId]
+    );
+
+    await logPayrollAudit(pool, req, auditAction, {
+      remarks: `Deleted ${label} record ID ${recordId}`,
+      metadata: { old_value: oldValue, soft_delete: true }
+    });
+
+    return res.json({ message: `${label} deleted.` });
+  } catch (err) {
+    console.error(`Error deleting ${label}:`, err);
+    return res.status(500).json({ error: `Failed to delete ${label}.` });
+  }
+}
+
+router.delete('/sew-types/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_sew_types', 'id', 'sew_type_configuration_deleted', 'Type of Sew')
+);
+
+router.delete('/size-ranges/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_size_ranges', 'id', 'size_range_configuration_deleted', 'Size range')
+);
+
+router.delete('/production-share-rules/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_production_share_rules', 'id', 'production_pair_share_rule_deleted', 'Sharing rule')
+);
+
+router.delete('/production-splits/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_production_split_configs', 'id', 'production_split_configuration_deleted', 'Production split')
+);
+
+router.delete('/piece-incentives/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_piece_incentives', 'id', 'piece_incentive_configuration_deleted', 'Incentive rule')
+);
+
+router.delete('/piece-rates/:id', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), (req, res) =>
+  deactivatePayrollConfigRecord(req, res, 'payroll_piece_rates', 'id', 'piece_rate_configuration_deleted', 'Piece rate')
+);
+
 router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
