@@ -279,7 +279,8 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     const [rows] = await connection.execute(
       `SELECT id, employee_id, failed_login_attempts, account_locked_until,
               account_locked_until > NOW() AS is_locked,
-              account_locked_until IS NOT NULL AND account_locked_until <= NOW() AS lock_expired
+              account_locked_until IS NOT NULL AND account_locked_until <= NOW() AS lock_expired,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
          FROM users
         WHERE id = ?
         LIMIT 1
@@ -299,6 +300,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
         locked: true,
         newlyLocked: false,
         lockedUntil: user.account_locked_until,
+        lockSecondsRemaining: Number(user.lock_seconds_remaining || 0),
       };
     }
 
@@ -315,7 +317,12 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     );
 
     const [stateRows] = await connection.execute(
-      'SELECT failed_login_attempts, account_locked_until, account_locked_until > NOW() AS is_locked FROM users WHERE id = ? LIMIT 1',
+      `SELECT failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
       [user.id]
     );
     const state = stateRows[0];
@@ -336,6 +343,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
       locked: Number(state.is_locked || 0) === 1,
       newlyLocked,
       lockedUntil: state.account_locked_until,
+      lockSecondsRemaining: Number(state.lock_seconds_remaining || 0),
     };
   } catch (error) {
     if (connection) await connection.rollback().catch(() => {});
@@ -351,7 +359,8 @@ async function getUserLoginLockState(userId) {
   try {
     const [rows] = await pool.execute(
       `SELECT failed_login_attempts, account_locked_until,
-              account_locked_until > NOW() AS is_locked
+              account_locked_until > NOW() AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
          FROM users
         WHERE id = ?
         LIMIT 1`,
@@ -363,6 +372,7 @@ async function getUserLoginLockState(userId) {
       attempts: Number(state.failed_login_attempts || 0),
       locked: Number(state.is_locked || 0) === 1,
       lockedUntil: state.account_locked_until,
+      lockSecondsRemaining: Number(state.lock_seconds_remaining || 0),
     };
   } catch (error) {
     logAndThrow(error, 'getUserLoginLockState');

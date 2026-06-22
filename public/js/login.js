@@ -17,9 +17,21 @@ function clearLoginError() {
   errEl.style.display = 'none';
 }
 
+function formatLockoutDuration(seconds) {
+  const total = Math.max(Number(seconds || 0), 0);
+  if (!Number.isFinite(total) || total <= 0) return '';
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  if (minutes > 0 && remainingSeconds > 0) return `${minutes}m ${remainingSeconds}s`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${remainingSeconds}s`;
+}
+
 function formatLoginFailureMessage(data, status) {
   if (status === 423) {
-    return data?.message || 'Account temporarily locked. Please try again later or contact your administrator.';
+    const duration = formatLockoutDuration(data?.lock_seconds_remaining);
+    const message = data?.message || 'Account temporarily locked. Please try again later or contact your administrator.';
+    return duration ? `${message} Try again in ${duration}.` : message;
   }
 
   const baseMessage = data?.message || data?.error || 'Login failed.';

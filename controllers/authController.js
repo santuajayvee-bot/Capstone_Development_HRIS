@@ -133,6 +133,17 @@ function invalidLoginAttemptResponse(res, failure) {
   });
 }
 
+function lockedAccountResponse(res, lockState = {}) {
+  const seconds = Number(lockState.lockSecondsRemaining || 0);
+  return res.status(423).json({
+    success: false,
+    message: LOCKED_ACCOUNT_MESSAGE,
+    locked_until: lockState.lockedUntil || null,
+    lock_seconds_remaining: seconds,
+    lock_minutes_remaining: Math.ceil(seconds / 60),
+  });
+}
+
 async function issueAuthenticatedSession(req, res, user) {
   const employeeId = getAuthEmployeeId(user);
   const ipAddress = getRequestIp(req);
@@ -230,10 +241,7 @@ async function login(req, res) {
         User_Agent: userAgent,
       });
 
-      return res.status(423).json({
-        success: false,
-        message: LOCKED_ACCOUNT_MESSAGE,
-      });
+      return lockedAccountResponse(res, lockState || { lockedUntil: user.Locked_Until });
     }
 
     const passwordMatches = await verifyPassword(user.Password_Hash, password);
@@ -252,10 +260,7 @@ async function login(req, res) {
           IP_Address: ipAddress,
           User_Agent: userAgent,
         });
-        return res.status(423).json({
-          success: false,
-          message: LOCKED_ACCOUNT_MESSAGE,
-        });
+        return lockedAccountResponse(res, failure);
       } else {
         await safeCreateAuditLog({
           Employee_ID: employeeId,
