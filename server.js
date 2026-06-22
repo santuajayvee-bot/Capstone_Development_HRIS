@@ -864,7 +864,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     if (EMPLOYEE_GOVERNMENT_ID_FIELDS.has(field) && !isPayrollOrAdmin && !isHrOrAdmin) {
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
-    if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !isPayrollOrAdmin) {
+    if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !isPayrollOrAdmin && !isHrOrAdmin) {
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
   }

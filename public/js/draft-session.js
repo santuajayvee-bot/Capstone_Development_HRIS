@@ -6,7 +6,7 @@ const DraftSession = (() => {
   const expiryDays = 14;
 
   const configs = [
-    { module: 'Employees', form: 'Employee Registration', selector: '#register-form-view', record: () => window.EDIT_EMPLOYEE_ID || document.getElementById('emp-id')?.value || 'new', clearFns: ['saveEmployee'] },
+    { module: 'Employees', form: 'Employee Registration', selector: '#register-form-view', record: () => window.EDIT_EMPLOYEE_ID || document.getElementById('emp-id')?.value || 'new', clearFns: ['saveEmployee'], restorePrompt: true },
     { module: 'Employees', form: 'Employee Profile Editing', selector: '#profile-edit-root', record: () => window.currentProfileEmployee?.id || new URLSearchParams(location.search).get('employeeId') || 'profile', clearFns: ['saveProfilePageChanges'] },
     { module: 'Leave', form: 'Leave Request Filing', selector: '#req-leave-fields', extraSelectors: ['#req-reason', '#req-attachment'], record: () => 'new', clearFns: ['saveRequest'] },
     { module: 'Leave', form: 'Manual Leave Encoding', selector: '#manual-leave-form', record: () => document.getElementById('manual-employee')?.value || 'new', clearFns: ['submitManualLeave'] },
@@ -16,6 +16,7 @@ const DraftSession = (() => {
       selector: '#payroll-tab-salary',
       record: () => document.getElementById('salary-employee')?.value || document.getElementById('salary-employee-search')?.value || 'new',
       clearFns: ['saveSalaryAsDraft', 'saveCalculation', 'saveSalaryRecord', 'saveProductionTransaction', 'saveLogisticsTransaction'],
+      restorePrompt: false,
       hasMeaningfulData: data => Boolean(String(data['salary-employee'] || data['salary-employee-search'] || '').trim())
     },
     { module: 'Attendance', form: 'Manual Correction', selector: '#override-modal, #att-overtime', record: () => document.getElementById('override-att-id')?.value || document.getElementById('ot-employee')?.value || 'new', clearFns: ['submitOverride', 'encodeOvertime'] },
@@ -232,6 +233,7 @@ const DraftSession = (() => {
           await clear(config, 'Discarded');
           return;
         }
+        if (config.restorePrompt === false) return;
         showRestorePrompt(config, draft);
       }
     } catch (error) {
