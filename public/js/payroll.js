@@ -812,13 +812,15 @@ function renderSalaryCalculations(records) {
           }
           
           const recordJson = JSON.stringify(r).replace(/"/g, '&quot;');
-          const draftAction = (r.status || 'Draft') === 'Draft'
+          const normalizedStatus = String(r.status || 'Draft').trim();
+          const normalizedStatusKey = normalizedStatus.toLowerCase();
+          const draftAction = normalizedStatusKey === 'draft'
             ? `<button class="btn btn-primary btn-sm" onclick="continueSalaryDraft(${recordJson})">Continue</button>`
             : '';
-          const approvalAction = r.status === 'Submitted' && canApproveSalaryCalculations()
+          const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
             ? `<button class="btn btn-primary btn-sm" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
             : '';
-          const blockchainRecordAction = r.status === 'Approved' && canApproveSalaryCalculations()
+          const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
             ? `<button class="btn btn-primary btn-sm" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Record on Blockchain</button>`
             : '';
           return `
@@ -832,7 +834,7 @@ function renderSalaryCalculations(records) {
               <td class="text-right">${money(r.gross_pay)}</td>
               <td class="text-right">${money(r.total_deductions)}</td>
               <td class="text-right payroll-net">${money(r.net_pay)}</td>
-              <td>${payrollBadge(r.status || 'Draft')}</td>
+              <td>${payrollBadge(normalizedStatus)}</td>
               <td>
                 ${draftAction}
                 ${approvalAction}
