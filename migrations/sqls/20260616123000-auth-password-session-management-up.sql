@@ -4,22 +4,52 @@
 -- The existing application schema uses `employees` as the employee table.
 -- This BIGINT alias supports capstone-style Employee_ID foreign keys without
 -- changing the existing employees.id primary key used by current code.
-ALTER TABLE employees
-  ADD COLUMN IF NOT EXISTS Employee_ID BIGINT NULL;
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Employee_ID') = 0,
+  'ALTER TABLE employees ADD COLUMN Employee_ID BIGINT NULL',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE employees
 SET Employee_ID = id
 WHERE Employee_ID IS NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_employee_id
-  ON employees (Employee_ID);
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND INDEX_NAME = 'uq_employees_employee_id') = 0,
+  'CREATE UNIQUE INDEX uq_employees_employee_id ON employees (Employee_ID)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-ALTER TABLE employees
-  ADD COLUMN IF NOT EXISTS Password_Hash VARCHAR(255) NULL,
-  ADD COLUMN IF NOT EXISTS Password_Changed_At DATETIME NULL,
-  ADD COLUMN IF NOT EXISTS Failed_Login_Attempts INT NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS Locked_Until DATETIME NULL,
-  ADD COLUMN IF NOT EXISTS Last_Login_At DATETIME NULL;
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Password_Hash') = 0, 'ALTER TABLE employees ADD COLUMN Password_Hash VARCHAR(255) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Password_Changed_At') = 0, 'ALTER TABLE employees ADD COLUMN Password_Changed_At DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Failed_Login_Attempts') = 0, 'ALTER TABLE employees ADD COLUMN Failed_Login_Attempts INT NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Locked_Until') = 0, 'ALTER TABLE employees ADD COLUMN Locked_Until DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'Last_Login_At') = 0, 'ALTER TABLE employees ADD COLUMN Last_Login_At DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- Placeholder for legacy rows so Password_Hash can be enforced as NOT NULL.
 -- This is an Argon2id hash of a random undisclosed value and should be replaced
@@ -96,10 +126,20 @@ CREATE TABLE IF NOT EXISTS system_audit_log (
 -- If system_audit_log already exists, extend it with the required auth fields.
 -- Existing lower-case audit columns such as employee_id, ip_address, and user_agent
 -- are retained because MySQL treats column names case-insensitively.
-ALTER TABLE system_audit_log
-  ADD COLUMN IF NOT EXISTS Action_Type VARCHAR(100) NULL,
-  ADD COLUMN IF NOT EXISTS Description TEXT NULL,
-  ADD COLUMN IF NOT EXISTS Created_At DATETIME NULL DEFAULT CURRENT_TIMESTAMP;
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND COLUMN_NAME = 'Action_Type') = 0, 'ALTER TABLE system_audit_log ADD COLUMN Action_Type VARCHAR(100) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND COLUMN_NAME = 'Description') = 0, 'ALTER TABLE system_audit_log ADD COLUMN Description TEXT NULL', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF((SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND COLUMN_NAME = 'Created_At') = 0, 'ALTER TABLE system_audit_log ADD COLUMN Created_At DATETIME NULL DEFAULT CURRENT_TIMESTAMP', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE system_audit_log
 SET Action_Type = COALESCE(NULLIF(Action_Type, ''), 'SYSTEM_EVENT')
@@ -108,14 +148,38 @@ WHERE Action_Type IS NULL OR Action_Type = '';
 ALTER TABLE system_audit_log
   MODIFY COLUMN Action_Type VARCHAR(100) NOT NULL;
 
-ALTER TABLE system_audit_log
-  MODIFY COLUMN user_agent TEXT NULL;
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND COLUMN_NAME = 'user_agent') > 0,
+  'ALTER TABLE system_audit_log MODIFY COLUMN user_agent TEXT NULL',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-CREATE INDEX IF NOT EXISTS idx_system_audit_log_employee_id
-  ON system_audit_log (employee_id);
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND INDEX_NAME = 'idx_system_audit_log_employee_id') = 0,
+  'CREATE INDEX idx_system_audit_log_employee_id ON system_audit_log (employee_id)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-CREATE INDEX IF NOT EXISTS idx_system_audit_log_action_type
-  ON system_audit_log (Action_Type);
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND INDEX_NAME = 'idx_system_audit_log_action_type') = 0,
+  'CREATE INDEX idx_system_audit_log_action_type ON system_audit_log (Action_Type)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-CREATE INDEX IF NOT EXISTS idx_system_audit_log_created_at
-  ON system_audit_log (Created_At);
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_audit_log' AND INDEX_NAME = 'idx_system_audit_log_created_at') = 0,
+  'CREATE INDEX idx_system_audit_log_created_at ON system_audit_log (Created_At)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
