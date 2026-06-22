@@ -8,9 +8,8 @@ const {
 } = require('../services/tokenService');
 const {
   findUserByEmail,
-  incrementFailedLoginAttempts,
+  recordFailedLoginFailure,
   resetFailedLoginAttempts,
-  lockUserAccount,
   updateLastLogin,
   createUserSession,
   createAuditLog,
@@ -24,9 +23,15 @@ const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
 const MISCONFIGURED_ACCOUNT_MESSAGE = 'Account is not fully configured. Please contact your administrator.';
 const UNEXPECTED_LOGIN_MESSAGE = 'Unable to process login request.';
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_MINUTES = 15;
+const MAX_FAILED_ATTEMPTS = positiveIntegerFromEnv('AUTH_MAX_FAILED_ATTEMPTS', 5, 20);
+const LOCK_MINUTES = positiveIntegerFromEnv('AUTH_LOCKOUT_MINUTES', 15, 1440);
 const REFRESH_COOKIE_NAME = 'refreshToken';
+
+function positiveIntegerFromEnv(name, fallback, maximum) {
+  const value = Number.parseInt(process.env[name], 10);
+  if (!Number.isFinite(value) || value <= 0 || value > maximum) return fallback;
+  return value;
+}
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -222,16 +227,22 @@ async function login(req, res) {
     const passwordMatches = await verifyPassword(user.Password_Hash, password);
 
     if (!passwordMatches) {
-      const failedAttempts = await incrementFailedLoginAttempts(employeeId);
+      const failure = await recordFailedLoginFailure(employeeId, {
+        maxAttempts: MAX_FAILED_ATTEMPTS,
+        lockMinutes: LOCK_MINUTES,
+      });
 
-      if (Number(failedAttempts) >= MAX_FAILED_ATTEMPTS) {
-        await lockUserAccount(employeeId, LOCK_MINUTES);
+      if (failure?.locked) {
         await safeCreateAuditLog({
           Employee_ID: employeeId,
           Action_Type: 'ACCOUNT_LOCKED',
           Description: 'Account locked after repeated failed login attempts.',
           IP_Address: ipAddress,
           User_Agent: userAgent,
+        });
+        return res.status(423).json({
+          success: false,
+          message: LOCKED_ACCOUNT_MESSAGE,
         });
       } else {
         await safeCreateAuditLog({

@@ -82,6 +82,8 @@ DB_SSL=false
 JWT_SECRET=<generate-a-long-random-secret>
 AES_ENCRYPTION_KEY=<generate-64-random-hex-characters>
 BLOCKCHAIN_EMPLOYEE_REF_PEPPER=<generate-a-long-random-secret>
+AUTH_MAX_FAILED_ATTEMPTS=5
+AUTH_LOCKOUT_MINUTES=15
 
 FABRIC_ENABLED=true
 FABRIC_CHANNEL_NAME=lgsvhr-payroll-channel

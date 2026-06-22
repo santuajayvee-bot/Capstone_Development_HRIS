@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 
+const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_LOCK_MINUTES = 15;
 const DEFAULT_REVOCATION_REASON = 'revoked';
 const AUTH_QUERY_ERROR = 'Authentication database operation failed.';
@@ -30,6 +31,18 @@ function normalizeLockMinutes(lockMinutes) {
   const minutes = Number.parseInt(lockMinutes, 10);
   if (!Number.isFinite(minutes) || minutes <= 0) return DEFAULT_LOCK_MINUTES;
   return minutes;
+}
+
+function normalizeMaxFailedAttempts(maxAttempts) {
+  const attempts = Number.parseInt(maxAttempts, 10);
+  if (!Number.isFinite(attempts) || attempts <= 0) return DEFAULT_MAX_FAILED_ATTEMPTS;
+  return attempts;
+}
+
+function isFutureDate(value) {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date > new Date();
 }
 
 function toNullable(value) {
@@ -158,6 +171,85 @@ async function incrementFailedLoginAttempts(employeeId) {
     return await getFailedLoginAttempts(employeeId);
   } catch (error) {
     logAndThrow(error, 'incrementFailedLoginAttempts');
+  }
+}
+
+// Increment and lock under one row lock so parallel failed requests cannot
+// bypass the threshold or leave users/employees account state out of sync.
+async function recordFailedLoginFailure(employeeId, options = {}) {
+  ensureEmployeeId(employeeId);
+
+  const maxAttempts = normalizeMaxFailedAttempts(options.maxAttempts);
+  const lockMinutes = normalizeLockMinutes(options.lockMinutes);
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, Failed_Login_Attempts, Locked_Until
+         FROM employees
+        WHERE Employee_ID = ? OR (Employee_ID IS NULL AND id = ?)
+        LIMIT 1
+        FOR UPDATE`,
+      [employeeId, employeeId]
+    );
+    const employee = rows[0];
+    if (!employee) {
+      await connection.rollback();
+      return null;
+    }
+
+    if (isFutureDate(employee.Locked_Until)) {
+      await connection.commit();
+      return {
+        attempts: Number(employee.Failed_Login_Attempts || 0),
+        locked: true,
+        newlyLocked: false,
+        lockedUntil: employee.Locked_Until,
+      };
+    }
+
+    // A completed lockout starts a fresh failure window after expiry.
+    const previousAttempts = employee.Locked_Until ? 0 : Number(employee.Failed_Login_Attempts || 0);
+    const attempts = previousAttempts + 1;
+    const newlyLocked = attempts >= maxAttempts;
+
+    await connection.execute(
+      `UPDATE employees
+          SET Failed_Login_Attempts = ?,
+              Locked_Until = CASE WHEN ? THEN DATE_ADD(NOW(), INTERVAL ? MINUTE) ELSE NULL END
+        WHERE id = ?`,
+      [attempts, newlyLocked ? 1 : 0, lockMinutes, employee.id]
+    );
+
+    const [stateRows] = await connection.execute(
+      'SELECT Failed_Login_Attempts, Locked_Until FROM employees WHERE id = ? LIMIT 1',
+      [employee.id]
+    );
+    const state = stateRows[0];
+
+    await connection.execute(
+      `UPDATE users
+          SET failed_login_attempts = ?,
+              account_locked_until = ?
+        WHERE employee_id = ?`,
+      [state.Failed_Login_Attempts, state.Locked_Until, employee.id]
+    );
+
+    await connection.commit();
+    return {
+      attempts: Number(state.Failed_Login_Attempts || 0),
+      locked: isFutureDate(state.Locked_Until),
+      newlyLocked,
+      lockedUntil: state.Locked_Until,
+    };
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    logAndThrow(error, 'recordFailedLoginFailure');
+  } finally {
+    if (connection) connection.release();
   }
 }
 
@@ -542,6 +634,7 @@ module.exports = {
   findUserById,
   findUserByUserId,
   incrementFailedLoginAttempts,
+  recordFailedLoginFailure,
   resetFailedLoginAttempts,
   lockUserAccount,
   updateLastLogin,
