@@ -2,6 +2,10 @@
    public/js/login.js - Login form
    ============================================================ */
 
+let lockoutCountdownTimer = null;
+let lockoutPollTimer = null;
+let activeLockoutState = null;
+
 function loginError(message, warning = false) {
   const errEl = document.getElementById('login-err');
   if (!errEl) return;
@@ -45,7 +49,86 @@ function formatLoginFailureMessage(data, status) {
   return baseMessage;
 }
 
+function stopLockoutCountdown() {
+  if (lockoutCountdownTimer) {
+    clearInterval(lockoutCountdownTimer);
+    lockoutCountdownTimer = null;
+  }
+  if (lockoutPollTimer) {
+    clearInterval(lockoutPollTimer);
+    lockoutPollTimer = null;
+  }
+  activeLockoutState = null;
+}
+
+function renderLockoutCountdown() {
+  if (!activeLockoutState) return;
+
+  const seconds = Math.max(Number(activeLockoutState.seconds || 0), 0);
+  if (seconds <= 0) {
+    stopLockoutCountdown();
+    loginError('Account lockout expired. You may try logging in again.', true);
+    return;
+  }
+
+  const duration = formatLockoutDuration(seconds);
+  const message = activeLockoutState.message || 'Account temporarily locked. Please try again later.';
+  loginError(`${message} Try again in ${duration}.`, true);
+}
+
+async function refreshLockoutStatus() {
+  if (!activeLockoutState?.username) return;
+
+  try {
+    const res = await fetch(`/api/auth/lockout-status?username=${encodeURIComponent(activeLockoutState.username)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.locked) {
+      stopLockoutCountdown();
+      loginError('Account lockout expired. You may try logging in again.', true);
+      return;
+    }
+
+    activeLockoutState.seconds = Number(data.lock_seconds_remaining || activeLockoutState.seconds || 0);
+    renderLockoutCountdown();
+  } catch (error) {
+    // Keep the local countdown moving if the status poll temporarily fails.
+  }
+}
+
+function startLockoutCountdown(username, data) {
+  const seconds = Number(data?.lock_seconds_remaining || 0);
+  const message = data?.message || 'Account temporarily locked. Please try again later.';
+
+  stopLockoutCountdown();
+
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    loginError(message, true);
+    return;
+  }
+
+  activeLockoutState = {
+    username,
+    message,
+    seconds,
+  };
+
+  renderLockoutCountdown();
+
+  lockoutCountdownTimer = setInterval(() => {
+    if (!activeLockoutState) return;
+    activeLockoutState.seconds = Math.max(Number(activeLockoutState.seconds || 0) - 1, 0);
+    renderLockoutCountdown();
+  }, 1000);
+
+  lockoutPollTimer = setInterval(refreshLockoutStatus, 5000);
+}
+
 function completeAuthenticatedLogin(data) {
+  stopLockoutCountdown();
+
   saveAuth(data.accessToken || data.token, data.user);
   buildSidebar(data.user);
 
@@ -73,6 +156,7 @@ async function doLogin() {
   const password = document.getElementById('password').value;
   const btnEl = document.querySelector('.btn-login');
 
+  stopLockoutCountdown();
   clearLoginError();
 
   if (!username || !password) {
@@ -93,6 +177,11 @@ async function doLogin() {
     const data = await res.json();
 
     if (!res.ok) {
+      if (res.status === 423) {
+        startLockoutCountdown(username, data);
+        return;
+      }
+
       const message = formatLoginFailureMessage(data, res.status);
       loginError(message, res.status === 423 || Number(data.remaining_attempts || 0) <= 2);
       return;

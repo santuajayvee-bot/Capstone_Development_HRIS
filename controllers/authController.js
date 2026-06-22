@@ -144,6 +144,54 @@ function lockedAccountResponse(res, lockState = {}) {
   });
 }
 
+async function lockoutStatus(req, res) {
+  const loginIdentifier = req.query?.username || req.query?.email || req.body?.username || req.body?.email;
+
+  if (!isNonEmptyString(loginIdentifier)) {
+    return res.json({
+      success: true,
+      locked: false,
+      attempts: 0,
+      locked_until: null,
+      lock_seconds_remaining: 0,
+      lock_minutes_remaining: 0,
+    });
+  }
+
+  try {
+    const user = await findUserByEmail(loginIdentifier.trim().toLowerCase());
+
+    if (!user || isInactiveUser(user)) {
+      return res.json({
+        success: true,
+        locked: false,
+        attempts: 0,
+        locked_until: null,
+        lock_seconds_remaining: 0,
+        lock_minutes_remaining: 0,
+      });
+    }
+
+    const lockState = await getUserLoginLockState(user.id);
+    const seconds = Number(lockState?.lockSecondsRemaining || 0);
+
+    return res.json({
+      success: true,
+      locked: Boolean(lockState?.locked),
+      attempts: Number(lockState?.attempts || 0),
+      locked_until: lockState?.lockedUntil || null,
+      lock_seconds_remaining: seconds,
+      lock_minutes_remaining: Math.ceil(seconds / 60),
+    });
+  } catch (error) {
+    console.error('[authController] lockout status failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: UNEXPECTED_LOGIN_MESSAGE,
+    });
+  }
+}
+
 async function issueAuthenticatedSession(req, res, user) {
   const employeeId = getAuthEmployeeId(user);
   const ipAddress = getRequestIp(req);
@@ -286,4 +334,5 @@ async function login(req, res) {
 
 module.exports = {
   login,
+  lockoutStatus,
 };
