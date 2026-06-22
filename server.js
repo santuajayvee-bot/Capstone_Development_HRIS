@@ -1042,6 +1042,31 @@ function hasMeaningfulSubmittedValue(value) {
   return String(value).trim() !== '';
 }
 
+function comparableEmployeeValue(value) {
+  if (value === undefined || value === null) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).trim();
+}
+
+function employeeFieldUnchanged(existing, field, submittedValue) {
+  if (!existing) return false;
+  const existingField = field === 'allowance' ? 'allowances' : field;
+  if (!Object.prototype.hasOwnProperty.call(existing, existingField)) return false;
+  const currentValue = decryptColumnValue(existing[existingField]);
+  const current = comparableEmployeeValue(currentValue);
+  const submitted = comparableEmployeeValue(submittedValue);
+  if (['allowances', 'allowance', 'base_rate'].includes(field) && current !== '' && submitted !== '') {
+    return Number(current) === Number(submitted);
+  }
+  return current === submitted;
+}
+
+function stripUnauthorizedEmployeeField(body, field) {
+  delete body[field];
+  if (field === 'allowance') delete body.allowances;
+  if (field === 'allowances') delete body.allowance;
+}
+
 async function validateDepartmentId(pool, body) {
   if (!Object.prototype.hasOwnProperty.call(body, 'department_id')) return;
   const value = normalizeBlank(body.department_id);
@@ -1082,14 +1107,19 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
 
   const isHrOrAdmin = employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any]);
   const isPayrollOrAdmin = employeeHasRole(req, [...ROLES.payroll_any, ...ROLES.admin_any]);
+  let existingForUpdate = null;
+  if (mode === 'update') {
+    const [existingRows] = await pool.execute('SELECT * FROM employees WHERE id = ? OR employee_code = ? LIMIT 1', [req.params.id, req.params.id]);
+    existingForUpdate = existingRows[0] || null;
+  }
 
   for (const field of Object.keys(body)) {
     if (EMPLOYEE_HR_PROTECTED_FIELDS.has(field) && !isHrOrAdmin) {
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
     if (EMPLOYEE_WAGE_CONFIG_FIELDS.has(field) && !isPayrollOrAdmin) {
-      if (!hasMeaningfulSubmittedValue(body[field])) {
-        delete body[field];
+      if (!hasMeaningfulSubmittedValue(body[field]) || mode === 'update') {
+        stripUnauthorizedEmployeeField(body, field);
         continue;
       }
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
@@ -1098,8 +1128,8 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
     if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !isPayrollOrAdmin) {
-      if (!hasMeaningfulSubmittedValue(body[field])) {
-        delete body[field];
+      if (!hasMeaningfulSubmittedValue(body[field]) || employeeFieldUnchanged(existingForUpdate, field, body[field])) {
+        stripUnauthorizedEmployeeField(body, field);
         continue;
       }
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
@@ -1107,8 +1137,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
   }
 
   if (mode === 'update') {
-    const [existingRows] = await pool.execute('SELECT * FROM employees WHERE id = ? OR employee_code = ? LIMIT 1', [req.params.id, req.params.id]);
-    const existing = existingRows[0] || null;
+    const existing = existingForUpdate;
     if (existing) {
       for (const field of [...EMPLOYEE_PAYROLL_PROTECTED_FIELDS, ...EMPLOYEE_HR_PROTECTED_FIELDS]) {
         if (Object.prototype.hasOwnProperty.call(body, field)) {
