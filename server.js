@@ -30,6 +30,7 @@ const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
+const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
 const {
   auditSecurityEvent,
   multerFileFilter,
@@ -207,6 +208,7 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+app.use(encryptedCommunicationMiddleware);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
