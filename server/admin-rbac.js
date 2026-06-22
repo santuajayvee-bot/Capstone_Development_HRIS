@@ -13,7 +13,7 @@
 const express  = require('express');
 const router   = express.Router();
 const pool     = require('../config/db');
-const { requireAuth }    = require('./middleware');
+const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const {
   hashTemporaryPassword,
@@ -120,6 +120,7 @@ async function revokeEmployeeSessions(conn, employeeId, reason) {
 // ── Apply auth + Level 4 guard to ALL routes in this router ──
 router.use(requireAuth);
 router.use(requireLevel4);
+router.use(requirePermission('admin_panel:access'));
 
 router.put('/users/:userId/reset-password', accountController.resetUserPassword);
 
@@ -334,6 +335,12 @@ router.put('/update-role/:userId', async (req, res) => {
 
     // Prevent self-demotion
     if (targetUserId === req.user.id) {
+      await logAuditEntry(req, {
+        action: `DENIED_ROLE_CHANGE_ATTEMPT: User '${req.user.username || req.user.id}' attempted to change their own role`,
+        module: 'RBAC_SECURITY',
+        targetEmployeeId: req.user.employeeId || null,
+        newValue: JSON.stringify({ target_user_id: targetUserId, requested_role_id: role_id, result: 'denied' }),
+      }).catch(() => {});
       return res.status(403).json({ error: 'You cannot change your own role.' });
     }
 
@@ -354,6 +361,12 @@ router.put('/update-role/:userId', async (req, res) => {
       [role_id]
     );
     if (roleRows.length === 0) {
+      await logAuditEntry(req, {
+        action: `DENIED_ROLE_CHANGE_ATTEMPT: Invalid role '${role_id}' requested for user ID ${targetUserId}`,
+        module: 'RBAC_SECURITY',
+        targetEmployeeId: targetUser.employee_id || null,
+        newValue: JSON.stringify({ target_user_id: targetUserId, requested_role_id: role_id, result: 'denied' }),
+      }).catch(() => {});
       return res.status(404).json({ error: 'Role not found.' });
     }
     const newRole = roleRows[0];

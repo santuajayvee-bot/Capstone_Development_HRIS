@@ -13,7 +13,7 @@ const http       = require('http');
 const nodeCrypto = require('crypto');
 
 const { me }                                 = require('./server/auth');
-const { requireAuth, requireRole, ROLES }    = require('./server/middleware');
+const { hasPermission, requireAuth, requireRole, ROLES } = require('./server/middleware');
 const authRoutes                             = require('./routes/authRoutes');
 const accountRoutes                          = require('./routes/accountRoutes');
 const payrollRoutes                          = require('./server/payroll');
@@ -1018,6 +1018,31 @@ async function rejectEmployeeUnknownFields(req, res, fields) {
     error: 'Request contains unsupported employee field(s).',
     fields,
   });
+}
+
+function canAccessEmployeeRecord(req, targetEmployeeId, { allowPayroll = false, allowPermission = true } = {}) {
+  const employeeId = Number(targetEmployeeId);
+  if (!Number.isFinite(employeeId) || employeeId <= 0) return false;
+  if (Number(req.user?.employeeId) === employeeId) return true;
+  if ([...ROLES.staff_management, ...ROLES.admin_any].includes(req.user?.role)) return true;
+  if (allowPayroll && ROLES.payroll_any.includes(req.user?.role)) return true;
+  return allowPermission && hasPermission(req, 'employee:read') && req.user?.role !== 'employee';
+}
+
+async function rejectEmployeeIdor(req, res, targetEmployeeId, action = 'blocked_employee_idor_attempt') {
+  await auditSecurityEvent(req, {
+    action,
+    module: 'IDOR_SECURITY',
+    targetTable: 'employees',
+    targetRecord: targetEmployeeId || req.params?.id || null,
+    newValue: {
+      method: req.method,
+      path: req.originalUrl,
+      requested_employee_id: targetEmployeeId || null,
+    },
+    result: 'blocked',
+  });
+  return res.status(403).json({ error: 'Access denied.' });
 }
 
 function applyEmployeeUpdateDefaults(body, existingEmployee) {
@@ -2905,6 +2930,9 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
     }
     
     const employeeId = empRows[0].id;
+    if (!canAccessEmployeeRecord(req, employeeId, { allowPermission: false })) {
+      return rejectEmployeeIdor(req, res, employeeId, 'blocked_employee_document_list_idor_attempt');
+    }
     
     // Fetch all documents for this employee
     const [docs] = await pool.execute(
@@ -2931,6 +2959,9 @@ app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROL
     const [empRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [id]);
     if (empRows.length === 0) {
       return res.status(404).json({ error: 'Employee not found.' });
+    }
+    if (!canAccessEmployeeRecord(req, empRows[0].id, { allowPermission: false })) {
+      return rejectEmployeeIdor(req, res, empRows[0].id, 'blocked_employee_document_view_idor_attempt');
     }
 
     const [docs] = await pool.execute(
@@ -3412,10 +3443,14 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
   try {
     const pool = require('./config/db');
     const { id } = req.params; // numeric employee ID
+    const employeeId = Number.parseInt(id, 10);
+    if (!canAccessEmployeeRecord(req, employeeId, { allowPermission: false })) {
+      return rejectEmployeeIdor(req, res, employeeId, 'blocked_employee_photo_idor_attempt');
+    }
     
     const [photos] = await pool.execute(
       `SELECT photo_data, photo_mime_type FROM employee_photos WHERE employee_id = ?`,
-      [id]
+      [employeeId]
     );
 
     if (photos.length === 0) {

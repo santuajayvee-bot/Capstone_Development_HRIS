@@ -327,21 +327,43 @@ function profilePhotoUrl(employeeId, photoId) {
 }
 
 async function loadOwnProfile(employeeId, userId) {
+  const usersHasEmail = await columnExists(pool, 'users', 'email').catch(() => false);
+  const employeesHasDepartmentId = await columnExists(pool, 'employees', 'department_id').catch(() => false);
+  const employeesHasWageTypeId = await columnExists(pool, 'employees', 'wage_type_id').catch(() => false);
+  const employeesHasPositionId = await columnExists(pool, 'employees', 'position_id').catch(() => false);
+  const hasDepartmentsTable = await tableExists(pool, 'departments').catch(() => false);
+  const hasWageTypesTable = await tableExists(pool, 'wage_types').catch(() => false);
+  const hasPositionsTable = await tableExists(pool, 'positions').catch(() => false);
+
+  const accountEmailSelect = usersHasEmail ? 'u.email AS account_email' : 'NULL AS account_email';
+  const departmentNameSelect = hasDepartmentsTable && employeesHasDepartmentId
+    ? 'd.name AS department_name'
+    : 'NULL AS department_name';
+  const wageTypeNameSelect = hasWageTypesTable && employeesHasWageTypeId
+    ? 'wt.name AS wage_type_name'
+    : 'NULL AS wage_type_name';
+  const positionNameSelect = hasPositionsTable && employeesHasPositionId
+    ? 'COALESCE(p.name, e.position) AS position_name'
+    : 'e.position AS position_name';
+  const optionalJoins = [
+    hasDepartmentsTable && employeesHasDepartmentId ? 'LEFT JOIN departments d ON d.id = e.department_id' : '',
+    hasWageTypesTable && employeesHasWageTypeId ? 'LEFT JOIN wage_types wt ON wt.id = e.wage_type_id' : '',
+    hasPositionsTable && employeesHasPositionId ? 'LEFT JOIN positions p ON p.id = e.position_id' : ''
+  ].filter(Boolean).join('\n       ');
+
   const [rows] = await pool.execute(
     `SELECT e.*,
             u.username,
-            u.email AS account_email,
+            ${accountEmailSelect},
             r.name AS role,
             r.label AS role_label,
-            d.name AS department_name,
-            wt.name AS wage_type_name,
-            COALESCE(p.name, e.position) AS position_name
+            ${departmentNameSelect},
+            ${wageTypeNameSelect},
+            ${positionNameSelect}
        FROM users u
        JOIN employees e ON e.id = u.employee_id
        LEFT JOIN roles r ON r.id = u.role_id
-       LEFT JOIN departments d ON d.id = e.department_id
-       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
-       LEFT JOIN positions p ON p.id = e.position_id
+       ${optionalJoins}
       WHERE u.id = ? AND e.id = ?
       LIMIT 1`,
     [userId, employeeId]

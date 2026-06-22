@@ -50,6 +50,101 @@ function dateLabel(value) {
   return new Date(value).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function formalModuleLabel(moduleName) {
+  const key = String(moduleName || '').trim().toUpperCase();
+  const labels = {
+    RBAC: 'Role and Access Control',
+    RBAC_SECURITY: 'Role and Access Control Security',
+    ONBOARDING: 'Onboarding',
+    PAYROLL: 'Payroll',
+    ATTENDANCE: 'Attendance',
+    LEAVE: 'Leave Management',
+    EMPLOYEE: 'Employee Records',
+    AUTH: 'Authentication',
+    DASHBOARD: 'Dashboard',
+    BLOCKCHAIN: 'Blockchain Audit',
+  };
+  return labels[key] || (key ? key.replaceAll('_', ' ') : 'System Activity');
+}
+
+function extractQuotedValue(text) {
+  return String(text || '').match(/'([^']+)'/)?.[1] || null;
+}
+
+function extractEmployeeCode(text) {
+  return String(text || '').match(/\bEmployee\s+([A-Za-z0-9-]+)/i)?.[1] || null;
+}
+
+function extractRoleLabel(text) {
+  return String(text || '').match(/\bwith role\s+(.+)$/i)?.[1]?.trim() || null;
+}
+
+function formatAuditMessage(actionPerformed, moduleName) {
+  const action = String(actionPerformed || '').trim();
+  if (!action) return 'A system activity was recorded.';
+
+  if (/^ACCOUNT_CREATED:/i.test(action)) {
+    const username = extractQuotedValue(action);
+    const employeeCode = extractEmployeeCode(action);
+    const role = extractRoleLabel(action);
+    const accountPart = username ? `User account ${username}` : 'A user account';
+    const employeePart = employeeCode ? ` for employee ${employeeCode}` : '';
+    const rolePart = role ? ` with the ${role} role` : '';
+    return `${accountPart} was created${employeePart}${rolePart}.`;
+  }
+
+  if (/^ROLE_REASSIGNED:/i.test(action)) {
+    const username = extractQuotedValue(action);
+    const role = action.match(/\bto\s+(.+)$/i)?.[1]?.trim();
+    const accountPart = username ? `User account ${username}` : 'A user account';
+    return role
+      ? `${accountPart} was assigned the ${role} role.`
+      : `${accountPart} role assignment was updated.`;
+  }
+
+  if (/^ACCOUNT_ACTIVATED:/i.test(action)) {
+    return 'A user account was reactivated by the system administrator.';
+  }
+
+  if (/^ACCOUNT_DEACTIVATED:/i.test(action)) {
+    return 'A user account was deactivated by the system administrator.';
+  }
+
+  if (/^CREDENTIALS_UPDATED:/i.test(action)) {
+    return 'User account credentials were updated by the system administrator.';
+  }
+
+  if (/^DOCUMENT_UPLOADED/i.test(action)) {
+    const applicantId = action.match(/\[APPLICANT:(\d+)\]/i)?.[1];
+    return applicantId
+      ? `An onboarding document was uploaded for applicant record ${applicantId}.`
+      : 'An onboarding document was uploaded.';
+  }
+
+  if (/^DASHBOARD_VIEWED$/i.test(action)) {
+    return 'The dashboard was accessed.';
+  }
+
+  const label = action
+    .replace(/^[A-Z_]+:\s*/i, '')
+    .replace(/\[[^\]]+\]/g, '')
+    .replaceAll('_', ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (!label) return `${formalModuleLabel(moduleName)} activity was recorded.`;
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
+}
+
+function auditNotification(row) {
+  return {
+    title: formalModuleLabel(row?.module),
+    message: formatAuditMessage(row?.action_performed, row?.module),
+    date: dateLabel(row?.timestamp),
+  };
+}
+
 function employeeName(row) {
   const first = decryptColumnValue(row?.first_name);
   const last = decryptColumnValue(row?.last_name);
@@ -169,11 +264,7 @@ async function sharedWidgets(role, profile, permissions) {
       LIMIT 5`
   );
 
-  const notifications = notificationRows.map(item => ({
-    title: item.module || 'HRIS',
-    message: item.action_performed || 'System activity',
-    date: dateLabel(item.timestamp),
-  }));
+  const notifications = notificationRows.map(auditNotification);
 
   return {
     notifications,
@@ -476,7 +567,11 @@ async function systemAdminDashboard(profile, permissions) {
   return {
     stats,
     tables: [
-      table('Recent Activities', ['Module', 'Activity', 'Date'], auditRows.map(r => [r.module || '-', r.action_performed || '-', dateLabel(r.timestamp)])),
+      table('Recent Activities', ['Module', 'Activity', 'Date'], auditRows.map(r => [
+        formalModuleLabel(r.module),
+        formatAuditMessage(r.action_performed, r.module),
+        dateLabel(r.timestamp),
+      ])),
     ],
     actions: [
       action('System Admin', 'system-admin', 'Manage users and roles'),
