@@ -107,6 +107,39 @@
 
 .login-field input::placeholder { color: #98a2b3; }
 
+#login-mfa-step[hidden] { display: none !important; }
+.login-mfa-title {
+  margin-bottom: 6px;
+  color: #101828;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+}
+.login-mfa-phone {
+  min-height: 20px;
+  margin-bottom: 18px;
+  color: #667085;
+  font-size: 13px;
+  text-align: center;
+}
+.login-mfa-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+.login-text-btn {
+  border: 0;
+  background: transparent;
+  color: #b42318;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+}
+.login-text-btn:hover,
+.login-text-btn:focus-visible { color: #7f1d1d; text-decoration: underline; }
+
 .btn-login {
   width: 100%;
   min-height: 46px;

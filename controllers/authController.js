@@ -8,6 +8,7 @@ const {
 } = require('../services/tokenService');
 const {
   findUserByEmail,
+  findUserById,
   recordFailedLoginFailure,
   resetFailedLoginAttempts,
   updateLastLogin,
@@ -18,6 +19,13 @@ const {
   getUserPermissions,
   getLinkedEmployeeProfile,
 } = require('../server/users');
+const {
+  MfaServiceError,
+  createMfaChallenge,
+  isMfaEnabled,
+  resendMfaChallenge,
+  verifyMfaChallenge,
+} = require('../services/mfaService');
 
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
@@ -119,6 +127,19 @@ function invalidLoginResponse(res) {
   return res.status(401).json({
     success: false,
     message: INVALID_LOGIN_MESSAGE,
+  });
+}
+
+function mfaErrorResponse(res, error) {
+  const statusCode = error instanceof MfaServiceError ? error.statusCode : 500;
+  const message = error instanceof MfaServiceError
+    ? error.message
+    : 'Unable to complete MFA verification. Please try again.';
+  return res.status(statusCode).json({
+    success: false,
+    mfaRequired: true,
+    code: error instanceof MfaServiceError ? error.code : 'MFA_FAILED',
+    message,
   });
 }
 
@@ -257,6 +278,34 @@ async function login(req, res) {
       return invalidLoginResponse(res);
     }
 
+    // A correct password resets password-lockout state, but never creates an
+    // access token until the MFA challenge has been successfully verified.
+    await resetFailedLoginAttempts(employeeId);
+    if (isMfaEnabled()) {
+      try {
+        const challenge = await createMfaChallenge({ employeeId, req });
+        return res.status(202).json({
+          success: true,
+          mfaRequired: true,
+          challengeId: challenge.challengeId,
+          mfaToken: challenge.mfaToken,
+          maskedPhoneNumber: challenge.maskedPhoneNumber,
+          expiresIn: challenge.expiresIn,
+        });
+      } catch (error) {
+        console.error('[authController] MFA challenge failed:', error.code || error.message);
+        return mfaErrorResponse(res, error);
+      }
+    }
+
+    await safeCreateAuditLog({
+      Employee_ID: employeeId,
+      Action_Type: 'MFA_BYPASSED',
+      Description: 'MFA bypassed because MFA_ENABLED is false.',
+      IP_Address: ipAddress,
+      User_Agent: userAgent,
+    });
+
     return issueAuthenticatedSession(req, res, user);
   } catch (error) {
     console.error('[authController] login failed:', error.message);
@@ -267,6 +316,41 @@ async function login(req, res) {
   }
 }
 
+async function verifyMfa(req, res) {
+  try {
+    const result = await verifyMfaChallenge({
+      challengeId: req.body?.challengeId,
+      mfaToken: req.body?.mfaToken,
+      code: req.body?.code,
+      req,
+    });
+    const authenticatedUser = await findUserById(result.employeeId);
+    if (!authenticatedUser || isInactiveUser(authenticatedUser)) {
+      return res.status(401).json({ success: false, message: 'MFA challenge is no longer valid.' });
+    }
+    return issueAuthenticatedSession(req, res, authenticatedUser);
+  } catch (error) {
+    console.error('[authController] MFA verification failed:', error.code || error.message);
+    return mfaErrorResponse(res, error);
+  }
+}
+
+async function resendMfa(req, res) {
+  try {
+    const result = await resendMfaChallenge({
+      challengeId: req.body?.challengeId,
+      mfaToken: req.body?.mfaToken,
+      req,
+    });
+    return res.json({ success: true, mfaRequired: true, ...result });
+  } catch (error) {
+    console.error('[authController] MFA resend failed:', error.code || error.message);
+    return mfaErrorResponse(res, error);
+  }
+}
+
 module.exports = {
   login,
+  resendMfa,
+  verifyMfa,
 };
