@@ -171,9 +171,9 @@ function resetEmployeePositionOptions() {
 
 const ADDRESS_FORM_CONFIGS = {
   emp: {
-    home: { input: 'emp-address' },
-    current: { input: 'emp-current-address', same: 'emp-current-same-home' },
-    mailing: { input: 'emp-mailing-address', same: 'emp-mailing-same-home' }
+    home: { input: 'emp-address', line: 'emp-address-line' },
+    current: { input: 'emp-current-address', line: 'emp-current-address-line', same: 'emp-current-same-home' },
+    mailing: { input: 'emp-mailing-address', line: 'emp-mailing-address-line', same: 'emp-mailing-same-home' }
   },
   profile: {
     home: { input: 'profile-edit-address' },
@@ -222,17 +222,51 @@ function setAddressSelection(input, address, latitude, longitude, placeId = '', 
   input.dataset.province = details.province || '';
   input.dataset.cityMunicipality = details.city_municipality || '';
   input.dataset.barangay = details.barangay || '';
-  input.dataset.streetAddress = details.street_address || address || '';
+  input.dataset.streetAddress = details.street_address || '';
   input.dataset.fullAddress = details.full_address || address || '';
+}
+
+function getAddressLineInput(item) {
+  return item?.line ? document.getElementById(item.line) : null;
+}
+
+function getAddressLineValue(item, input) {
+  const lineInput = getAddressLineInput(item);
+  return (lineInput?.value || input?.dataset.streetAddress || '').trim();
+}
+
+function getAddressLocationValue(input) {
+  return (input?.dataset.fullAddress || input?.value || '').trim();
+}
+
+function buildEmployeeFullAddress(line, input) {
+  const location = getAddressLocationValue(input);
+  return [line, location].filter(Boolean).join(', ');
+}
+
+function syncAddressFullValue(item) {
+  const input = document.getElementById(item.input);
+  if (!input) return '';
+  const line = getAddressLineValue(item, input);
+  const fullAddress = buildEmployeeFullAddress(line, input);
+  input.dataset.streetAddress = line;
+  input.dataset.fullAddress = fullAddress || getAddressLocationValue(input);
+  return fullAddress || input.value || '';
 }
 
 function copyHomeAddress(config) {
   const home = document.getElementById(config.home.input);
+  const homeLine = getAddressLineInput(config.home);
   ['current', 'mailing'].forEach(key => {
     const item = config[key];
     const same = document.getElementById(item.same);
     const input = document.getElementById(item.input);
     if (!same || !input || !same.checked) return;
+    const lineInput = getAddressLineInput(item);
+    if (lineInput) {
+      lineInput.value = homeLine?.value || home?.dataset.streetAddress || '';
+      lineInput.disabled = true;
+    }
     // A same-as-home address is the same verified address, not merely the same
     // display text. Preserve its full selection metadata for payload generation.
     setAddressSelection(input, home?.value || '', home?.dataset.latitude, home?.dataset.longitude, home?.dataset.placeId, {
@@ -240,7 +274,7 @@ function copyHomeAddress(config) {
       province: home?.dataset.province,
       city_municipality: home?.dataset.cityMunicipality,
       barangay: home?.dataset.barangay,
-      street_address: home?.dataset.streetAddress,
+      street_address: homeLine?.value || home?.dataset.streetAddress,
       full_address: home?.dataset.fullAddress || home?.value || ''
     });
     if (window.copyPhilippineAddressSection) window.copyPhilippineAddressSection(config.home.input, item.input);
@@ -343,6 +377,16 @@ function initializeEmployeeAddressAutocomplete(scope = document) {
     setupAddressInput(config.home.input);
     setupAddressInput(config.current.input);
     setupAddressInput(config.mailing.input);
+    ['home', 'current', 'mailing'].forEach(key => {
+      const item = config[key];
+      const lineInput = getAddressLineInput(item);
+      if (!lineInput || lineInput.dataset.addressLineReady === '1') return;
+      lineInput.dataset.addressLineReady = '1';
+      lineInput.addEventListener('input', () => {
+        syncAddressFullValue(item);
+        Object.values(ADDRESS_FORM_CONFIGS).forEach(copyHomeAddress);
+      });
+    });
 
     ['current', 'mailing'].forEach(key => {
       const item = config[key];
@@ -351,11 +395,16 @@ function initializeEmployeeAddressAutocomplete(scope = document) {
       if (!same || !input || same.dataset.addressSameReady === '1') return;
       same.dataset.addressSameReady = '1';
       same.addEventListener('change', () => {
+        const lineInput = getAddressLineInput(item);
         if (same.checked) {
           copyHomeAddress(config);
           input.disabled = true;
         } else {
           input.disabled = false;
+          if (lineInput) {
+            lineInput.disabled = false;
+            lineInput.value = '';
+          }
           input.value = '';
           clearAddressSelection(input);
         }
@@ -381,31 +430,49 @@ function collectEmployeeAddressPayload(mode = 'emp') {
   const currentSame = config.current.same ? document.getElementById(config.current.same)?.checked : false;
   const mailingSame = config.mailing.same ? document.getElementById(config.mailing.same)?.checked : false;
   const errors = [];
+  const homeLine = getAddressLineValue(config.home, home);
+  const currentLine = currentSame ? homeLine : getAddressLineValue(config.current, current);
+  const mailingLine = mailingSame ? homeLine : getAddressLineValue(config.mailing, mailing);
+  const homeAddress = syncAddressFullValue(config.home);
+  const currentAddress = currentSame ? homeAddress : syncAddressFullValue(config.current);
+  const mailingAddress = mailingSame ? homeAddress : syncAddressFullValue(config.mailing);
 
-  if (!home?.value.trim()) errors.push('Home Address is required.');
-  if (!currentSame && !current?.value.trim()) errors.push('Current Address is required unless Same as Home Address is checked.');
-  if (!mailingSame && !mailing?.value.trim()) errors.push('Mailing Address is required unless Same as Home Address is checked.');
+  if (!homeLine) errors.push('Home Address exact address line is required.');
+  if (!home?.value.trim()) errors.push('Home Address barangay / city / province is required.');
+  if (!currentSame && !currentLine) errors.push('Current Address exact address line is required unless Same as Home Address is checked.');
+  if (!currentSame && !current?.value.trim()) errors.push('Current Address barangay / city / province is required unless Same as Home Address is checked.');
+  if (!mailingSame && !mailingLine) errors.push('Mailing Address exact address line is required unless Same as Home Address is checked.');
+  if (!mailingSame && !mailing?.value.trim()) errors.push('Mailing Address barangay / city / province is required unless Same as Home Address is checked.');
   const phInputIds = [...new Set([config.home.input, currentSame ? config.home.input : config.current.input, mailingSame ? config.home.input : config.mailing.input])];
   const phAddress = window.collectPhilippineAddressPayload
     ? window.collectPhilippineAddressPayload(phInputIds)
     : { errors: [], payload: {} };
   errors.push(...phAddress.errors);
+  const addressPayload = {
+    ...phAddress.payload,
+    residential_address_street_address: homeLine,
+    residential_address_full_address: homeAddress,
+    current_address_street_address: currentLine,
+    current_address_full_address: currentAddress,
+    mailing_address_street_address: mailingLine,
+    mailing_address_full_address: mailingAddress
+  };
 
   return {
-    errors,
+    errors: [...new Set(errors)],
     payload: {
-      residential_address: home?.value || null,
+      residential_address: homeAddress || null,
       residential_address_lat: home?.dataset.latitude || null,
       residential_address_lng: home?.dataset.longitude || null,
-      current_address: currentSame ? home?.value || null : current?.value || null,
+      current_address: currentAddress || null,
       current_address_lat: currentSame ? home?.dataset.latitude || null : current?.dataset.latitude || null,
       current_address_lng: currentSame ? home?.dataset.longitude || null : current?.dataset.longitude || null,
       current_address_same_as_home: currentSame ? 1 : 0,
-      mailing_address: mailingSame ? home?.value || null : mailing?.value || null,
+      mailing_address: mailingAddress || null,
       mailing_address_lat: mailingSame ? home?.dataset.latitude || null : mailing?.dataset.latitude || null,
       mailing_address_lng: mailingSame ? home?.dataset.longitude || null : mailing?.dataset.longitude || null,
       mailing_address_same_as_home: mailingSame ? 1 : 0,
-      ...phAddress.payload
+      ...addressPayload
     }
   };
 }

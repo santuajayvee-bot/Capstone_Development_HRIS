@@ -49,8 +49,18 @@
     if (selected && [...select.options].some(option => option.value === selected)) select.value = selected;
   }
 
+  function getLineInput(section) {
+    return section?.querySelector('[data-ph-address-line]');
+  }
+
+  function getLocationInput(section) {
+    return section?.querySelector('.address-autocomplete input');
+  }
+
   function buildFullAddress(section) {
-    const street = section.querySelector('[data-ph-address-part="street"]')?.value.trim() || '';
+    const street = getLineInput(section)?.value.trim()
+      || section.querySelector('[data-ph-address-part="street"]')?.value.trim()
+      || '';
     const barangay = section.querySelector('[data-ph-address-part="barangay"]')?.value || '';
     const city = section.querySelector('[data-ph-address-part="city_municipality"]')?.value || '';
     const province = section.querySelector('[data-ph-address-part="province"]')?.value || '';
@@ -59,7 +69,7 @@
   }
 
   function syncInputAddress(section) {
-    const input = section.querySelector('.address-autocomplete input');
+    const input = getLocationInput(section);
     if (!input) return;
     input.dataset.fullAddress = buildFullAddress(section);
   }
@@ -75,26 +85,39 @@
     section.dataset.phAddressReady = '1';
     section.dataset.phAddressPrefix = prefix;
     input.dataset.phAddressPrefix = prefix;
-    input.setAttribute('placeholder', 'Type address and select from suggestions');
-    input.setAttribute('data-ph-address-part', 'street');
+    input.setAttribute('placeholder', 'Search barangay / city / province');
+    input.setAttribute('data-ph-address-part', 'location');
+    const lineInput = getLineInput(section);
+    if (lineInput) {
+      lineInput.setAttribute('placeholder', lineInput.getAttribute('placeholder') || 'House no., street, subdivision, unit');
+      lineInput.setAttribute('data-ph-address-part', 'street');
+    }
   }
 
   function collectSection(section) {
     const prefix = section?.dataset.phAddressPrefix;
     if (!prefix) return { errors: [], payload: {} };
-    const input = section.querySelector('.address-autocomplete input');
+    const input = getLocationInput(section);
+    const lineInput = getLineInput(section);
+    const hasSplitAddress = Boolean(lineInput);
+    const streetAddress = (hasSplitAddress ? lineInput.value : input?.dataset.streetAddress || input?.value || '').trim();
+    const locationAddress = (input?.dataset.fullAddress || input?.value || '').trim();
+    const fullAddress = hasSplitAddress
+      ? [streetAddress, locationAddress].filter(Boolean).join(', ')
+      : locationAddress || streetAddress;
     const payload = {
       [`${prefix}_region`]: input?.dataset.region || '',
       [`${prefix}_province`]: input?.dataset.province || '',
       [`${prefix}_city_municipality`]: input?.dataset.cityMunicipality || '',
       [`${prefix}_barangay`]: input?.dataset.barangay || '',
-      [`${prefix}_street_address`]: input?.dataset.streetAddress || input?.value.trim() || '',
-      [`${prefix}_full_address`]: input?.dataset.fullAddress || input?.value.trim() || '',
+      [`${prefix}_street_address`]: streetAddress,
+      [`${prefix}_full_address`]: fullAddress,
       [`${prefix}_place_id`]: input?.dataset.placeId || null
     };
     const errors = [];
     const label = prefix === 'residential_address' ? 'Home Address' : prefix === 'current_address' ? 'Current Address' : 'Mailing Address';
-    if (!payload[`${prefix}_street_address`]) errors.push(`${label} street address is required.`);
+    if (!payload[`${prefix}_street_address`]) errors.push(`${label} exact address line is required.`);
+    if (hasSplitAddress && !locationAddress) errors.push(`${label} barangay / city / province is required.`);
     return { errors, payload };
   }
 
@@ -136,6 +159,9 @@
         full_address: fromInput.dataset.fullAddress || fromInput.value
       });
     }
+    const fromLine = getLineInput(from);
+    const toLine = getLineInput(to);
+    if (fromLine && toLine) toLine.value = fromLine.value;
   };
 
   window.setPhilippineAddressValues = async function setPhilippineAddressValues(inputId, data = {}) {
@@ -144,12 +170,21 @@
     await hydrateAddressSection(section);
     const prefix = section.dataset.phAddressPrefix;
     const input = document.getElementById(inputId);
+    const lineInput = getLineInput(section);
     const value = suffix => data[`${prefix}_${suffix}`] || '';
     if (input) {
       const street = value('street_address') || data[prefix] || '';
       const lat = data[`${prefix}_lat`];
       const lng = data[`${prefix}_lng`];
       const placeId = value('place_id');
+      if (lineInput) lineInput.value = value('street_address') || '';
+      const location = [
+        value('barangay'),
+        value('city_municipality'),
+        value('province'),
+        value('region'),
+        value('barangay') || value('city_municipality') || value('province') || value('region') ? 'Philippines' : ''
+      ].filter(Boolean).join(', ');
       if (window.setAddressSelection) window.setAddressSelection(input, value('full_address') || street, lat, lng, placeId, {
         region: value('region'),
         province: value('province'),
@@ -158,7 +193,9 @@
         street_address: street,
         full_address: value('full_address') || street
       });
-      else input.value = street;
+      input.value = location || value('full_address') || street;
+      input.dataset.fullAddress = location || value('full_address') || street;
+      if (!window.setAddressSelection) input.value = location || street;
     }
   };
 

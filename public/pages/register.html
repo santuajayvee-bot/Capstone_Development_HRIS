@@ -408,24 +408,27 @@
           <div class="form-group"><label>Work Email Address</label><input id="emp-work-email" type="email" placeholder="name@company.com" data-validation="email" /></div>
           <div class="form-group full">
             <label>Permanent Home Address</label>
+            <input id="emp-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off" />
             <div class="address-autocomplete" data-address-field="home">
-              <input id="emp-address" placeholder="Search and select permanent home address" autocomplete="off" />
+              <input id="emp-address" placeholder="Search barangay / city / province" autocomplete="off" />
               <div class="address-suggestions" id="emp-address-suggestions"></div>
             </div>
           </div>
           <div class="form-group full">
             <label>Current Address</label>
-            <label class="address-same-check"><input id="emp-current-same-home" type="checkbox"> Same as Home Address</label>
+            <label class="address-same-check"><input id="emp-current-same-home" type="checkbox"><span>Same as Permanent Home Address</span></label>
+            <input id="emp-current-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off" />
             <div class="address-autocomplete" data-address-field="current">
-              <input id="emp-current-address" placeholder="Search and select current address" autocomplete="off" />
+              <input id="emp-current-address" placeholder="Search barangay / city / province" autocomplete="off" />
               <div class="address-suggestions" id="emp-current-address-suggestions"></div>
             </div>
           </div>
           <div class="form-group full">
             <label>Mailing Address</label>
-            <label class="address-same-check"><input id="emp-mailing-same-home" type="checkbox"> Same as Home Address</label>
+            <label class="address-same-check"><input id="emp-mailing-same-home" type="checkbox"><span>Same as Permanent Home Address</span></label>
+            <input id="emp-mailing-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off" />
             <div class="address-autocomplete" data-address-field="mailing">
-              <input id="emp-mailing-address" placeholder="Search and select mailing address" autocomplete="off" />
+              <input id="emp-mailing-address" placeholder="Search barangay / city / province" autocomplete="off" />
               <div class="address-suggestions" id="emp-mailing-address-suggestions"></div>
             </div>
           </div>

@@ -2045,6 +2045,7 @@ input.lgsv-date-native[type="date"] {
 @keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
 .address-autocomplete {
   position: relative;
+  margin-top: 8px;
 }
 
 .address-autocomplete::after {
@@ -2116,19 +2117,41 @@ input.lgsv-date-native[type="date"] {
   font-size: 11px;
 }
 
-.address-same-check {
+.address-same-check,
+.employee-form-shell .form-group label.address-same-check {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 0 7px;
+  gap: 8px;
+  width: fit-content;
+  margin: 0 0 8px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
 }
 
-.address-same-check input {
-  width: 14px;
-  height: 14px;
+.address-same-check input,
+.employee-form-shell .form-group label.address-same-check input[type="checkbox"] {
+  width: 16px !important;
+  min-height: 16px !important;
+  height: 16px !important;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: #16a34a;
+  background: transparent !important;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.address-same-check span {
+  display: inline-block;
+  color: var(--text);
+}
+
+.form-group [data-ph-address-line] {
+  margin-top: 0;
 }
 
 .draft-save-status {
