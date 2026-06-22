@@ -17,6 +17,22 @@ function clearLoginError() {
   errEl.style.display = 'none';
 }
 
+function formatLoginFailureMessage(data, status) {
+  if (status === 423) {
+    return data?.message || 'Account temporarily locked. Please try again later or contact your administrator.';
+  }
+
+  const baseMessage = data?.message || data?.error || 'Login failed.';
+  const remaining = Number(data?.remaining_attempts);
+  if (Number.isFinite(remaining) && remaining > 0) {
+    return `${baseMessage} ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before account lockout.`;
+  }
+  if (Number.isFinite(remaining) && remaining <= 0) {
+    return 'Account temporarily locked. Please try again later or contact your administrator.';
+  }
+  return baseMessage;
+}
+
 function completeAuthenticatedLogin(data) {
   saveAuth(data.accessToken || data.token, data.user);
   buildSidebar(data.user);
@@ -65,7 +81,7 @@ async function doLogin() {
     const data = await res.json();
 
     if (!res.ok) {
-      const message = data.message || data.error || 'Login failed.';
+      const message = formatLoginFailureMessage(data, res.status);
       loginError(message, res.status === 423 || Number(data.remaining_attempts || 0) <= 2);
       return;
     }
