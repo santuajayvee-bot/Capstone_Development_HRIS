@@ -20,6 +20,18 @@ const {
   validateTemporaryPassword,
 } = require('../services/passwordService');
 
+async function hasColumn(tableName, columnName) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND COLUMN_NAME = ?`,
+    [tableName, columnName]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+}
+
 // ── Argon2 Configuration (OWASP recommended) ────────────────
 /* ================================================================
    MIDDLEWARE: requireLevel4 — Strict System Administrator Guard
@@ -499,9 +511,31 @@ router.get('/roles', async (req, res) => {
    ================================================================ */
 router.get('/users', async (req, res) => {
   try {
+    const hasFailedAttempts = await hasColumn('users', 'failed_login_attempts');
+    const hasAccountLockedUntil = await hasColumn('users', 'account_locked_until');
+    const hasLoginAttempts = await hasColumn('users', 'login_attempts');
+    const hasLockedUntil = await hasColumn('users', 'locked_until');
+    const attemptsExpr = hasFailedAttempts
+      ? 'u.failed_login_attempts'
+      : hasLoginAttempts
+        ? 'u.login_attempts'
+        : '0';
+    const lockedUntilExpr = hasAccountLockedUntil
+      ? 'u.account_locked_until'
+      : hasLockedUntil
+        ? 'u.locked_until'
+        : 'NULL';
+
     const [rows] = await pool.execute(
       `SELECT u.id, u.username, u.role_id, u.employee_id, u.is_active, u.last_login,
               u.password_changed_at, u.force_password_change, u.created_at,
+              COALESCE(${attemptsExpr}, 0) AS failed_login_attempts,
+              ${lockedUntilExpr} AS account_locked_until,
+              CASE
+                WHEN ${lockedUntilExpr} IS NOT NULL AND ${lockedUntilExpr} > NOW() THEN 1
+                ELSE 0
+              END AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), ${lockedUntilExpr}), 0) AS lock_seconds_remaining,
               r.name AS role_name, r.label AS role_label, r.access_level,
               e.first_name, e.last_name, e.employee_code
        FROM users u

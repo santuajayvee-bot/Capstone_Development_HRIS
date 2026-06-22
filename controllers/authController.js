@@ -137,6 +137,7 @@ function lockedAccountResponse(res, lockState = {}) {
   const seconds = Number(lockState.lockSecondsRemaining || 0);
   return res.status(423).json({
     success: false,
+    locked: true,
     message: LOCKED_ACCOUNT_MESSAGE,
     locked_until: lockState.lockedUntil || null,
     lock_seconds_remaining: seconds,
