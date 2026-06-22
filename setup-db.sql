@@ -51,7 +51,10 @@ CREATE TABLE employees (
   date_hired DATE NULL,
   supervisor VARCHAR(100) NULL,
   work_location VARCHAR(100) NULL,
-  status ENUM('Active','Inactive','Resigned') DEFAULT 'Active',
+  status ENUM('Active','Inactive','Resigned','Terminated','End of Contract','Suspended') DEFAULT 'Active',
+  separation_date DATE NULL,
+  separation_reason VARCHAR(120) NULL,
+  offboarding_remarks VARCHAR(500) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (department_id) REFERENCES departments(id)
 );

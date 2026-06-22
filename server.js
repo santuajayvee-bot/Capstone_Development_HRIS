@@ -72,7 +72,7 @@ const EMPLOYEE_ENUMS = {
   hiring_type: new Set(['Direct Hire', 'Agency-Hired']),
   deployment_status: new Set(['Pending Deployment', 'Deployed', 'On Hold', 'Ended']),
   employee_level: new Set(['Rank and File', 'Supervisor', 'Manager', 'Executive']),
-  status: new Set(['Active', 'Inactive']),
+  status: new Set(['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended']),
   payroll_schedule: new Set(['weekly', 'semi_monthly', 'monthly', 'Weekly', 'Semi-Monthly', 'Monthly']),
   tax_status: new Set(['Single', 'Married', 'Head of Family', 'Exempt']),
 };
@@ -86,10 +86,14 @@ const EMPLOYEE_GOVERNMENT_ID_FIELDS = new Set(['sss_number', 'philhealth_number'
 const EMPLOYEE_PAYROLL_ONLY_FIELDS = new Set(['allowances', 'allowance', 'payroll_schedule', 'salary_grade', 'tax_status', 'bank_name', 'bank_account']);
 const EMPLOYEE_HR_PROTECTED_FIELDS = new Set([
   'department_id', 'position', 'employment_type', 'hiring_type', 'deployment_status',
-  'date_hired', 'end_of_contract', 'employee_level', 'status', 'supervisor',
+  'date_hired', 'end_of_contract', 'employee_level', 'status', 'employment_status', 'supervisor',
   'work_location', 'shift_schedule', 'agency_name', 'agency_contact_person',
-  'agency_contact_number', 'contract_start_date', 'contract_end_date'
+  'agency_contact_number', 'contract_start_date', 'contract_end_date',
+  'separation_date', 'separation_reason', 'offboarding_remarks'
 ]);
+const EMPLOYEE_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended'];
+const NON_ACTIVE_EMPLOYEE_STATUSES = new Set(EMPLOYEE_STATUS_OPTIONS.filter(status => status !== 'Active'));
+const ACCOUNT_DEACTIVATION_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract']);
 let philippineAddressCache = null;
 let philippineAddressError = null;
 
@@ -673,6 +677,31 @@ function rejectEmployeeInput(field, reason = null) {
   return error;
 }
 
+function normalizeEmploymentStatus(value) {
+  const status = normalizeBlank(value) || 'Active';
+  if (!EMPLOYEE_ENUMS.status.has(status)) throw rejectEmployeeInput('status');
+  return status;
+}
+
+function isNonActiveEmploymentStatus(status) {
+  return NON_ACTIVE_EMPLOYEE_STATUSES.has(normalizeEmploymentStatus(status));
+}
+
+async function deactivateLinkedUserAccounts(pool, employeeId, status, req) {
+  if (!ACCOUNT_DEACTIVATION_STATUSES.has(status) || !employeeId) return 0;
+  const [result] = await pool.execute(
+    'UPDATE users SET is_active = 0 WHERE employee_id = ? AND is_active <> 0',
+    [employeeId]
+  );
+  if (result.affectedRows > 0) {
+    await writeEmployeeLifecycleAudit(pool, req, 'LINKED_USER_ACCOUNT_DEACTIVATED', employeeId, null, {
+      status,
+      affected_user_accounts: result.affectedRows,
+    });
+  }
+  return result.affectedRows || 0;
+}
+
 function validateNoDangerousText(field, value) {
   if (value == null) return null;
   const text = String(value).trim();
@@ -867,6 +896,9 @@ async function validateWageType(pool, body) {
 
 async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } = {}) {
   const body = req.body || {};
+  if (Object.prototype.hasOwnProperty.call(body, 'employment_status') && !Object.prototype.hasOwnProperty.call(body, 'status')) {
+    body.status = body.employment_status;
+  }
   const role = req.user?.role;
   const isHrOrAdmin = employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any]);
   const isPayrollOrAdmin = employeeHasRole(req, [...ROLES.payroll_any, ...ROLES.admin_any]);
@@ -909,8 +941,11 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
       'education_school', 'education_attainment', 'education_jhs_school',
       'education_jhs_attainment', 'education_shs_school', 'education_shs_attainment',
       'education_vocational_school', 'education_vocational_attainment',
-      'education_college_school', 'education_college_attainment', 'agency_contact_person'
+      'education_college_school', 'education_college_attainment', 'agency_contact_person',
+      'separation_reason'
     ].forEach(field => validateEmployeeTextField(body, field, { max: field.includes('school') ? 180 : 120 }));
+
+    validateEmployeeTextField(body, 'offboarding_remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
 
     ['position', 'shift_schedule', 'salary_grade', 'bank_name', 'agency_name'].forEach(field => {
       validateEmployeeTextField(body, field, { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
@@ -941,7 +976,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     ['gender', 'nationality', 'marital_status', 'blood_type', 'employment_type', 'hiring_type', 'deployment_status', 'employee_level', 'status', 'tax_status']
       .forEach(field => validateEmployeeEnumField(body, field));
 
-    ['date_of_birth', 'date_hired', 'end_of_contract', 'contract_start_date', 'contract_end_date'].forEach(field => {
+    ['date_of_birth', 'date_hired', 'end_of_contract', 'contract_start_date', 'contract_end_date', 'separation_date'].forEach(field => {
       validateEmployeeDateField(body, field, { noFuture: field === 'date_of_birth' });
     });
     validateDateOrder(body, 'date_hired', 'end_of_contract');
@@ -1403,6 +1438,13 @@ async function ensureEmployeeSetupSchema(pool) {
 }
 
 async function ensureEmployeeLifecycleColumns(pool) {
+  const [statusColumns] = await pool.execute("SHOW COLUMNS FROM employees LIKE 'status'");
+  if (statusColumns.length && !String(statusColumns[0].Type || '').includes('Terminated')) {
+    await pool.execute(
+      "ALTER TABLE employees MODIFY COLUMN status ENUM('Active','Inactive','Resigned','Terminated','End of Contract','Suspended') NOT NULL DEFAULT 'Active'"
+    );
+  }
+
   const columns = [
     ['hiring_type', "ENUM('Direct Hire','Agency-Hired') NULL DEFAULT 'Direct Hire'"],
     ['agency_name', 'VARCHAR(180) NULL'],
@@ -1412,6 +1454,9 @@ async function ensureEmployeeLifecycleColumns(pool) {
     ['contract_start_date', 'DATE NULL'],
     ['contract_end_date', 'DATE NULL'],
     ['lifecycle_status', "ENUM('Active','Pending Onboarding','Pending Training','On Hold') NULL DEFAULT 'Active'"],
+    ['separation_date', 'DATE NULL'],
+    ['separation_reason', 'VARCHAR(120) NULL'],
+    ['offboarding_remarks', 'VARCHAR(500) NULL'],
   ];
 
   for (const [name, definition] of columns) {
@@ -1761,6 +1806,18 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
     await ensurePhilippineAddressColumns(pool);
+    const requestedStatus = String(req.query.status || '').trim();
+    const includeAllStatuses = /^(all|all status|all statuses)$/i.test(requestedStatus);
+    const employeeWhere = [];
+    const employeeParams = [];
+    if (!includeAllStatuses) {
+      if (requestedStatus && EMPLOYEE_ENUMS.status.has(requestedStatus)) {
+        employeeWhere.push('e.status = ?');
+        employeeParams.push(requestedStatus);
+      } else {
+        employeeWhere.push("COALESCE(e.status, 'Active') = 'Active'");
+      }
+    }
     const [rows] = await pool.execute(
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
               e.work_email, e.mailing_address, e.mailing_address_lat, e.mailing_address_lng, e.mailing_address_same_as_home,
@@ -1781,7 +1838,8 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
               e.education_vocational_school, e.education_vocational_attainment, e.education_vocational_units, e.education_vocational_from, e.education_vocational_to, e.education_vocational_year_graduated,
               e.education_college_school, e.education_college_attainment, e.education_college_units, e.education_college_from, e.education_college_to, e.education_college_year_graduated,
               e.department_id, e.position, e.employment_type, e.date_hired, e.end_of_contract, e.supervisor, e.work_location,
-              e.shift_schedule, e.employee_level, e.employment_history, e.status, e.wage_type_id,
+              e.shift_schedule, e.employee_level, e.employment_history, e.status, e.status AS employment_status,
+              e.separation_date, e.separation_reason, e.offboarding_remarks, e.wage_type_id,
               e.salary_grade, e.allowances, e.payroll_schedule,
               e.sss_number, e.philhealth_number, e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account,
               e.hiring_type, e.agency_name, e.agency_contact_person, e.agency_contact_number,
@@ -1797,7 +1855,9 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+       ${employeeWhere.length ? `WHERE ${employeeWhere.join(' AND ')}` : ''}
        ORDER BY e.first_name`
+      , employeeParams
     );
     
     console.log('\n=== GET /api/employees ===');
@@ -1833,7 +1893,8 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
     await ensureEmployeeAuthColumns(pool);
     const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'create' });
     if (validationResponse) return validationResponse;
-    const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
+    const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
+    const normalizedEmployeeStatus = normalizeEmploymentStatus(employment_status || status);
     
     console.log('\n=== POST /api/employees ===');
     console.log('User role:', req.user.role);
@@ -2025,9 +2086,9 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
     const employeePasswordHash = await hashTemporaryPassword(generatedTemporaryPassword);
     
     const [result] = await pool.execute(
-      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, Password_Hash, Password_Changed_At, Failed_Login_Attempts, force_password_change)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0, 1)`,
-      [finalEmployeeCode, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active', salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, employeePasswordHash]
+      `INSERT INTO employees (employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, separation_date, separation_reason, offboarding_remarks, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, Password_Hash, Password_Changed_At, Failed_Login_Attempts, force_password_change)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0, 1)`,
+      [finalEmployeeCode, first_name, middle_name || null, last_name, suffix || null, email, contact_number || null, work_email || null, addresses.mailing.address || null, nationality || 'Filipino', marital_status || null, date_of_birth || null, place_of_birth || null, gender || null, blood_type || null, religion || null, addresses.home.address || null, addresses.current.address || null, emergency_contact_name || null, emergency_contact_num || null, emergency_contact_relationship || null, emergency_contact_secondary_num || null, emergency_contact_email || null, emergency_contact_address || null, education_school || null, education_attainment || null, education_units || null, education_year_graduated || null, education_jhs_school || null, education_jhs_attainment || null, education_jhs_from || null, education_jhs_to || null, education_jhs_year_graduated || null, education_shs_school || null, education_shs_attainment || null, education_shs_from || null, education_shs_to || null, education_shs_year_graduated || null, education_vocational_school || null, education_vocational_attainment || null, education_vocational_units || null, education_vocational_from || null, education_vocational_to || null, education_vocational_year_graduated || null, education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null, department_id || null, position || null, normalizedEmploymentType, date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, normalizedEmployeeStatus, separation_date || null, separation_reason || null, offboarding_remarks || null, salary_grade || null, allowances || null, payroll_schedule || null, sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, employeePasswordHash]
     );
     
     const employee_id = result.insertId;
@@ -2239,7 +2300,8 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
     const { id } = req.params; // numeric employee id
     const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'update' });
     if (validationResponse) return validationResponse;
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const normalizedEmployeeStatus = normalizeEmploymentStatus(employment_status || status);
     
     console.log('\n=== PUT /api/employees/:id ===');
     console.log('Employee ID:', id);
@@ -2314,6 +2376,7 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
         education_college_school=?, education_college_attainment=?, education_college_units=?, education_college_from=?, education_college_to=?, education_college_year_graduated=?,
         department_id=?, position=?, employment_type=?, hiring_type=?, agency_name=?, agency_contact_person=?, agency_contact_number=?, deployment_status=?, contract_start_date=?, contract_end_date=?,
         date_hired=?, end_of_contract=?, supervisor=?, work_location=?, shift_schedule=?, employee_level=?, employment_history=?, status=?,
+        separation_date=?, separation_reason=?, offboarding_remarks=?,
         salary_grade=?, allowances=?, payroll_schedule=?,
         sss_number=?, philhealth_number=?, pagibig_number=?, tin=?, tax_status=?, bank_name=?, bank_account=?
        WHERE id=? OR employee_code=?`,
@@ -2328,7 +2391,8 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
        education_college_school || null, education_college_attainment || null, education_college_units || null, education_college_from || null, education_college_to || null, education_college_year_graduated || null,
        department_id || null, position || null,
        employment_type || 'Regular', normalizedHiringType, agencyNameValue, agencyContactPersonValue, agencyContactNumberValue, deploymentStatusValue, contractStartValue, contractEndValue,
-       date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, status || 'Active',
+       date_hired || null, directoryEndOfContract, supervisor || null, work_location || null, shift_schedule || null, employee_level || null, employment_history || null, normalizedEmployeeStatus,
+       separation_date || null, separation_reason || null, offboarding_remarks || null,
        salary_grade || null, allowances || null, payroll_schedule || null,
        sss_number || null, philhealth_number || null, pagibig_number || null, tin || null, tax_status || null, bank_name || null, bank_account || null, id, id]
     );
@@ -2376,6 +2440,8 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
         employee_code: requestedEmployeeCode,
       });
     }
+
+    await deactivateLinkedUserAccounts(pool, existingEmployee?.id || Number(id), normalizedEmployeeStatus, req);
 
     // Save wage configuration if provided
     if (wage_type) {
@@ -2461,31 +2527,48 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
+    await ensureEmployeeLifecycleColumns(pool);
     const { id } = req.params; // id = numeric employee id
-    const { status } = req.body;
+    const { separation_date, separation_reason, offboarding_remarks } = req.body;
+    const requestedStatus = normalizeBlank(req.body.employment_status || req.body.status);
 
-    if (!status || !['Active', 'Inactive'].includes(status)) {
+    if (!requestedStatus || !EMPLOYEE_ENUMS.status.has(requestedStatus)) {
       await auditSecurityEvent(req, {
         action: 'blocked_employee_invalid_status',
         module: 'EMPLOYEE_SECURITY',
         targetTable: 'employees',
         targetRecord: id,
-        newValue: { field: 'status', value: status, path: req.originalUrl },
+        newValue: { field: 'status', value: requestedStatus, path: req.originalUrl },
         result: 'blocked',
       });
-      return res.status(400).json({ error: 'Invalid status. Must be Active or Inactive.' });
+      return res.status(400).json({ error: `Invalid status. Must be one of: ${EMPLOYEE_STATUS_OPTIONS.join(', ')}.` });
+    }
+    const status = requestedStatus;
+    try {
+      validateEmployeeDateField(req.body, 'separation_date');
+      validateEmployeeTextField(req.body, 'separation_reason', { max: 120 });
+      validateEmployeeTextField(req.body, 'offboarding_remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid status details.', field: error.field || null });
     }
 
     console.log('PATCH /api/employees/:id/status - Employee ID:', id, '- New Status:', status);
 
     const [result] = await pool.execute(
-      `UPDATE employees SET status = ? WHERE id = ?`,
-      [status, id]
+      `UPDATE employees
+          SET status = ?,
+              separation_date = ?,
+              separation_reason = ?,
+              offboarding_remarks = ?
+        WHERE id = ?`,
+      [status, req.body.separation_date || null, req.body.separation_reason || null, req.body.offboarding_remarks || null, id]
     );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Employee not found.' });
     }
+
+    await deactivateLinkedUserAccounts(pool, Number(id), status, req);
 
     return res.status(200).json({ message: `Employee status updated to ${status}.` });
   } catch (err) {

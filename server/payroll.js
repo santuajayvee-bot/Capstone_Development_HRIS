@@ -4560,6 +4560,13 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
 
     const calcDate = calculation_date || new Date().toISOString().split('T')[0];
     await ensurePieceRatePayrollSchema(pool);
+    const [employeeStatusRows] = await pool.execute(
+      "SELECT status FROM employees WHERE id = ? LIMIT 1",
+      [employee_id]
+    );
+    if (!employeeStatusRows.length || String(employeeStatusRows[0].status || 'Active') !== 'Active') {
+      return res.status(400).json({ error: 'Payroll can only be processed for active employees.' });
+    }
     const [wageRows] = await pool.execute('SELECT name FROM wage_types WHERE id = ? LIMIT 1', [wage_type_id]);
     const wageTypeName = wageRows[0]?.name || '';
     const isPieceRate = /piece/i.test(wageTypeName);

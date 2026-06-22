@@ -273,6 +273,17 @@ bash fabric-network/scripts/network-down.sh --volumes
 
 After a volume reset, rerun all three Fabric setup commands from section 4. A reset does not change MySQL payroll records; previously recorded local receipts may no longer exist in the new local Fabric ledger, so use a fresh local test database or test payroll data when demonstrating a reset.
 
+## AWS Deployment Environment
+
+Set the same account lockout variables in the AWS runtime environment, not only in the local `.env` file:
+
+```env
+AUTH_MAX_FAILED_ATTEMPTS=5
+AUTH_LOCKOUT_MINUTES=15
+```
+
+For EC2, add them to the process manager or deployment environment that starts Node.js. For Elastic Beanstalk/App Runner, add them as application environment properties. If AWS Systems Manager Parameter Store or Secrets Manager is used for configuration, create matching entries there and make sure the app loads them before startup.
+
 ## What Belongs In Git
 
 Commit:

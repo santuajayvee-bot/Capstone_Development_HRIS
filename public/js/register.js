@@ -1425,6 +1425,30 @@ function initializeEmployeeLifecycleControls() {
   toggleEmployeeLifecycleDecisionFields();
 }
 
+async function showEmployeeRegistrationFeedback({ isEditing, routedToOnboarding, data, employeeCode }) {
+  const savedCode = data?.employee_code || employeeCode || document.getElementById('emp-id')?.value || '';
+  const title = routedToOnboarding
+    ? 'Employee Routed to Onboarding'
+    : isEditing
+      ? 'Employee Updated'
+      : 'Employee Registered';
+  const fallbackMessage = routedToOnboarding
+    ? 'Employee/applicant routed to onboarding.'
+    : isEditing
+      ? 'Employee record updated successfully.'
+      : 'New employee account registered successfully.';
+  const message = [
+    data?.message || fallbackMessage,
+    savedCode ? `Employee ID: ${savedCode}` : ''
+  ].filter(Boolean).join('\n');
+
+  if (typeof showAlert === 'function') {
+    await showAlert(message, title, 'success');
+  } else {
+    alert(message);
+  }
+}
+
 async function saveEmployee() {
   // Prevent double submission
   if (IS_SAVING) {
@@ -1637,7 +1661,7 @@ async function saveEmployee() {
     }
     return res.json();
   })
-  .then(data => {
+  .then(async data => {
     console.log('Response data:', data);
     if (data.employee_code) {
       empId = data.employee_code;
@@ -1646,10 +1670,7 @@ async function saveEmployee() {
     }
     routedToOnboarding = data.routed_to === 'onboarding';
     savedEmployeeNumericId = routedToOnboarding ? null : (data.id || savedEmployeeNumericId);
-    const message = routedToOnboarding
-      ? (data.message || 'Employee/applicant routed to onboarding.')
-      : (isEditing ? 'Employee updated successfully!' : 'Employee added successfully!');
-    alert(message);
+    await showEmployeeRegistrationFeedback({ isEditing, routedToOnboarding, data, employeeCode: savedEmployeeCode || empId });
     removeActiveEmployeeDraftAfterSave();
     IS_SAVING = false;  // Reset double-submit flag
 

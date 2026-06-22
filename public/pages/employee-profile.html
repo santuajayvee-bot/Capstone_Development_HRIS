@@ -254,9 +254,14 @@
             <label>Job Title / Position<select id="profile-edit-position"><option value="">Select department first</option></select></label>
             <label>Employee Type<select id="profile-edit-type"><option>Regular</option><option>Probationary</option><option>Contractual</option></select></label>
             <label>Hiring Classification<select id="profile-edit-hiring-type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
-            <label>Employment Status<select id="profile-edit-status"><option>Active</option><option>Inactive</option></select></label>
+            <label>Employment Status<select id="profile-edit-status" required><option>Active</option><option>Inactive</option><option>Resigned</option><option>Terminated</option><option>End of Contract</option><option>Suspended</option></select></label>
             <label>Date Hired<input id="profile-edit-hired" type="date"></label>
             <label>End of Contract<input id="profile-edit-end-contract" type="date"></label>
+            <div id="profile-edit-offboarding-fields" class="profile-form-grid" style="grid-column:1 / -1; display:none;">
+              <label>Separation Date<input id="profile-edit-separation-date" type="date"></label>
+              <label>Separation Reason<input id="profile-edit-separation-reason" type="text" maxlength="120"></label>
+              <label style="grid-column:1 / -1;">Offboarding Remarks<textarea id="profile-edit-offboarding-remarks" maxlength="500"></textarea></label>
+            </div>
             <div id="profile-edit-agency-fields" class="profile-form-grid" style="grid-column:1 / -1; display:none;">
               <label>Agency Name<input id="profile-edit-agency-name" type="text" placeholder="Agency name"></label>
               <label>Agency Contact Person<input id="profile-edit-agency-contact-person" type="text" placeholder="Contact person"></label>

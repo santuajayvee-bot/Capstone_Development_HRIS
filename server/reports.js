@@ -29,6 +29,8 @@ const REPORTS = [
   ['department-summary', 'Department Summary', 'HR Reports', 'Employee count and active headcount by department.', BASE_FORMATS],
   ['position-summary', 'Position Summary', 'HR Reports', 'Configured positions and employee counts by department.', BASE_FORMATS],
   ['active-inactive-employees', 'Active / Inactive Employees', 'HR Reports', 'Employee status report for active and inactive workers.', BASE_FORMATS],
+  ['inactive-separated-employees', 'Inactive / Separated Employees', 'HR Reports', 'Separated, inactive, suspended, and offboarded employee records.', BASE_FORMATS],
+  ['employee-status-summary', 'Employee Status Summary', 'HR Reports', 'Employee headcount grouped by employment status.', BASE_FORMATS],
   ['employee-lifecycle', 'Employee Lifecycle', 'HR Reports', 'Hiring type, deployment status, contract dates, and lifecycle status.', BASE_FORMATS],
   ['employee-profile-summary', 'Employee Profile Summary', 'HR Reports', 'Printable employee profile summary for selected employees.', BASE_FORMATS],
 
@@ -173,6 +175,9 @@ async function employeeReport(filters, mode) {
   const where = [];
   const params = [];
   employeeFilters(where, params, filters);
+  if (mode === 'inactive-separated-employees') {
+    where.push("COALESCE(e.status, 'Active') <> 'Active'");
+  }
 
   const query = `
     SELECT
@@ -189,6 +194,9 @@ async function employeeReport(filters, mode) {
       COALESCE(e.deployment_status, '-') AS "Deployment Status",
       COALESCE(e.lifecycle_status, '-') AS "Lifecycle Status",
       COALESCE(e.status, '-') AS "Status",
+      DATE_FORMAT(e.separation_date, '%Y-%m-%d') AS "Separation Date",
+      COALESCE(e.separation_reason, '-') AS "Separation Reason",
+      COALESCE(e.offboarding_remarks, '-') AS "Offboarding Remarks",
       DATE_FORMAT(e.date_hired, '%Y-%m-%d') AS "Date Hired"
     FROM employees e
     LEFT JOIN departments d ON d.id = e.department_id
@@ -197,6 +205,19 @@ async function employeeReport(filters, mode) {
     ORDER BY d.name, e.last_name, e.first_name
   `;
   return safeQuery('employees', query, params);
+}
+
+async function employeeStatusSummary() {
+  return safeQuery('employees', `
+    SELECT
+      COALESCE(status, 'Active') AS "Employment Status",
+      COUNT(*) AS "Employees",
+      SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS "Active Count",
+      SUM(CASE WHEN status <> 'Active' OR status IS NULL THEN 1 ELSE 0 END) AS "Non-Active Count"
+    FROM employees
+    GROUP BY COALESCE(status, 'Active')
+    ORDER BY FIELD(COALESCE(status, 'Active'), 'Active', 'Suspended', 'Inactive', 'Resigned', 'Terminated', 'End of Contract')
+  `);
 }
 
 async function departmentSummary() {
@@ -542,6 +563,7 @@ async function reportRows(report, filters) {
   if (report.category === 'HR Reports' || report.id === 'employee-profile-summary' || report.id === 'employment-certificate') {
     if (report.id === 'department-summary') return departmentSummary();
     if (report.id === 'position-summary') return positionSummary(filters);
+    if (report.id === 'employee-status-summary') return employeeStatusSummary();
     return employeeReport(filters, report.id);
   }
   if (report.category === 'Attendance Reports' || report.id === 'attendance-summary-sheet' || report.id === 'attendance-certification') {
