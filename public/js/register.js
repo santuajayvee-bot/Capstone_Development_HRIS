@@ -381,18 +381,10 @@ function collectEmployeeAddressPayload(mode = 'emp') {
   const currentSame = config.current.same ? document.getElementById(config.current.same)?.checked : false;
   const mailingSame = config.mailing.same ? document.getElementById(config.mailing.same)?.checked : false;
   const errors = [];
-  const selected = input => input?.dataset.addressSelected === '1';
 
   if (!home?.value.trim()) errors.push('Home Address is required.');
   if (!currentSame && !current?.value.trim()) errors.push('Current Address is required unless Same as Home Address is checked.');
   if (!mailingSame && !mailing?.value.trim()) errors.push('Mailing Address is required unless Same as Home Address is checked.');
-  if (home?.value.trim() && !selected(home)) errors.push('Home Address must be selected from address suggestions.');
-  // The verified Home Address is authoritative when either same-as-home flag is set.
-  // Do not require the user to select the same address three separate times.
-  const currentSelection = currentSame ? home : current;
-  const mailingSelection = mailingSame ? home : mailing;
-  if (currentSelection?.value.trim() && !selected(currentSelection)) errors.push('Current Address must be selected from address suggestions.');
-  if (mailingSelection?.value.trim() && !selected(mailingSelection)) errors.push('Mailing Address must be selected from address suggestions.');
   const phInputIds = [...new Set([config.home.input, currentSame ? config.home.input : config.current.input, mailingSame ? config.home.input : config.mailing.input])];
   const phAddress = window.collectPhilippineAddressPayload
     ? window.collectPhilippineAddressPayload(phInputIds)

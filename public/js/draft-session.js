@@ -131,14 +131,7 @@ const DraftSession = (() => {
   }
 
   function ensureStatus(root) {
-    if (!root) return null;
-    let target = root.querySelector?.('.draft-save-status');
-    if (target) return target;
-    target = document.createElement('span');
-    target.className = 'draft-save-status';
-    const actionArea = root.querySelector?.('button[type="submit"], .btn-primary, .btn-green')?.parentElement || root;
-    actionArea.appendChild(target);
-    return target;
+    return null;
   }
 
   function setStatus(session, text, state = '') {
@@ -168,7 +161,7 @@ const DraftSession = (() => {
       });
       session.dirty = false;
       session.savedAt = new Date();
-      setStatus(session, 'Saved just now', 'saved');
+      setStatus(session, '', '');
     } catch (error) {
       setStatus(session, 'Draft save failed', 'error');
       console.error('[DraftSession] save failed:', error);

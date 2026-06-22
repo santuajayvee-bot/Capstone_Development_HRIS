@@ -587,20 +587,6 @@ function normalizeAddressPayload(body) {
   return { home, current, mailing, sameCurrent, sameMailing };
 }
 
-function hasStructuredAddressParts(address) {
-  return Boolean(address.region && address.province && address.city_municipality && address.barangay && address.street_address);
-}
-
-function hasCoordinates(address) {
-  return address.lat !== undefined && address.lat !== null && address.lat !== ''
-    && address.lng !== undefined && address.lng !== null && address.lng !== ''
-    && Number.isFinite(Number(address.lat)) && Number.isFinite(Number(address.lng));
-}
-
-function hasSelectedAddress(address) {
-  return hasCoordinates(address) || hasStructuredAddressParts(address) || Boolean(address.place_id);
-}
-
 async function ensurePhilippineAddressColumns(pool) {
   const columns = [
     ['residential_address_region', 'VARCHAR(120) NULL'],
@@ -648,16 +634,6 @@ function validateEmployeeAddresses(body) {
   if (!addresses.home.address) errors.push('Home Address is required.');
   if (!addresses.sameCurrent && !addresses.current.address) errors.push('Current Address is required unless Same as Home Address is checked.');
   if (!addresses.sameMailing && !addresses.mailing.address) errors.push('Mailing Address is required unless Same as Home Address is checked.');
-  if (addresses.home.address && !hasSelectedAddress(addresses.home)) errors.push('Home Address must be selected from address suggestions.');
-  // When marked as the same address, normalizeAddressPayload already derives the
-  // value from Home Address. Only independently entered addresses need their own
-  // suggestion-selection proof.
-  if (!addresses.sameCurrent && addresses.current.address && !hasSelectedAddress(addresses.current)) {
-    errors.push('Current Address must be selected from address suggestions.');
-  }
-  if (!addresses.sameMailing && addresses.mailing.address && !hasSelectedAddress(addresses.mailing)) {
-    errors.push('Mailing Address must be selected from address suggestions.');
-  }
 
   return { errors, addresses };
 }
