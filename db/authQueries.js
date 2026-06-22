@@ -265,6 +265,84 @@ async function recordFailedLoginFailure(employeeId, options = {}) {
   }
 }
 
+async function recordFailedLoginFailureForUser(userId, options = {}) {
+  ensureEmployeeId(userId);
+
+  const maxAttempts = normalizeMaxFailedAttempts(options.maxAttempts);
+  const lockMinutes = normalizeLockMinutes(options.lockMinutes);
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employee_id, failed_login_attempts, account_locked_until
+         FROM users
+        WHERE id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [userId]
+    );
+    const user = rows[0];
+    if (!user) {
+      await connection.rollback();
+      return null;
+    }
+
+    if (isFutureDate(user.account_locked_until)) {
+      await connection.commit();
+      return {
+        attempts: Number(user.failed_login_attempts || 0),
+        locked: true,
+        newlyLocked: false,
+        lockedUntil: user.account_locked_until,
+      };
+    }
+
+    const previousAttempts = user.account_locked_until ? 0 : Number(user.failed_login_attempts || 0);
+    const attempts = previousAttempts + 1;
+    const newlyLocked = attempts >= maxAttempts;
+
+    await connection.execute(
+      `UPDATE users
+          SET failed_login_attempts = ?,
+              account_locked_until = CASE WHEN ? THEN DATE_ADD(NOW(), INTERVAL ? MINUTE) ELSE NULL END
+        WHERE id = ?`,
+      [attempts, newlyLocked ? 1 : 0, lockMinutes, user.id]
+    );
+
+    const [stateRows] = await connection.execute(
+      'SELECT failed_login_attempts, account_locked_until FROM users WHERE id = ? LIMIT 1',
+      [user.id]
+    );
+    const state = stateRows[0];
+
+    if (user.employee_id) {
+      await connection.execute(
+        `UPDATE employees
+            SET Failed_Login_Attempts = ?,
+                Locked_Until = ?
+          WHERE id = ?`,
+        [state.failed_login_attempts, state.account_locked_until, user.employee_id]
+      );
+    }
+
+    await connection.commit();
+    return {
+      attempts: Number(state.failed_login_attempts || 0),
+      locked: isFutureDate(state.account_locked_until),
+      newlyLocked,
+      lockedUntil: state.account_locked_until,
+    };
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    logAndThrow(error, 'recordFailedLoginFailureForUser');
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
 async function resetFailedLoginAttempts(employeeId) {
   ensureEmployeeId(employeeId);
 
@@ -288,6 +366,32 @@ async function resetFailedLoginAttempts(employeeId) {
     return result.affectedRows;
   } catch (error) {
     logAndThrow(error, 'resetFailedLoginAttempts');
+  }
+}
+
+async function resetFailedLoginAttemptsForUser(userId) {
+  ensureEmployeeId(userId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE users
+          SET failed_login_attempts = 0,
+              account_locked_until = NULL
+        WHERE id = ?`,
+      [userId]
+    );
+    await pool.execute(
+      `UPDATE employees e
+        JOIN users u ON u.employee_id = e.id
+           SET e.Failed_Login_Attempts = 0,
+               e.Locked_Until = NULL
+         WHERE u.id = ?`,
+      [userId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'resetFailedLoginAttemptsForUser');
   }
 }
 
@@ -647,7 +751,9 @@ module.exports = {
   findUserByUserId,
   incrementFailedLoginAttempts,
   recordFailedLoginFailure,
+  recordFailedLoginFailureForUser,
   resetFailedLoginAttempts,
+  resetFailedLoginAttemptsForUser,
   lockUserAccount,
   updateLastLogin,
   updatePasswordHash,

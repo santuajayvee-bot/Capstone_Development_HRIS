@@ -8,8 +8,8 @@ const {
 } = require('../services/tokenService');
 const {
   findUserByEmail,
-  recordFailedLoginFailure,
-  resetFailedLoginAttempts,
+  recordFailedLoginFailureForUser,
+  resetFailedLoginAttemptsForUser,
   updateLastLogin,
   createUserSession,
   createAuditLog,
@@ -127,7 +127,7 @@ async function issueAuthenticatedSession(req, res, user) {
   const ipAddress = getRequestIp(req);
   const userAgent = getUserAgent(req);
 
-  await resetFailedLoginAttempts(employeeId);
+  await resetFailedLoginAttemptsForUser(user.id);
   await updateLastLogin(employeeId);
 
   const authenticatedUser = await buildAuthenticatedUser(user);
@@ -227,7 +227,7 @@ async function login(req, res) {
     const passwordMatches = await verifyPassword(user.Password_Hash, password);
 
     if (!passwordMatches) {
-      const failure = await recordFailedLoginFailure(employeeId, {
+      const failure = await recordFailedLoginFailureForUser(user.id, {
         maxAttempts: MAX_FAILED_ATTEMPTS,
         lockMinutes: LOCK_MINUTES,
       });
