@@ -277,7 +277,9 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      `SELECT id, employee_id, failed_login_attempts, account_locked_until
+      `SELECT id, employee_id, failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked,
+              account_locked_until IS NOT NULL AND account_locked_until <= NOW() AS lock_expired
          FROM users
         WHERE id = ?
         LIMIT 1
@@ -290,7 +292,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
       return null;
     }
 
-    if (isFutureDate(user.account_locked_until)) {
+    if (Number(user.is_locked || 0) === 1) {
       await connection.commit();
       return {
         attempts: Number(user.failed_login_attempts || 0),
@@ -300,7 +302,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
       };
     }
 
-    const previousAttempts = user.account_locked_until ? 0 : Number(user.failed_login_attempts || 0);
+    const previousAttempts = Number(user.lock_expired || 0) === 1 ? 0 : Number(user.failed_login_attempts || 0);
     const attempts = previousAttempts + 1;
     const newlyLocked = attempts >= maxAttempts;
 
@@ -313,7 +315,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     );
 
     const [stateRows] = await connection.execute(
-      'SELECT failed_login_attempts, account_locked_until FROM users WHERE id = ? LIMIT 1',
+      'SELECT failed_login_attempts, account_locked_until, account_locked_until > NOW() AS is_locked FROM users WHERE id = ? LIMIT 1',
       [user.id]
     );
     const state = stateRows[0];
@@ -331,7 +333,7 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     await connection.commit();
     return {
       attempts: Number(state.failed_login_attempts || 0),
-      locked: isFutureDate(state.account_locked_until),
+      locked: Number(state.is_locked || 0) === 1,
       newlyLocked,
       lockedUntil: state.account_locked_until,
     };
@@ -348,7 +350,8 @@ async function getUserLoginLockState(userId) {
 
   try {
     const [rows] = await pool.execute(
-      `SELECT failed_login_attempts, account_locked_until
+      `SELECT failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked
          FROM users
         WHERE id = ?
         LIMIT 1`,
@@ -358,7 +361,7 @@ async function getUserLoginLockState(userId) {
     if (!state) return null;
     return {
       attempts: Number(state.failed_login_attempts || 0),
-      locked: isFutureDate(state.account_locked_until),
+      locked: Number(state.is_locked || 0) === 1,
       lockedUntil: state.account_locked_until,
     };
   } catch (error) {
