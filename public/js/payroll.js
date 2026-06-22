@@ -293,7 +293,17 @@ function renderPayrollRecords(records) {
         </tr>
       </thead>
       <tbody>
-        ${records.map(r => `
+        ${records.map(r => {
+          const normalizedStatus = String(r.status || 'Draft').trim();
+          const normalizedStatusKey = normalizedStatus.toLowerCase();
+          const recordJson = JSON.stringify(r).replace(/"/g, '&quot;');
+          const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
+            ? `<button class="btn btn-primary btn-sm" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
+            : '';
+          const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
+            ? `<button class="btn btn-primary btn-sm" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Record on Blockchain</button>`
+            : '';
+          return `
           <tr>
             <td>CALC-${String(r.id).padStart(5, '0')}</td>
             <td>${r.employee_name}<br><span style="color:var(--muted); font-size:12px;">${r.employee_code}</span></td>
@@ -308,10 +318,14 @@ function renderPayrollRecords(records) {
               </div>
             </td>
             <td><strong style="color:var(--accent);">PHP ${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></td>
-            <td>${payrollBadge(r.status || 'Draft')}</td>
-            <td><button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${JSON.stringify(r).replace(/"/g, '&quot;')})">View</button></td>
+            <td>${payrollBadge(normalizedStatus)}</td>
+            <td>
+              ${approvalAction}
+              ${blockchainRecordAction}
+              <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${recordJson})">View</button>
+            </td>
           </tr>
-        `).join('')}
+        `; }).join('')}
       </tbody>
     </table>
   `;
@@ -1419,10 +1433,12 @@ function showCalculationBreakdown(record) {
       <td class="text-right">${value}</td>
     </tr>
   `;
-  const approvalAction = record.status === 'Submitted' && canApproveSalaryCalculations()
+  const normalizedStatus = String(record.status || '').trim();
+  const normalizedStatusKey = normalizedStatus.toLowerCase();
+  const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
     ? `<button class="btn btn-primary" type="button" onclick="approveSalaryCalculation(${Number(record.id)})">Approve & Finalize</button>`
     : '';
-  const blockchainRecordAction = record.status === 'Approved' && canApproveSalaryCalculations()
+  const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
     ? `<button class="btn btn-primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(record.id)})">Record on Blockchain</button>`
     : '';
 
