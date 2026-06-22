@@ -888,7 +888,10 @@ async function continueSalaryDraft(record) {
 }
 
 function canApproveSalaryCalculations() {
-  return typeof getUser === 'function' && getUser()?.role === 'payroll_manager';
+  if (typeof getUser !== 'function') return false;
+  const user = getUser();
+  return user?.role === 'payroll_manager'
+    || (Array.isArray(user?.permissions) && user.permissions.includes('payroll.approve'));
 }
 
 async function approveSalaryCalculation(calculationId) {
