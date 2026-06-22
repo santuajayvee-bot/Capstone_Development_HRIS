@@ -64,8 +64,8 @@ const USER_SELECT_FIELDS = `
   COALESCE(u.password_hash, e.Password_Hash) AS Password_Hash,
   u.role_id AS Role_ID,
   r.access_level AS Access_Level,
-  COALESCE(e.Failed_Login_Attempts, u.failed_login_attempts, 0) AS Failed_Login_Attempts,
-  COALESCE(e.Locked_Until, u.account_locked_until) AS Locked_Until,
+  COALESCE(u.failed_login_attempts, e.Failed_Login_Attempts, 0) AS Failed_Login_Attempts,
+  COALESCE(u.account_locked_until, e.Locked_Until) AS Locked_Until,
   COALESCE(u.password_changed_at, e.Password_Changed_At) AS Password_Changed_At,
   COALESCE(e.Last_Login_At, u.last_login_at, u.last_login) AS Last_Login_At,
   (COALESCE(u.force_password_change, 0) OR COALESCE(e.force_password_change, 0)) AS force_password_change,
@@ -340,6 +340,29 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
     logAndThrow(error, 'recordFailedLoginFailureForUser');
   } finally {
     if (connection) connection.release();
+  }
+}
+
+async function getUserLoginLockState(userId) {
+  ensureEmployeeId(userId);
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT failed_login_attempts, account_locked_until
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
+      [userId]
+    );
+    const state = rows[0] || null;
+    if (!state) return null;
+    return {
+      attempts: Number(state.failed_login_attempts || 0),
+      locked: isFutureDate(state.account_locked_until),
+      lockedUntil: state.account_locked_until,
+    };
+  } catch (error) {
+    logAndThrow(error, 'getUserLoginLockState');
   }
 }
 
@@ -752,6 +775,7 @@ module.exports = {
   incrementFailedLoginAttempts,
   recordFailedLoginFailure,
   recordFailedLoginFailureForUser,
+  getUserLoginLockState,
   resetFailedLoginAttempts,
   resetFailedLoginAttemptsForUser,
   lockUserAccount,

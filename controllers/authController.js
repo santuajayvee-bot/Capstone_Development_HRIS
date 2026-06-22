@@ -9,6 +9,7 @@ const {
 const {
   findUserByEmail,
   recordFailedLoginFailureForUser,
+  getUserLoginLockState,
   resetFailedLoginAttemptsForUser,
   updateLastLogin,
   createUserSession,
@@ -122,6 +123,16 @@ function invalidLoginResponse(res) {
   });
 }
 
+function invalidLoginAttemptResponse(res, failure) {
+  const attempts = Number(failure?.attempts || 0);
+  return res.status(401).json({
+    success: false,
+    message: INVALID_LOGIN_MESSAGE,
+    attempts,
+    remaining_attempts: Math.max(MAX_FAILED_ATTEMPTS - attempts, 0),
+  });
+}
+
 async function issueAuthenticatedSession(req, res, user) {
   const employeeId = getAuthEmployeeId(user);
   const ipAddress = getRequestIp(req);
@@ -209,7 +220,8 @@ async function login(req, res) {
       });
     }
 
-    if (isFutureDate(user.Locked_Until)) {
+    const lockState = await getUserLoginLockState(user.id);
+    if (lockState?.locked || isFutureDate(user.Locked_Until)) {
       await safeCreateAuditLog({
         Employee_ID: employeeId,
         Action_Type: 'LOGIN_BLOCKED_LOCKED_ACCOUNT',
@@ -254,7 +266,7 @@ async function login(req, res) {
         });
       }
 
-      return invalidLoginResponse(res);
+      return invalidLoginAttemptResponse(res, failure);
     }
 
     return issueAuthenticatedSession(req, res, user);
