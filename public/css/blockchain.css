@@ -34,3 +34,82 @@
 /* Transaction logs */
 .tx-hash { font-family: monospace; font-size: 11px; color: var(--muted); }
 .tx-block { color: var(--accent); }
+
+.blockchain-table .btn {
+  white-space: nowrap;
+}
+
+.bc-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bc-pagination-info {
+  min-width: 0;
+}
+
+.bc-pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bc-pagination-controls span {
+  white-space: nowrap;
+}
+
+.bc-pagination .btn[disabled] {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+@media (max-width: 760px) {
+  .block-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bc-pagination {
+    align-items: stretch;
+    flex-direction: column;
+    padding-top: 12px;
+  }
+
+  .bc-pagination-info {
+    text-align: center;
+  }
+
+  .bc-pagination-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .bc-pagination-controls span {
+    grid-column: 1 / -1;
+    order: -1;
+    text-align: center;
+  }
+
+  .bc-pagination .btn {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .block-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .bc-pagination-controls {
+    gap: 6px;
+  }
+}

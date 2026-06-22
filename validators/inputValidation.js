@@ -18,18 +18,24 @@ const NAME_FIELDS = new Set([
 ]);
 
 const INTEGER_FIELDS = new Set([
-  'contact_number',
   'contact_num',
   'mobile',
   'phone_number',
+  'emergency_contact_phone',
+  'employee_number',
+  'employee_id',
+]);
+
+const PHONE_FIELDS = new Set([
+  'contact_number',
   'emergency_contact_num',
   'emergency_contact_number',
   'emergency_contact_secondary_num',
   'emergency_contact_secondary_number',
-  'emergency_contact_phone',
   'agency_contact_number',
-  'employee_number',
-  'employee_id',
+]);
+
+const GOVERNMENT_ID_FIELDS = new Set([
   'sss_number',
   'sss',
   'philhealth_number',
@@ -74,6 +80,11 @@ const DECIMAL_FIELDS = new Set([
   'meal_allowance',
   'transport_allowance',
   'bonus_allowance',
+  'allowance',
+  'deduction',
+  'piece_rate',
+  'piece_rate_amount',
+  'trip_count',
   'total_allowances',
   'overtime_amount',
 ]);
@@ -151,6 +162,14 @@ function isSafeText(value) {
   return ![...SQL_INJECTION_PATTERNS, ...XSS_PATTERNS].some(pattern => pattern.test(value));
 }
 
+function unsafeCategories(value) {
+  if (typeof value !== 'string') return [];
+  const categories = [];
+  if (SQL_INJECTION_PATTERNS.some(pattern => pattern.test(value))) categories.push('sql_injection');
+  if (XSS_PATTERNS.some(pattern => pattern.test(value))) categories.push('xss');
+  return categories;
+}
+
 function isName(value) {
   return typeof value === 'string' && /^[\p{L}]+(?:[ '-][\p{L}]+)*$/u.test(value);
 }
@@ -158,6 +177,23 @@ function isName(value) {
 function isIntegerText(value) {
   return (typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0)
     || (typeof value === 'string' && /^\d+$/.test(value));
+}
+
+function isPhilippinePhone(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  const normalized = String(value).trim().replace(/[\s()-]/g, '');
+  return /^(09\d{9}|\+639\d{9})$/.test(normalized);
+}
+
+function isGovernmentId(value, fieldName) {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  const text = String(value).trim();
+  if (!/^[\d-]+$/.test(text)) return false;
+  const digits = text.replace(/\D/g, '');
+  if (/sss/.test(fieldName)) return /^\d{10}$/.test(digits);
+  if (/philhealth|pagibig/.test(fieldName)) return /^\d{12}$/.test(digits);
+  if (/tin|tax_id/.test(fieldName)) return /^\d{9,12}$/.test(digits);
+  return false;
 }
 
 function isDecimalText(value) {
@@ -186,7 +222,7 @@ function validateAndSanitize(value, fieldName, errors, path = fieldName) {
       return value;
     }
     if (!isSafeText(value)) {
-      errors.push({ field: path, message: UNSAFE_INPUT_MESSAGE });
+      errors.push({ field: path, message: UNSAFE_INPUT_MESSAGE, value });
       return value;
     }
   }
@@ -206,6 +242,10 @@ function validateAndSanitize(value, fieldName, errors, path = fieldName) {
 
   if (NAME_FIELDS.has(normalizedField) && !isName(value)) {
     errors.push({ field: path, message: NAME_MESSAGE });
+  } else if (PHONE_FIELDS.has(normalizedField) && !isPhilippinePhone(value)) {
+    errors.push({ field: path, message: 'Please enter a valid Philippine phone number.' });
+  } else if (GOVERNMENT_ID_FIELDS.has(normalizedField) && !isGovernmentId(value, normalizedField)) {
+    errors.push({ field: path, message: NUMERIC_MESSAGE });
   } else if (INTEGER_FIELDS.has(normalizedField) && !isIntegerText(value)) {
     errors.push({ field: path, message: NUMERIC_MESSAGE });
   } else if (DECIMAL_FIELDS.has(normalizedField)) {
@@ -243,12 +283,21 @@ function validateRequestBody(req, res, next) {
 
   if (errors.length) {
     const messages = [...new Set(errors.map(error => error.message))];
-    const unsafeFields = errors.filter(error => error.message === UNSAFE_INPUT_MESSAGE).map(error => error.field);
+    const unsafeErrors = errors.filter(error => error.message === UNSAFE_INPUT_MESSAGE);
+    const unsafeFields = unsafeErrors.map(error => error.field);
+    const attackTypes = [...new Set(unsafeErrors.flatMap(error => unsafeCategories(error.value || '')))];
+    const action = attackTypes.includes('sql_injection')
+      ? 'blocked_sql_injection_attempt'
+      : attackTypes.includes('xss')
+        ? 'blocked_xss_attempt'
+        : unsafeFields.length
+          ? 'blocked_injection_or_xss_attempt'
+          : 'blocked_invalid_input_attempt';
     auditSecurityEvent(req, {
-      action: unsafeFields.length ? 'blocked_injection_or_xss_attempt' : 'blocked_invalid_input_attempt',
+      action,
       module: unsafeFields.length ? 'INPUT_ATTACK_VALIDATION' : 'INPUT_VALIDATION',
       targetTable: req.originalUrl || null,
-      newValue: { fields: errors.map(error => error.field), unsafeFields },
+      newValue: { fields: errors.map(error => error.field), unsafeFields, attackTypes },
       result: 'blocked',
     }).catch(() => {});
     return res.status(400).json({

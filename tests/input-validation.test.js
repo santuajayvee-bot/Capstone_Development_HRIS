@@ -32,6 +32,19 @@ const accepted = validate({
 assert.strictEqual(accepted.nextCalled, true);
 assert.strictEqual(accepted.req.body.first_name, 'Anne-Marie');
 
+const acceptedPayrollNumbers = validate({
+  salary: '15000',
+  rate: '610.00',
+  piece_rate: '0.42',
+  allowance: '250',
+  deduction: '75.50',
+  output_quantity: '2322',
+  trip_count: '3',
+  gross_pay: '16750.25',
+  net_pay: '15500.00',
+});
+assert.strictEqual(acceptedPayrollNumbers.nextCalled, true);
+
 const multiWordName = validate({ first_name: '  Juan   Dela Cruz  ' });
 assert.strictEqual(multiWordName.nextCalled, true);
 assert.strictEqual(multiWordName.req.body.first_name, 'Juan Dela Cruz');
@@ -58,6 +71,14 @@ assert.strictEqual(unsafe.response.payload.message, UNSAFE_INPUT_MESSAGE);
 
 const unsafeSql = validate({ remarks: "' OR 1=1 --" });
 assert.strictEqual(unsafeSql.response.payload.message, UNSAFE_INPUT_MESSAGE);
+
+const unsafePayrollNumberSql = validate({ piece_rate: "' OR '1'='1" });
+assert.strictEqual(unsafePayrollNumberSql.response.code, 400);
+assert.strictEqual(unsafePayrollNumberSql.response.payload.message, UNSAFE_INPUT_MESSAGE);
+
+const unsafePayrollDrop = validate({ allowance: '0; DROP TABLE employees' });
+assert.strictEqual(unsafePayrollDrop.response.code, 400);
+assert.strictEqual(unsafePayrollDrop.response.payload.message, UNSAFE_INPUT_MESSAGE);
 
 const unsafeEventHandler = validate({ residential_address: '<img src=x onerror=alert(1)>' });
 assert.strictEqual(unsafeEventHandler.response.payload.message, UNSAFE_INPUT_MESSAGE);

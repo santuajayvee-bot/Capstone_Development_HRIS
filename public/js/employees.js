@@ -542,27 +542,28 @@ function renderEmployees(list) {
   const pageEmployees = list.slice(startIndex, endIndex);
   
   const renderedRows = pageEmployees.map(e => {
+    const employeeId = Number(e.id);
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     
     return `
-    <tr onclick="openEmployeeProfile('${e.id}', 'personal')" style="cursor:pointer;" data-emp-id="${e.id}">
-      <td class="emp-id">${e.empCode}</td>
-      <td class="emp-name">${e.name}</td>
-      <td class="emp-email">${e.email}</td>
-      <td>${e.phone}</td>
-      <td>${e.city}</td>
-      <td>${e.dept}</td>
-      <td>${e.position}</td>
-      <td>${e.supervisor}</td>
+    <tr onclick="openEmployeeProfile('${employeeId}', 'personal')" style="cursor:pointer;" data-emp-id="${employeeId}">
+      <td class="emp-id">${escapeHtml(e.empCode)}</td>
+      <td class="emp-name">${escapeHtml(e.name)}</td>
+      <td class="emp-email">${escapeHtml(e.email)}</td>
+      <td>${escapeHtml(e.phone)}</td>
+      <td>${escapeHtml(e.city)}</td>
+      <td>${escapeHtml(e.dept)}</td>
+      <td>${escapeHtml(e.position)}</td>
+      <td>${escapeHtml(e.supervisor)}</td>
       <td><span class="emp-status ${statusClass}">${statusDisplay}</span></td>
       <td class="emp-action" onclick="event.stopPropagation();">
         <div class="emp-action-menu">
-          <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${e.id}')">${employeeActionDotsIcon()}</button>
-          <div class="emp-action-dropdown" id="emp-action-menu-${e.id}">
-            <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${e.id}', 'personal')">View Profile</button>
-            <button class="emp-menu-item activate" type="button" onclick="setEmployeeStatus('${e.id}', 'Active')" ${e.status === 'Active' ? 'disabled' : ''}>Activate</button>
-            <button class="emp-menu-item deactivate" type="button" onclick="setEmployeeStatus('${e.id}', 'Inactive')" ${e.status === 'Inactive' ? 'disabled' : ''}>Deactivate</button>
+          <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${employeeId}')">${employeeActionDotsIcon()}</button>
+          <div class="emp-action-dropdown" id="emp-action-menu-${employeeId}">
+            <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${employeeId}', 'personal')">View Profile</button>
+            <button class="emp-menu-item activate" type="button" onclick="setEmployeeStatus('${employeeId}', 'Active')" ${e.status === 'Active' ? 'disabled' : ''}>Activate</button>
+            <button class="emp-menu-item deactivate" type="button" onclick="setEmployeeStatus('${employeeId}', 'Inactive')" ${e.status === 'Inactive' ? 'disabled' : ''}>Deactivate</button>
           </div>
         </div>
       </td>

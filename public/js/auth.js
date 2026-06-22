@@ -10,11 +10,11 @@ const ROLE_PERMISSIONS = {
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
+    'attendance', 'payroll', 'onboarding', 'employee-profile', 'self-service',
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
+    'attendance', 'payroll', 'reports', 'onboarding', 'employee-profile', 'self-service',
   ],
   system_admin: [
     'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain', 'self-service',
@@ -52,7 +52,6 @@ const NAV_CONFIG = {
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'payroll', icon: 'PR', label: 'Payroll' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
-    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   hr_manager: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
@@ -63,7 +62,6 @@ const NAV_CONFIG = {
     { page: 'payroll', icon: 'PR', label: 'Payroll' },
     { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
-    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   system_admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
@@ -224,6 +222,9 @@ function buildEmployeeBottomNav(user) {
 function canAccess(pageId) {
   const user = getUser();
   if (!user) return false;
+  if (pageId === 'blockchain') {
+    return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(user.role);
+  }
   if (pageId === 'self-service') return true;
   if (user.role === 'employee' && pageId === 'employee-profile') return true;
   if (pageId === 'requests') return user.role === 'employee';

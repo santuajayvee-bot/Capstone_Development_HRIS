@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const accountController = require('../controllers/accountController');
+const { auditSecurityEvent } = require('./security-controls');
 
 const router = express.Router();
 const HR_REVIEW_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
@@ -64,11 +65,85 @@ const CHANGE_REQUEST_FIELDS = {
   bank_name: { column: 'bank_name', label: 'Bank name' }
 };
 
+const SELF_SERVICE_FORBIDDEN_FIELDS = new Set([
+  'department_id', 'wage_type', 'wage_type_id', 'base_rate', 'allowance', 'allowances',
+  'payroll_schedule', 'salary_grade', 'employment_type', 'hiring_type', 'deployment_status',
+  'employee_level', 'status', 'position', 'supervisor', 'work_location', 'date_hired',
+  'end_of_contract', 'sss_number', 'philhealth_number', 'pagibig_number', 'tin',
+  'tax_status', 'bank_name', 'bank_account'
+]);
+const SELF_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/;
+const SELF_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#/-]+$/;
+const SELF_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
+
 let schemaReady;
 
 function cleanText(value, max = 500) {
   const text = String(value ?? '').trim();
   return text ? text.slice(0, max) : null;
+}
+
+function selfInvalid(field) {
+  const error = new Error(`Invalid input for ${field}.`);
+  error.status = 400;
+  error.field = field;
+  return error;
+}
+
+function selfNormalize(value) {
+  const text = String(value ?? '').trim();
+  return text === '' ? null : text;
+}
+
+function selfRejectUnsafe(field, value) {
+  const text = selfNormalize(value);
+  if (text == null) return null;
+  if (SELF_FORBIDDEN_PATTERN.test(text) || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(text)) throw selfInvalid(field);
+  return text;
+}
+
+function validateSelfProfileValue(field, value) {
+  if (field.endsWith('_same_as_home')) return value ? 1 : 0;
+  const text = selfRejectUnsafe(field, value);
+  if (text == null) return null;
+
+  if (field === 'email' || field === 'work_email' || field === 'emergency_contact_email') {
+    const email = text.toLowerCase();
+    if (email.length > 254 || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) throw selfInvalid(field);
+    return email;
+  }
+  if (field === 'contact_number' || field === 'emergency_contact_num') {
+    const phone = text.replace(/[\s()-]/g, '');
+    if (!/^(09\d{9}|\+639\d{9})$/.test(phone)) throw selfInvalid(field);
+    return phone;
+  }
+  if (field.endsWith('_lat') || field.endsWith('_lng')) {
+    const number = Number(text);
+    const isLat = field.endsWith('_lat');
+    if (!Number.isFinite(number) || number < (isLat ? -90 : -180) || number > (isLat ? 90 : 180)) throw selfInvalid(field);
+    return String(number);
+  }
+  if (field === 'emergency_contact_name' || field === 'emergency_contact_relationship') {
+    if (text.length > 120 || !SELF_TEXT_PATTERN.test(text)) throw selfInvalid(field);
+    return text.replace(/\s+/g, ' ');
+  }
+  if (field.includes('address')) {
+    if (text.length > 700 || !SELF_ADDRESS_PATTERN.test(text)) throw selfInvalid(field);
+    return text;
+  }
+  if (text.length > 255) throw selfInvalid(field);
+  return text;
+}
+
+async function auditSelfServiceBlocked(req, field, value) {
+  await auditSecurityEvent(req, {
+    action: 'blocked_self_service_parameter_tampering_attempt',
+    module: 'EMPLOYEE_SELF_SERVICE_SECURITY',
+    targetTable: 'employees',
+    targetRecord: currentEmployeeId(req),
+    newValue: { field, value, path: req.originalUrl },
+    result: 'blocked',
+  });
 }
 
 function currentUserId(req) {
@@ -359,13 +434,21 @@ router.put('/self-service/profile', async (req, res) => {
     const profile = await loadOwnProfile(employeeId, userId);
     if (!profile) return res.status(404).json({ error: 'Profile not found.' });
 
+    for (const field of Object.keys(req.body || {})) {
+      if (field === 'password_confirmation') continue;
+      if (!Object.prototype.hasOwnProperty.call(DIRECT_EDIT_FIELDS, field) || SELF_SERVICE_FORBIDDEN_FIELDS.has(field)) {
+        await auditSelfServiceBlocked(req, field, req.body[field]);
+        return res.status(403).json({ error: 'You are not allowed to modify this field.' });
+      }
+    }
+
     const updates = [];
     const params = [];
     const changed = [];
     for (const [inputName, columnName] of Object.entries(DIRECT_EDIT_FIELDS)) {
       if (!Object.prototype.hasOwnProperty.call(req.body, inputName)) continue;
       const oldValue = profile[columnName];
-      const newValue = inputName.endsWith('_same_as_home') ? (req.body[inputName] ? 1 : 0) : cleanText(req.body[inputName], inputName.includes('address') ? 700 : 255);
+      const newValue = validateSelfProfileValue(inputName, req.body[inputName]);
       if (String(oldValue ?? '') === String(newValue ?? '')) continue;
       updates.push(`${columnName} = ?`);
       params.push(newValue);
@@ -397,6 +480,10 @@ router.put('/self-service/profile', async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('[self-service/profile:put]', error.message);
+    if (error.status === 400) {
+      await auditSelfServiceBlocked(req, error.field || 'unknown', req.body?.[error.field]);
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to update profile.' });
   } finally {
     connection.release();

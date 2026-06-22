@@ -4,6 +4,8 @@
 
 let BC_RECORDS = [];
 let BC_INITIALIZED = false;
+let BC_PAGE = 1;
+const BC_PAGE_SIZE = 10;
 
 function bcEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -71,6 +73,44 @@ function bcCanVerify() {
   return ['system_admin', 'admin'].includes(bcUserRole());
 }
 
+function bcTotalPages() {
+  return Math.max(1, Math.ceil(BC_RECORDS.length / BC_PAGE_SIZE));
+}
+
+function renderBlockchainPagination() {
+  const pager = document.getElementById('bc-pagination');
+  if (!pager) return;
+
+  if (BC_RECORDS.length <= BC_PAGE_SIZE) {
+    pager.style.display = 'none';
+    pager.innerHTML = '';
+    return;
+  }
+
+  const totalPages = bcTotalPages();
+  BC_PAGE = Math.min(Math.max(BC_PAGE, 1), totalPages);
+  const start = (BC_PAGE - 1) * BC_PAGE_SIZE;
+  const end = Math.min(start + BC_PAGE_SIZE, BC_RECORDS.length);
+
+  pager.style.display = '';
+  pager.innerHTML = `
+    <div class="bc-pagination-info">Showing ${start + 1}-${end} of ${BC_RECORDS.length}</div>
+    <div class="bc-pagination-controls">
+      <button class="btn btn-outline btn-sm" type="button" data-bc-page="prev" ${BC_PAGE <= 1 ? 'disabled' : ''}>Previous</button>
+      <span>Page ${BC_PAGE} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" data-bc-page="next" ${BC_PAGE >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>
+  `;
+
+  pager.querySelector('[data-bc-page="prev"]')?.addEventListener('click', () => changeBlockchainPage(-1));
+  pager.querySelector('[data-bc-page="next"]')?.addEventListener('click', () => changeBlockchainPage(1));
+}
+
+function changeBlockchainPage(direction) {
+  BC_PAGE = Math.min(Math.max(BC_PAGE + direction, 1), bcTotalPages());
+  renderBlockchainRows({ preservePage: true });
+}
+
 async function bcRequest(url, options = {}) {
   const response = typeof apiFetch === 'function'
     ? await apiFetch(url, options)
@@ -108,16 +148,22 @@ function renderBlockchainStats(payload) {
   if (!fabric.enabled || !fabric.ready) bcShowMessage(status, 'warning');
 }
 
-function renderBlockchainRows() {
+function renderBlockchainRows(options = {}) {
   const tbody = document.getElementById('tx-tbody');
   if (!tbody) return;
 
   if (!BC_RECORDS.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="att-empty">No payroll integrity records found.</td></tr>';
+    renderBlockchainPagination();
+    if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
     return;
   }
 
-  tbody.innerHTML = BC_RECORDS.map(record => {
+  if (!options.preservePage) BC_PAGE = 1;
+  BC_PAGE = Math.min(Math.max(BC_PAGE, 1), bcTotalPages());
+  const pageRows = BC_RECORDS.slice((BC_PAGE - 1) * BC_PAGE_SIZE, BC_PAGE * BC_PAGE_SIZE);
+
+  tbody.innerHTML = pageRows.map(record => {
     const payrollId = Number(record.Payroll_ID);
     const status = record.Blockchain_Status || 'PENDING';
     const auditStatus = record.Latest_Audit_Status || '-';
@@ -145,6 +191,8 @@ function renderBlockchainRows() {
       </td>
     </tr>`;
   }).join('');
+  renderBlockchainPagination();
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
 }
 
 async function loadBlockchainRecords() {
@@ -265,12 +313,20 @@ async function loadBlockchainAudit(payrollId) {
     const rows = renderAuditRows(logs);
     if (tbody) tbody.innerHTML = rows;
     if (modalBody) modalBody.innerHTML = rows;
+    if (typeof enhanceResponsiveTables === 'function') {
+      enhanceResponsiveTables(document.getElementById('bc-audit-panel') || document);
+      enhanceResponsiveTables(modal);
+    }
     bcShowMessage(logs.length
       ? `Loaded ${logs.length} audit event${logs.length === 1 ? '' : 's'} for payroll ${payrollId}.`
       : `No audit entries were found for payroll ${payrollId}.`);
   } catch (error) {
     if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
     if (modalBody) modalBody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
+    if (typeof enhanceResponsiveTables === 'function') {
+      enhanceResponsiveTables(document.getElementById('bc-audit-panel') || document);
+      enhanceResponsiveTables(modal);
+    }
     bcShowMessage(error.message, 'critical');
   }
 }

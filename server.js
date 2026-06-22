@@ -59,6 +59,37 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
 });
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
+const EMPLOYEE_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/;
+const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#/-]+$/;
+const EMPLOYEE_SAFE_TEXT_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+/-]+$/;
+const EMPLOYEE_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
+const EMPLOYEE_ENUMS = {
+  gender: new Set(['Male', 'Female', 'Prefer not to say']),
+  nationality: new Set(['Filipino', 'American', 'Other']),
+  marital_status: new Set(['Single', 'Married', 'Separated', 'Widowed']),
+  blood_type: new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown']),
+  employment_type: new Set(['Full-time', 'Part-time', 'Contractual', 'Regular']),
+  hiring_type: new Set(['Direct Hire', 'Agency-Hired']),
+  deployment_status: new Set(['Pending Deployment', 'Deployed', 'On Hold', 'Ended']),
+  employee_level: new Set(['Rank and File', 'Supervisor', 'Manager', 'Executive']),
+  status: new Set(['Active', 'Inactive']),
+  payroll_schedule: new Set(['weekly', 'semi_monthly', 'monthly', 'Weekly', 'Semi-Monthly', 'Monthly']),
+  tax_status: new Set(['Single', 'Married', 'Head of Family', 'Exempt']),
+};
+const EMPLOYEE_PAYROLL_PROTECTED_FIELDS = new Set([
+  'wage_type', 'wage_type_id', 'base_rate', 'sewingRates', 'allowances', 'allowance',
+  'payroll_schedule', 'salary_grade', 'sss_number', 'philhealth_number',
+  'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account'
+]);
+const EMPLOYEE_WAGE_CONFIG_FIELDS = new Set(['wage_type', 'wage_type_id', 'base_rate', 'sewingRates']);
+const EMPLOYEE_GOVERNMENT_ID_FIELDS = new Set(['sss_number', 'philhealth_number', 'pagibig_number', 'tin']);
+const EMPLOYEE_PAYROLL_ONLY_FIELDS = new Set(['allowances', 'allowance', 'payroll_schedule', 'salary_grade', 'tax_status', 'bank_name', 'bank_account']);
+const EMPLOYEE_HR_PROTECTED_FIELDS = new Set([
+  'department_id', 'position', 'employment_type', 'hiring_type', 'deployment_status',
+  'date_hired', 'end_of_contract', 'employee_level', 'status', 'supervisor',
+  'work_location', 'shift_schedule', 'agency_name', 'agency_contact_person',
+  'agency_contact_number', 'contract_start_date', 'contract_end_date'
+]);
 let philippineAddressCache = null;
 let philippineAddressError = null;
 
@@ -184,7 +215,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
   );
   next();
 });
@@ -629,6 +660,350 @@ function validateEmployeeAddresses(body) {
   }
 
   return { errors, addresses };
+}
+
+function employeeHasRole(req, roles) {
+  return roles.includes(req.user?.role);
+}
+
+function normalizeBlank(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const text = String(value).trim();
+  return text === '' ? null : text;
+}
+
+function rejectEmployeeInput(field, reason = null) {
+  const error = new Error(`Invalid input for ${field}.`);
+  error.status = 400;
+  error.field = field;
+  error.reason = reason;
+  return error;
+}
+
+function validateNoDangerousText(field, value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (EMPLOYEE_FORBIDDEN_PATTERN.test(text) || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(text)) {
+    throw rejectEmployeeInput(field);
+  }
+  return text;
+}
+
+function validateEmployeeTextField(body, field, { max = 120, pattern = EMPLOYEE_TEXT_PATTERN, allowEmpty = true } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    if (!allowEmpty) throw rejectEmployeeInput(field);
+    body[field] = null;
+    return;
+  }
+  const text = validateNoDangerousText(field, value);
+  if (text.length > max || !pattern.test(text)) throw rejectEmployeeInput(field);
+  body[field] = text.replace(/\s+/g, ' ');
+}
+
+function validateEmployeeEmailField(body, field, { required = false } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    if (required) throw rejectEmployeeInput(field);
+    return;
+  }
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    if (required) throw rejectEmployeeInput(field);
+    body[field] = null;
+    return;
+  }
+  const email = validateNoDangerousText(field, value).toLowerCase();
+  if (email.length > 254 || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) throw rejectEmployeeInput(field);
+  body[field] = email;
+}
+
+function validateEmployeePhoneField(body, field, { required = false } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    if (required) throw rejectEmployeeInput(field);
+    return;
+  }
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    if (required) throw rejectEmployeeInput(field);
+    body[field] = null;
+    return;
+  }
+  const phone = validateNoDangerousText(field, value).replace(/[\s()-]/g, '');
+  if (!/^(09\d{9}|\+639\d{9})$/.test(phone)) throw rejectEmployeeInput(field);
+  body[field] = phone;
+}
+
+function validateEmployeeDateField(body, field, { required = false, noFuture = false } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    if (required) throw rejectEmployeeInput(field);
+    return;
+  }
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    if (required) throw rejectEmployeeInput(field);
+    body[field] = null;
+    return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw rejectEmployeeInput(field);
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || value !== date.toISOString().slice(0, 10)) throw rejectEmployeeInput(field);
+  if (noFuture && date > new Date()) throw rejectEmployeeInput(field);
+  body[field] = value;
+}
+
+function validateEmployeeYearField(body, field) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    body[field] = null;
+    return;
+  }
+  if (!/^\d{4}$/.test(value)) throw rejectEmployeeInput(field);
+  const year = Number(value);
+  const currentYear = new Date().getFullYear() + 1;
+  if (year < 1900 || year > currentYear) throw rejectEmployeeInput(field);
+  body[field] = String(year);
+}
+
+function validateEmployeeEnumField(body, field, allowed = EMPLOYEE_ENUMS[field]) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    body[field] = null;
+    return;
+  }
+  validateNoDangerousText(field, value);
+  if (!allowed || !allowed.has(value)) throw rejectEmployeeInput(field);
+  body[field] = value;
+}
+
+function normalizePayrollSchedule(value) {
+  const text = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (text === 'semi_monthly' || text === 'semimonthly') return 'semi_monthly';
+  if (text === 'weekly' || text === 'monthly') return text;
+  throw rejectEmployeeInput('payroll_schedule');
+}
+
+function validateEmployeeMoneyField(body, field, { max = 1000000 } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    body[field] = null;
+    return;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > max) throw rejectEmployeeInput(field);
+  body[field] = number.toFixed(2);
+}
+
+function validateGovernmentIdField(body, field, pattern) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    body[field] = null;
+    return;
+  }
+  const text = validateNoDangerousText(field, value);
+  const digits = text.replace(/\D/g, '');
+  if (!pattern.test(digits) || !/^[\d-]+$/.test(text)) throw rejectEmployeeInput(field);
+  body[field] = text;
+}
+
+function validateLatLngField(body, field, min, max) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  const value = normalizeBlank(body[field]);
+  if (value == null) {
+    body[field] = null;
+    return;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) throw rejectEmployeeInput(field);
+  body[field] = String(number);
+}
+
+function validateDateOrder(body, startField, endField) {
+  if (!body[startField] || !body[endField]) return;
+  if (String(body[endField]) < String(body[startField])) throw rejectEmployeeInput(endField);
+}
+
+async function auditEmployeeSensitiveField(req, field, targetEmployeeId, oldValue, newValue, result) {
+  await auditSecurityEvent(req, {
+    action: result === 'blocked' ? 'employee_sensitive_field_tampering_blocked' : 'employee_sensitive_field_updated',
+    module: 'EMPLOYEE_SECURITY',
+    targetTable: 'employees',
+    targetRecord: targetEmployeeId || req.params?.id || null,
+    oldValue: { field, value: oldValue ?? null },
+    newValue: { field, value: newValue ?? null, path: req.originalUrl },
+    result,
+  });
+}
+
+async function rejectEmployeeFieldTampering(req, res, field, oldValue = null, newValue = null) {
+  await auditEmployeeSensitiveField(req, field, req.params?.id || req.body?.id || null, oldValue, newValue, 'blocked');
+  return res.status(403).json({ error: 'You are not allowed to modify this field.' });
+}
+
+async function validateDepartmentId(pool, body) {
+  if (!Object.prototype.hasOwnProperty.call(body, 'department_id')) return;
+  const value = normalizeBlank(body.department_id);
+  if (value == null) {
+    body.department_id = null;
+    return;
+  }
+  const departmentId = Number(value);
+  if (!Number.isInteger(departmentId) || departmentId <= 0) throw rejectEmployeeInput('department_id');
+  const [rows] = await pool.execute('SELECT id FROM departments WHERE id = ? AND is_active = 1 LIMIT 1', [departmentId]);
+  if (!rows.length) throw rejectEmployeeInput('department_id');
+  body.department_id = departmentId;
+}
+
+async function validateWageType(pool, body) {
+  if (!Object.prototype.hasOwnProperty.call(body, 'wage_type')) return;
+  const value = normalizeBlank(body.wage_type);
+  if (value == null) {
+    body.wage_type = null;
+    return;
+  }
+  const normalized = normalizeWageTypeInput(value);
+  const [rows] = await pool.execute('SELECT id, name FROM wage_types WHERE LOWER(name) = LOWER(?) LIMIT 1', [normalized]);
+  if (!rows.length) throw rejectEmployeeInput('wage_type');
+  body.wage_type = rows[0].name;
+}
+
+async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } = {}) {
+  const body = req.body || {};
+  const role = req.user?.role;
+  const isHrOrAdmin = employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any]);
+  const isPayrollOrAdmin = employeeHasRole(req, [...ROLES.payroll_any, ...ROLES.admin_any]);
+
+  for (const field of Object.keys(body)) {
+    if (EMPLOYEE_HR_PROTECTED_FIELDS.has(field) && !isHrOrAdmin) {
+      return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
+    }
+    if (EMPLOYEE_WAGE_CONFIG_FIELDS.has(field) && !isPayrollOrAdmin && !isHrOrAdmin) {
+      return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
+    }
+    if (EMPLOYEE_GOVERNMENT_ID_FIELDS.has(field) && !isPayrollOrAdmin && !isHrOrAdmin) {
+      return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
+    }
+    if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !isPayrollOrAdmin) {
+      return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
+    }
+  }
+
+  if (mode === 'update') {
+    const [existingRows] = await pool.execute('SELECT * FROM employees WHERE id = ? OR employee_code = ? LIMIT 1', [req.params.id, req.params.id]);
+    const existing = existingRows[0] || null;
+    if (existing) {
+      for (const field of [...EMPLOYEE_PAYROLL_PROTECTED_FIELDS, ...EMPLOYEE_HR_PROTECTED_FIELDS]) {
+        if (Object.prototype.hasOwnProperty.call(body, field)) {
+          const oldValue = existing[field] ?? (field === 'allowance' ? existing.allowances : null);
+          if (String(oldValue ?? '') !== String(body[field] ?? '')) {
+            await auditEmployeeSensitiveField(req, field, existing.id, oldValue, body[field], 'allowed');
+          }
+        }
+      }
+    }
+  }
+
+  try {
+    [
+      'first_name', 'middle_name', 'last_name', 'suffix', 'nationality', 'marital_status',
+      'place_of_birth', 'religion', 'supervisor', 'work_location',
+      'emergency_contact_name', 'emergency_contact_relationship',
+      'education_school', 'education_attainment', 'education_jhs_school',
+      'education_jhs_attainment', 'education_shs_school', 'education_shs_attainment',
+      'education_vocational_school', 'education_vocational_attainment',
+      'education_college_school', 'education_college_attainment', 'agency_contact_person'
+    ].forEach(field => validateEmployeeTextField(body, field, { max: field.includes('school') ? 180 : 120 }));
+
+    ['position', 'shift_schedule', 'salary_grade', 'bank_name', 'agency_name'].forEach(field => {
+      validateEmployeeTextField(body, field, { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+    });
+
+    [
+      'residential_address', 'current_address', 'mailing_address', 'emergency_contact_address',
+      'residential_address_full_address', 'current_address_full_address', 'mailing_address_full_address',
+      'residential_address_street_address', 'current_address_street_address', 'mailing_address_street_address'
+    ].forEach(field => validateEmployeeTextField(body, field, { max: 255, pattern: EMPLOYEE_ADDRESS_PATTERN }));
+
+    [
+      'residential_address_region', 'residential_address_province', 'residential_address_city_municipality',
+      'residential_address_barangay', 'current_address_region', 'current_address_province',
+      'current_address_city_municipality', 'current_address_barangay', 'mailing_address_region',
+      'mailing_address_province', 'mailing_address_city_municipality', 'mailing_address_barangay'
+    ].forEach(field => validateEmployeeTextField(body, field, { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN }));
+
+    validateEmployeeEmailField(body, 'email', { required: true });
+    validateEmployeeEmailField(body, 'work_email');
+    validateEmployeeEmailField(body, 'emergency_contact_email');
+    validateEmployeePhoneField(body, 'contact_number');
+    validateEmployeePhoneField(body, 'emergency_contact_num');
+    validateEmployeePhoneField(body, 'emergency_contact_number');
+    validateEmployeePhoneField(body, 'emergency_contact_secondary_num');
+    validateEmployeePhoneField(body, 'agency_contact_number');
+
+    ['gender', 'nationality', 'marital_status', 'blood_type', 'employment_type', 'hiring_type', 'deployment_status', 'employee_level', 'status', 'tax_status']
+      .forEach(field => validateEmployeeEnumField(body, field));
+
+    ['date_of_birth', 'date_hired', 'end_of_contract', 'contract_start_date', 'contract_end_date'].forEach(field => {
+      validateEmployeeDateField(body, field, { noFuture: field === 'date_of_birth' });
+    });
+    validateDateOrder(body, 'date_hired', 'end_of_contract');
+    validateDateOrder(body, 'contract_start_date', 'contract_end_date');
+
+    [
+      'education_year_graduated', 'education_jhs_from', 'education_jhs_to', 'education_jhs_year_graduated',
+      'education_shs_from', 'education_shs_to', 'education_shs_year_graduated',
+      'education_vocational_from', 'education_vocational_to', 'education_vocational_year_graduated',
+      'education_college_from', 'education_college_to', 'education_college_year_graduated'
+    ].forEach(field => validateEmployeeYearField(body, field));
+    validateDateOrder(body, 'education_jhs_from', 'education_jhs_to');
+    validateDateOrder(body, 'education_shs_from', 'education_shs_to');
+    validateDateOrder(body, 'education_vocational_from', 'education_vocational_to');
+    validateDateOrder(body, 'education_college_from', 'education_college_to');
+
+    ['residential_address_lat', 'current_address_lat', 'mailing_address_lat'].forEach(field => validateLatLngField(body, field, -90, 90));
+    ['residential_address_lng', 'current_address_lng', 'mailing_address_lng'].forEach(field => validateLatLngField(body, field, -180, 180));
+
+    await validateDepartmentId(pool, body);
+    await validateWageType(pool, body);
+
+    if (Object.prototype.hasOwnProperty.call(body, 'payroll_schedule') && body.payroll_schedule != null && body.payroll_schedule !== '') {
+      body.payroll_schedule = normalizePayrollSchedule(body.payroll_schedule);
+    }
+    validateEmployeeMoneyField(body, 'allowances');
+    validateEmployeeMoneyField(body, 'allowance');
+    validateEmployeeMoneyField(body, 'base_rate');
+    validateGovernmentIdField(body, 'sss_number', /^\d{10}$/);
+    validateGovernmentIdField(body, 'tin', /^\d{9,12}$/);
+    validateGovernmentIdField(body, 'philhealth_number', /^\d{12}$/);
+    validateGovernmentIdField(body, 'pagibig_number', /^\d{12}$/);
+
+    if (Array.isArray(body.sewingRates)) {
+      for (const rate of body.sewingRates) {
+        if (!Number.isInteger(Number(rate.sewing_id)) || Number(rate.sewing_id) <= 0) throw rejectEmployeeInput('sewingRates');
+        const value = Number(rate.rate);
+        if (!Number.isFinite(value) || value < 0 || value > 1000000) throw rejectEmployeeInput('sewingRates');
+      }
+    } else if (Object.prototype.hasOwnProperty.call(body, 'sewingRates') && body.sewingRates != null) {
+      throw rejectEmployeeInput('sewingRates');
+    }
+  } catch (error) {
+    await auditSecurityEvent(req, {
+      action: 'blocked_employee_invalid_input',
+      module: 'EMPLOYEE_SECURITY',
+      targetTable: 'employees',
+      targetRecord: req.params?.id || null,
+      newValue: { field: error.field || null, reason: error.reason || null, path: req.originalUrl },
+      result: 'blocked',
+    });
+    return res.status(error.status || 400).json({ error: error.message || 'Invalid employee input.' });
+  }
+
+  return null;
 }
 
 function lifecycleTruthy(value) {
@@ -1459,6 +1834,8 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
     await ensureOnboardingLifecycleSchema(pool);
     await ensurePhilippineAddressColumns(pool);
     await ensureEmployeeAuthColumns(pool);
+    const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'create' });
+    if (validationResponse) return validationResponse;
     const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     
     console.log('\n=== POST /api/employees ===');
@@ -1850,7 +2227,7 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
         next_employee_code: nextEmployeeCode,
       });
     }
-    return res.status(500).json({ error: 'Failed to add employee: ' + err.message }); 
+    return res.status(500).json({ error: 'Failed to add employee.' }); 
   }
 });
 
@@ -1863,6 +2240,8 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
     await ensureEmployeeLifecycleColumns(pool);
     await ensurePhilippineAddressColumns(pool);
     const { id } = req.params; // numeric employee id
+    const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'update' });
+    if (validationResponse) return validationResponse;
     const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     
     console.log('\n=== PUT /api/employees/:id ===');
@@ -2076,7 +2455,7 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
   } catch (err) { 
     console.error('Error updating employee:', err.message, err.sqlMessage);
     res.setHeader('Content-Type', 'application/json');
-    return res.status(500).json({ error: 'Failed to update employee: ' + err.message }); 
+    return res.status(500).json({ error: 'Failed to update employee.' }); 
   }
 });
 
@@ -2089,6 +2468,14 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
     const { status } = req.body;
 
     if (!status || !['Active', 'Inactive'].includes(status)) {
+      await auditSecurityEvent(req, {
+        action: 'blocked_employee_invalid_status',
+        module: 'EMPLOYEE_SECURITY',
+        targetTable: 'employees',
+        targetRecord: id,
+        newValue: { field: 'status', value: status, path: req.originalUrl },
+        result: 'blocked',
+      });
       return res.status(400).json({ error: 'Invalid status. Must be Active or Inactive.' });
     }
 
@@ -2106,7 +2493,7 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
     return res.status(200).json({ message: `Employee status updated to ${status}.` });
   } catch (err) {
     console.error('Error updating employee status:', err.message, err.sqlMessage);
-    return res.status(500).json({ error: 'Failed to update employee status.', details: err.message });
+    return res.status(500).json({ error: 'Failed to update employee status.' });
   }
 });
 
@@ -2131,7 +2518,7 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
     return res.status(200).json({ message: 'Employee deleted successfully.' });
   } catch (err) {
     console.error('Error deleting employee:', err.message, err.sqlMessage);
-    return res.status(500).json({ error: 'Failed to delete employee.', details: err.message });
+    return res.status(500).json({ error: 'Failed to delete employee.' });
   }
 });
 
@@ -2187,7 +2574,7 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
   } catch (err) {
     console.error('Error uploading document:', err.message);
     if (req.file) fs.unlinkSync(req.file.path);
-    return res.status(500).json({ error: 'Failed to upload document.', details: err.message });
+    return res.status(500).json({ error: 'Failed to upload document.' });
   }
 });
 
@@ -2217,7 +2604,7 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
     
   } catch (err) {
     console.error('Error fetching documents:', err.message);
-    return res.status(500).json({ error: 'Failed to fetch documents.', details: err.message });
+    return res.status(500).json({ error: 'Failed to fetch documents.' });
   }
 });
 
@@ -2256,7 +2643,7 @@ app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROL
     return res.sendFile(absolutePath);
   } catch (err) {
     console.error('Error viewing document:', err.message);
-    return res.status(500).json({ error: 'Failed to view document.', details: err.message });
+    return res.status(500).json({ error: 'Failed to view document.' });
   }
 });
 
@@ -2287,7 +2674,7 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
     
   } catch (err) {
     console.error('Error deleting document:', err.message);
-    return res.status(500).json({ error: 'Failed to delete document.', details: err.message });
+    return res.status(500).json({ error: 'Failed to delete document.' });
   }
 });
 
@@ -2689,7 +3076,7 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    return res.status(500).json({ error: 'Failed to upload photo.', details: err.message });
+    return res.status(500).json({ error: 'Failed to upload photo.' });
   }
 });
 
@@ -2716,7 +3103,7 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
     
   } catch (err) {
     console.error('Error fetching photo:', err.message);
-    return res.status(500).json({ error: 'Failed to fetch photo.', details: err.message });
+    return res.status(500).json({ error: 'Failed to fetch photo.' });
   }
 });
 
@@ -2740,7 +3127,7 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
     
   } catch (err) {
     console.error('Error deleting photo:', err.message);
-    return res.status(500).json({ error: 'Failed to delete photo.', details: err.message });
+    return res.status(500).json({ error: 'Failed to delete photo.' });
   }
 });
 
@@ -3197,9 +3584,9 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
 
     await writeLeaveAudit(pool, result.insertId, empId, req.user.id, source === 'Manual' ? 'leave_manual_encoded' : 'leave_created', remarks || reason || null, null, 'Pending', { leave_type: leaveType.name, filing_source: source });
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
-  } catch (err) { 
+  } catch (err) {
     console.error('Error saving leave request:', err.message);
-    res.status(500).json({ error: 'Failed to submit leave: ' + err.message });
+    res.status(500).json({ error: 'Failed to submit leave.' });
   }
 });
 
@@ -3480,8 +3867,7 @@ app.use('/api', selfServiceRoutes);
 app.use((err, req, res, next) => {
   console.error('❌ Unhandled Error:', err.message);
   res.status(err.status || 500).json({ 
-    error: 'Internal Server Error',
-    message: err.message
+    error: 'Internal Server Error'
   });
 });
 

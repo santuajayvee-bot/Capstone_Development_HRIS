@@ -42,8 +42,8 @@
 
 <div class="card" style="margin-bottom:20px;">
   <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Payroll Integrity Queue</div>
-  <div class="table-wrap">
-    <table>
+  <div class="table-wrap blockchain-table-wrap">
+    <table class="blockchain-table" data-no-pagination="1">
       <thead>
         <tr>
           <th>Payroll ID</th>
@@ -62,12 +62,13 @@
       </tbody>
     </table>
   </div>
+  <div id="bc-pagination" class="bc-pagination" style="display:none;"></div>
 </div>
 
 <div id="bc-audit-panel" class="card" tabindex="-1">
   <div id="bc-audit-title" style="font-size:14px;font-weight:700;margin-bottom:16px;">Audit Trail</div>
-  <div class="table-wrap">
-    <table>
+  <div class="table-wrap blockchain-table-wrap">
+    <table class="blockchain-table" data-page-size="10">
       <thead>
         <tr>
           <th>Timestamp</th>

@@ -74,6 +74,20 @@ function currentRequestIp(req) {
     || null;
 }
 
+function safePayrollError(err, fallback) {
+  const message = String(err?.message || '').trim();
+  const code = String(err?.code || '');
+  if (
+    err?.sqlMessage ||
+    err?.sqlState ||
+    code.startsWith('ER_') ||
+    /\b(sql|mysql|database|table|column|constraint|syntax|foreign key|select|insert|update|delete)\b/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message || fallback;
+}
+
 async function logPayrollAudit(pool, req, action, options = {}) {
   try {
     await pool.execute(`
@@ -2655,7 +2669,7 @@ router.get('/employees/:id/payroll-validation', requireAuth, requireRole(PAYROLL
     res.json(validation);
   } catch (err) {
     console.error('Error validating daily/hourly payroll:', err);
-    res.status(500).json({ error: 'Failed to validate payroll: ' + err.message });
+    res.status(500).json({ error: 'Failed to validate payroll.' });
   }
 });
 
@@ -2682,7 +2696,7 @@ router.post('/logistics-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.set
     res.json({ id: result.insertId, message: 'Logistics rate saved.' });
   } catch (err) {
     console.error('Error saving logistics rate:', err);
-    res.status(500).json({ error: 'Failed to save logistics rate: ' + err.message });
+    res.status(500).json({ error: 'Failed to save logistics rate.' });
   }
 });
 
@@ -2756,7 +2770,7 @@ router.delete('/logistics/truck-types/:id', requireAuth, requireRole(LOGISTICS_T
     res.json({ message: 'Truck type deactivated. Existing trip history was retained.' });
   } catch (err) {
     console.error('[logistics/truck-types:delete]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to deactivate truck type.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to deactivate truck type.') });
   }
 });
 
@@ -2831,7 +2845,7 @@ router.delete('/logistics/locations/:id', requireAuth, requireRole(LOGISTICS_TRI
     res.json({ message: 'Logistics location deactivated. Existing trip history was retained.' });
   } catch (err) {
     console.error('[logistics/locations:delete]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to deactivate logistics location.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to deactivate logistics location.') });
   }
 });
 
@@ -2887,7 +2901,7 @@ router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
     res.status(201).json({ id: result.insertId, total_trip_pay: computeTripPay(rate), message: 'Logistics rate created.' });
   } catch (err) {
     console.error('[logistics/rates:post]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to create logistics rate.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to create logistics rate.') });
   }
 });
 
@@ -2909,7 +2923,7 @@ router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMI
     res.json({ total_trip_pay: computeTripPay(rate), message: 'Logistics rate updated.' });
   } catch (err) {
     console.error('[logistics/rates:put]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to update logistics rate.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to update logistics rate.') });
   }
 });
 
@@ -2925,7 +2939,7 @@ router.delete('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PE
     res.json({ message: 'Logistics rate deactivated. Existing trip history was retained.' });
   } catch (err) {
     console.error('[logistics/rates:delete]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to deactivate logistics rate.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to deactivate logistics rate.') });
   }
 });
 
@@ -2945,7 +2959,7 @@ router.get('/logistics/rates/preview', requireAuth, requireRole(LOGISTICS_TRIP_P
     res.json({ ...rate, total_trip_pay: computeTripPay({ baseRate: rate.base_rate, multiplier: rate.multiplier, additionalRate: rate.additional_rate }) });
   } catch (err) {
     console.error('[logistics/rates:preview]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to preview logistics rate.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to preview logistics rate.') });
   }
 });
 
@@ -3031,7 +3045,7 @@ router.get('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
     res.json(rows);
   } catch (err) {
     console.error('[logistics/trips:get]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to load delivery trips.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to load delivery trips.') });
   }
 });
 
@@ -3058,7 +3072,7 @@ router.post('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
     res.status(201).json({ id: result.insertId, status: submitNow ? 'Submitted' : 'Draft', total_trip_pay: trip.totalTripPay, message: submitNow ? 'Delivery trip submitted for approval.' : 'Delivery trip saved as draft.' });
   } catch (err) {
     console.error('[logistics/trips:post]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to create delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to create delivery trip.') });
   }
 });
 
@@ -3084,7 +3098,7 @@ router.put('/logistics/trips/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMI
     res.json({ total_trip_pay: trip.totalTripPay, message: 'Delivery trip updated.' });
   } catch (err) {
     console.error('[logistics/trips:put]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to update delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to update delivery trip.') });
   }
 });
 
@@ -3103,7 +3117,7 @@ router.post('/logistics/trips/:id/submit', requireAuth, requireRole(LOGISTICS_TR
     res.json({ message: 'Delivery trip submitted for approval.' });
   } catch (err) {
     console.error('[logistics/trips:submit]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to submit delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to submit delivery trip.') });
   }
 });
 
@@ -3121,7 +3135,7 @@ router.post('/logistics/trips/:id/approve', requireAuth, requireRole(LOGISTICS_T
     res.json({ message: 'Delivery trip approved and ready for payroll.' });
   } catch (err) {
     console.error('[logistics/trips:approve]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to approve delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to approve delivery trip.') });
   }
 });
 
@@ -3140,7 +3154,7 @@ router.post('/logistics/trips/:id/reject', requireAuth, requireRole(LOGISTICS_TR
     res.json({ message: 'Delivery trip rejected.' });
   } catch (err) {
     console.error('[logistics/trips:reject]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to reject delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to reject delivery trip.') });
   }
 });
 
@@ -3159,7 +3173,7 @@ router.delete('/logistics/trips/:id', requireAuth, requireRole(LOGISTICS_TRIP_PE
     res.json({ message: 'Draft delivery trip deleted.' });
   } catch (err) {
     console.error('[logistics/trips:delete]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to delete delivery trip.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to delete delivery trip.') });
   }
 });
 
@@ -3183,7 +3197,7 @@ router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP
     res.json({ start_date: startDate, end_date: endDate, rows, total_logistics_pay: totalLogisticsPay });
   } catch (err) {
     console.error('[logistics/payroll-summary:get]', err.message);
-    res.status(400).json({ error: err.message || 'Failed to load logistics payroll summary.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to load logistics payroll summary.') });
   }
 });
 
@@ -3364,7 +3378,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
     res.json({ success: true, message: 'Wage configuration updated', ratesSaved: verifyRates.length });
   } catch (err) {
     console.error('❌ Error updating wage config:', err);
-    res.status(500).json({ error: 'Failed to update wage configuration: ' + err.message });
+    res.status(500).json({ error: 'Failed to update wage configuration.' });
   }
 });
 
@@ -4312,7 +4326,7 @@ router.post('/piece-rate-outputs', requireAuth, requireRole(ROLES.payroll_any), 
   } catch (err) {
     if (connection) await connection.rollback();
     console.error('Error encoding daily piece-rate output:', err);
-    res.status(400).json({ error: err.message || 'Failed to encode daily piece-rate output.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to encode daily piece-rate output.') });
   } finally { if (connection) connection.release(); }
 });
 
@@ -4369,7 +4383,7 @@ router.patch('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_a
     res.json({ id: existing.id, ...output, queued_calculations: queuedCalculations });
   } catch (err) {
     if (connection) await connection.rollback();
-    res.status(400).json({ error: err.message || 'Failed to update daily piece-rate output.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to update daily piece-rate output.') });
   } finally { if (connection) connection.release(); }
 });
 
@@ -4405,7 +4419,7 @@ router.delete('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_
     res.json({ success: true, queued_calculations: queuedCalculations });
   } catch (err) {
     if (connection) await connection.rollback();
-    res.status(400).json({ error: err.message || 'Failed to delete daily piece-rate output.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to delete daily piece-rate output.') });
   } finally { if (connection) connection.release(); }
 });
 
@@ -4447,7 +4461,7 @@ router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), a
     res.json({ id: result.insertId, ...payroll });
   } catch (err) {
     console.error('Error encoding production output:', err);
-    res.status(400).json({ error: err.message || 'Failed to encode production output.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to encode production output.') });
   }
 });
 
@@ -4489,7 +4503,7 @@ router.post('/production-pairs', requireAuth, requireRole(ROLES.payroll_any), as
     res.json({ id: result.insertId, ...pair });
   } catch (err) {
     console.error('Error encoding production pair:', err);
-    res.status(400).json({ error: err.message || 'Failed to encode production pair.' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to encode production pair.') });
   }
 });
 
@@ -5665,7 +5679,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
     try { await connection.rollback(); } catch (_) {}
     console.error('Error generating payroll:', err);
     const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
-    res.status(status).json({ error: status === 400 ? err.message : 'Failed to generate payroll', message: err.message });
+    res.status(status).json({ error: status === 400 ? err.message : 'Failed to generate payroll.' });
   } finally {
     connection.release();
   }
@@ -6048,7 +6062,7 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     });
   } catch (err) {
     console.error('Error fetching salary calculations:', err);
-    res.status(500).json({ error: 'Failed to fetch salary calculations: ' + err.message });
+    res.status(500).json({ error: 'Failed to fetch salary calculations.' });
   }
 });
 
@@ -6199,8 +6213,7 @@ router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.
   } catch (err) {
     console.error('❌ Error converting calculations:', err);
     res.status(500).json({
-      error: 'Failed to convert calculations to payslips',
-      details: err.message
+      error: 'Failed to convert calculations to payslips.'
     });
   }
 });
@@ -6879,12 +6892,12 @@ router.get('/sewing-registries', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
     const kind = String(req.query.kind || 'main');
     if (!['main', '55', '45'].includes(kind)) return res.status(400).json({ error: 'Registry kind must be main, 55, or 45.' });
     res.json(await buildSewingRegistry(require('../config/db'), req.query.month_year, kind));
-  } catch (err) { res.status(400).json({ error: err.message || 'Failed to build sewing registry.' }); }
+  } catch (err) { res.status(400).json({ error: safePayrollError(err, 'Failed to build sewing registry.') }); }
 });
 
 router.get('/swr-fxr-summary', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try { res.json(await buildSwrFxrSummary(require('../config/db'), req.query.month_year)); }
-  catch (err) { res.status(400).json({ error: err.message || 'Failed to build SWR-FXR summary.' }); }
+  catch (err) { res.status(400).json({ error: safePayrollError(err, 'Failed to build SWR-FXR summary.') }); }
 });
 
 async function listSwrFxrProductionPeriods(pool) {
@@ -6962,7 +6975,7 @@ router.get('/piece-payroll-register', requireAuth, requireRole(PAYROLL_PERMISSIO
     res.json(register);
   } catch (err) {
     console.error('Error building piece payroll register:', err);
-    res.status(500).json({ error: err.message || 'Failed to build piece payroll register.' });
+    res.status(500).json({ error: 'Failed to build piece payroll register.' });
   }
 });
 
@@ -7001,7 +7014,7 @@ router.post('/piece-payroll-register/generate', requireAuth, requireRole(ROLES.p
     res.json({ message: 'Per-piece payroll register generated.', ...register });
   } catch (err) {
     console.error('Error generating piece payroll register:', err);
-    res.status(500).json({ error: err.message || 'Failed to generate piece payroll register.' });
+    res.status(500).json({ error: 'Failed to generate piece payroll register.' });
   }
 });
 
