@@ -1030,6 +1030,9 @@ function clearEmployeeForm() {
   if (typeof clearUploadedFiles === 'function') {
     clearUploadedFiles();
   }
+  if (typeof resetRegisterDraftSelection === 'function') {
+    resetRegisterDraftSelection();
+  }
 }
 
 /* Management Table */
@@ -2983,6 +2986,10 @@ function populateProfileEditForm(employee) {
     if (input) input.value = value || '';
   });
 
+  if (window.LGSVValidation?.applyPhoneFieldHints) {
+    window.LGSVValidation.applyPhoneFieldHints(document.getElementById('profile-edit-root') || document);
+  }
+
   updateProfileBaseSalaryVisibility();
   const profileWageType = document.getElementById('profile-edit-wage-type');
   if (profileWageType) profileWageType.onchange = updateProfileBaseSalaryVisibility;
@@ -3073,8 +3080,37 @@ function toggleProfileEditMode(forceState = null, skipTabSync = false) {
   if (!skipTabSync) switchProfileTab(currentProfileTab);
 }
 
+function focusProfileEditField(field) {
+  const fieldToId = {
+    contact_number: 'profile-edit-phone',
+    emergency_contact_num: 'profile-edit-emergency-phone',
+    emergency_contact_secondary_num: 'profile-edit-emergency-secondary-phone',
+    agency_contact_number: 'profile-edit-agency-contact-number',
+    sss_number: 'profile-edit-sss',
+    tin: 'profile-edit-tin',
+    philhealth_number: 'profile-edit-philhealth',
+    pagibig_number: 'profile-edit-pagibig',
+    base_rate: 'profile-edit-basic-salary',
+    allowances: 'profile-edit-allowances',
+    bank_account: 'profile-edit-bank-account'
+  };
+  const element = document.getElementById(fieldToId[field] || `profile-edit-${String(field || '').replace(/_/g, '-')}`);
+  if (!element) return;
+  const panel = element.closest('.profile-edit-tab-panel');
+  if (panel?.id && typeof switchProfileTab === 'function') {
+    switchProfileTab(panel.id.replace(/^profile-edit-tab-/, ''));
+  }
+  element.classList.add('input-validation-error');
+  setTimeout(() => element.focus?.({ preventScroll: false }), 120);
+}
+
 async function saveProfilePageChanges() {
   if (!currentProfileEmployee) return;
+
+  const editRoot = document.getElementById('profile-edit-root');
+  if (window.LGSVValidation && editRoot && !window.LGSVValidation.validateScope(editRoot)) {
+    return;
+  }
 
   const addressResult = window.collectEmployeeAddressPayload
     ? collectEmployeeAddressPayload('profile')
@@ -3190,6 +3226,7 @@ async function saveProfilePageChanges() {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
+      focusProfileEditField(error.field || error.errors?.[0]?.field);
       throw new Error(error.error || 'Failed to save profile');
     }
 
@@ -3255,7 +3292,17 @@ async function uploadProfilePhoto(event) {
 }
 
 function openEmployeeDocumentUpload() {
-  document.getElementById('profile-doc-input')?.click();
+  let input = document.getElementById('profile-doc-input');
+  if (!input) {
+    input = document.createElement('input');
+    input.id = 'profile-doc-input';
+    input.type = 'file';
+    input.accept = '.pdf,.doc,.docx,.jpg,.jpeg,.png';
+    input.hidden = true;
+    input.addEventListener('change', uploadProfileDocument);
+    document.body.appendChild(input);
+  }
+  input.click();
 }
 
 async function uploadProfileDocument(event) {
@@ -3285,8 +3332,15 @@ async function uploadProfileDocument(event) {
 }
 
 async function loadProfileDocuments(employee) {
-  const list = document.getElementById('profile-documents-list');
-  if (!list || !employee?.employee_code) return;
+  const lists = [
+    document.getElementById('profile-documents-list'),
+    document.getElementById('profile-edit-documents-list')
+  ].filter(Boolean);
+  if (!lists.length || !employee?.employee_code) return;
+
+  const renderLists = html => {
+    lists.forEach(list => { list.innerHTML = html; });
+  };
 
   try {
     const response = await apiFetch(`/api/employees/${employee.employee_code}/documents`);
@@ -3294,11 +3348,11 @@ async function loadProfileDocuments(employee) {
     const docs = await response.json();
 
     if (!docs.length) {
-      list.innerHTML = '<div class="profile-empty">No documents uploaded yet.</div>';
+      renderLists('<div class="profile-empty">No documents uploaded yet.</div>');
       return;
     }
 
-    list.innerHTML = docs.map(doc => `
+    renderLists(docs.map(doc => `
       <div class="profile-doc-card clickable" role="button" tabindex="0"
            onclick="openProfileDocument(${Number(doc.id)})"
            onkeydown="if(event.key === 'Enter' || event.key === ' '){ event.preventDefault(); openProfileDocument(${Number(doc.id)}); }">
@@ -3311,9 +3365,9 @@ async function loadProfileDocuments(employee) {
         </div>
         <span class="profile-label">${escapeHtml(doc.uploaded_date || doc.uploaded_at || doc.created_at)}</span>
       </div>
-    `).join('');
+    `).join(''));
   } catch {
-    list.innerHTML = '<div class="profile-empty">No documents uploaded yet.</div>';
+    renderLists('<div class="profile-empty">No documents uploaded yet.</div>');
   }
 }
 

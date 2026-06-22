@@ -75,7 +75,10 @@ function openModal() {
 function prepareModal(message, title, type) {
   setModalType(type);
   modalTitle.textContent = title;
-  modalMessage.textContent = message;
+  const finalMessage = typeof window.LGSVValidation?.formatValidationAlert === 'function'
+    ? window.LGSVValidation.formatValidationAlert(message)
+    : message;
+  modalMessage.textContent = finalMessage;
 }
 
 modalConfirmBtn?.addEventListener('click', () => {

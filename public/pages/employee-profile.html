@@ -209,7 +209,7 @@
           <div class="profile-form-grid">
             <label>Email<input id="profile-edit-email" type="email"></label>
             <label>Work Email<input id="profile-edit-work-email" type="email"></label>
-            <label>Contact No<input id="profile-edit-phone" type="text"></label>
+            <label>Contact No<input id="profile-edit-phone" type="tel" inputmode="tel" placeholder="+63 9XX XXX XXXX"></label>
             <label>Home Address
               <div class="address-autocomplete" data-address-field="profile-home">
                 <input id="profile-edit-address" type="text" autocomplete="off">
@@ -241,8 +241,8 @@
           <div class="profile-form-grid">
             <label>Contact Name(s)<input id="profile-edit-emergency-name" type="text"></label>
             <label>Relationship to Employee<input id="profile-edit-emergency-relationship" type="text"></label>
-            <label>Primary Phone Number<input id="profile-edit-emergency-phone" type="text"></label>
-            <label>Secondary Phone Number<input id="profile-edit-emergency-secondary-phone" type="text"></label>
+            <label>Primary Phone Number<input id="profile-edit-emergency-phone" type="tel" inputmode="tel" placeholder="+63 9XX XXX XXXX"></label>
+            <label>Secondary Phone Number<input id="profile-edit-emergency-secondary-phone" type="tel" inputmode="tel" placeholder="+63 9XX XXX XXXX"></label>
             <label>Alternative Email Address<input id="profile-edit-emergency-email" type="email"></label>
             <label>Residential Address<input id="profile-edit-emergency-address" type="text"></label>
           </div>
@@ -260,7 +260,7 @@
             <div id="profile-edit-agency-fields" class="profile-form-grid" style="grid-column:1 / -1; display:none;">
               <label>Agency Name<input id="profile-edit-agency-name" type="text" placeholder="Agency name"></label>
               <label>Agency Contact Person<input id="profile-edit-agency-contact-person" type="text" placeholder="Contact person"></label>
-              <label>Agency Contact Number<input id="profile-edit-agency-contact-number" type="text" placeholder="+63 9XX XXX XXXX"></label>
+              <label>Agency Contact Number<input id="profile-edit-agency-contact-number" type="tel" inputmode="tel" placeholder="+63 9XX XXX XXXX"></label>
               <label>Deployment Status<select id="profile-edit-deployment-status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></label>
               <label>Contract Start<input id="profile-edit-contract-start-date" type="date"></label>
               <label>Contract End<input id="profile-edit-contract-end-date" type="date"></label>
@@ -313,7 +313,13 @@
         </div>
 
         <div id="profile-edit-tab-experience" class="profile-edit-tab-panel"><div class="profile-empty">Previous work experiences are managed from the Work Experience table using + Experience.</div></div>
-        <div id="profile-edit-tab-documents" class="profile-edit-tab-panel"><div id="profile-edit-documents-list" class="profile-doc-grid"><div class="profile-empty">No documents loaded.</div></div></div>
+        <div id="profile-edit-tab-documents" class="profile-edit-tab-panel">
+          <div class="profile-doc-toolbar">
+            <h3 class="profile-section-title">Uploaded Documents</h3>
+            <button class="profile-doc-upload" type="button" onclick="openEmployeeDocumentUpload()">Upload Document</button>
+          </div>
+          <div id="profile-edit-documents-list" class="profile-doc-grid"><div class="profile-empty">Loading documents...</div></div>
+        </div>
 
         <div id="profile-edit-tab-bank-tax" class="profile-edit-tab-panel">
           <h3 class="profile-section-title">Salary Configuration</h3>
@@ -330,10 +336,10 @@
           </div>
           <h3 class="profile-section-title" style="margin-top:22px;">Government & Tax Information</h3>
           <div class="profile-form-grid">
-            <label>TIN<input id="profile-edit-tin" type="text"></label>
-            <label>SSS<input id="profile-edit-sss" type="text"></label>
-            <label>PhilHealth<input id="profile-edit-philhealth" type="text"></label>
-            <label>Pag-IBIG<input id="profile-edit-pagibig" type="text"></label>
+            <label>TIN<input id="profile-edit-tin" type="text" inputmode="numeric" data-validation="government-id"></label>
+            <label>SSS<input id="profile-edit-sss" type="text" inputmode="numeric" data-validation="government-id"></label>
+            <label>PhilHealth<input id="profile-edit-philhealth" type="text" inputmode="numeric" data-validation="government-id"></label>
+            <label>Pag-IBIG<input id="profile-edit-pagibig" type="text" inputmode="numeric" data-validation="government-id"></label>
             <label>Tax Status<select id="profile-edit-tax-status"><option value="">Select tax status</option><option>Single</option><option>Married</option><option>Head of Family</option><option>Exempt</option></select></label>
           </div>
         </div>

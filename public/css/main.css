@@ -4132,6 +4132,13 @@ tr:hover td,
   box-shadow: 0 0 0 2px rgba(239, 68, 68, .16) !important;
 }
 
+.field-validation-message {
+  margin-top: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 /* Payroll salary calculation layout */
 #payroll-tab-salary {
   padding: 16px;

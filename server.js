@@ -649,8 +649,24 @@ function normalizeBlank(value) {
   return text === '' ? null : text;
 }
 
+const EMPLOYEE_FIELD_LABELS = {
+  contact_number: 'Contact No',
+  emergency_contact_num: 'Primary Phone Number',
+  emergency_contact_number: 'Emergency Contact Number',
+  emergency_contact_secondary_num: 'Secondary Phone Number',
+  agency_contact_number: 'Agency Contact Number',
+  sss_number: 'SSS',
+  tin: 'TIN',
+  philhealth_number: 'PhilHealth',
+  pagibig_number: 'Pag-IBIG',
+  base_rate: 'Basic Salary',
+  allowances: 'Allowances',
+  allowance: 'Allowance'
+};
+
 function rejectEmployeeInput(field, reason = null) {
-  const error = new Error(`Invalid input for ${field}.`);
+  const label = EMPLOYEE_FIELD_LABELS[field] || String(field || 'field').replace(/_/g, ' ');
+  const error = new Error(reason ? `${label}: ${reason}` : `Invalid input for ${label}.`);
   error.status = 400;
   error.field = field;
   error.reason = reason;
@@ -783,8 +799,9 @@ function validateGovernmentIdField(body, field, pattern) {
   }
   const text = validateNoDangerousText(field, value);
   const digits = text.replace(/\D/g, '');
-  if (!pattern.test(digits) || !/^[\d-]+$/.test(text)) throw rejectEmployeeInput(field);
-  body[field] = text;
+  if (!/^[\d\s-]+$/.test(text)) throw rejectEmployeeInput(field, 'This field must contain numbers only.');
+  if (!pattern.test(digits)) throw rejectEmployeeInput(field, 'Please enter the required number of digits.');
+  body[field] = digits;
 }
 
 function validateLatLngField(body, field, min, max) {
@@ -976,7 +993,11 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
       newValue: { field: error.field || null, reason: error.reason || null, path: req.originalUrl },
       result: 'blocked',
     });
-    return res.status(error.status || 400).json({ error: error.message || 'Invalid employee input.' });
+    return res.status(error.status || 400).json({
+      error: error.message || 'Invalid employee input.',
+      field: error.field || null,
+      reason: error.reason || null
+    });
   }
 
   return null;
@@ -2525,18 +2546,11 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
     const employeeId = empRows[0].id;
     const filePath = `/uploads/${req.file.filename}`;
     
-    // Insert or update document record without deleting the existing row.
+    // Insert a new document record. Multiple files of the same document type
+    // are valid because HR may collect updated or supplemental copies.
     const [result] = await pool.execute(
       `INSERT INTO documents (employee_id, document_type, file_name, file_path)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         file_name = VALUES(file_name),
-         file_path = VALUES(file_path),
-         uploaded_date = CURRENT_TIMESTAMP,
-         verification_status = 'Pending',
-         verified_by = NULL,
-         verified_at = NULL,
-         rejection_reason = NULL`,
+       VALUES (?, ?, ?, ?)`,
       [employeeId, docType, req.file.originalname, filePath]
     );
     

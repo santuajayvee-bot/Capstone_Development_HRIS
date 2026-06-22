@@ -9,13 +9,15 @@ let EDIT_EMPLOYEE_NUMERIC_ID = null;   // Stores the numeric database ID (for AP
 let IS_SAVING = false;                 // Prevent double-submit
 let SELECTED_EMPLOYEE_PHOTO = null;
 let EMPLOYEE_PHOTO_PREVIEW_URL = null;
+let ACTIVE_EMPLOYEE_DRAFT_ID = null;
+const EMPLOYEE_DRAFT_STORAGE_PREFIX = 'lgsv_employee_intake_drafts';
 
 // Store uploaded files temporarily (in memory before save)
 const UPLOADED_FILES = {
-  resume: null,
-  govid: null,
-  nbi: null,
-  other: null
+  resume: [],
+  govid: [],
+  nbi: [],
+  other: []
 };
 
 // Document type mappings
@@ -60,6 +62,197 @@ function employeeOptionEscape(value) {
     '"': '&quot;',
     "'": '&#039;'
   }[char]));
+}
+
+function getEmployeeDraftStorageKey() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return `${EMPLOYEE_DRAFT_STORAGE_PREFIX}_${user?.id || user?.username || user?.role || 'local'}`;
+}
+
+function readEmployeeDrafts() {
+  try {
+    const raw = localStorage.getItem(getEmployeeDraftStorageKey());
+    const drafts = raw ? JSON.parse(raw) : [];
+    return Array.isArray(drafts) ? drafts : [];
+  } catch (error) {
+    console.warn('Unable to read employee drafts:', error.message);
+    return [];
+  }
+}
+
+function writeEmployeeDrafts(drafts) {
+  localStorage.setItem(getEmployeeDraftStorageKey(), JSON.stringify(drafts.slice(0, 30)));
+}
+
+function employeeDraftEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  }[char]));
+}
+
+function currentEmployeeDraftTab() {
+  return document.querySelector('.employee-form-tabs .form-tab.active')?.dataset?.formSection || 'personal';
+}
+
+function collectEmployeeDraftValues() {
+  const values = {};
+  document.querySelectorAll('#register-form-view input, #register-form-view select, #register-form-view textarea').forEach(field => {
+    if (!field.id || field.type === 'file') return;
+    values[field.id] = field.type === 'checkbox' ? Boolean(field.checked) : field.value;
+  });
+  return values;
+}
+
+function employeeDraftTitle(values) {
+  const firstName = String(values['emp-first-name'] || '').trim();
+  const lastName = String(values['emp-last-name'] || '').trim();
+  const employeeCode = String(values['emp-id'] || '').trim();
+  const position = String(values['emp-position'] || '').trim();
+  const name = [firstName, lastName].filter(Boolean).join(' ');
+  if (name && employeeCode && employeeCode !== 'Generating...') return `${name} (${employeeCode})`;
+  if (name) return name;
+  if (position) return `Draft for ${position}`;
+  if (employeeCode && employeeCode !== 'Generating...') return employeeCode;
+  return 'Untitled employee draft';
+}
+
+function updateEmployeeDraftStatus(message) {
+  const status = document.getElementById('employee-draft-status');
+  if (status) status.textContent = message || 'No draft loaded.';
+}
+
+function renderEmployeeDraftArchive() {
+  const archive = document.getElementById('employee-draft-archive');
+  if (!archive) return;
+
+  const drafts = readEmployeeDrafts().sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+  if (!drafts.length) {
+    archive.innerHTML = '<div class="employee-draft-meta">No saved drafts yet.</div>';
+    updateEmployeeDraftStatus(ACTIVE_EMPLOYEE_DRAFT_ID ? 'Draft archive is empty.' : 'No draft loaded.');
+    return;
+  }
+
+  archive.innerHTML = drafts.map(draft => {
+    const updated = draft.updated_at ? new Date(draft.updated_at).toLocaleString('en-PH') : 'Unknown date';
+    const subtitle = [draft.values?.['emp-position'], draft.values?.['emp-dept']].filter(Boolean).join(' - ') || 'Partial employee intake';
+    const activeLabel = draft.id === ACTIVE_EMPLOYEE_DRAFT_ID ? 'Loaded' : 'Load';
+    return `
+      <div class="employee-draft-row" data-draft-id="${employeeDraftEscape(draft.id)}">
+        <div>
+          <strong>${employeeDraftEscape(draft.title)}</strong>
+          <span>${employeeDraftEscape(subtitle)} | Updated ${employeeDraftEscape(updated)}</span>
+        </div>
+        <div class="employee-draft-row-actions">
+          <button class="btn btn-outline" type="button" onclick="loadEmployeeDraft('${employeeDraftEscape(draft.id)}')">${activeLabel}</button>
+          <button class="btn btn-outline" type="button" onclick="deleteEmployeeDraft('${employeeDraftEscape(draft.id)}')">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function saveEmployeeDraft() {
+  const values = collectEmployeeDraftValues();
+  const now = new Date().toISOString();
+  const id = ACTIVE_EMPLOYEE_DRAFT_ID || `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const title = employeeDraftTitle(values);
+  const drafts = readEmployeeDrafts().filter(draft => draft.id !== id);
+  drafts.unshift({
+    id,
+    title,
+    values,
+    active_tab: currentEmployeeDraftTab(),
+    created_at: readEmployeeDrafts().find(draft => draft.id === id)?.created_at || now,
+    updated_at: now
+  });
+  ACTIVE_EMPLOYEE_DRAFT_ID = id;
+  writeEmployeeDrafts(drafts);
+  renderEmployeeDraftArchive();
+  updateEmployeeDraftStatus(`Saved draft: ${title}`);
+}
+
+async function loadEmployeeDraft(draftId) {
+  const draft = readEmployeeDrafts().find(item => item.id === draftId);
+  if (!draft) {
+    alert('Draft not found.');
+    renderEmployeeDraftArchive();
+    return;
+  }
+
+  if (typeof clearEmployeeForm === 'function') clearEmployeeForm();
+  ACTIVE_EMPLOYEE_DRAFT_ID = draft.id;
+
+  const values = draft.values || {};
+  await loadEmployeePositionOptions();
+
+  Object.entries(values).forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (!field || field.type === 'file') return;
+    if (field.type === 'checkbox') {
+      field.checked = Boolean(value);
+    } else {
+      field.value = value ?? '';
+    }
+  });
+
+  const dept = document.getElementById('emp-dept')?.value || '';
+  const position = values['emp-position'] || '';
+  if (typeof bindDepartmentPositionDropdown === 'function') {
+    bindDepartmentPositionDropdown('emp-dept', 'emp-position', position);
+  } else {
+    renderEmployeePositionOptions(document.getElementById('emp-position'), dept, position);
+  }
+
+  document.getElementById('emp-current-same-home')?.dispatchEvent(new Event('change'));
+  document.getElementById('emp-mailing-same-home')?.dispatchEvent(new Event('change'));
+  if (typeof updateWageTypeUI === 'function') updateWageTypeUI();
+  if (typeof toggleEmployeeAgencyFields === 'function') toggleEmployeeAgencyFields();
+  if (typeof toggleEmployeeLifecycleDecisionFields === 'function') toggleEmployeeLifecycleDecisionFields();
+  if (typeof onEmployeeIdModeChange === 'function') await onEmployeeIdModeChange();
+  switchFormTab(draft.active_tab || 'personal');
+  renderEmployeeDraftArchive();
+  updateEmployeeDraftStatus(`Loaded draft: ${draft.title}`);
+}
+
+function deleteEmployeeDraft(draftId) {
+  const drafts = readEmployeeDrafts();
+  const draft = drafts.find(item => item.id === draftId);
+  if (!draft) return;
+  if (!confirm(`Delete draft "${draft.title}"?`)) return;
+  writeEmployeeDrafts(drafts.filter(item => item.id !== draftId));
+  if (ACTIVE_EMPLOYEE_DRAFT_ID === draftId) {
+    ACTIVE_EMPLOYEE_DRAFT_ID = null;
+    updateEmployeeDraftStatus('No draft loaded.');
+  }
+  renderEmployeeDraftArchive();
+}
+
+function clearEmployeeDraftArchive() {
+  const drafts = readEmployeeDrafts();
+  if (!drafts.length) return;
+  if (!confirm('Clear all saved employee drafts?')) return;
+  writeEmployeeDrafts([]);
+  ACTIVE_EMPLOYEE_DRAFT_ID = null;
+  renderEmployeeDraftArchive();
+  updateEmployeeDraftStatus('Draft archive cleared.');
+}
+
+function removeActiveEmployeeDraftAfterSave() {
+  if (!ACTIVE_EMPLOYEE_DRAFT_ID) return;
+  writeEmployeeDrafts(readEmployeeDrafts().filter(draft => draft.id !== ACTIVE_EMPLOYEE_DRAFT_ID));
+  ACTIVE_EMPLOYEE_DRAFT_ID = null;
+  renderEmployeeDraftArchive();
+  updateEmployeeDraftStatus('Draft converted to an employee record.');
+}
+
+function resetRegisterDraftSelection() {
+  ACTIVE_EMPLOYEE_DRAFT_ID = null;
+  updateEmployeeDraftStatus('No draft loaded.');
+  renderEmployeeDraftArchive();
 }
 
 async function loadEmployeePositionOptions() {
@@ -903,6 +1096,10 @@ function loadEmployeeData() {
     // Also load wage configuration
     loadExistingWageConfiguration(EDIT_EMPLOYEE_ID);
   }
+
+  if (window.LGSVValidation?.applyPhoneFieldHints) {
+    window.LGSVValidation.applyPhoneFieldHints(document.getElementById('register-form-view') || document);
+  }
 }
 
 // Auto-generate next employee ID
@@ -1254,7 +1451,9 @@ async function saveEmployee() {
   // window.IS_EDITING is set in loadEmployeeData()
   const isEditing = EDIT_MODE || window.PENDING_EDIT_MODE || window.IS_EDITING || false;
   let savedEmployeeNumericId = EDIT_EMPLOYEE_NUMERIC_ID;
+  let savedEmployeeCode = empId;
   let routedToOnboarding = false;
+  let saveCompleted = false;
   
   // Debug log - VERY DETAILED
   console.log('====== saveEmployee DEBUG ======');
@@ -1442,6 +1641,7 @@ async function saveEmployee() {
     console.log('Response data:', data);
     if (data.employee_code) {
       empId = data.employee_code;
+      savedEmployeeCode = data.employee_code;
       if (empIdInput) empIdInput.value = data.employee_code;
     }
     routedToOnboarding = data.routed_to === 'onboarding';
@@ -1450,15 +1650,9 @@ async function saveEmployee() {
       ? (data.message || 'Employee/applicant routed to onboarding.')
       : (isEditing ? 'Employee updated successfully!' : 'Employee added successfully!');
     alert(message);
+    removeActiveEmployeeDraftAfterSave();
     IS_SAVING = false;  // Reset double-submit flag
-    
-    // Reset edit mode flags
-    EDIT_MODE = false;
-    EDIT_EMPLOYEE_ID = null;
-    EDIT_EMPLOYEE_NUMERIC_ID = null;
-    window.IS_EDITING = false;
-    window.PENDING_EDIT_MODE = false;
-    
+
     if (routedToOnboarding) return { routedToOnboarding: true };
 
     // Save wage configuration if set
@@ -1474,21 +1668,22 @@ async function saveEmployee() {
     if (routedToOnboarding) return null;
     if (SELECTED_EMPLOYEE_PHOTO) {
       console.log('Uploading employee photo...');
-      return uploadEmployeePhoto(savedEmployeeNumericId || EDIT_EMPLOYEE_NUMERIC_ID);
+      return uploadEmployeePhoto(savedEmployeeNumericId);
     }
     return null;
   })
   .then(() => {
     if (routedToOnboarding) return null;
     // Upload documents if any files were selected
-    const hasFiles = Object.values(UPLOADED_FILES).some(f => f !== null);
+    const hasFiles = Object.values(UPLOADED_FILES).some(files => Array.isArray(files) && files.length > 0);
     if (hasFiles) {
       console.log('Uploading documents...');
-      return uploadEmployeeDocuments(empId);
+      return uploadEmployeeDocuments(savedEmployeeCode);
     }
     return null;
   })
   .then(() => {
+    saveCompleted = true;
     if (routedToOnboarding) {
       clearUploadedFiles();
       setTimeout(() => {
@@ -1498,8 +1693,8 @@ async function saveEmployee() {
     }
 
     // Reload documents list after upload
-    if (EDIT_EMPLOYEE_ID) {
-      loadEmployeeDocuments(EDIT_EMPLOYEE_ID);
+    if (savedEmployeeCode) {
+      loadEmployeeDocuments(savedEmployeeCode);
     }
     
     // Wait a moment for database to settle, then fetch fresh data and redirect
@@ -1568,6 +1763,15 @@ async function saveEmployee() {
       return;
     }
     alert('Failed to save employee: ' + err.message);
+  })
+  .finally(() => {
+    if (saveCompleted && !routedToOnboarding) {
+      EDIT_MODE = false;
+      EDIT_EMPLOYEE_ID = null;
+      EDIT_EMPLOYEE_NUMERIC_ID = null;
+      window.IS_EDITING = false;
+      window.PENDING_EDIT_MODE = false;
+    }
   });
 }
 
@@ -1792,6 +1996,7 @@ async function saveWageConfiguration(employeeCode, wageTypeId) {
     }
   } catch (err) {
     console.error('❌ Error saving wage configuration:', err);
+    throw err;
   }
   return null;
 }
@@ -1827,6 +2032,11 @@ window.initializeAddForm = function() {
 
 window.switchFormTab  = switchFormTab;
 window.saveEmployee   = saveEmployee;
+window.saveEmployeeDraft = saveEmployeeDraft;
+window.loadEmployeeDraft = loadEmployeeDraft;
+window.deleteEmployeeDraft = deleteEmployeeDraft;
+window.clearEmployeeDraftArchive = clearEmployeeDraftArchive;
+window.resetRegisterDraftSelection = resetRegisterDraftSelection;
 
 // ===== FILE UPLOAD FUNCTIONS =====
 
@@ -1953,65 +2163,50 @@ function handleFileSelect(event, docType) {
     console.log(`No file selected for ${docType}`);
     return;
   }
-  
-  console.log(`📁 File selected for ${docType}:`, file.name, `(${(file.size / 1024).toFixed(2)}KB)`);
-  
-  // Validate file size (max 5MB)
+
   const maxSize = 5 * 1024 * 1024;
   if (file.size > maxSize) {
-    console.error(`❌ File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
     alert(`File is too large. Maximum size is 5MB. Your file: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
-    event.target.value = ''; // Clear the input
+    event.target.value = '';
     return;
   }
-  
-  // Store file in memory
-  UPLOADED_FILES[docType] = file;
-  console.log(`✅ File stored in UPLOADED_FILES[${docType}]`);
-  
-  // Update status in upload box to indicate file selected
+
+  if (!Array.isArray(UPLOADED_FILES[docType])) UPLOADED_FILES[docType] = [];
+  UPLOADED_FILES[docType].push(file);
+  event.target.value = '';
+
   const statusEl = document.getElementById(`${docType}-status`);
   if (statusEl) {
-    statusEl.textContent = `✓ ${file.name}`;
+    const count = UPLOADED_FILES[docType].length;
+    statusEl.textContent = count === 1 ? `Selected: ${file.name}` : `${count} files selected`;
     statusEl.style.color = '#28a745';
     statusEl.style.fontWeight = '600';
   }
-  
-  // Render chip in preview area
+
   renderSelectedFilesChips();
-  
-  console.log(`File selected for ${DOC_TYPES[docType]}:`, file.name);
 }
 
 // Render chips for all selected files
 function renderSelectedFilesChips() {
   const previewEl = document.getElementById('selected-files-preview');
-  if (!previewEl) {
-    console.warn('⚠️ selected-files-preview element not found');
-    return;
-  }
-  
-  console.log('🎨 Rendering file chips...');
-  
-  // Clear existing chips
+  if (!previewEl) return;
+
   previewEl.innerHTML = '';
-  
+
   const docIds = ['resume', 'govid', 'nbi', 'other'];
   const docLabels = {
-    resume: '📄 Resume',
-    govid: '🆔 Gov ID',
-    nbi: '✅ NBI',
-    other: '📎 Other'
+    resume: 'Resume',
+    govid: 'Gov ID',
+    nbi: 'NBI',
+    other: 'Other'
   };
-  
+
   let chipCount = 0;
-  
-  // Add a chip for each selected file
   docIds.forEach(docId => {
-    if (UPLOADED_FILES[docId]) {
-      const file = UPLOADED_FILES[docId];
+    const files = Array.isArray(UPLOADED_FILES[docId]) ? UPLOADED_FILES[docId] : [];
+    files.forEach((file, fileIndex) => {
       const chip = document.createElement('div');
-      chip.id = `chip-${docId}`;
+      chip.id = `chip-${docId}-${fileIndex}`;
       chip.style.cssText = `
         display: inline-flex;
         align-items: center;
@@ -2025,103 +2220,93 @@ function renderSelectedFilesChips() {
         color: #e8eaf6;
         animation: slideIn 0.2s ease-out;
       `;
-      
-      // Truncate long filenames
-      let displayName = file.name;
-      if (displayName.length > 25) {
-        displayName = displayName.substring(0, 22) + '...';
-      }
-      
+
+      const displayName = file.name.length > 25 ? file.name.substring(0, 22) + '...' : file.name;
       chip.innerHTML = `
         <span style="font-weight:500;">${docLabels[docId]}</span>
-        <span style="font-size:12px;opacity:0.9;">: ${displayName}</span>
-        <button type="button" 
+        <span style="font-size:12px;opacity:0.9;">: ${employeeOptionEscape(displayName)}</span>
+        <button type="button"
                 style="background:none;border:none;color:#fff;cursor:pointer;font-weight:bold;padding:0;margin-left:6px;font-size:16px;opacity:0.8;transition:opacity 0.2s;"
                 onmouseover="this.style.opacity='1'"
                 onmouseout="this.style.opacity='0.8'"
                 title="Remove ${docLabels[docId]}"
-                onclick="removeUploadedFile('${docId}', event)">×</button>
+                onclick="removeUploadedFile('${docId}', ${fileIndex}, event)">x</button>
       `;
-      
       previewEl.appendChild(chip);
       chipCount++;
-      console.log(`✅ Chip added for ${docId}: ${file.name}`);
-    }
+    });
   });
-  
-  // If no files selected, show help message
+
   if (chipCount === 0) {
     previewEl.innerHTML = '<span style="color:var(--muted);font-size:13px;italic;">Select files to upload</span>';
-    console.log('ℹ️ No files selected');
   }
 }
 
 // Remove an uploaded file
-function removeUploadedFile(docType, event) {
+function removeUploadedFile(docType, fileIndex, event) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
   }
-  
-  console.log(`🗑️ Removing file: ${docType}`);
-  
-  // Clear from memory
-  UPLOADED_FILES[docType] = null;
-  
-  // Clear file input
+
+  if (Array.isArray(UPLOADED_FILES[docType])) {
+    UPLOADED_FILES[docType].splice(fileIndex, 1);
+  } else {
+    UPLOADED_FILES[docType] = [];
+  }
+
   const fileInput = document.getElementById(`doc-${docType}`);
   if (fileInput) fileInput.value = '';
-  
-  // Reset status text
+
   const statusEl = document.getElementById(`${docType}-status`);
   if (statusEl) {
     const labels = {
-      resume: '⬆ Upload Resume / CV',
-      govid: '⬆ Upload Government ID',
-      nbi: '⬆ Upload NBI Clearance',
-      other: '⬆ Upload Other Documents'
+      resume: 'Upload Resume / CV',
+      govid: 'Upload Government ID',
+      nbi: 'Upload NBI Clearance',
+      other: 'Upload Other Documents'
     };
-    statusEl.textContent = labels[docType];
-    statusEl.style.color = '';
-    statusEl.style.fontWeight = '';
+    const count = Array.isArray(UPLOADED_FILES[docType]) ? UPLOADED_FILES[docType].length : 0;
+    statusEl.textContent = count ? `${count} file${count === 1 ? '' : 's'} selected` : labels[docType];
+    statusEl.style.color = count ? '#28a745' : '';
+    statusEl.style.fontWeight = count ? '600' : '';
   }
-  
-  // Re-render chips
+
   renderSelectedFilesChips();
 }
 
 // Clear uploaded files
 function clearUploadedFiles() {
-  UPLOADED_FILES.resume = null;
-  UPLOADED_FILES.govid = null;
-  UPLOADED_FILES.nbi = null;
-  UPLOADED_FILES.other = null;
+  UPLOADED_FILES.resume = [];
+  UPLOADED_FILES.govid = [];
+  UPLOADED_FILES.nbi = [];
+  UPLOADED_FILES.other = [];
   clearEmployeePhotoSelection();
-  
-  document.getElementById('doc-resume').value = '';
-  document.getElementById('doc-govid').value = '';
-  document.getElementById('doc-nbi').value = '';
-  document.getElementById('doc-other').value = '';
-  
-  document.getElementById('resume-status').textContent = '⬆ Upload Resume / CV';
-  document.getElementById('govid-status').textContent = '⬆ Upload Government ID';
-  document.getElementById('nbi-status').textContent = '⬆ Upload NBI Clearance';
-  document.getElementById('other-status').textContent = '⬆ Upload Other Documents';
-  
-  // Reset status colors
-  const statusEls = document.querySelectorAll('[id$="-status"]');
-  statusEls.forEach(el => {
+
+  ['doc-resume', 'doc-govid', 'doc-nbi', 'doc-other'].forEach(id => {
+    const field = document.getElementById(id);
+    if (field) field.value = '';
+  });
+
+  const labels = {
+    'resume-status': 'Upload Resume / CV',
+    'govid-status': 'Upload Government ID',
+    'nbi-status': 'Upload NBI Clearance',
+    'other-status': 'Upload Other Documents'
+  };
+  Object.entries(labels).forEach(([id, label]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = label;
     el.style.color = '';
     el.style.fontWeight = '';
   });
-  
-  // Clear chip preview
+
   const previewEl = document.getElementById('selected-files-preview');
   if (previewEl) {
     previewEl.innerHTML = '<span style="color:var(--muted);font-size:13px;italic;">Select files to upload</span>';
   }
-  
-  // Clear documents list when adding new employee
+
   if (!EDIT_MODE) {
     const listEl = document.getElementById('documents-list');
     if (listEl) {
@@ -2134,58 +2319,36 @@ function clearUploadedFiles() {
 async function uploadEmployeeDocuments(employeeId) {
   const docIds = ['resume', 'govid', 'nbi', 'other'];
   let uploadCount = 0;
-  
-  console.log('📤 Starting document upload for employee:', employeeId);
-  
+  const queuedCount = docIds.reduce((total, docId) => total + (Array.isArray(UPLOADED_FILES[docId]) ? UPLOADED_FILES[docId].length : 0), 0);
+
   for (const docId of docIds) {
-    const file = UPLOADED_FILES[docId];
-    if (!file) {
-      console.log(`⏭️  No ${docId} file to upload`);
-      continue;
-    }
-    
-    console.log(`📁 Uploading ${docId}:`, file.name);
-    
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('docType', DOC_TYPES[docId]);
-    
-    console.log(`📤 FormData prepared for ${docId}. Sending to /api/employees/${employeeId}/documents`);
-    
-    try {
-      const response = await apiFetch(`/api/employees/${employeeId}/documents`, {
-        method: 'POST',
-        body: formData
-      });
-      
-      if (!response) {
-        console.error(`❌ No response for ${docId} - auth might have failed`);
-        continue;
+    const files = Array.isArray(UPLOADED_FILES[docId]) ? UPLOADED_FILES[docId] : [];
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('docType', DOC_TYPES[docId]);
+
+      try {
+        const response = await apiFetch(`/api/employees/${employeeId}/documents`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response) continue;
+        if (!response.ok) {
+          const error = await response.text();
+          alert(`Failed to upload ${DOC_TYPES[docId]}: ${error}`);
+        } else {
+          uploadCount++;
+        }
+      } catch (err) {
+        alert(`Error uploading ${DOC_TYPES[docId]}: ${err.message}`);
       }
-      
-      console.log(`Response status for ${docId}:`, response.status, response.statusText);
-      
-      if (!response.ok) {
-        const error = await response.text();
-        console.error(`❌ Failed to upload ${docId}:`, response.status, error);
-        alert(`Failed to upload ${DOC_TYPES[docId]}: ${error}`);
-      } else {
-        const data = await response.json();
-        console.log(`✅ Uploaded ${docId} successfully:`, data);
-        uploadCount++;
-      }
-    } catch (err) {
-      console.error(`❌ Error uploading ${docId}:`, err.message, err);
-      alert(`Error uploading ${DOC_TYPES[docId]}: ${err.message}`);
     }
   }
-  
-  console.log(`✅ Upload complete: ${uploadCount}/${docIds.filter(d => UPLOADED_FILES[d]).length} documents uploaded`);
-  
-  // Clear files after upload
+
+  console.log(`Upload complete: ${uploadCount}/${queuedCount} documents uploaded`);
   clearUploadedFiles();
-  
-  // Small delay to ensure database writes are complete
   return new Promise(resolve => setTimeout(resolve, 500));
 }
 
@@ -2273,6 +2436,7 @@ function initializeRegisterPage() {
   initializeEmployeeAddressAutocomplete();
   initializeEmployeeLifecycleControls();
   initializeEmployeePositionDropdowns();
+  renderEmployeeDraftArchive();
   
   // Apply role-based access after a short delay to ensure DOM is ready
   setTimeout(() => {

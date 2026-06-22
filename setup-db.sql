@@ -65,7 +65,7 @@ CREATE TABLE documents (
   file_path VARCHAR(500) NOT NULL,
   uploaded_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
-  UNIQUE KEY unique_doc_per_emp (employee_id, document_type)
+  INDEX idx_documents_employee_type_uploaded (employee_id, document_type, uploaded_date)
 );
 
 -- Leave Requests table

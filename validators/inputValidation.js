@@ -114,6 +114,31 @@ const NAME_MESSAGE = 'Name fields must contain letters only and cannot contain n
 const NUMERIC_MESSAGE = 'This field must contain numbers only.';
 const EMAIL_MESSAGE = 'Please enter a valid email address.';
 const UNSAFE_INPUT_MESSAGE = 'Input contains disallowed characters or patterns.';
+const FIELD_LABELS = {
+  contact_number: 'Contact No',
+  contact_num: 'Contact No',
+  mobile: 'Mobile',
+  phone_number: 'Phone Number',
+  emergency_contact_num: 'Primary Phone Number',
+  emergency_contact_number: 'Emergency Contact Number',
+  emergency_contact_secondary_num: 'Secondary Phone Number',
+  emergency_contact_secondary_number: 'Secondary Phone Number',
+  agency_contact_number: 'Agency Contact Number',
+  sss_number: 'SSS',
+  sss: 'SSS',
+  philhealth_number: 'PhilHealth',
+  philhealth: 'PhilHealth',
+  pagibig_number: 'Pag-IBIG',
+  pagibig: 'Pag-IBIG',
+  tin: 'TIN',
+  tax_id: 'Tax ID',
+  base_rate: 'Basic Salary',
+  basic_salary: 'Basic Salary',
+  allowances: 'Allowances',
+  allowance: 'Allowance',
+  hours_worked: 'Hours Worked',
+  training_hours: 'Training Hours',
+};
 const MAX_TEXT_LENGTH = 2000;
 const MAX_MONEY_VALUE = Number(process.env.MAX_PAYROLL_AMOUNT || 10000000);
 const MAX_RATE_VALUE = Number(process.env.MAX_PAYROLL_RATE || 1000000);
@@ -153,6 +178,11 @@ function normalizeFieldName(key) {
     .toLowerCase();
 }
 
+function fieldLabel(fieldName) {
+  const normalized = normalizeFieldName(fieldName);
+  return FIELD_LABELS[normalized] || normalized.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
 function isEmpty(value) {
   return value === null || value === undefined || (typeof value === 'string' && value === '');
 }
@@ -188,7 +218,7 @@ function isPhilippinePhone(value) {
 function isGovernmentId(value, fieldName) {
   if (typeof value !== 'string' && typeof value !== 'number') return false;
   const text = String(value).trim();
-  if (!/^[\d-]+$/.test(text)) return false;
+  if (!/^[\d\s-]+$/.test(text)) return false;
   const digits = text.replace(/\D/g, '');
   if (/sss/.test(fieldName)) return /^\d{10}$/.test(digits);
   if (/philhealth|pagibig/.test(fieldName)) return /^\d{12}$/.test(digits);
@@ -241,16 +271,16 @@ function validateAndSanitize(value, fieldName, errors, path = fieldName) {
   if (isEmpty(value)) return value;
 
   if (NAME_FIELDS.has(normalizedField) && !isName(value)) {
-    errors.push({ field: path, message: NAME_MESSAGE });
+    errors.push({ field: path, message: `${fieldLabel(path)}: ${NAME_MESSAGE}` });
   } else if (PHONE_FIELDS.has(normalizedField) && !isPhilippinePhone(value)) {
-    errors.push({ field: path, message: 'Please enter a valid Philippine phone number.' });
+    errors.push({ field: path, message: `${fieldLabel(path)}: Please enter a valid Philippine phone number.` });
   } else if (GOVERNMENT_ID_FIELDS.has(normalizedField) && !isGovernmentId(value, normalizedField)) {
-    errors.push({ field: path, message: NUMERIC_MESSAGE });
+    errors.push({ field: path, message: `${fieldLabel(path)}: ${NUMERIC_MESSAGE} Check the required digit length.` });
   } else if (INTEGER_FIELDS.has(normalizedField) && !isIntegerText(value)) {
-    errors.push({ field: path, message: NUMERIC_MESSAGE });
+    errors.push({ field: path, message: `${fieldLabel(path)}: ${NUMERIC_MESSAGE}` });
   } else if (DECIMAL_FIELDS.has(normalizedField)) {
     if (!isDecimalText(value)) {
-      errors.push({ field: path, message: NUMERIC_MESSAGE });
+      errors.push({ field: path, message: `${fieldLabel(path)}: ${NUMERIC_MESSAGE}` });
     } else {
       const numericValue = Number(value);
       const max = /hours?|overtime|undertime|late/.test(normalizedField)
@@ -261,11 +291,11 @@ function validateAndSanitize(value, fieldName, errors, path = fieldName) {
             ? MAX_RATE_VALUE
             : MAX_MONEY_VALUE;
       if (numericValue > max) {
-        errors.push({ field: path, message: `Numeric value exceeds the configured maximum of ${max}.` });
+        errors.push({ field: path, message: `${fieldLabel(path)}: Numeric value exceeds the configured maximum of ${max}.` });
       }
     }
   } else if (EMAIL_FIELDS.has(normalizedField) && !isEmail(value)) {
-    errors.push({ field: path, message: EMAIL_MESSAGE });
+    errors.push({ field: path, message: `${fieldLabel(path)}: ${EMAIL_MESSAGE}` });
   }
 
   return value;

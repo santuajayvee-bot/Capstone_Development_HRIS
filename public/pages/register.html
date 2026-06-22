@@ -125,6 +125,74 @@
     color: var(--form-accent-ink);
   }
 
+  .employee-draft-panel {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) auto;
+    gap: 16px;
+    align-items: start;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--form-line);
+    background: rgba(220, 173, 119, .06);
+  }
+
+  .employee-draft-title {
+    margin: 0 0 4px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .employee-draft-meta {
+    color: var(--form-muted);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .employee-draft-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .employee-draft-archive {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 8px;
+  }
+
+  .employee-draft-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--form-line);
+    border-radius: 4px;
+    background: #101720;
+  }
+
+  .employee-draft-row strong {
+    display: block;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .employee-draft-row span {
+    display: block;
+    color: var(--form-muted);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  .employee-draft-row-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .employee-form-section {
     padding: 22px 20px;
   }
@@ -330,6 +398,16 @@
       padding: 14px;
     }
 
+    .employee-draft-panel,
+    .employee-draft-row {
+      grid-template-columns: 1fr;
+    }
+
+    .employee-draft-actions,
+    .employee-draft-row-actions {
+      justify-content: stretch;
+    }
+
     .register-actions .btn {
       width: 100%;
     }
@@ -356,6 +434,20 @@
           <input id="emp-id" placeholder="EMP000001" />
           <div class="employee-id-hint" id="emp-id-hint">The system will generate the next available employee ID.</div>
         </div>
+      </div>
+    </div>
+
+    <div class="employee-draft-panel">
+      <div>
+        <p class="employee-draft-title">Draft Archive</p>
+        <div class="employee-draft-meta" id="employee-draft-status">No draft loaded.</div>
+      </div>
+      <div class="employee-draft-actions">
+        <button class="btn btn-outline" type="button" onclick="saveEmployeeDraft()">Save Draft</button>
+        <button class="btn btn-outline" type="button" onclick="clearEmployeeDraftArchive()">Clear Drafts</button>
+      </div>
+      <div class="employee-draft-archive" id="employee-draft-archive">
+        <div class="employee-draft-meta">No saved drafts yet.</div>
       </div>
     </div>
 
@@ -403,7 +495,7 @@
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Primary Contact Info</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>Personal Mobile Number</label><input id="emp-contact" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Personal Mobile Number</label><input id="emp-contact" type="tel" placeholder="+63 9XX XXX XXXX" inputmode="tel" /></div>
           <div class="form-group"><label>Personal Email Address</label><input id="emp-email" type="email" placeholder="personal@email.com" data-validation="email" required /></div>
           <div class="form-group"><label>Work Email Address</label><input id="emp-work-email" type="email" placeholder="name@company.com" data-validation="email" /></div>
           <div class="form-group full">
@@ -440,8 +532,8 @@
         <div class="employee-form-grid">
           <div class="form-group"><label>Contact Name(s)</label><input id="emp-emerg-name" placeholder="Contact name(s)" data-validation="name" /></div>
           <div class="form-group"><label>Relationship to Employee</label><input id="emp-emerg-relationship" placeholder="Parent, spouse, sibling" /></div>
-          <div class="form-group"><label>Primary Phone Number</label><input id="emp-emerg-phone" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
-          <div class="form-group"><label>Secondary Phone Number</label><input id="emp-emerg-secondary-phone" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>Primary Phone Number</label><input id="emp-emerg-phone" type="tel" placeholder="+63 9XX XXX XXXX" inputmode="tel" /></div>
+          <div class="form-group"><label>Secondary Phone Number</label><input id="emp-emerg-secondary-phone" type="tel" placeholder="+63 9XX XXX XXXX" inputmode="tel" /></div>
           <div class="form-group"><label>Alternative Email Address</label><input id="emp-emerg-email" type="email" placeholder="optional@email.com" data-validation="email" /></div>
           <div class="form-group full"><label>Residential Address</label><input id="emp-emerg-address" placeholder="Emergency contact residential address" /></div>
         </div>
@@ -481,7 +573,7 @@
             <div class="employee-form-grid">
               <div class="form-group"><label>Agency Name</label><input id="emp-agency-name" placeholder="Agency name" /></div>
               <div class="form-group"><label>Agency Contact Person</label><input id="emp-agency-contact-person" placeholder="Contact person" data-validation="name" /></div>
-              <div class="form-group"><label>Agency Contact Number</label><input id="emp-agency-contact-number" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+              <div class="form-group"><label>Agency Contact Number</label><input id="emp-agency-contact-number" type="tel" placeholder="+63 9XX XXX XXXX" inputmode="tel" /></div>
               <div class="form-group"><label>Deployment Status</label><select id="emp-deployment-status"><option>Pending Deployment</option><option>Deployed</option><option>On Hold</option><option>Ended</option></select></div>
               <div class="form-group"><label>Contract Start Date</label><input id="emp-contract-start-date" type="date" /></div>
               <div class="form-group"><label>Contract End Date</label><input id="emp-contract-end-date" type="date" /></div>
@@ -599,6 +691,7 @@
 
     <div class="register-actions">
       <button class="btn btn-outline" onclick="clearEmployeeForm()">Clear</button>
+      <button class="btn btn-outline" onclick="saveEmployeeDraft()">Save Draft</button>
       <button class="btn btn-green" onclick="saveEmployee()">Save Employee</button>
     </div>
   </div>
