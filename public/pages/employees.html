@@ -242,24 +242,24 @@
   }
 
   .emp-action-dropdown {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    min-width: 170px;
+    position: fixed;
+    min-width: 220px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
     display: none;
     padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: #151a2a;
-    box-shadow: 0 14px 35px rgba(0,0,0,0.35);
-    z-index: 500;
+    border: 1px solid #d6dce6;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 18px 42px rgba(15,23,42,0.18);
+    z-index: 15000;
   }
 
   .emp-action-dropdown::before {
-    content: "Status Action";
+    content: "Actions";
     display: block;
     padding: 4px 8px 8px;
-    color: var(--muted);
+    color: #64748b;
     font-size: 10px;
     font-weight: 800;
     letter-spacing: .08em;
@@ -271,13 +271,22 @@
     gap: 4px;
   }
 
+  .emp-menu-section {
+    padding: 10px 8px 3px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
   .emp-menu-item {
     width: 100%;
     padding: 9px 10px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 6px;
     background: transparent;
-    color: var(--text);
+    color: #1f2937;
     font-size: 12px;
     font-weight: 700;
     text-align: left;
@@ -285,21 +294,22 @@
   }
 
   .emp-menu-item:hover {
-    background: rgba(79,124,255,0.14);
+    background: #edf4ff;
+    color: #1d4ed8;
   }
 
   .emp-menu-item.activate {
-    color: #9ee6b0;
+    color: #15803d;
   }
 
   .emp-menu-item.deactivate {
-    color: #ffb4b4;
+    color: #b91c1c;
   }
 
   .emp-menu-item:disabled {
-    color: var(--muted);
+    color: #94a3b8;
     cursor: not-allowed;
-    opacity: 0.55;
+    opacity: 1;
   }
 
   .emp-menu-item:disabled:hover {

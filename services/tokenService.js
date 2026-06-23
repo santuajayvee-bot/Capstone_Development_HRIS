@@ -77,6 +77,7 @@ function generateAccessToken(user) {
     forcePasswordChange: Boolean(getUserValue(user, 'forcePasswordChange', ['force_password_change', 'mustChangePassword'])),
     mustChangePassword: Boolean(getUserValue(user, 'mustChangePassword', ['forcePasswordChange', 'force_password_change'])),
     passwordChangedAt: getUserValue(user, 'passwordChangedAt', ['Password_Changed_At', 'password_changed_at']) || null,
+    tokenVersion: Number(getUserValue(user, 'tokenVersion', ['Token_Version', 'token_version']) || 0),
     permissions: Array.isArray(user.permissions) ? user.permissions : [],
     employeeProfile: user.employeeProfile || null,
     jti: jwtId,

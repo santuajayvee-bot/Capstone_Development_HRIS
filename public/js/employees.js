@@ -7,8 +7,9 @@ let EMPLOYEES_RAW = []; // Store raw API data for editing
 let wageTypesForPayroll = [];
 let EMPLOYEE_DIRECTORY_PAGE = 1;
 const EMPLOYEE_DIRECTORY_PAGE_SIZE = 10;
-const EMPLOYMENT_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended'];
-const OFFBOARDING_DETAIL_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended']);
+const EMPLOYMENT_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded', 'Rehired'];
+const OFFBOARDING_DETAIL_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded']);
+const REONBOARDABLE_STATUSES = new Set(['Resigned', 'Terminated', 'End of Contract', 'Retired', 'Offboarded']);
 const ORG_SETUP_DEFAULT_PAGE_SIZE = 10;
 const ORG_SETUP_PAGINATION = {
   departments: 1,
@@ -564,6 +565,17 @@ function renderEmployees(list) {
     const statusMenuItems = EMPLOYMENT_STATUS_OPTIONS.map(option => `
             <button class="emp-menu-item status-${statusClassName(option)}" type="button" onclick="setEmployeeStatus('${employeeId}', '${option}')" ${employmentStatus === option ? 'disabled' : ''}>Mark ${option}</button>
     `).join('');
+    const pendingOffboardingId = e._raw?.pending_offboarding_request_id;
+    const pendingReonboardingId = e._raw?.pending_reonboarding_request_id;
+    const lifecycleAction = pendingOffboardingId
+      ? `<button class="emp-menu-item" type="button" onclick="viewLifecycleRequest('${employeeId}', 'offboarding')">View Offboarding Request</button>`
+      : pendingReonboardingId
+        ? `<button class="emp-menu-item" type="button" onclick="viewLifecycleRequest('${employeeId}', 'reonboarding')">View Re-onboarding Request</button>`
+        : employmentStatus === 'Active'
+          ? `<button class="emp-menu-item deactivate" type="button" onclick="openOffboardingDrawer('${employeeId}')">Offboard Employee</button>`
+          : REONBOARDABLE_STATUSES.has(employmentStatus)
+            ? `<button class="emp-menu-item activate" type="button" onclick="openReonboardingDrawer('${employeeId}')">Re-onboard Employee</button>`
+            : '';
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     
@@ -583,7 +595,9 @@ function renderEmployees(list) {
           <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${employeeId}')">${employeeActionDotsIcon()}</button>
           <div class="emp-action-dropdown" id="emp-action-menu-${employeeId}">
             <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${employeeId}', 'personal')">View Profile</button>
-${statusMenuItems}
+            ${lifecycleAction ? `<div class="emp-menu-section">Lifecycle</div>${lifecycleAction}` : ''}
+            <div class="emp-menu-section">Status</div>
+            ${statusMenuItems}
           </div>
         </div>
       </td>
@@ -664,6 +678,9 @@ function bindEmployeeDirectoryPagination() {
 function closeEmployeeActionMenus() {
   document.querySelectorAll('.emp-action-dropdown.open').forEach(menu => {
     menu.classList.remove('open');
+    menu.style.top = '';
+    menu.style.left = '';
+    menu.style.right = '';
   });
   document.querySelectorAll('.emp-action-trigger.active').forEach(button => {
     button.classList.remove('active');
@@ -679,7 +696,17 @@ function toggleEmployeeActionMenu(event, employeeId) {
   closeEmployeeActionMenus();
 
   if (menu && !isOpen) {
+    const rect = trigger.getBoundingClientRect();
     menu.classList.add('open');
+    const menuHeight = menu.offsetHeight;
+    const menuWidth = menu.offsetWidth;
+    const preferredTop = rect.bottom + 8;
+    const top = preferredTop + menuHeight > window.innerHeight
+      ? Math.max(12, rect.top - menuHeight - 8)
+      : preferredTop;
+    menu.style.top = `${top}px`;
+    menu.style.left = `${Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12))}px`;
+    menu.style.right = 'auto';
     trigger.classList.add('active');
   }
 }
@@ -871,6 +898,280 @@ async function setEmployeeStatus(employeeId, newStatus) {
   } catch (error) {
     console.error('Error updating status:', error);
     await showAlert('Failed to update employee status: ' + error.message, 'Error', 'error');
+  }
+}
+
+function employeeTodayIsoDate() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 10);
+}
+
+async function offboardEmployee(employeeId) {
+  openOffboardingDrawer(employeeId);
+}
+
+async function reonboardEmployee(employeeId) {
+  openReonboardingDrawer(employeeId);
+}
+
+function getDirectoryEmployee(employeeId) {
+  return EMPLOYEES_RAW.find(e => Number(e.id) === Number(employeeId));
+}
+
+function lifecycleReadonly(label, value) {
+  return `<label><span>${employeeSetupEscape(label)}</span><input type="text" value="${employeeSetupEscape(value || '-')}" readonly></label>`;
+}
+
+function ensureLifecycleDrawer() {
+  let drawer = document.getElementById('employee-lifecycle-drawer');
+  if (drawer) return drawer;
+  drawer = document.createElement('div');
+  drawer.id = 'employee-lifecycle-drawer';
+  drawer.style.cssText = 'position:fixed;inset:0;display:none;z-index:12000;background:rgba(15,23,42,.62);align-items:center;justify-content:center;padding:24px;';
+  drawer.innerHTML = '<div id="employee-lifecycle-panel" style="width:min(980px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:hidden;background:#fff;color:#1b2430;border-radius:10px;box-shadow:0 24px 70px rgba(15,23,42,.34);display:flex;flex-direction:column;"></div>';
+  drawer.addEventListener('click', event => {
+    if (event.target === drawer) closeLifecycleDrawer();
+  });
+  document.body.appendChild(drawer);
+  return drawer;
+}
+
+function lifecycleFormShell(title, body, submitHandler) {
+  const drawer = ensureLifecycleDrawer();
+  const panel = document.getElementById('employee-lifecycle-panel');
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:20px 22px 14px;border-bottom:1px solid #e2e8f0;">
+      <div>
+        <h2 style="margin:0;font-size:20px;">${employeeSetupEscape(title)}</h2>
+        <div id="employee-lifecycle-step-label" style="margin-top:4px;color:#64748b;font-size:12px;font-weight:700;"></div>
+      </div>
+      <button type="button" onclick="closeLifecycleDrawer()" style="border:0;background:#eef1f5;border-radius:6px;padding:9px 12px;cursor:pointer;">Close</button>
+    </div>
+    <div id="employee-lifecycle-steps" style="display:flex;gap:8px;overflow:auto;padding:14px 22px 0;"></div>
+    <form id="employee-lifecycle-form" style="display:block;padding:14px 22px 18px;overflow:hidden;">
+      <div id="employee-lifecycle-pages" style="min-height:420px;max-height:calc(100vh - 250px);overflow:auto;">
+        ${body}
+      </div>
+      <div style="display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:16px;border-top:1px solid #e2e8f0;padding-top:14px;">
+        <button type="button" id="employee-lifecycle-prev" class="btn btn-outline">Previous</button>
+        <div id="employee-lifecycle-progress" style="color:#64748b;font-size:12px;font-weight:700;"></div>
+        <div style="display:flex;gap:10px;">
+        <button type="button" onclick="closeLifecycleDrawer()" class="btn btn-outline">Cancel</button>
+          <button type="button" id="employee-lifecycle-next" class="btn btn-primary">Next</button>
+          <button type="submit" id="employee-lifecycle-submit" class="btn btn-primary">Submit</button>
+        </div>
+      </div>
+    </form>
+  `;
+  panel.querySelectorAll('label').forEach(label => {
+    label.style.cssText = 'display:grid;gap:5px;font-size:12px;font-weight:700;color:#566070;';
+    const control = label.querySelector('input,select,textarea');
+    if (control) control.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #cfd6e0;border-radius:6px;padding:9px;font-size:13px;color:#1b2430;background:#fff;';
+    if (control?.disabled) control.style.background = '#f3f6fa';
+  });
+  panel.querySelectorAll('fieldset').forEach(fieldset => {
+    fieldset.style.cssText = 'display:none;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px;border:1px solid #d8dee8;border-radius:8px;padding:18px;margin:0;';
+  });
+  panel.querySelectorAll('legend').forEach(legend => {
+    legend.style.cssText = 'padding:0 6px;font-size:12px;font-weight:800;color:#334155;text-transform:uppercase;letter-spacing:.05em;';
+  });
+  const form = document.getElementById('employee-lifecycle-form');
+  form.addEventListener('submit', submitHandler);
+  setupLifecycleWizard();
+  drawer.style.display = 'flex';
+}
+
+function setupLifecycleWizard() {
+  const form = document.getElementById('employee-lifecycle-form');
+  const pages = [...form.querySelectorAll('fieldset')];
+  const steps = document.getElementById('employee-lifecycle-steps');
+  const label = document.getElementById('employee-lifecycle-step-label');
+  const progress = document.getElementById('employee-lifecycle-progress');
+  const prev = document.getElementById('employee-lifecycle-prev');
+  const next = document.getElementById('employee-lifecycle-next');
+  const submit = document.getElementById('employee-lifecycle-submit');
+  if (!pages.length) return;
+  let current = 0;
+  const pageTitle = page => page.querySelector('legend')?.textContent?.trim() || 'Details';
+  steps.innerHTML = pages.map((page, index) => `<button type="button" class="employee-lifecycle-step" data-step="${index}" style="border:1px solid #d8dee8;background:#fff;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:800;color:#475569;white-space:nowrap;cursor:pointer;">${index + 1}. ${employeeSetupEscape(pageTitle(page))}</button>`).join('');
+  const render = () => {
+    pages.forEach((page, index) => {
+      page.style.display = index === current ? 'grid' : 'none';
+    });
+    steps.querySelectorAll('.employee-lifecycle-step').forEach((button, index) => {
+      button.style.background = index === current ? '#1d4ed8' : '#fff';
+      button.style.color = index === current ? '#fff' : '#475569';
+      button.style.borderColor = index === current ? '#1d4ed8' : '#d8dee8';
+    });
+    label.textContent = pageTitle(pages[current]);
+    progress.textContent = `Step ${current + 1} of ${pages.length}`;
+    prev.disabled = current === 0;
+    next.style.display = current === pages.length - 1 ? 'none' : 'inline-flex';
+    submit.style.display = current === pages.length - 1 ? 'inline-flex' : 'none';
+  };
+  const canLeaveCurrent = () => {
+    const controls = [...pages[current].querySelectorAll('input,select,textarea')].filter(control => !control.disabled);
+    for (const control of controls) {
+      if (!control.checkValidity()) {
+        control.reportValidity();
+        return false;
+      }
+    }
+    return true;
+  };
+  prev.onclick = () => { if (current > 0) { current -= 1; render(); } };
+  next.onclick = () => { if (current < pages.length - 1 && canLeaveCurrent()) { current += 1; render(); } };
+  steps.querySelectorAll('.employee-lifecycle-step').forEach(button => {
+    button.onclick = () => {
+      const target = Number(button.dataset.step);
+      if (target <= current || canLeaveCurrent()) {
+        current = target;
+        render();
+      }
+    };
+  });
+  render();
+}
+
+function closeLifecycleDrawer() {
+  const drawer = document.getElementById('employee-lifecycle-drawer');
+  if (drawer) drawer.style.display = 'none';
+}
+
+function fullEmployeeName(employee) {
+  return `${employee?.first_name || ''} ${employee?.middle_name || ''} ${employee?.last_name || ''}`.replace(/\s+/g, ' ').trim();
+}
+
+function openOffboardingDrawer(employeeId) {
+  closeEmployeeActionMenus();
+  const employee = getDirectoryEmployee(employeeId);
+  if (!employee) return;
+  const role = employee.current_system_role || employee.role || '-';
+  lifecycleFormShell('Offboard Employee', `
+    <fieldset>
+      <legend>Employee Information</legend>
+      ${lifecycleReadonly('Employee ID', employee.employee_code)}
+      ${lifecycleReadonly('Name', fullEmployeeName(employee))}
+      ${lifecycleReadonly('Current Position', employee.position)}
+      ${lifecycleReadonly('Department', employee.department)}
+      ${lifecycleReadonly('Current Status', employee.status)}
+      ${lifecycleReadonly('Current System Role', role)}
+    </fieldset>
+    <fieldset>
+      <legend>Offboarding Details</legend>
+      <label><span>Offboarding Type</span><select name="offboarding_type" required><option>Resignation</option><option>Termination</option><option>End of Contract</option><option>Retirement</option><option>AWOL</option></select></label>
+      <label><span>Effective Date</span><input name="effective_date" type="date" required value="${employeeTodayIsoDate()}"></label>
+      <label><span>Last Working Day</span><input name="last_working_day" type="date" required value="${employeeTodayIsoDate()}"></label>
+      <label style="grid-column:1/-1;"><span>Reason</span><textarea name="reason" required rows="3"></textarea></label>
+      <label><span>Clearance Status</span><select name="clearance_status" required><option>Pending</option><option>Cleared</option><option>Not Cleared</option></select></label>
+      <label><span>Account Action</span><select name="account_action" required><option>Disable Immediately</option><option>Disable on Effective Date</option></select></label>
+      <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
+    </fieldset>
+    <fieldset>
+      <legend>Clearance Checklist</legend>
+      <label><span>Company Property Status</span><select name="company_property_status" required><option>Pending</option><option>Partially Returned</option><option>Completed</option><option>Not Applicable</option></select></label>
+      <label><span>Turnover Status</span><select name="turnover_status" required><option>Pending</option><option>Completed</option><option>Not Required</option></select></label>
+      <label><span>Exit Interview Status</span><select name="exit_interview_status" required><option>Pending</option><option>Completed</option><option>Not Required</option></select></label>
+      <label><span>Attendance and Leave Clearance</span><select name="attendance_leave_clearance" required><option>Pending</option><option>Checked</option><option>With Issue</option></select></label>
+    </fieldset>
+    <fieldset>
+      <legend>Payroll Clearance</legend>
+      <label><span>Payroll Clearance Status</span><select name="payroll_clearance_status" disabled><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select></label>
+      <label><span>Payroll Checked By</span><input name="payroll_checked_by" value="Payroll Officer" disabled></label>
+      <label><span>Final Pay Status</span><select name="final_pay_status" disabled><option>Pending</option><option>For Processing</option><option>For Approval</option><option>Approved</option><option>Released</option><option>With Issue</option></select></label>
+      <label><span>Final Pay Approved By</span><input name="final_pay_approved_by" value="Payroll Manager" disabled></label>
+      <label><span>Final Pay Release Date</span><input name="final_pay_release_date" type="date" disabled></label>
+    </fieldset>
+    <fieldset>
+      <legend>IT Access Revocation</legend>
+      <label><span>IT Access Status</span><select name="it_access_status" disabled><option>Pending</option><option>Disabled</option><option>Revoked</option></select></label>
+      <label><span>Permissions Revoked</span><select name="permissions_revoked" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
+      <label><span>Active Sessions/JWT Invalidated</span><select name="sessions_invalidated" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
+      <label><span>Biometric/Attendance Access Removed</span><select name="biometric_access_removed" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
+      <label><span>IT Processed By</span><input name="it_processed_by" value="IT Staff" disabled></label>
+      <label><span>IT Processed Date</span><input name="it_processed_at" type="datetime-local" disabled></label>
+    </fieldset>
+    <fieldset>
+      <legend>Process Tracking</legend>
+      <label><span>Offboarding Status</span><select name="offboarding_status" required><option>In Progress</option><option>Pending</option><option>Cancelled</option></select></label>
+      <label><span>Processed By</span><input name="processed_by_display" value="Logged-in HR user" readonly></label>
+      <label><span>Completed By</span><input name="completed_by_display" value="Auto-filled on completion" disabled></label>
+      <label><span>Completed Date</span><input name="completed_at" type="datetime-local" disabled></label>
+    </fieldset>
+  `, async event => submitLifecycleForm(event, `/api/employees/${employeeId}/offboard`, 'Employee offboarding request submitted.'));
+}
+
+function openReonboardingDrawer(employeeId) {
+  closeEmployeeActionMenus();
+  const employee = getDirectoryEmployee(employeeId);
+  if (!employee) return;
+  const departments = typeof getEmployeeDepartments === 'function' ? getEmployeeDepartments() : [];
+  const departmentOptions = ['<option value="">Select department</option>'].concat(departments.map(dept => `<option value="${dept.id}" ${String(employee.department_id) === String(dept.id) ? 'selected' : ''}>${employeeSetupEscape(dept.name)}</option>`)).join('');
+  lifecycleFormShell('Re-onboard Employee', `
+    ${lifecycleReadonly('Previous Employee ID', employee.employee_code)}
+    ${lifecycleReadonly('Name', fullEmployeeName(employee))}
+    ${lifecycleReadonly('Previous Position', employee.position)}
+    ${lifecycleReadonly('Previous Department', employee.department)}
+    ${lifecycleReadonly('Previous Offboarding Date', employee.separation_date)}
+    ${lifecycleReadonly('Previous Offboarding Reason', employee.separation_reason)}
+    <label><span>Rehire Date</span><input name="rehire_date" type="date" required value="${employeeTodayIsoDate()}"></label>
+    <label><span>New Position</span><input name="new_position" required value="${employeeSetupEscape(employee.position || '')}"></label>
+    <label><span>Department</span><select name="department_id">${departmentOptions}</select></label>
+    <label><span>Work Location</span><input name="work_location" value="${employeeSetupEscape(employee.work_location || '')}"></label>
+    <label><span>Employment Type</span><select name="employment_type" required><option>Full-time</option><option>Part-time</option><option>Contractual</option><option>Regular</option></select></label>
+    <label><span>Hiring Type</span><select name="hiring_type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
+    <label><span>New Supervisor</span><input name="new_supervisor" value="${employeeSetupEscape(employee.supervisor || '')}"></label>
+    <label><span>Employee Level</span><select name="employee_level"><option>Rank and File</option><option>Supervisor</option><option>Manager</option><option>Executive</option></select></label>
+    <label><span>Payroll Setup Status</span><select name="payroll_setup_status" required><option>Pending</option><option>Ready</option></select></label>
+    <label><span>Assigned System Role</span><select name="assigned_system_role" required><option value="employee">Regular Employee</option><option value="hr_manager">HR Manager</option><option value="payroll_officer">Payroll Officer</option><option value="payroll_manager">Payroll Manager</option></select></label>
+    <label><span>Force Password Reset</span><select name="force_password_reset"><option value="true">Yes</option><option value="false">No</option></select></label>
+    <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
+  `, async event => submitLifecycleForm(event, `/api/employees/${employeeId}/reonboard`, 'Employee re-onboarding request submitted.'));
+}
+
+async function submitLifecycleForm(event, endpoint, fallbackMessage) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (endpoint.includes('/offboard')) {
+    const confirmed = confirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.');
+    if (!confirmed) return;
+  }
+  const payload = Object.fromEntries(new FormData(form).entries());
+
+  try {
+    const response = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to submit lifecycle request.');
+    closeLifecycleDrawer();
+    await showAlert(data.message || fallbackMessage, 'Success', 'success');
+    await fetchEmployees();
+  } catch (error) {
+    console.error('Lifecycle request error:', error);
+    await showAlert(error.message, 'Error', 'error');
+  }
+}
+
+async function viewLifecycleRequest(employeeId, type) {
+  closeEmployeeActionMenus();
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}/lifecycle`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to load lifecycle request.');
+    const list = type === 'offboarding' ? data.offboarding_cases || [] : data.reonboarding_cases || [];
+    const request = list.find(item => item.status === 'Pending') || list[0];
+    if (!request) return showAlert('No lifecycle request found.', 'Lifecycle Request', 'info');
+    const text = Object.entries(request)
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
+      .join('<br>');
+    await showAlert(text, type === 'offboarding' ? 'Offboarding Request' : 'Re-onboarding Request', 'info');
+  } catch (error) {
+    await showAlert(error.message, 'Error', 'error');
   }
 }
 
@@ -3482,6 +3783,12 @@ window.switchEditTab = switchEditTab;
 window.updateEditPayrollWageType = updateEditPayrollWageType;
 window.editEmployeeFromManage = editEmployeeFromManage;
 window.toggleEmployeeStatus = toggleEmployeeStatus;
+window.offboardEmployee = offboardEmployee;
+window.reonboardEmployee = reonboardEmployee;
+window.openOffboardingDrawer = openOffboardingDrawer;
+window.openReonboardingDrawer = openReonboardingDrawer;
+window.closeLifecycleDrawer = closeLifecycleDrawer;
+window.viewLifecycleRequest = viewLifecycleRequest;
 window.deleteEmployeeFromManage = deleteEmployeeFromManage;
 window.uploadEmployeePhoto = uploadEmployeePhoto;
 window.deleteEmployeePhoto = deleteEmployeePhoto;
@@ -3523,6 +3830,12 @@ window.resetOrganizationSetupPositionFilters = resetOrganizationSetupPositionFil
 window.openEmployeeDetail = openEmployeeDetail;
 window.toggleEmployeeActionMenu = toggleEmployeeActionMenu;
 window.setEmployeeStatus = setEmployeeStatus;
+window.offboardEmployee = offboardEmployee;
+window.reonboardEmployee = reonboardEmployee;
+window.openOffboardingDrawer = openOffboardingDrawer;
+window.openReonboardingDrawer = openReonboardingDrawer;
+window.closeLifecycleDrawer = closeLifecycleDrawer;
+window.viewLifecycleRequest = viewLifecycleRequest;
 window.prefillEmployeeForm = prefillEmployeeForm;
 window.openPayrollConfigModal = openPayrollConfigModal;
 window.closePayrollConfigModal = closePayrollConfigModal;

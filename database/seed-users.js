@@ -43,11 +43,11 @@ const USERS = [
   },
   {
     username: 'payroll.officer', password: 'officer123', role: 'payroll_officer', email: 'payroll.officer@lgsv.local',
-    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer' }
+    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer', contact_number: '09181234567' }
   },
   {
     username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local',
-    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager' }
+    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager', contact_number: '09191234567' }
   },
   { username: 'serjo.justine', password: 'emp123', role: 'employee', email: 'serjo.justine@lgsv.local', employee_id: 37 },
   { username: 'chris.brown', password: 'emp123', role: 'employee', email: 'chris.brown@lgsv.local', employee_id: 11 },
@@ -74,6 +74,7 @@ function employeeDefaults(user) {
     first_name: employee.first_name || user.username.split('.')[0] || 'LGSV',
     last_name: employee.last_name || user.username.split('.')[1] || 'User',
     email: user.email,
+    contact_number: employee.contact_number || null,
     position: employee.position || user.role.replace(/_/g, ' '),
   };
 }
@@ -100,16 +101,18 @@ async function findEmployee(connection, user) {
   return rows[0]?.id || null;
 }
 
-async function resetEmployeeAuth(connection, employeeId, passwordHash, employeesHasForcePasswordChange = false) {
+async function resetEmployeeAuth(connection, employeeId, passwordHash, employeesHasForcePasswordChange = false, user = {}) {
+  const employee = employeeDefaults(user);
   await connection.execute(
     `UPDATE employees
         SET Employee_ID = COALESCE(Employee_ID, id),
+            contact_number = COALESCE(?, contact_number),
             Password_Hash = ?,
             Password_Changed_At = NOW(),
             Failed_Login_Attempts = 0,
             Locked_Until = NULL
       WHERE id = ?`,
-    [passwordHash, employeeId]
+    [employee.contact_number, passwordHash, employeeId]
   );
 
   if (employeesHasForcePasswordChange) {
@@ -124,22 +127,23 @@ async function ensureEmployee(connection, user, passwordHash, employeesHasForceP
   const existingEmployeeId = await findEmployee(connection, user);
 
   if (existingEmployeeId) {
-    await resetEmployeeAuth(connection, existingEmployeeId, passwordHash, employeesHasForcePasswordChange);
+    await resetEmployeeAuth(connection, existingEmployeeId, passwordHash, employeesHasForcePasswordChange, user);
     return existingEmployeeId;
   }
 
   const employee = employeeDefaults(user);
   const [result] = await connection.execute(
     `INSERT INTO employees
-       (employee_code, first_name, last_name, email, position, employment_type,
+       (employee_code, first_name, last_name, email, contact_number, position, employment_type,
         status, Password_Hash, Password_Changed_At, Failed_Login_Attempts,
         Locked_Until)
-     VALUES (?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL)`,
     [
       employee.employee_code,
       employee.first_name,
       employee.last_name,
       employee.email,
+      employee.contact_number,
       employee.position,
       passwordHash,
     ]

@@ -32,6 +32,7 @@ const ROLE_ALIASES = {
   'hr_manager': 'hr_manager',
   'payroll_officer': 'payroll_officer',
   'payroll_manager': 'payroll_manager',
+  'it_staff': 'it_staff',
   'manager': 'hr_manager',
   'employee': 'employee'
 };
@@ -42,13 +43,14 @@ const ROLES = {
   hr_manager:      ['hr_manager', 'hr_admin'],
   payroll_officer: ['payroll_officer'],
   payroll_manager: ['payroll_manager'],
+  it_staff:        ['it_staff'],
   payroll_any:     ['payroll_officer', 'payroll_manager'],
   hr_ops:          ['hr_manager', 'hr_admin'],
   hr_final_approval: ['hr_manager', 'hr_admin'],
   staff_management: ['hr_manager', 'hr_admin'],
   admin_any:       ['system_admin', 'admin'],
   staff_any:       ['hr_manager', 'hr_admin', 'payroll_officer', 'payroll_manager'],
-  any:             ['hr_admin', 'hr_manager', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
+  any:             ['hr_admin', 'hr_manager', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'it_staff', 'employee'],
 };
 
 const PERMISSION_ALIASES = {
@@ -65,6 +67,7 @@ const PERMISSION_ALIASES = {
 const CLIENT_AUTHORITY_FIELDS = new Set([
   'access_level',
   'account_status',
+  'employee_status',
   'admin',
   'admin_flag',
   'is_admin',
@@ -72,6 +75,7 @@ const CLIENT_AUTHORITY_FIELDS = new Set([
   'permissions',
   'role',
   'roles',
+  'token_version',
   'user_type',
 ]);
 
@@ -102,6 +106,14 @@ async function getAccountSessionState(tokenPayload) {
   const verifiedUserId = Number.parseInt(tokenPayload?.id || tokenPayload?.userId, 10);
   if (!Number.isFinite(verifiedUserId) || verifiedUserId <= 0) return null;
 
+  for (const [name, definition] of [
+    ['account_status', "ENUM('Active','Disabled','Offboarded','Inactive') NOT NULL DEFAULT 'Active'"],
+    ['token_version', 'INT NOT NULL DEFAULT 0'],
+  ]) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM users LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
+  }
+
   const [rows] = await pool.execute(
     `SELECT
        u.id AS user_id,
@@ -114,6 +126,8 @@ async function getAccountSessionState(tokenPayload) {
        r.access_level,
        e.Employee_ID,
        e.status AS employee_status,
+       u.account_status,
+       COALESCE(u.token_version, 0) AS token_version,
        u.force_password_change,
        COALESCE(u.password_changed_at, e.Password_Changed_At) AS password_changed_at,
        s.Session_ID,
@@ -137,7 +151,9 @@ async function getAccountSessionState(tokenPayload) {
 function isInactiveAccount(accountState) {
   if (!accountState) return true;
   if (accountState.is_active === 0 || accountState.is_active === false) return true;
-  return ['inactive', 'resigned', 'terminated', 'end of contract'].includes(
+  const accountStatus = String(accountState.account_status || '').trim().toLowerCase();
+  if (['disabled', 'offboarded', 'inactive'].includes(accountStatus)) return true;
+  return ['inactive', 'resigned', 'terminated', 'end of contract', 'retired', 'offboarded'].includes(
     String(accountState.employee_status || '').trim().toLowerCase()
   );
 }
@@ -219,6 +235,9 @@ async function requireAuth(req, res, next) {
     }
 
     if (isTokenOlderThanPasswordChange(verifiedToken, accountState.password_changed_at)) {
+      return authError(res, 'Session expired. Please log in again.');
+    }
+    if (Number(verifiedToken.tokenVersion || 0) !== Number(accountState.token_version || 0)) {
       return authError(res, 'Session expired. Please log in again.');
     }
 

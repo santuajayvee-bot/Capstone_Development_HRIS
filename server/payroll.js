@@ -68,6 +68,89 @@ const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIE
   module: 'PAYROLL_SECURITY',
 });
 
+const PAYROLL_CLEARANCE_ALLOWED_FIELDS = new Set([
+  'last_payroll_period_checked',
+  'attendance_checked',
+  'leave_balance_checked',
+  'deductions_checked',
+  'loans_or_cash_advances_checked',
+  'benefits_or_13th_month_checked',
+  'payroll_remarks',
+  'payroll_clearance_status',
+]);
+
+const FINAL_PAY_ALLOWED_FIELDS = new Set([
+  'final_pay_status',
+  'final_pay_release_date',
+  'final_pay_remarks',
+]);
+
+const YES_NO = new Set(['Yes', 'No']);
+const YES_NO_NA = new Set(['Yes', 'No', 'Not Applicable']);
+const PAYROLL_CLEARANCE_STATUSES = new Set(['Pending', 'Checked', 'Cleared', 'With Issue']);
+const FINAL_PAY_STATUSES = new Set(['Pending', 'For Approval', 'Approved', 'Released', 'With Issue']);
+
+function hasPayrollRole(req, roles) {
+  return roles.includes(req.user?.role);
+}
+
+function cleanPayrollText(value, max = 500) {
+  const text = String(value || '').trim();
+  if (text.length > max) throw new Error(`Maximum length is ${max} characters.`);
+  if (/[<>]/.test(text)) throw new Error('Unsupported characters detected.');
+  return text || null;
+}
+
+function requireChoice(body, field, allowed) {
+  const value = String(body[field] || '').trim();
+  if (!allowed.has(value)) {
+    const err = new Error(`${field} is invalid.`);
+    err.status = 400;
+    throw err;
+  }
+  return value;
+}
+
+async function ensurePayrollOffboardingSchema(pool) {
+  const columns = [
+    ['payroll_clearance_status', "ENUM('Pending','Checked','Cleared','With Issue') NOT NULL DEFAULT 'Pending'"],
+    ['payroll_checked_by', 'INT NULL'],
+    ['payroll_checked_at', 'DATETIME NULL'],
+    ['last_payroll_period_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['attendance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['leave_balance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['deductions_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['loans_or_cash_advances_checked', "ENUM('Yes','No','Not Applicable') NOT NULL DEFAULT 'No'"],
+    ['benefits_or_13th_month_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['payroll_remarks', 'VARCHAR(500) NULL'],
+    ['final_pay_status', "ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'"],
+    ['final_pay_approved_by', 'INT NULL'],
+    ['final_pay_approved_at', 'DATETIME NULL'],
+    ['final_pay_release_date', 'DATE NULL'],
+    ['final_pay_remarks', 'VARCHAR(500) NULL'],
+  ];
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN final_pay_status ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  for (const [name, definition] of columns) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM employee_offboarding_case LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE employee_offboarding_case ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+async function auditOffboardingPayroll(req, action, row, result, remarks = null) {
+  const pool = require('../config/db');
+  await logPayrollAudit(pool, req, action, {
+    employee_id: row?.employee_id || null,
+    remarks,
+    metadata: {
+      result,
+      role: req.user?.role || null,
+      offboarding_id: row?.offboarding_case_id || null,
+      ip: currentRequestIp(req),
+    },
+  });
+}
+
 function currentUserId(req) {
   return req.user?.id || req.user?.userId || req.user?.sub || null;
 }
@@ -6792,6 +6875,136 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(PAYROLL
     res.status(500).json({ error: 'Failed to update payroll status' });
   } finally {
     if (connection) connection.release();
+  }
+});
+
+function offboardingPayrollSelect(whereClause) {
+  return `SELECT oc.offboarding_case_id, oc.employee_id, oc.offboarding_type, oc.separation_type,
+                 oc.effective_date, oc.last_working_day, oc.separation_reason, oc.status AS offboarding_status,
+                 oc.clearance_status, oc.payroll_clearance_status, oc.final_pay_status,
+                 oc.last_payroll_period_checked, oc.attendance_checked, oc.leave_balance_checked,
+                 oc.deductions_checked, oc.loans_or_cash_advances_checked, oc.benefits_or_13th_month_checked,
+                 oc.payroll_remarks, oc.final_pay_release_date, oc.final_pay_remarks,
+                 e.employee_code, e.first_name, e.middle_name, e.last_name, e.position,
+                 d.name AS department
+            FROM employee_offboarding_case oc
+            JOIN employees e ON e.id = oc.employee_id
+            LEFT JOIN departments d ON d.id = e.department_id
+           WHERE ${whereClause}
+           ORDER BY oc.last_working_day ASC, oc.created_at DESC`;
+}
+
+router.get('/offboarding-clearance', requireAuth, requireRole([...ROLES.payroll_any, ...ROLES.hr_manager, ...ROLES.admin_any]), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePayrollOffboardingSchema(pool);
+    const [rows] = await pool.execute(offboardingPayrollSelect(
+      "oc.payroll_clearance_status IN ('Pending','Checked','Cleared','With Issue') AND oc.status IN ('Pending','In Progress')"
+    ));
+    await auditOffboardingPayroll(req, 'PAYROLL_CLEARANCE_VIEWED', null, 'success', 'Viewed pending offboarding payroll clearances');
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
+  } catch (err) {
+    console.error('Error loading offboarding payroll clearances:', err.message);
+    res.status(500).json({ error: 'Failed to load offboarding payroll clearances.' });
+  }
+});
+
+router.patch('/offboarding-clearance/:id', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePayrollOffboardingSchema(pool);
+    if (Object.keys(req.body || {}).some(key => !PAYROLL_CLEARANCE_ALLOWED_FIELDS.has(key))) {
+      return res.status(400).json({ error: 'Invalid payroll clearance field.' });
+    }
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Valid offboarding id is required.' });
+    const [rows] = await pool.execute('SELECT * FROM employee_offboarding_case WHERE offboarding_case_id = ? LIMIT 1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Offboarding record not found.' });
+    const row = rows[0];
+    const body = req.body || {};
+    const clearanceStatus = body.payroll_clearance_status ? requireChoice(body, 'payroll_clearance_status', PAYROLL_CLEARANCE_STATUSES) : row.payroll_clearance_status || 'Pending';
+    const remarks = Object.prototype.hasOwnProperty.call(body, 'payroll_remarks') ? cleanPayrollText(body.payroll_remarks) : row.payroll_remarks;
+
+    await pool.execute(
+      `UPDATE employee_offboarding_case
+          SET last_payroll_period_checked = ?,
+              attendance_checked = ?,
+              leave_balance_checked = ?,
+              deductions_checked = ?,
+              loans_or_cash_advances_checked = ?,
+              benefits_or_13th_month_checked = ?,
+              payroll_remarks = ?,
+              payroll_clearance_status = ?,
+              payroll_checked_by = ?,
+              payroll_checked_at = NOW()
+        WHERE offboarding_case_id = ?`,
+      [
+        body.last_payroll_period_checked ? requireChoice(body, 'last_payroll_period_checked', YES_NO) : row.last_payroll_period_checked || 'No',
+        body.attendance_checked ? requireChoice(body, 'attendance_checked', YES_NO) : row.attendance_checked || 'No',
+        body.leave_balance_checked ? requireChoice(body, 'leave_balance_checked', YES_NO) : row.leave_balance_checked || 'No',
+        body.deductions_checked ? requireChoice(body, 'deductions_checked', YES_NO) : row.deductions_checked || 'No',
+        body.loans_or_cash_advances_checked ? requireChoice(body, 'loans_or_cash_advances_checked', YES_NO_NA) : row.loans_or_cash_advances_checked || 'No',
+        body.benefits_or_13th_month_checked ? requireChoice(body, 'benefits_or_13th_month_checked', YES_NO) : row.benefits_or_13th_month_checked || 'No',
+        remarks,
+        clearanceStatus,
+        currentUserId(req),
+        id,
+      ]
+    );
+    await auditOffboardingPayroll(req, clearanceStatus === 'With Issue' ? 'PAYROLL_CLEARANCE_MARKED_WITH_ISSUE' : 'PAYROLL_CLEARANCE_UPDATED', row, 'success', remarks);
+    res.json({ message: 'Payroll clearance updated.' });
+  } catch (err) {
+    console.error('Error updating payroll clearance:', err.message);
+    res.status(err.status || 400).json({ error: safePayrollError(err, 'Failed to update payroll clearance.') });
+  }
+});
+
+router.get('/final-pay-approval', requireAuth, requireRole([...ROLES.payroll_manager, ...ROLES.admin_any]), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePayrollOffboardingSchema(pool);
+    const [rows] = await pool.execute(offboardingPayrollSelect(
+      "oc.payroll_clearance_status IN ('Checked','Cleared') AND oc.final_pay_status IN ('Pending','For Approval') AND oc.status IN ('Pending','In Progress')"
+    ));
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
+  } catch (err) {
+    console.error('Error loading final pay approvals:', err.message);
+    res.status(500).json({ error: 'Failed to load final pay approvals.' });
+  }
+});
+
+router.patch('/final-pay-approval/:id', requireAuth, requireRole(ROLES.payroll_manager), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    await ensurePayrollOffboardingSchema(pool);
+    if (Object.keys(req.body || {}).some(key => !FINAL_PAY_ALLOWED_FIELDS.has(key))) {
+      return res.status(400).json({ error: 'Invalid final pay field.' });
+    }
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Valid offboarding id is required.' });
+    const finalPayStatus = requireChoice(req.body, 'final_pay_status', FINAL_PAY_STATUSES);
+    const releaseDate = req.body.final_pay_release_date || null;
+    if (releaseDate && Number.isNaN(new Date(releaseDate).getTime())) return res.status(400).json({ error: 'Final pay release date is invalid.' });
+    const remarks = cleanPayrollText(req.body.final_pay_remarks);
+    const [rows] = await pool.execute('SELECT * FROM employee_offboarding_case WHERE offboarding_case_id = ? LIMIT 1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Offboarding record not found.' });
+    const row = rows[0];
+
+    await pool.execute(
+      `UPDATE employee_offboarding_case
+          SET final_pay_status = ?,
+              final_pay_release_date = ?,
+              final_pay_remarks = ?,
+              final_pay_approved_by = CASE WHEN ? IN ('Approved','Released') THEN ? ELSE final_pay_approved_by END,
+              final_pay_approved_at = CASE WHEN ? IN ('Approved','Released') THEN NOW() ELSE final_pay_approved_at END
+        WHERE offboarding_case_id = ?`,
+      [finalPayStatus, releaseDate, remarks, finalPayStatus, currentUserId(req), finalPayStatus, id]
+    );
+    await auditOffboardingPayroll(req, finalPayStatus === 'Released' ? 'FINAL_PAY_RELEASED' : 'FINAL_PAY_APPROVED', row, 'success', remarks);
+    res.json({ message: 'Final pay status updated.' });
+  } catch (err) {
+    console.error('Error updating final pay approval:', err.message);
+    res.status(err.status || 400).json({ error: safePayrollError(err, 'Failed to update final pay status.') });
   }
 });
 

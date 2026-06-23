@@ -18,6 +18,8 @@
     <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Salary Calculation</button>
     <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
     <button class="payroll-tab" data-payroll-tab="payslips" onclick="switchPayrollTab('payslips')">Payslips</button>
+    <button class="payroll-tab" data-payroll-tab="offboarding-clearance" onclick="switchPayrollTab('offboarding-clearance')">Offboarding Clearance</button>
+    <button class="payroll-tab" data-payroll-tab="final-pay-approval" onclick="switchPayrollTab('final-pay-approval')">Final Pay Approval</button>
   </div>
   <div class="payroll-nav-group">
     <span>Payroll Configuration</span>
@@ -34,6 +36,32 @@
     <button class="payroll-tab" data-payroll-tab="reports" onclick="switchPayrollTab('reports')">Payroll Reports</button>
   </div>
 </div>
+
+<section class="payroll-panel" id="payroll-tab-offboarding-clearance">
+  <div class="payroll-form-page">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h3>Offboarding Clearance</h3>
+        <p class="muted-small">Payroll Officer review for offboarding records that need payroll checking.</p>
+      </div>
+      <button class="btn btn-outline" onclick="loadOffboardingClearance()">Refresh</button>
+    </div>
+    <div id="offboarding-clearance-grid" style="margin-top:14px;"></div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-final-pay-approval">
+  <div class="payroll-form-page">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h3>Final Pay Approval</h3>
+        <p class="muted-small">Payroll Manager approval and release tracking for cleared offboarding records.</p>
+      </div>
+      <button class="btn btn-outline" onclick="loadFinalPayApprovals()">Refresh</button>
+    </div>
+    <div id="final-pay-approval-grid" style="margin-top:14px;"></div>
+  </div>
+</section>
 
 <section class="payroll-panel active" id="payroll-tab-dashboard">
   <div class="payroll-filter-bar">

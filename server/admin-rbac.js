@@ -15,6 +15,7 @@ const router   = express.Router();
 const pool     = require('../config/db');
 const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
+const { decryptColumnValue } = require('./data-protection');
 const {
   hashTemporaryPassword,
   validateTemporaryPassword,
@@ -30,6 +31,16 @@ async function hasColumn(tableName, columnName) {
     [tableName, columnName]
   );
   return Number(rows[0]?.count || 0) > 0;
+}
+
+function decryptEmployeeUserFields(row) {
+  if (!row) return row;
+  ['first_name', 'last_name'].forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(row, field)) {
+      row[field] = decryptColumnValue(row[field]);
+    }
+  });
+  return row;
 }
 
 // ── Argon2 Configuration (OWASP recommended) ────────────────
@@ -556,7 +567,7 @@ router.get('/users', async (req, res) => {
        LEFT JOIN employees e ON e.id = u.employee_id
        ORDER BY u.id`
     );
-    return res.json(rows);
+    return res.json(rows.map(decryptEmployeeUserFields));
   } catch (err) {
     console.error('❌ [RBAC] list users error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch users.' });

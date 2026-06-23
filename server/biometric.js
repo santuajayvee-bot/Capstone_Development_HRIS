@@ -12,6 +12,7 @@ const {
   getDeviceSecret,
 } = require('./attendance-service');
 const { encryptAES256 } = require('./crypto');
+const { decryptColumnValue } = require('./data-protection');
 const { emitAttendanceCreated } = require('./realtime');
 const {
   getActiveAttendancePolicy,
@@ -27,6 +28,25 @@ const BIOMETRIC_ATTENDANCE_STATUSES = "ENUM('PENDING_VALIDATION','VALIDATED','RE
 
 function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>]/g, '').slice(0, maxLength);
+}
+
+function biometricEmployeeName(row) {
+  const first = decryptColumnValue(row?.first_name) || '';
+  const middle = decryptColumnValue(row?.middle_name) || '';
+  const last = decryptColumnValue(row?.last_name) || '';
+  return [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
+    || row?.employee_code
+    || (row?.employee_id ? `Employee #${row.employee_id}` : 'Employee');
+}
+
+function withBiometricEmployeeName(row) {
+  return row ? {
+    ...row,
+    first_name: undefined,
+    middle_name: undefined,
+    last_name: undefined,
+    employee_name: biometricEmployeeName(row),
+  } : row;
 }
 
 function biometricStep(step, message, meta = {}) {
@@ -349,7 +369,7 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
     );
     const [latest] = await pool.execute(
       `SELECT bse.scan_timestamp, bse.attendance_type, bse.verification_status, bse.verification_score,
-              bse.error_message, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+              bse.error_message, e.employee_code, e.first_name, e.middle_name, e.last_name
          FROM biometric_scan_event bse
          LEFT JOIN employees e ON e.id = bse.employee_id
         ${req.user.employeeId ? 'WHERE bse.employee_id = ?' : ''}
@@ -360,7 +380,7 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
     res.json({
       device: devices[0] || null,
       devices,
-      latest_scan: latest[0] || null,
+      latest_scan: withBiometricEmployeeName(latest[0]) || null,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load biometric status.' });
@@ -380,13 +400,13 @@ router.get('/station-status', async (_req, res) => {
     );
     const [latest] = await pool.execute(
       `SELECT bse.scan_timestamp, bse.attendance_type, bse.verification_status, bse.verification_score,
-              bse.error_message, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+              bse.error_message, e.employee_code, e.first_name, e.middle_name, e.last_name
          FROM biometric_scan_event bse
          LEFT JOIN employees e ON e.id = bse.employee_id
         ORDER BY bse.created_at DESC
         LIMIT 1`
     );
-    res.json({ device: devices[0] || null, latest_scan: latest[0] || null });
+    res.json({ device: devices[0] || null, latest_scan: withBiometricEmployeeName(latest[0]) || null });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load attendance station status.' });
   }
@@ -640,8 +660,7 @@ async function recordBiometricAttendance(req, res, options = {}) {
 
     const [attendanceRows] = await pool.execute(
       `SELECT al.verification_status, ats.payroll_eligible,
-              e.employee_code, e.department_id,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+              e.employee_code, e.department_id, e.first_name, e.middle_name, e.last_name
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
          LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
@@ -649,10 +668,10 @@ async function recordBiometricAttendance(req, res, options = {}) {
         LIMIT 1`,
       [attendanceId]
     );
-    const attendanceMeta = attendanceRows[0] || {};
+    const attendanceMeta = withBiometricEmployeeName(attendanceRows[0]) || {};
     const realtimePayload = {
       employee_id: employeeId,
-      employee_name: attendanceMeta.employee_name || `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+      employee_name: attendanceMeta.employee_name || biometricEmployeeName(employee),
       employee_code: attendanceMeta.employee_code || employee.employee_code,
       department_id: attendanceMeta.department_id,
       scan_type: scanType,

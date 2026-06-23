@@ -111,6 +111,7 @@ async function buildAuthenticatedUser(user) {
     Access_Level: user.Access_Level,
     forcePasswordChange: Boolean(Number(user.force_password_change)),
     mustChangePassword: Boolean(Number(user.force_password_change)),
+    tokenVersion: Number(user.token_version || 0),
     passwordChangedAt: user.Password_Changed_At || null,
     permissions,
     employeeProfile,

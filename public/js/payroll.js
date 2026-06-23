@@ -11,6 +11,8 @@ let salaryCalculationPage = 1;
 const SALARY_CALCULATION_PAGE_SIZE = 10;
 let payrollReportPage = 1;
 let selectedPayrollReport = null;
+let offboardingClearanceRows = [];
+let finalPayApprovalRows = [];
 let weeklyPayrollEmployees = [];
 let pieceRateConfig = {
   sew_types: [],
@@ -1522,6 +1524,142 @@ function switchPayrollTab(tab) {
     if (typeof prepareSwrFxrRegistry === 'function') prepareSwrFxrRegistry();
   }
   if (targetTab === 'records') loadSalaryCalculations();
+  if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
+  if (targetTab === 'final-pay-approval') loadFinalPayApprovals();
+}
+
+function payrollOffboardingTable(rows, actionRenderer) {
+  if (!rows.length) return '<div class="empty-state">No offboarding records found.</div>';
+  return `
+    <table class="payroll-table">
+      <thead><tr>
+        <th>Employee ID</th><th>Employee Name</th><th>Position</th><th>Department</th>
+        <th>Offboarding Type</th><th>Last Working Day</th><th>Payroll Clearance</th><th>Final Pay</th><th>Actions</th>
+      </tr></thead>
+      <tbody>${rows.map(row => `
+        <tr>
+          <td>${payrollEscape(row.employee_code || '-')}</td>
+          <td>${payrollEscape(row.employee_name || '-')}</td>
+          <td>${payrollEscape(row.position || '-')}</td>
+          <td>${payrollEscape(row.department || '-')}</td>
+          <td>${payrollEscape(row.offboarding_type || '-')}</td>
+          <td>${payrollEscape(row.last_working_day || '-')}</td>
+          <td>${payrollEscape(row.payroll_clearance_status || 'Pending')}</td>
+          <td>${payrollEscape(row.final_pay_status || 'Pending')}</td>
+          <td>${actionRenderer(row)}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table>
+  `;
+}
+
+async function loadOffboardingClearance() {
+  const grid = document.getElementById('offboarding-clearance-grid');
+  if (grid) grid.innerHTML = '<div class="muted-small">Loading...</div>';
+  try {
+    const res = await apiFetch('/api/payroll/offboarding-clearance');
+    const data = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(data.error || 'Failed to load offboarding clearances.');
+    offboardingClearanceRows = data;
+    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => `<button class="btn btn-outline" onclick="openPayrollClearanceReview(${Number(row.offboarding_case_id)})">Review</button>`);
+  } catch (err) {
+    if (grid) grid.innerHTML = `<div class="empty-state">${payrollEscape(err.message)}</div>`;
+  }
+}
+
+async function loadFinalPayApprovals() {
+  const grid = document.getElementById('final-pay-approval-grid');
+  if (grid) grid.innerHTML = '<div class="muted-small">Loading...</div>';
+  try {
+    const res = await apiFetch('/api/payroll/final-pay-approval');
+    const data = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(data.error || 'Failed to load final pay approvals.');
+    finalPayApprovalRows = data;
+    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => `<button class="btn btn-outline" onclick="openFinalPayReview(${Number(row.offboarding_case_id)})">Review</button>`);
+  } catch (err) {
+    if (grid) grid.innerHTML = `<div class="empty-state">${payrollEscape(err.message)}</div>`;
+  }
+}
+
+function offboardingReadonlyBlock(row) {
+  const item = (label, value) => `<label>${label}<input value="${payrollEscape(value || '-')}" readonly /></label>`;
+  return `
+    <div class="payroll-breakdown-grid">
+      ${item('Employee ID', row.employee_code)}
+      ${item('Name', row.employee_name)}
+      ${item('Position', row.position)}
+      ${item('Department', row.department)}
+      ${item('Offboarding Type', row.offboarding_type)}
+      ${item('Effective Date', row.effective_date)}
+      ${item('Last Working Day', row.last_working_day)}
+      ${item('Reason', row.separation_reason)}
+    </div>
+  `;
+}
+
+function payrollModal(id, title, body) {
+  document.getElementById(id)?.remove();
+  const modal = document.createElement('div');
+  modal.id = id;
+  modal.className = 'payroll-breakdown-modal';
+  modal.innerHTML = `<div class="payroll-breakdown-card"><h2>${payrollEscape(title)}</h2>${body}</div>`;
+  modal.addEventListener('click', event => { if (event.target.id === id) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+function openPayrollClearanceReview(caseId) {
+  const row = offboardingClearanceRows.find(item => Number(item.offboarding_case_id) === Number(caseId));
+  if (!row) return;
+  payrollModal('payroll-clearance-modal', 'Payroll Clearance Review', `
+    ${offboardingReadonlyBlock(row)}
+    <form id="payroll-clearance-form" class="payroll-breakdown-grid" onsubmit="submitPayrollClearance(event, ${caseId})">
+      ${['last_payroll_period_checked','attendance_checked','leave_balance_checked','deductions_checked','benefits_or_13th_month_checked'].map(field => `
+        <label>${field.replace(/_/g, ' ')}<select name="${field}"><option ${row[field] === 'No' ? 'selected' : ''}>No</option><option ${row[field] === 'Yes' ? 'selected' : ''}>Yes</option></select></label>
+      `).join('')}
+      <label>loans or cash advances checked<select name="loans_or_cash_advances_checked"><option ${row.loans_or_cash_advances_checked === 'No' ? 'selected' : ''}>No</option><option ${row.loans_or_cash_advances_checked === 'Yes' ? 'selected' : ''}>Yes</option><option ${row.loans_or_cash_advances_checked === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option></select></label>
+      <label>payroll clearance status<select name="payroll_clearance_status"><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select></label>
+      <label style="grid-column:1/-1;">payroll remarks<textarea name="payroll_remarks" rows="3">${payrollEscape(row.payroll_remarks || '')}</textarea></label>
+      <div class="payroll-breakdown-actions" style="grid-column:1/-1;"><button class="btn btn-outline" type="button" onclick="document.getElementById('payroll-clearance-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+    </form>
+  `);
+  document.querySelector('#payroll-clearance-form [name="payroll_clearance_status"]').value = row.payroll_clearance_status || 'Pending';
+}
+
+async function submitPayrollClearance(event, caseId) {
+  event.preventDefault();
+  const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const res = await apiFetch(`/api/payroll/offboarding-clearance/${caseId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return alert(data.error || 'Failed to update payroll clearance.');
+  alert(data.message || 'Payroll clearance updated.');
+  document.getElementById('payroll-clearance-modal')?.remove();
+  loadOffboardingClearance();
+}
+
+function openFinalPayReview(caseId) {
+  const row = finalPayApprovalRows.find(item => Number(item.offboarding_case_id) === Number(caseId));
+  if (!row) return;
+  payrollModal('final-pay-modal', 'Final Pay Approval', `
+    ${offboardingReadonlyBlock(row)}
+    <form id="final-pay-form" class="payroll-breakdown-grid" onsubmit="submitFinalPayApproval(event, ${caseId})">
+      <label>Final Pay Status<select name="final_pay_status"><option>Pending</option><option>For Approval</option><option>Approved</option><option>Released</option><option>With Issue</option></select></label>
+      <label>Final Pay Release Date<input name="final_pay_release_date" type="date" value="${payrollEscape(row.final_pay_release_date || '')}" /></label>
+      <label style="grid-column:1/-1;">Final Pay Remarks<textarea name="final_pay_remarks" rows="3">${payrollEscape(row.final_pay_remarks || '')}</textarea></label>
+      <div class="payroll-breakdown-actions" style="grid-column:1/-1;"><button class="btn btn-outline" type="button" onclick="document.getElementById('final-pay-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+    </form>
+  `);
+  document.querySelector('#final-pay-form [name="final_pay_status"]').value = row.final_pay_status || 'Pending';
+}
+
+async function submitFinalPayApproval(event, caseId) {
+  event.preventDefault();
+  const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const res = await apiFetch(`/api/payroll/final-pay-approval/${caseId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return alert(data.error || 'Failed to update final pay.');
+  alert(data.message || 'Final pay updated.');
+  document.getElementById('final-pay-modal')?.remove();
+  loadFinalPayApprovals();
 }
 
 async function loadPieceRateConfig() {
@@ -2990,6 +3128,12 @@ window.recordApprovedPayrollOnBlockchain = recordApprovedPayrollOnBlockchain;
 window.generatePayslipPreview = generatePayslipPreview;
 window.exportPayslipPdf = exportPayslipPdf;
 window.switchPayrollTab = switchPayrollTab;
+window.loadOffboardingClearance = loadOffboardingClearance;
+window.openPayrollClearanceReview = openPayrollClearanceReview;
+window.submitPayrollClearance = submitPayrollClearance;
+window.loadFinalPayApprovals = loadFinalPayApprovals;
+window.openFinalPayReview = openFinalPayReview;
+window.submitFinalPayApproval = submitFinalPayApproval;
 window.refreshPayrollDashboard = refreshPayrollDashboard;
 window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;

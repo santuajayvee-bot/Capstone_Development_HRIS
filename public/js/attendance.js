@@ -369,9 +369,10 @@ function renderAttendanceSummaryCell(primaryStatus, summary) {
 
 function validationLabel(value) {
   const normalized = normalizeValidationStatus(value);
-  if (normalized === 'PAYROLL_READY' || normalized === 'VALIDATED' || normalized === 'CORRECTED_BY_HR') return 'Validated';
+  if (normalized === 'PAYROLL_READY') return 'Payroll Ready';
+  if (normalized === 'VALIDATED' || normalized === 'CORRECTED_BY_HR') return formalValidationStatus(normalized);
   if (normalized === 'REJECTED') return 'Rejected';
-  return 'Pending';
+  return formalValidationStatus(normalized);
 }
 
 function actionDotsIcon() {
@@ -582,6 +583,24 @@ function normalizeValidationStatus(value) {
   return raw || '-';
 }
 
+function formalValidationStatus(value) {
+  const normalized = normalizeValidationStatus(value);
+  const labels = {
+    PAYROLL_READY: 'Payroll Ready',
+    PENDING_VALIDATION: 'Pending Validation',
+    NEEDS_REVIEW: 'Needs Review',
+    REJECTED: 'Rejected',
+    CORRECTED_BY_HR: 'Corrected by HR',
+    INCOMPLETE: 'Incomplete',
+    VALIDATED: 'Validated'
+  };
+  if (labels[normalized]) return labels[normalized];
+  return String(value || '-')
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
 function isPayrollReadyRecord(record) {
   const status = normalizeValidationStatus(record.verification_status);
   return status === 'PAYROLL_READY' || Number(record.payroll_ready || record.payroll_eligible || 0) === 1;
@@ -725,7 +744,7 @@ function exportAttendanceRecords() {
     minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes'),
     minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes'),
     record.attendance_status || record.status || '',
-    normalizeValidationStatus(record.verification_status),
+    formalValidationStatus(record.verification_status),
     isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready'
   ]);
   const csv = [headers, ...rows]
@@ -781,7 +800,7 @@ function openAttendanceDetail(attendanceId) {
     <section>
       <h4>Validation History</h4>
       <table><tbody>
-        <tr><th>Validation Status</th><td>${badge(normalizeValidationStatus(record.verification_status))}</td><th>Latest Action</th><td>${esc(record.source || '-')}</td></tr>
+        <tr><th>Validation Status</th><td>${badge(formalValidationStatus(record.verification_status))}</td><th>Latest Action</th><td>${esc(record.source || '-')}</td></tr>
       </tbody></table>
     </section>
     <section>
@@ -890,24 +909,33 @@ async function verifyIntegrity(attendanceId) {
   }
 }
 
-async function loadEmployees() {
-  if (ATT_EMPLOYEES.length) {
+async function loadEmployees(force = false) {
+  if (ATT_EMPLOYEES.length && !force) {
     populateEmployeeSelects();
     return;
   }
   try {
-    const res = await apiFetch('/api/employees');
-    if (!res?.ok) return;
+    const res = await apiFetch('/api/attendance/employees');
+    if (!res?.ok) {
+      const select = document.getElementById('manual-employee');
+      if (select) select.innerHTML = '<option value="">Unable to load employees</option>';
+      return;
+    }
     ATT_EMPLOYEES = await res.json();
     populateEmployeeSelects();
   } catch (err) {
     console.error('Employee list error:', err);
+    const select = document.getElementById('manual-employee');
+    if (select) select.innerHTML = '<option value="">Unable to load employees</option>';
   }
 }
 
 function populateEmployeeSelects() {
   const options = '<option value="">Select employee</option>' + ATT_EMPLOYEES
-    .map(employee => `<option value="${Number(employee.id)}">${esc(employee.first_name)} ${esc(employee.last_name)} (${esc(employee.employee_code)})</option>`)
+    .map(employee => {
+      const name = employee.employee_name || [employee.first_name, employee.middle_name, employee.last_name].filter(Boolean).join(' ') || employee.name || 'Employee';
+      return `<option value="${Number(employee.id)}">${esc(name)} (${esc(employee.employee_code || employee.empCode || employee.id)})</option>`;
+    })
     .join('');
   ['ot-employee', 'manual-employee', 'bio-map-employee'].forEach(id => {
     const select = document.getElementById(id);
@@ -942,8 +970,8 @@ async function encodeOvertime() {
   }
 }
 
-function openManualModal() {
-  loadEmployees();
+async function openManualModal() {
+  await loadEmployees(true);
   document.getElementById('manual-modal').style.display = 'flex';
 }
 
@@ -985,7 +1013,7 @@ async function loadBiometricExceptions() {
       <td>${esc(row.device_name)}</td>
       <td>${esc(row.employee_name || 'Unmapped')}</td>
       <td>${esc(row.attendance_type)}</td>
-      <td>${badge(row.verification_status)}</td>
+      <td>${badge(formalValidationStatus(row.verification_status))}</td>
       <td>${esc(row.error_message || '-')}</td>
     </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No biometric exceptions.</td></tr>';
   } catch (err) {
@@ -1178,7 +1206,7 @@ async function loadBiometricEvents() {
       <td>${esc(row.employee_name || 'Unmapped')}<br><small>${esc(row.employee_code || '')}</small></td>
       <td>${esc(formatDateTime(row.scan_timestamp || row.created_at))}</td>
       <td>${esc((row.attendance_type || '-').replace('_', ' '))}</td>
-      <td>${badge(row.verification_status || '-')}</td>
+      <td>${badge(formalValidationStatus(row.verification_status || '-'))}</td>
     </tr>`).join('') : '<tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr>';
   } catch (err) {
     console.error(err);

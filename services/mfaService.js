@@ -33,11 +33,13 @@ function booleanEnv(name, fallback = false) {
 function mfaConfig() {
   const provider = String(process.env.MFA_PROVIDER || 'iprog').trim().toLowerCase();
   const mockMode = booleanEnv('MFA_MOCK_MODE', false);
+  const localSmsDisabled = booleanEnv('DISABLE_SMS_MFA_FOR_LOCAL_DEV', false);
   const iprog = getIprogConfig();
   return {
     enabled: booleanEnv('MFA_ENABLED', false),
     provider,
     mockMode,
+    localSmsDisabled,
     mockCode: String(process.env.MFA_MOCK_CODE || '').trim(),
     showMockCode: booleanEnv('MFA_SHOW_MOCK_CODE', false),
     codeLength: 6,
@@ -109,6 +111,12 @@ function assertMfaConfiguration(config) {
   if (config.mockMode && process.env.NODE_ENV === 'production') {
     throw new MfaServiceError('MFA mock mode cannot be used in production.', 'MFA_MOCK_MODE_FORBIDDEN', 503);
   }
+  if (config.localSmsDisabled && process.env.NODE_ENV === 'production') {
+    throw new MfaServiceError('Local MFA SMS bypass cannot be used in production.', 'MFA_LOCAL_SMS_DISABLED_FORBIDDEN', 503);
+  }
+  if (config.localSmsDisabled && !config.mockMode) {
+    throw new MfaServiceError('Local MFA SMS bypass requires MFA mock mode.', 'MFA_LOCAL_SMS_DISABLED_INVALID', 503);
+  }
   if (config.mockMode && !new RegExp(`^\\d{${config.codeLength}}$`).test(config.mockCode)) {
     throw new MfaServiceError('MFA mock mode is not configured.', 'MFA_MOCK_CODE_INVALID', 503);
   }
@@ -124,6 +132,10 @@ async function getEmployeePhone(employeeId) {
 
 async function sendVerification(phoneNumber, config) {
   if (config.mockMode) {
+    if (config.localSmsDisabled) {
+      console.warn('[MFA] Local development mock mode is active; SMS delivery was skipped.');
+      return { mock: true, localOnly: true, mockCode: config.mockCode };
+    }
     const message = config.messageTemplate.includes(':otp')
       ? config.messageTemplate.replace(/:otp/g, config.mockCode)
       : `${config.messageTemplate} ${config.mockCode}`.trim();
@@ -210,7 +222,11 @@ async function createMfaChallenge({ employeeId, req }) {
     await auditMfa(
       employeeId,
       delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-      delivery.mock ? 'MFA mock challenge created; fake OTP SMS request accepted.' : 'IPROG OTP request accepted.',
+      delivery.localOnly
+        ? 'MFA local development challenge created; SMS delivery skipped.'
+        : delivery.mock
+          ? 'MFA mock challenge created; fake OTP SMS request accepted.'
+          : 'IPROG OTP request accepted.',
       req
     );
   } catch (error) {
@@ -358,7 +374,11 @@ async function resendMfaChallenge({ challengeId: rawChallengeId, mfaToken, req }
   await auditMfa(
     challenge.Employee_ID,
     delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-    delivery.mock ? 'MFA mock challenge resent; fake OTP SMS request accepted.' : 'IPROG OTP resend request accepted.',
+    delivery.localOnly
+      ? 'MFA local development challenge resent; SMS delivery skipped.'
+      : delivery.mock
+        ? 'MFA mock challenge resent; fake OTP SMS request accepted.'
+        : 'IPROG OTP resend request accepted.',
     req
   );
 

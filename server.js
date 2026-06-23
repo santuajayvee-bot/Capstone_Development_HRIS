@@ -67,6 +67,8 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'user_type',
   'permissions',
   'account_status',
+  'employee_status',
+  'token_version',
   'password',
   'password_hash',
   'mfa_secret',
@@ -98,7 +100,7 @@ const EMPLOYEE_ENUMS = {
   hiring_type: new Set(['Direct Hire', 'Agency-Hired']),
   deployment_status: new Set(['Pending Deployment', 'Deployed', 'On Hold', 'Ended']),
   employee_level: new Set(['Rank and File', 'Supervisor', 'Manager', 'Executive']),
-  status: new Set(['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended']),
+  status: new Set(['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded', 'Rehired']),
   payroll_schedule: new Set(['weekly', 'semi_monthly', 'monthly', 'Weekly', 'Semi-Monthly', 'Monthly']),
   tax_status: new Set(['Single', 'Married', 'Head of Family', 'Exempt']),
 };
@@ -181,6 +183,14 @@ const EMPLOYEE_TRAINING_ALLOWED_FIELDS = new Set(TRAINING_PII_FIELDS);
 const EMPLOYEE_SKILL_ALLOWED_FIELDS = new Set(['skill_name', 'proficiency', 'remarks']);
 const EMPLOYEE_DOCUMENT_ALLOWED_FIELDS = new Set(['docType', 'document_type']);
 const EMPLOYEE_STATUS_ALLOWED_FIELDS = new Set(['status', 'employment_status', 'separation_date', 'separation_reason', 'offboarding_remarks']);
+const EMPLOYEE_OFFBOARD_ALLOWED_FIELDS = new Set([
+  'offboarding_type', 'effective_date', 'last_working_day', 'reason', 'clearance_status', 'final_pay_status', 'account_action', 'remarks',
+  'company_property_status', 'turnover_status', 'exit_interview_status', 'attendance_leave_clearance',
+  'payroll_clearance_status', 'payroll_checked_by', 'final_pay_approved_by', 'final_pay_release_date',
+  'it_access_status', 'permissions_revoked', 'sessions_invalidated', 'biometric_access_removed', 'it_processed_by', 'it_processed_at',
+  'offboarding_status', 'processed_by', 'completed_by', 'completed_at'
+]);
+const EMPLOYEE_REONBOARD_ALLOWED_FIELDS = new Set(['rehire_date', 'new_position', 'department_id', 'department', 'work_location', 'employment_type', 'hiring_type', 'new_supervisor', 'employee_level', 'payroll_setup_status', 'assigned_system_role', 'force_password_reset', 'remarks']);
 const FORM_DRAFT_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status', 'expiry_days', 'draft_data']);
 const FORM_DRAFT_STATUS_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status']);
 const EMPLOYEE_ID_CONFIG_ALLOWED_FIELDS = new Set(['prefix', 'starting_number', 'number_padding', 'current_sequence', 'auto_generate_enabled']);
@@ -222,9 +232,29 @@ const EMPLOYEE_STRICT_PII_COLUMNS = [
   'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account',
   'agency_contact_person', 'agency_contact_number', 'separation_reason', 'offboarding_remarks'
 ];
-const EMPLOYEE_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended'];
+const EMPLOYEE_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded', 'Rehired'];
 const NON_ACTIVE_EMPLOYEE_STATUSES = new Set(EMPLOYEE_STATUS_OPTIONS.filter(status => status !== 'Active'));
-const ACCOUNT_DEACTIVATION_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract']);
+const ACCOUNT_DEACTIVATION_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Retired', 'Offboarded']);
+const EMPLOYEE_REONBOARDABLE_STATUSES = new Set(['Resigned', 'Terminated', 'End of Contract', 'Retired', 'Offboarded']);
+const EMPLOYEE_OFFBOARDING_TYPES = new Map([
+  ['Resignation', 'Resigned'],
+  ['Termination', 'Terminated'],
+  ['End of Contract', 'End of Contract'],
+  ['Retirement', 'Retired'],
+  ['AWOL', 'Offboarded'],
+]);
+const EMPLOYEE_CLEARANCE_STATUSES = new Set(['Pending', 'Cleared', 'Not Cleared']);
+const EMPLOYEE_COMPANY_PROPERTY_STATUSES = new Set(['Pending', 'Partially Returned', 'Completed', 'Not Applicable']);
+const EMPLOYEE_TURNOVER_STATUSES = new Set(['Pending', 'Completed', 'Not Required']);
+const EMPLOYEE_EXIT_INTERVIEW_STATUSES = new Set(['Pending', 'Completed', 'Not Required']);
+const EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES = new Set(['Pending', 'Checked', 'With Issue']);
+const EMPLOYEE_PAYROLL_CLEARANCE_STATUSES = new Set(['Pending', 'Checked', 'Cleared', 'With Issue']);
+const EMPLOYEE_FINAL_PAY_STATUSES = new Set(['Pending', 'For Processing', 'For Approval', 'Approved', 'Processed', 'Released', 'With Issue']);
+const EMPLOYEE_IT_ACCESS_STATUSES = new Set(['Pending', 'Disabled', 'Revoked']);
+const EMPLOYEE_OFFBOARDING_PROCESS_STATUSES = new Set(['Pending', 'In Progress', 'Completed', 'Cancelled']);
+const EMPLOYEE_ACCOUNT_ACTIONS = new Set(['Disable Immediately', 'Disable on Effective Date']);
+const EMPLOYEE_PAYROLL_SETUP_STATUSES = new Set(['Pending', 'Ready']);
+const EMPLOYEE_LIFECYCLE_PENDING_STATUSES = new Set(['Pending']);
 let philippineAddressCache = null;
 let philippineAddressError = null;
 
@@ -875,9 +905,25 @@ function isNonActiveEmploymentStatus(status) {
 async function deactivateLinkedUserAccounts(pool, employeeId, status, req) {
   if (!ACCOUNT_DEACTIVATION_STATUSES.has(status) || !employeeId) return 0;
   const [result] = await pool.execute(
-    'UPDATE users SET is_active = 0 WHERE employee_id = ? AND is_active <> 0',
-    [employeeId]
+    `UPDATE users
+        SET is_active = 0,
+            account_status = CASE
+              WHEN ? IN ('Resigned','Terminated','End of Contract','Retired','Offboarded') THEN 'Offboarded'
+              ELSE 'Disabled'
+            END,
+            token_version = COALESCE(token_version, 0) + 1
+      WHERE employee_id = ?
+        AND (is_active <> 0 OR COALESCE(account_status, 'Active') NOT IN ('Disabled','Offboarded'))`,
+    [status, employeeId]
   );
+  await pool.execute(
+    `UPDATE USER_SESSION
+        SET Revoked_At = NOW(),
+            Revocation_Reason = 'employee_offboarded'
+      WHERE Employee_ID = ?
+        AND Revoked_At IS NULL`,
+    [employeeId]
+  ).catch(() => {});
   if (result.affectedRows > 0) {
     await writeEmployeeLifecycleAudit(pool, req, 'LINKED_USER_ACCOUNT_DEACTIVATED', employeeId, null, {
       status,
@@ -885,6 +931,74 @@ async function deactivateLinkedUserAccounts(pool, employeeId, status, req) {
     });
   }
   return result.affectedRows || 0;
+}
+
+async function reactivateLinkedUserAccounts(pool, employeeId, req) {
+  if (!employeeId) return 0;
+  const [result] = await pool.execute(
+    `UPDATE users
+        SET is_active = 1,
+            account_status = 'Active',
+            force_password_change = 1,
+            password_changed_at = NOW(),
+            token_version = COALESCE(token_version, 0) + 1
+      WHERE employee_id = ?`,
+    [employeeId]
+  );
+  if (result.affectedRows > 0) {
+    await writeEmployeeLifecycleAudit(pool, req, 'LINKED_USER_ACCOUNT_REACTIVATED', employeeId, null, {
+      affected_user_accounts: result.affectedRows,
+    });
+  }
+  return result.affectedRows || 0;
+}
+
+function canCreateOffboarding(req) {
+  return employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any])
+    || hasPermission(req, 'employee:offboard:create')
+    || hasPermission(req, 'employee:offboard:approve');
+}
+
+function canCreateReonboarding(req) {
+  return employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any])
+    || hasPermission(req, 'employee:reboard:create')
+    || hasPermission(req, 'employee:reboard:approve')
+    || hasPermission(req, 'user_account:reactivate');
+}
+
+function canUpdateItOffboarding(req) {
+  return employeeHasRole(req, ['it_staff', ...ROLES.admin_any])
+    || hasPermission(req, 'employee:offboard:it');
+}
+
+async function rejectLifecycleUnauthorized(req, res, action, targetEmployeeId) {
+  await auditSecurityEvent(req, {
+    action,
+    module: 'EMPLOYEE_LIFECYCLE_SECURITY',
+    targetTable: 'employees',
+    targetRecord: targetEmployeeId || req.params?.id || null,
+    newValue: { path: req.originalUrl, role: req.user?.role || null },
+    result: 'blocked',
+  }).catch(() => {});
+  return res.status(403).json({ error: 'Access denied.' });
+}
+
+function requireBodyValue(body, field) {
+  const value = normalizeBlank(body[field]);
+  if (value == null) throw rejectEmployeeInput(field, 'This field is required.');
+  body[field] = value;
+  return value;
+}
+
+function validateLifecycleChoice(body, field, allowed) {
+  const value = requireBodyValue(body, field);
+  validateNoDangerousText(field, value);
+  if (!allowed.has(value)) throw rejectEmployeeInput(field);
+  return value;
+}
+
+function employeeDisplayName(row) {
+  return [row?.first_name, row?.middle_name, row?.last_name].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function validateNoDangerousText(field, value) {
@@ -1800,9 +1914,9 @@ async function ensureEmployeeSetupSchema(pool) {
 
 async function ensureEmployeeLifecycleColumns(pool) {
   const [statusColumns] = await pool.execute("SHOW COLUMNS FROM employees LIKE 'status'");
-  if (statusColumns.length && !String(statusColumns[0].Type || '').includes('Terminated')) {
+  if (statusColumns.length && !String(statusColumns[0].Type || '').includes('Offboarded')) {
     await pool.execute(
-      "ALTER TABLE employees MODIFY COLUMN status ENUM('Active','Inactive','Resigned','Terminated','End of Contract','Suspended') NOT NULL DEFAULT 'Active'"
+      "ALTER TABLE employees MODIFY COLUMN status ENUM('Active','Inactive','Resigned','Terminated','End of Contract','Suspended','Retired','Offboarded','Rehired') NOT NULL DEFAULT 'Active'"
     );
   }
 
@@ -1827,9 +1941,157 @@ async function ensureEmployeeLifecycleColumns(pool) {
     }
   }
 
+  const [lifecycleColumns] = await pool.execute("SHOW COLUMNS FROM employees LIKE 'lifecycle_status'");
+  if (lifecycleColumns.length && !String(lifecycleColumns[0].Type || '').includes('On Hold')) {
+    await pool.execute(
+      "ALTER TABLE employees MODIFY COLUMN lifecycle_status ENUM('Active','Pending Onboarding','Pending Training','On Hold','For Onboarding','Under Screening','In Training','Rejected','Transferred') NULL DEFAULT 'Active'"
+    );
+  }
+
   const [wageRateActive] = await pool.execute("SHOW COLUMNS FROM employee_wage_rates LIKE 'is_active'");
   if (!wageRateActive.length) {
     await pool.execute('ALTER TABLE employee_wage_rates ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1');
+  }
+
+  const userColumns = [
+    ['account_status', "ENUM('Active','Disabled','Offboarded','Inactive') NOT NULL DEFAULT 'Active'"],
+    ['token_version', 'INT NOT NULL DEFAULT 0'],
+    ['force_password_change', 'BOOLEAN NOT NULL DEFAULT FALSE'],
+  ];
+  for (const [name, definition] of userColumns) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM users LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+async function ensureEmployeeLifecycleManagementSchema(pool) {
+  await ensureEmployeeLifecycleColumns(pool);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS employee_lifecycle_event (
+      lifecycle_event_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NOT NULL,
+      event_type ENUM('ONBOARDED','OFFBOARDED','REONBOARDED','CONTRACT_RENEWED','STATUS_CHANGED') NOT NULL,
+      previous_status VARCHAR(40) NULL,
+      new_status VARCHAR(40) NULL,
+      effective_date DATE NULL,
+      reason VARCHAR(180) NULL,
+      remarks VARCHAR(500) NULL,
+      created_by INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_employee_lifecycle_event_employee (employee_id, created_at),
+      INDEX idx_employee_lifecycle_event_type (event_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS employee_offboarding_case (
+      offboarding_case_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NOT NULL,
+      status ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending',
+      offboarding_type ENUM('Resignation','Termination','End of Contract','Retirement','AWOL') NOT NULL,
+      separation_type ENUM('Resigned','Terminated','End of Contract','Retired','Offboarded') NOT NULL,
+      effective_date DATE NOT NULL,
+      last_working_day DATE NOT NULL,
+      separation_date DATE NOT NULL,
+      separation_reason VARCHAR(180) NOT NULL,
+      clearance_status ENUM('Pending','Cleared','Not Cleared') NOT NULL DEFAULT 'Pending',
+      final_pay_status ENUM('Pending','For Processing','Processed','Released') NOT NULL DEFAULT 'Pending',
+      account_action ENUM('Disable Immediately','Disable on Effective Date') NOT NULL DEFAULT 'Disable on Effective Date',
+      account_deactivated TINYINT(1) NOT NULL DEFAULT 0,
+      remarks VARCHAR(500) NULL,
+      created_by INT NULL,
+      completed_by INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_employee_offboarding_case_employee (employee_id, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS employee_reonboarding_case (
+      reonboarding_case_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT NOT NULL,
+      previous_offboarding_case_id BIGINT NULL,
+      status ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending',
+      rehire_date DATE NOT NULL,
+      department_id INT NULL,
+      work_location VARCHAR(160) NULL,
+      position VARCHAR(120) NULL,
+      employment_type ENUM('Full-time','Part-time','Contractual','Regular') NULL,
+      hiring_type ENUM('Direct Hire','Agency-Hired') NULL,
+      new_supervisor VARCHAR(120) NULL,
+      employee_level ENUM('Rank and File','Supervisor','Manager','Executive') NULL,
+      payroll_setup_status ENUM('Pending','Ready') NOT NULL DEFAULT 'Pending',
+      assigned_system_role VARCHAR(80) NULL,
+      force_password_reset TINYINT(1) NOT NULL DEFAULT 1,
+      contract_start_date DATE NULL,
+      contract_end_date DATE NULL,
+      account_reactivated TINYINT(1) NOT NULL DEFAULT 0,
+      remarks VARCHAR(500) NULL,
+      created_by INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_employee_reonboarding_case_employee (employee_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN separation_type ENUM('Resigned','Terminated','End of Contract','Retired','Offboarded') NOT NULL").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN clearance_status ENUM('Pending','Cleared','Not Cleared') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN final_pay_status ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_reonboarding_case MODIFY COLUMN status ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'").catch(() => {});
+
+  const offboardingColumns = [
+    ['offboarding_type', "ENUM('Resignation','Termination','End of Contract','Retirement','AWOL') NULL"],
+    ['effective_date', 'DATE NULL'],
+    ['last_working_day', 'DATE NULL'],
+    ['company_property_status', "ENUM('Pending','Partially Returned','Completed','Not Applicable') NOT NULL DEFAULT 'Pending'"],
+    ['turnover_status', "ENUM('Pending','Completed','Not Required') NOT NULL DEFAULT 'Pending'"],
+    ['exit_interview_status', "ENUM('Pending','Completed','Not Required') NOT NULL DEFAULT 'Pending'"],
+    ['attendance_leave_clearance', "ENUM('Pending','Checked','With Issue') NOT NULL DEFAULT 'Pending'"],
+    ['payroll_clearance_status', "ENUM('Pending','Checked','Cleared','With Issue') NOT NULL DEFAULT 'Pending'"],
+    ['payroll_checked_by', 'INT NULL'],
+    ['payroll_checked_at', 'DATETIME NULL'],
+    ['last_payroll_period_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['attendance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['leave_balance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['deductions_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['loans_or_cash_advances_checked', "ENUM('Yes','No','Not Applicable') NOT NULL DEFAULT 'No'"],
+    ['benefits_or_13th_month_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
+    ['payroll_remarks', 'VARCHAR(500) NULL'],
+    ['final_pay_status', "ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'"],
+    ['final_pay_approved_by', 'INT NULL'],
+    ['final_pay_approved_at', 'DATETIME NULL'],
+    ['final_pay_release_date', 'DATE NULL'],
+    ['final_pay_remarks', 'VARCHAR(500) NULL'],
+    ['it_access_status', "ENUM('Pending','Disabled','Revoked') NOT NULL DEFAULT 'Pending'"],
+    ['permissions_revoked', 'TINYINT(1) NOT NULL DEFAULT 0'],
+    ['sessions_invalidated', 'TINYINT(1) NOT NULL DEFAULT 0'],
+    ['biometric_access_removed', 'TINYINT(1) NOT NULL DEFAULT 0'],
+    ['it_processed_by', 'INT NULL'],
+    ['it_processed_at', 'DATETIME NULL'],
+    ['processed_by', 'INT NULL'],
+    ['account_action', "ENUM('Disable Immediately','Disable on Effective Date') NOT NULL DEFAULT 'Disable on Effective Date'"],
+  ];
+  for (const [name, definition] of offboardingColumns) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM employee_offboarding_case LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE employee_offboarding_case ADD COLUMN ${name} ${definition}`);
+  }
+
+  const reonboardingColumns = [
+    ['status', "ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'"],
+    ['work_location', 'VARCHAR(160) NULL'],
+    ['hiring_type', "ENUM('Direct Hire','Agency-Hired') NULL"],
+    ['new_supervisor', 'VARCHAR(120) NULL'],
+    ['employee_level', "ENUM('Rank and File','Supervisor','Manager','Executive') NULL"],
+    ['payroll_setup_status', "ENUM('Pending','Ready') NOT NULL DEFAULT 'Pending'"],
+    ['assigned_system_role', 'VARCHAR(80) NULL'],
+    ['force_password_reset', 'TINYINT(1) NOT NULL DEFAULT 1'],
+  ];
+  for (const [name, definition] of reonboardingColumns) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM employee_reonboarding_case LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE employee_reonboarding_case ADD COLUMN ${name} ${definition}`);
   }
 }
 
@@ -2169,7 +2431,7 @@ app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROL
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    await ensureEmployeeLifecycleColumns(pool);
+    await ensureEmployeeLifecycleManagementSchema(pool);
     await ensurePhilippineAddressColumns(pool);
     const requestedStatus = String(req.query.status || '').trim();
     const includeAllStatuses = /^(all|all status|all statuses)$/i.test(requestedStatus);
@@ -2210,6 +2472,27 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
               e.hiring_type, e.agency_name, e.agency_contact_person, e.agency_contact_number,
               e.deployment_status, e.contract_start_date, e.contract_end_date, e.lifecycle_status,
               d.name AS department, wt.name AS wage_type,
+              (
+                SELECT COALESCE(r.label, r.name)
+                FROM users u
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE u.employee_id = e.id
+                LIMIT 1
+              ) AS current_system_role,
+              (
+                SELECT eoc.offboarding_case_id
+                FROM employee_offboarding_case eoc
+                WHERE eoc.employee_id = e.id AND eoc.status = 'Pending'
+                ORDER BY eoc.created_at DESC
+                LIMIT 1
+              ) AS pending_offboarding_request_id,
+              (
+                SELECT erc.reonboarding_case_id
+                FROM employee_reonboarding_case erc
+                WHERE erc.employee_id = e.id AND erc.status = 'Pending'
+                ORDER BY erc.created_at DESC
+                LIMIT 1
+              ) AS pending_reonboarding_request_id,
               (
                 SELECT ewr.rate
                 FROM employee_wage_rates ewr
@@ -2908,6 +3191,568 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
     console.error('Error updating employee:', err.message, err.sqlMessage);
     res.setHeader('Content-Type', 'application/json');
     return res.status(500).json({ error: 'Failed to update employee.' }); 
+  }
+});
+
+// Full offboarding workflow
+app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
+  const pool = require('./config/db');
+  let connection;
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_OFFBOARD_ALLOWED_FIELDS, 'offboarding')) return;
+    if (!canCreateOffboarding(req)) return rejectLifecycleUnauthorized(req, res, 'blocked_employee_offboarding_unauthorized', id);
+
+    let offboardingType;
+    let targetStatus;
+    let clearanceStatus;
+    let finalPayStatus;
+    let accountAction;
+    let companyPropertyStatus;
+    let turnoverStatus;
+    let exitInterviewStatus;
+    let attendanceLeaveClearance;
+    let payrollClearanceStatus;
+    let itAccessStatus;
+    let offboardingStatus;
+    try {
+      const choiceOrDefault = (field, allowed, fallback) => {
+        if (req.body[field] === undefined || req.body[field] === null || String(req.body[field]).trim() === '') {
+          req.body[field] = fallback;
+        }
+        return validateLifecycleChoice(req.body, field, allowed);
+      };
+      offboardingType = validateLifecycleChoice(req.body, 'offboarding_type', new Set(EMPLOYEE_OFFBOARDING_TYPES.keys()));
+      targetStatus = EMPLOYEE_OFFBOARDING_TYPES.get(offboardingType);
+      validateEmployeeDateField(req.body, 'effective_date', { required: true });
+      validateEmployeeDateField(req.body, 'last_working_day', { required: true });
+      validateDateOrder(req.body, 'effective_date', 'last_working_day');
+      validateEmployeeTextField(req.body, 'reason', { max: 180, pattern: EMPLOYEE_SAFE_TEXT_PATTERN, allowEmpty: false });
+      clearanceStatus = choiceOrDefault('clearance_status', EMPLOYEE_CLEARANCE_STATUSES, 'Pending');
+      finalPayStatus = choiceOrDefault('final_pay_status', EMPLOYEE_FINAL_PAY_STATUSES, 'Pending');
+      companyPropertyStatus = choiceOrDefault('company_property_status', EMPLOYEE_COMPANY_PROPERTY_STATUSES, 'Pending');
+      turnoverStatus = choiceOrDefault('turnover_status', EMPLOYEE_TURNOVER_STATUSES, 'Pending');
+      exitInterviewStatus = choiceOrDefault('exit_interview_status', EMPLOYEE_EXIT_INTERVIEW_STATUSES, 'Pending');
+      attendanceLeaveClearance = choiceOrDefault('attendance_leave_clearance', EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES, 'Pending');
+      payrollClearanceStatus = choiceOrDefault('payroll_clearance_status', EMPLOYEE_PAYROLL_CLEARANCE_STATUSES, 'Pending');
+      itAccessStatus = choiceOrDefault('it_access_status', EMPLOYEE_IT_ACCESS_STATUSES, 'Pending');
+      offboardingStatus = choiceOrDefault('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES, 'In Progress');
+      if (offboardingStatus === 'Completed') return res.status(400).json({ error: 'Offboarding cannot be created as Completed. Complete it after payroll and IT clearance.' });
+      accountAction = validateLifecycleChoice(req.body, 'account_action', EMPLOYEE_ACCOUNT_ACTIONS);
+      validateEmployeeTextField(req.body, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid offboarding details.', field: error.field || null });
+    }
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [employeeRows] = await connection.execute(
+      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.status, e.position,
+              e.department_id, d.name AS department
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+        WHERE e.id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [id]
+    );
+    if (!employeeRows.length) {
+      await connection.rollback();
+      await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_OFFBOARDING_FAILED_NOT_FOUND', Number(id), null, null).catch(() => {});
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    const employee = employeeRows[0];
+    if (employee.status !== 'Active') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Only Active employees can be offboarded.' });
+    }
+
+    const [pendingRows] = await connection.execute(
+      `SELECT offboarding_case_id
+         FROM employee_offboarding_case
+        WHERE employee_id = ?
+          AND status IN ('Pending','In Progress')
+        LIMIT 1`,
+      [id]
+    );
+    if (pendingRows.length) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Employee already has a pending offboarding request.', request_id: pendingRows[0].offboarding_case_id });
+    }
+
+    const shouldDisableNow = accountAction === 'Disable Immediately';
+    const accountDeactivated = shouldDisableNow ? await deactivateLinkedUserAccounts(connection, Number(id), targetStatus, req) : 0;
+
+    const [caseResult] = await connection.execute(
+      `INSERT INTO employee_offboarding_case
+         (employee_id, status, offboarding_type, separation_type, effective_date, last_working_day,
+          separation_date, separation_reason, clearance_status, company_property_status, turnover_status,
+          exit_interview_status, attendance_leave_clearance, payroll_clearance_status, final_pay_status,
+          it_access_status, account_action, account_deactivated, sessions_invalidated, remarks, created_by, processed_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        offboardingStatus,
+        offboardingType,
+        targetStatus,
+        req.body.effective_date,
+        req.body.last_working_day,
+        req.body.effective_date,
+        req.body.reason,
+        clearanceStatus,
+        companyPropertyStatus,
+        turnoverStatus,
+        exitInterviewStatus,
+        attendanceLeaveClearance,
+        payrollClearanceStatus,
+        finalPayStatus,
+        itAccessStatus,
+        accountAction,
+        accountDeactivated > 0 ? 1 : 0,
+        accountDeactivated > 0 ? 1 : 0,
+        req.body.remarks || null,
+        req.user.id || null,
+        req.user.id || null,
+      ]
+    );
+
+    await connection.execute(
+      `UPDATE employees
+          SET lifecycle_status = 'On Hold',
+              separation_date = ?,
+              separation_reason = ?,
+              offboarding_remarks = ?,
+              updated_at = NOW()
+        WHERE id = ?`,
+      [req.body.effective_date, employeeDbValue('separation_reason', req.body.reason), employeeDbValue('offboarding_remarks', req.body.remarks || null), id]
+    );
+
+    await connection.execute(
+      `INSERT INTO employee_lifecycle_event
+         (employee_id, event_type, previous_status, new_status, effective_date, reason, remarks, created_by)
+       VALUES (?, 'STATUS_CHANGED', ?, ?, ?, ?, ?, ?)`,
+      [id, employee.status || null, offboardingStatus, req.body.effective_date, req.body.reason, req.body.remarks || null, req.user.id || null]
+    );
+
+    await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_CREATED', Number(id), {
+      status: employee.status,
+    }, {
+      status: offboardingStatus,
+      target_employee_status: targetStatus,
+      offboarding_case_id: caseResult.insertId,
+      offboarding_type: offboardingType,
+      clearance_status: clearanceStatus,
+      final_pay_status: finalPayStatus,
+      account_action: accountAction,
+      account_deactivated: accountDeactivated > 0,
+    });
+
+    await connection.commit();
+    return res.status(200).json({
+      message: `Offboarding request created for ${employeeDisplayName(employee) || employee.employee_code}.`,
+      offboarding_case_id: caseResult.insertId,
+      status: employee.status,
+      request_status: offboardingStatus,
+      clearance_status: clearanceStatus,
+    });
+  } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error('Error offboarding employee:', err.message, err.sqlMessage);
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_OFFBOARDING_FAILED', Number(req.params.id), null, { error: err.message }).catch(() => {});
+    return res.status(500).json({ error: 'Failed to offboard employee.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.any), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
+  const pool = require('./config/db');
+  let connection;
+  try {
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const caseId = Number(req.params.caseId);
+    if (!caseId) return res.status(400).json({ error: 'Valid offboarding case id is required.' });
+
+    const isHrProcessor = canCreateOffboarding(req);
+    const isItProcessor = canUpdateItOffboarding(req);
+    if (!isHrProcessor && !isItProcessor) {
+      return rejectLifecycleUnauthorized(req, res, 'unauthorized_offboarding_attempt_denied', caseId);
+    }
+
+    const hrFields = new Set(['clearance_status', 'company_property_status', 'turnover_status', 'exit_interview_status', 'attendance_leave_clearance', 'offboarding_status', 'remarks']);
+    const itFields = new Set(['it_access_status', 'permissions_revoked', 'sessions_invalidated', 'biometric_access_removed', 'it_processed_at']);
+    const allowed = new Set([...(isHrProcessor ? hrFields : []), ...(isItProcessor ? itFields : [])]);
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, allowed, 'offboarding_update')) return;
+
+    const updates = [];
+    const values = [];
+    const setChoice = (field, allowedValues) => {
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) return null;
+      const value = validateLifecycleChoice(req.body, field, allowedValues);
+      updates.push(`${field} = ?`);
+      values.push(value);
+      return value;
+    };
+    const setBool = field => {
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) return null;
+      const value = req.body[field] === true || req.body[field] === 'true' || req.body[field] === '1' || req.body[field] === 'Yes' ? 1 : 0;
+      updates.push(`${field} = ?`);
+      values.push(value);
+      return value;
+    };
+
+    try {
+      setChoice('clearance_status', EMPLOYEE_CLEARANCE_STATUSES);
+      setChoice('company_property_status', EMPLOYEE_COMPANY_PROPERTY_STATUSES);
+      setChoice('turnover_status', EMPLOYEE_TURNOVER_STATUSES);
+      setChoice('exit_interview_status', EMPLOYEE_EXIT_INTERVIEW_STATUSES);
+      setChoice('attendance_leave_clearance', EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES);
+      const requestedStatus = setChoice('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES);
+      setChoice('it_access_status', EMPLOYEE_IT_ACCESS_STATUSES);
+      setBool('permissions_revoked');
+      setBool('sessions_invalidated');
+      setBool('biometric_access_removed');
+      if (Object.prototype.hasOwnProperty.call(req.body, 'it_processed_at')) {
+        if (req.body.it_processed_at && Number.isNaN(new Date(req.body.it_processed_at).getTime())) {
+          return res.status(400).json({ error: 'IT processed date is invalid.', field: 'it_processed_at' });
+        }
+        updates.push('it_processed_at = ?');
+        values.push(req.body.it_processed_at || null);
+      }
+      if (isHrProcessor && Object.prototype.hasOwnProperty.call(req.body, 'remarks')) {
+        validateEmployeeTextField(req.body, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+        updates.push('remarks = ?');
+        values.push(req.body.remarks || null);
+      }
+      if (!updates.length) return res.status(400).json({ error: 'No valid offboarding fields supplied.' });
+      if (isItProcessor && (req.body.it_access_status || req.body.permissions_revoked || req.body.sessions_invalidated || req.body.biometric_access_removed || req.body.it_processed_at)) {
+        updates.push('it_processed_by = ?');
+        values.push(req.user.id || null);
+      }
+      if (requestedStatus === 'Completed') {
+        updates.push('completed_by = ?', 'completed_at = NOW()');
+        values.push(req.user.id || null);
+      }
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid offboarding update.', field: error.field || null });
+    }
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [caseRows] = await connection.execute(
+      `SELECT oc.*, e.status AS employee_status
+         FROM employee_offboarding_case oc
+         JOIN employees e ON e.id = oc.employee_id
+        WHERE oc.offboarding_case_id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [caseId]
+    );
+    if (!caseRows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Offboarding case not found.' });
+    }
+    const current = caseRows[0];
+    const next = { ...current, ...req.body };
+    const truthyProcessValue = value => value === true || value === 1 || value === '1' || value === 'true' || value === 'Yes';
+    const completing = req.body.offboarding_status === 'Completed';
+    if (completing) {
+      const payrollOk = ['Checked', 'Cleared'].includes(String(current.payroll_clearance_status || next.payroll_clearance_status));
+      const finalPayOk = ['Approved', 'Released', 'Processed'].includes(String(current.final_pay_status || next.final_pay_status));
+      const itOk = ['Disabled', 'Revoked'].includes(String(next.it_access_status || current.it_access_status))
+        && truthyProcessValue(next.permissions_revoked ?? current.permissions_revoked)
+        && truthyProcessValue(next.sessions_invalidated ?? current.sessions_invalidated)
+        && truthyProcessValue(next.biometric_access_removed ?? current.biometric_access_removed);
+      if (!payrollOk || !finalPayOk || !itOk) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Payroll clearance, final pay approval, and IT access revocation must be completed before finalizing offboarding.' });
+      }
+    }
+
+    values.push(caseId);
+    await connection.execute(`UPDATE employee_offboarding_case SET ${updates.join(', ')} WHERE offboarding_case_id = ?`, values);
+
+    if (isItProcessor && (req.body.it_access_status || req.body.permissions_revoked || req.body.sessions_invalidated || req.body.biometric_access_removed)) {
+      await writeEmployeeLifecycleAudit(connection, req, 'IT_ACCESS_REVOKED', current.employee_id, null, { offboarding_case_id: caseId, ...req.body });
+    }
+
+    if (completing) {
+      await connection.execute(
+        `UPDATE employees
+            SET status = ?,
+                lifecycle_status = 'Active',
+                updated_at = NOW()
+          WHERE id = ?`,
+        [current.separation_type, current.employee_id]
+      );
+      await deactivateLinkedUserAccounts(connection, Number(current.employee_id), current.separation_type, req);
+      await connection.execute(
+        `UPDATE biometric_employee_mapping
+            SET is_active = 0,
+                updated_by = ?
+          WHERE employee_id = ?`,
+        [req.user.id || null, current.employee_id]
+      ).catch(() => {});
+      await connection.execute(
+        `INSERT INTO employee_lifecycle_event
+           (employee_id, event_type, previous_status, new_status, effective_date, reason, remarks, created_by)
+         VALUES (?, 'OFFBOARDED', ?, ?, ?, ?, ?, ?)`,
+        [current.employee_id, current.employee_status || null, current.separation_type, current.effective_date, current.separation_reason, current.remarks || null, req.user.id || null]
+      );
+      await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_COMPLETED', current.employee_id, null, { offboarding_case_id: caseId, status: current.separation_type });
+    } else {
+      await writeEmployeeLifecycleAudit(connection, req, 'CLEARANCE_UPDATED', current.employee_id, null, { offboarding_case_id: caseId, ...req.body });
+    }
+
+    await connection.commit();
+    return res.json({ message: completing ? 'Offboarding completed.' : 'Offboarding updated.' });
+  } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error('Error updating offboarding:', err.message, err.sqlMessage);
+    return res.status(500).json({ error: 'Failed to update offboarding.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Re-onboard a previously offboarded employee
+app.post('/api/employees/:id/reonboard', requireAuth, requireRole(ROLES.any), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
+  const pool = require('./config/db');
+  let connection;
+  try {
+    res.setHeader('Content-Type', 'application/json');
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_REONBOARD_ALLOWED_FIELDS, 'reonboarding')) return;
+    if (!canCreateReonboarding(req)) return rejectLifecycleUnauthorized(req, res, 'blocked_employee_reonboarding_unauthorized', id);
+
+    req.body.rehire_date = req.body.rehire_date || req.body.date_hired;
+    let payrollSetupStatus;
+    let forcePasswordReset = true;
+    try {
+      validateEmployeeDateField(req.body, 'rehire_date', { required: true });
+      validateEmployeeTextField(req.body, 'new_position', { max: 120, pattern: EMPLOYEE_SAFE_TEXT_PATTERN, allowEmpty: false });
+      validateEmployeeTextField(req.body, 'work_location', { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+      validateEmployeeTextField(req.body, 'new_supervisor', { max: 120, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+      validateEmployeeTextField(req.body, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+      validateEmployeeEnumField(req.body, 'employment_type', EMPLOYEE_ENUMS.employment_type);
+      validateEmployeeEnumField(req.body, 'hiring_type', EMPLOYEE_ENUMS.hiring_type);
+      validateEmployeeEnumField(req.body, 'employee_level', EMPLOYEE_ENUMS.employee_level);
+      payrollSetupStatus = validateLifecycleChoice(req.body, 'payroll_setup_status', EMPLOYEE_PAYROLL_SETUP_STATUSES);
+      validateEmployeeTextField(req.body, 'assigned_system_role', { max: 80, pattern: EMPLOYEE_SAFE_TEXT_PATTERN, allowEmpty: false });
+      forcePasswordReset = req.body.force_password_reset === false || req.body.force_password_reset === 'false' || req.body.force_password_reset === '0' ? 0 : 1;
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || 'Invalid re-onboarding details.', field: error.field || null });
+    }
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [employeeRows] = await connection.execute(
+      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.status, e.position,
+              e.department_id, e.separation_date, e.separation_reason, d.name AS department
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+        WHERE e.id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [id]
+    );
+    if (!employeeRows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    const employee = employeeRows[0];
+    if (!EMPLOYEE_REONBOARDABLE_STATUSES.has(employee.status)) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Only Resigned, Terminated, End of Contract, Retired, or Offboarded employees can be re-onboarded.' });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'department_id')) {
+      await validateDepartmentId(connection, req.body);
+    }
+    if (!req.body.department_id && !req.body.work_location) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Department or work location is required.', field: 'department_id' });
+    }
+
+    const [roleRows] = await connection.execute('SELECT id, name FROM roles WHERE name = ? OR label = ? LIMIT 1', [req.body.assigned_system_role, req.body.assigned_system_role]);
+    if (!roleRows.length) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Assigned system role is invalid.', field: 'assigned_system_role' });
+    }
+
+    const [offboardingRows] = await connection.execute(
+      `SELECT offboarding_case_id, effective_date, separation_reason
+         FROM employee_offboarding_case
+        WHERE employee_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [id]
+    );
+    const previousOffboardingCaseId = offboardingRows[0]?.offboarding_case_id || null;
+
+    const [pendingRows] = await connection.execute(
+      `SELECT reonboarding_case_id
+         FROM employee_reonboarding_case
+        WHERE employee_id = ?
+          AND status = 'Pending'
+        LIMIT 1`,
+      [id]
+    );
+    if (pendingRows.length) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Employee already has a pending re-onboarding request.', request_id: pendingRows[0].reonboarding_case_id });
+    }
+
+    await connection.execute(
+      `UPDATE users
+          SET role_id = ?,
+              is_active = 1,
+              account_status = 'Active',
+              force_password_change = ?,
+              password_changed_at = NOW(),
+              token_version = COALESCE(token_version, 0) + 1
+        WHERE employee_id = ?`,
+      [roleRows[0].id, forcePasswordReset, id]
+    );
+    const accountReactivated = await reactivateLinkedUserAccounts(connection, Number(id), req);
+
+    const [caseResult] = await connection.execute(
+      `INSERT INTO employee_reonboarding_case
+         (employee_id, previous_offboarding_case_id, status, rehire_date, department_id, work_location,
+          position, employment_type, hiring_type, new_supervisor, employee_level, payroll_setup_status,
+          assigned_system_role, force_password_reset, account_reactivated, remarks, created_by)
+       VALUES (?, ?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        previousOffboardingCaseId,
+        req.body.rehire_date,
+        req.body.department_id || null,
+        req.body.work_location || null,
+        req.body.new_position || null,
+        req.body.employment_type || null,
+        req.body.hiring_type || null,
+        req.body.new_supervisor || null,
+        req.body.employee_level || null,
+        payrollSetupStatus,
+        roleRows[0].name,
+        forcePasswordReset,
+        accountReactivated > 0 ? 1 : 0,
+        req.body.remarks || null,
+        req.user.id || null,
+      ]
+    );
+
+    const updateFields = [
+      'status = ?',
+      "lifecycle_status = 'Active'",
+      'date_hired = ?',
+      'position = ?',
+      'employment_type = ?',
+      'hiring_type = ?',
+      'supervisor = ?',
+      'employee_level = ?',
+      'separation_date = NULL',
+      'separation_reason = NULL',
+      'offboarding_remarks = NULL',
+      'updated_at = NOW()',
+    ];
+    const updateValues = ['Active', req.body.rehire_date, req.body.new_position, req.body.employment_type || null, req.body.hiring_type || null, req.body.new_supervisor || null, req.body.employee_level || null];
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'department_id')) {
+      updateFields.push('department_id = ?');
+      updateValues.push(req.body.department_id || null);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'work_location')) {
+      updateFields.push('work_location = ?');
+      updateValues.push(req.body.work_location || null);
+    }
+    updateValues.push(id);
+
+    await connection.execute(`UPDATE employees SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+
+    await connection.execute(
+      `INSERT INTO employee_lifecycle_event
+         (employee_id, event_type, previous_status, new_status, effective_date, reason, remarks, created_by)
+       VALUES (?, 'REONBOARDED', ?, 'Active', ?, 'Re-onboarding', ?, ?)`,
+      [id, employee.status || null, req.body.rehire_date, req.body.remarks || null, req.user.id || null]
+    );
+
+    await writeEmployeeLifecycleAudit(connection, req, 'EMPLOYEE_REONBOARDED', Number(id), {
+      status: employee.status,
+      previous_offboarding_case_id: previousOffboardingCaseId,
+    }, {
+      status: 'Active',
+      reonboarding_case_id: caseResult.insertId,
+      assigned_system_role: roleRows[0].name,
+      payroll_setup_status: payrollSetupStatus,
+      account_reactivated: accountReactivated > 0,
+      force_password_reset: Boolean(forcePasswordReset),
+    });
+
+    await connection.commit();
+    return res.status(200).json({
+      message: 'Re-onboarding request created and employee restored to Active status.',
+      reonboarding_case_id: caseResult.insertId,
+      request_status: 'Pending',
+      status: 'Active',
+    });
+  } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error('Error re-onboarding employee:', err.message, err.sqlMessage);
+    return res.status(500).json({ error: 'Failed to re-onboard employee.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.get('/api/employees/:id/lifecycle', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_lifecycle_idor_attempt',
+    });
+    if (!employeeId) return;
+
+    const [events] = await pool.execute(
+      `SELECT lifecycle_event_id, event_type, previous_status, new_status, effective_date,
+              reason, remarks, created_by, created_at
+         FROM employee_lifecycle_event
+        WHERE employee_id = ?
+        ORDER BY created_at DESC`,
+      [employeeId]
+    );
+    const [offboardingCases] = await pool.execute(
+      `SELECT offboarding_case_id, status, offboarding_type, separation_type, effective_date,
+              last_working_day, separation_date, separation_reason,
+              clearance_status, final_pay_status, account_action, account_deactivated,
+              remarks, created_at, completed_at
+         FROM employee_offboarding_case
+        WHERE employee_id = ?
+        ORDER BY created_at DESC`,
+      [employeeId]
+    );
+    const [reonboardingCases] = await pool.execute(
+      `SELECT reonboarding_case_id, previous_offboarding_case_id, rehire_date, department_id,
+              work_location, position, employment_type, hiring_type, new_supervisor,
+              employee_level, payroll_setup_status, assigned_system_role, force_password_reset,
+              contract_start_date, contract_end_date,
+              account_reactivated, remarks, created_at
+         FROM employee_reonboarding_case
+        WHERE employee_id = ?
+        ORDER BY created_at DESC`,
+      [employeeId]
+    );
+
+    res.json({ events, offboarding_cases: offboardingCases, reonboarding_cases: reonboardingCases });
+  } catch (err) {
+    console.error('Error loading employee lifecycle:', err.message, err.sqlMessage);
+    res.status(500).json({ error: 'Failed to load employee lifecycle.' });
   }
 });
 
@@ -3949,7 +4794,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
     let q = `SELECT lr.*,
                     COALESCE(lt.name, lr.type) AS type,
                     COALESCE(lt.category, lr.leave_category, 'Company') AS leave_category,
-                    CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+                    e.first_name, e.middle_name, e.last_name, e.suffix, e.employee_code,
                     d.name AS department, wt.name AS wage_type,
                     CASE
                       WHEN LOWER(COALESCE(wt.name, '')) LIKE '%hour%' THEN 'Per Hour'
@@ -3982,7 +4827,18 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
     }
     q += ' ORDER BY lr.created_at DESC';
     const [rows] = await pool.execute(q, p);
-    res.json(rows);
+    res.json(rows.map(row => {
+      decryptEmployeeStrictPii(row);
+      const employeeName = [row.first_name, row.middle_name, row.last_name, row.suffix]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return {
+        ...row,
+        employee_name: employeeName || row.employee_code || `Employee #${row.employee_id}`,
+      };
+    }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
 });
 
@@ -4283,14 +5139,17 @@ app.get('/api/leave/audit', requireAuth, requireLeavePermission('leave.audit.vie
   try {
     const pool = require('./config/db');
     const [rows] = await pool.execute(
-      `SELECT lat.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name, u.username AS actor_name
+      `SELECT lat.*, e.employee_code, e.first_name, e.middle_name, e.last_name, u.username AS actor_name
        FROM leave_audit_trail lat
        LEFT JOIN employees e ON e.id = lat.employee_id
        LEFT JOIN users u ON u.id = lat.actor_user_id
        ORDER BY lat.created_at DESC
        LIMIT 200`
     );
-    res.json(rows);
+    res.json(rows.map(row => {
+      decryptEmployeeStrictPii(row);
+      return { ...row, employee_name: employeeDisplayName(row) || row.employee_code || '-' };
+    }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch leave audit trail.' });
   }
@@ -4304,7 +5163,7 @@ app.get('/api/leave/reports/:reportType', requireAuth, requireLeavePermission('l
     let rows = [];
     if (reportType === 'balances') {
       [rows] = await pool.execute(
-        `SELECT CONCAT(e.first_name,' ',e.last_name) AS employee, d.name AS department,
+        `SELECT e.employee_code, e.first_name, e.middle_name, e.last_name, d.name AS department,
                 lb.leave_type, lb.balance, lb.used, (lb.balance - lb.used) AS remaining, lb.year
          FROM leave_balances lb
          JOIN employees e ON e.id = lb.employee_id
@@ -4313,7 +5172,7 @@ app.get('/api/leave/reports/:reportType', requireAuth, requireLeavePermission('l
       );
     } else {
       [rows] = await pool.execute(
-        `SELECT CONCAT(e.first_name,' ',e.last_name) AS employee, d.name AS department,
+        `SELECT e.employee_code, e.first_name, e.middle_name, e.last_name, d.name AS department,
                 lr.type, lr.date_from, lr.date_to, lr.days, lr.filing_source, lr.status, lr.created_at
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
@@ -4321,6 +5180,11 @@ app.get('/api/leave/reports/:reportType', requireAuth, requireLeavePermission('l
          ORDER BY lr.created_at DESC`
       );
     }
+    rows = rows.map(row => {
+      decryptEmployeeStrictPii(row);
+      const { first_name, middle_name, last_name, ...rest } = row;
+      return { employee: employeeDisplayName(row) || row.employee_code || '-', ...rest };
+    });
     const keys = Object.keys(rows[0] || { report: 'No data' });
     const csv = [keys.join(','), ...rows.map(row => keys.map(key => `"${String(row[key] ?? '').replace(/"/g, '""')}"`).join(','))].join('\n');
     const extension = format === 'excel' ? 'xls' : format;
@@ -4345,14 +5209,17 @@ const employeeOnlyRequestAccess = (req, res, next) => {
 app.get('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
   try {
     const pool = require('./config/db');
-    let q = `SELECT gr.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name
+    let q = `SELECT gr.*, e.employee_code, e.first_name, e.middle_name, e.last_name
              FROM general_requests gr JOIN employees e ON e.id = gr.employee_id`;
     const p = [];
     q += ' WHERE gr.employee_id = ?';
     p.push(req.user.employeeId);
     q += ' ORDER BY gr.created_at DESC';
     const [rows] = await pool.execute(q, p);
-    res.json(rows);
+    res.json(rows.map(row => {
+      decryptEmployeeStrictPii(row);
+      return { ...row, employee_name: employeeDisplayName(row) || row.employee_code || '-' };
+    }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch requests.' }); }
 });
 
@@ -4426,7 +5293,7 @@ app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['payroll_ma
 app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    let q = `SELECT ps.*, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+    let q = `SELECT ps.*, e.employee_code, e.first_name, e.middle_name, e.last_name,
              pr.period_start, pr.period_end
              FROM payslips ps JOIN employees e ON e.id=ps.employee_id
              JOIN payroll_runs pr ON pr.id=ps.payroll_run_id`;
@@ -4434,7 +5301,10 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
     if (req.user.role === 'employee') { q += ' WHERE ps.employee_id = ?'; p.push(req.user.employeeId); }
     q += ' ORDER BY ps.generated_at DESC';
     const [rows] = await pool.execute(q, p);
-    res.json(rows);
+    res.json(rows.map(row => {
+      decryptEmployeeStrictPii(row);
+      return { ...row, employee_name: employeeDisplayName(row) || row.employee_code || '-' };
+    }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips.' }); }
 });
 

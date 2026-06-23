@@ -55,6 +55,16 @@ function logAndThrow(error, operation) {
   throw new Error(AUTH_QUERY_ERROR);
 }
 
+async function ensureUserAuthColumns() {
+  for (const [name, definition] of [
+    ['account_status', "ENUM('Active','Disabled','Offboarded','Inactive') NOT NULL DEFAULT 'Active'"],
+    ['token_version', 'INT NOT NULL DEFAULT 0'],
+  ]) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM users LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
+  }
+}
+
 const USER_SELECT_FIELDS = `
   COALESCE(e.Employee_ID, e.id) AS Employee_ID,
   u.id AS id,
@@ -72,6 +82,7 @@ const USER_SELECT_FIELDS = `
   u.username,
   u.is_active,
   u.account_status,
+  COALESCE(u.token_version, 0) AS token_version,
   r.name AS role_name,
   r.label AS role_label
 `;
@@ -89,6 +100,7 @@ async function findUserByEmail(email) {
   if (!isNonEmptyString(email)) return null;
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT ${USER_SELECT_FIELDS}
          FROM users u
@@ -357,6 +369,7 @@ async function getUserLoginLockState(userId) {
   ensureEmployeeId(userId);
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT failed_login_attempts, account_locked_until,
               account_locked_until > NOW() AS is_locked,
@@ -556,6 +569,7 @@ async function findActiveSessionByRefreshTokenHash(refreshTokenHash) {
   if (!isNonEmptyString(refreshTokenHash)) return null;
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT
          s.Session_ID,
@@ -703,6 +717,7 @@ async function findValidPasswordResetToken(resetTokenHash) {
   if (!isNonEmptyString(resetTokenHash)) return null;
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT
          Reset_ID,

@@ -11,6 +11,7 @@ const router = express.Router();
 const pool = require('../config/db');
 const { requireRole, ROLES } = require('./middleware');
 const {
+  decryptColumnValue,
   decryptNullable,
   encryptNullable,
   hashNullable,
@@ -168,7 +169,9 @@ router.get('/list', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
       SELECT 
         e.id,
         e.employee_code,
-        CONCAT(e.first_name, ' ', e.last_name) AS name,
+        e.first_name,
+        e.middle_name,
+        e.last_name,
         e.email,
         e.position,
         d.name AS department,
@@ -180,7 +183,18 @@ router.get('/list', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
       ORDER BY e.first_name, e.last_name
     `);
     
-    res.json(employees);
+    res.json(employees.map(employee => {
+      const first = decryptColumnValue(employee.first_name) || '';
+      const middle = decryptColumnValue(employee.middle_name) || '';
+      const last = decryptColumnValue(employee.last_name) || '';
+      return {
+        ...employee,
+        first_name: undefined,
+        middle_name: undefined,
+        last_name: undefined,
+        name: [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim() || employee.employee_code,
+      };
+    }));
   } catch (err) {
     console.error('Error fetching employees for 201-file:', err);
     res.status(500).json({ error: 'Failed to fetch employees.' });

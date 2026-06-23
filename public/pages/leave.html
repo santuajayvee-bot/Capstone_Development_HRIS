@@ -109,6 +109,7 @@
       <h3 class="leave-section-title">Leave Balances</h3>
       <div class="leave-field" id="leave-balance-viewer-field" style="min-width:280px;display:none;">
         <label>View Employee Balance</label>
+        <input id="leave-balance-viewer-filter" type="search" placeholder="Search employee code or name" oninput="filterLeaveBalanceViewerEmployees()" style="margin-bottom:6px;">
         <select id="leave-balance-viewer-employee" onchange="loadLeaveBalancesForSelection(this.value)"></select>
       </div>
     </div>

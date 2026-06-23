@@ -14,6 +14,7 @@ const crypto = require('crypto');
 const express = require('express');
 const pool = require('../config/db');
 const { encryptAES256 } = require('./crypto');
+const { decryptColumnValue } = require('./data-protection');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const {
   anchorIntegrityEntry,
@@ -68,6 +69,24 @@ const GEOFENCE_ALLOWED_FIELDS = new Set(['site_name', 'latitude', 'longitude', '
 
 function includesRole(roles, req) {
   return roles.includes(req.user?.role);
+}
+
+function attendanceEmployeeName(row) {
+  const first = decryptColumnValue(row?.first_name) || '';
+  const middle = decryptColumnValue(row?.middle_name) || '';
+  const last = decryptColumnValue(row?.last_name) || '';
+  const name = [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return name || row?.employee_code || (row?.employee_id ? `Employee #${row.employee_id}` : 'Employee');
+}
+
+function withAttendanceEmployeeName(row) {
+  return {
+    ...row,
+    first_name: undefined,
+    middle_name: undefined,
+    last_name: undefined,
+    employee_name: attendanceEmployeeName(row),
+  };
 }
 
 function rejectUnsupportedFields(req, res, allowedFields, module = 'ATTENDANCE_SECURITY') {
@@ -184,8 +203,7 @@ async function emitAttendanceRealtimeById(attendanceId, scanType = 'AUTO') {
     const [rows] = await pool.execute(
       `SELECT al.employee_id, al.date, al.time_in, al.time_out, al.verification_status,
               al.device_id, ats.payroll_eligible,
-              e.employee_code, e.department_id,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              e.employee_code, e.department_id, e.first_name, e.middle_name, e.last_name,
               bd.device_reference
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
@@ -196,7 +214,7 @@ async function emitAttendanceRealtimeById(attendanceId, scanType = 'AUTO') {
       [attendanceId]
     );
     if (!rows.length) return;
-    const row = rows[0];
+    const row = rows[0] ? withAttendanceEmployeeName(rows[0]) : null;
     emitAttendanceCreated({
       employee_id: row.employee_id,
       employee_name: row.employee_name,
@@ -443,7 +461,7 @@ router.get('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES
     const deviceId = req.query.device_id ? positiveInteger(req.query.device_id, 'device_id') : null;
     const [rows] = await pool.execute(
       `SELECT bem.mapping_id, bem.device_id, bd.device_name, bem.employee_id,
-              e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              e.employee_code, e.first_name, e.middle_name, e.last_name,
               bem.biometric_user_id_encrypted, bem.is_active, bem.created_at, bem.updated_at
          FROM biometric_employee_mapping bem
          JOIN biometric_device bd ON bd.device_id = bem.device_id
@@ -454,6 +472,7 @@ router.get('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES
     );
     res.json(rows.map(row => ({
       ...row,
+      ...withAttendanceEmployeeName(row),
       biometric_user_id_encrypted: undefined,
       biometric_user_reference: 'Encrypted reference',
     })));
@@ -540,7 +559,7 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
   try {
     const [rows] = await pool.execute(
       `SELECT bse.scan_event_id, bse.external_event_id, bse.device_id, bd.device_name,
-              bse.employee_id, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              bse.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name,
               bse.scan_timestamp, bse.attendance_type, bse.verification_status,
               bse.error_message, bse.created_at
          FROM biometric_scan_event bse
@@ -550,7 +569,7 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
         ORDER BY bse.created_at DESC
         LIMIT 200`
     );
-    res.json(rows);
+    res.json(rows.map(withAttendanceEmployeeName));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch biometric exceptions.' });
   }
@@ -559,8 +578,7 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
 router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT bse.scan_event_id, bse.employee_id, e.employee_code,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+      `SELECT bse.scan_event_id, bse.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name,
               bse.scan_timestamp, bse.attendance_type, bse.verification_status,
               bse.error_message, bse.created_at
          FROM biometric_scan_event bse
@@ -568,7 +586,7 @@ router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
         ORDER BY bse.created_at DESC
         LIMIT 50`
     );
-    res.json(rows);
+    res.json(rows.map(withAttendanceEmployeeName));
   } catch (err) {
     console.error('[attendance/biometric-events]', err.message);
     res.status(500).json({ error: 'Failed to fetch recent fingerprint attendance activity.' });
@@ -653,6 +671,33 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
   }
 });
 
+router.get('/employees', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES]), async (_req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
+              e.position, d.name AS department
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+        WHERE COALESCE(e.status, 'Active') = 'Active'
+        ORDER BY e.employee_code, e.last_name, e.first_name
+        LIMIT 1000`
+    );
+    res.json(rows.map(row => {
+      const employee = withAttendanceEmployeeName(row);
+      return {
+        id: employee.id,
+        employee_code: employee.employee_code,
+        employee_name: employee.employee_name,
+        department: employee.department,
+        position: employee.position,
+      };
+    }));
+  } catch (err) {
+    console.error('[attendance/employees]', err.message);
+    res.status(500).json({ error: 'Failed to fetch attendance employee dropdown.' });
+  }
+});
+
 router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
   try {
     await ensureAttendanceLogMetricColumns(pool);
@@ -687,8 +732,8 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
       values.push(Number(month), Number(year));
     }
     if (search) {
-      conditions.push("CONCAT(e.first_name, ' ', e.last_name) LIKE ?");
-      values.push(`%${search}%`);
+      conditions.push("(e.employee_code LIKE ? OR e.first_name LIKE ? OR e.last_name LIKE ?)");
+      values.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     if (department) {
       conditions.push('d.name = ?');
@@ -723,7 +768,7 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
               ats.late_minutes AS summary_late_minutes,
               ats.undertime_minutes AS summary_undertime_minutes,
               ats.attendance_status, ats.payroll_eligible,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              e.first_name, e.middle_name, e.last_name,
               e.employee_code, d.name AS department, e.position
          FROM attendance_log al
          JOIN employees e ON e.id = al.employee_id
@@ -734,7 +779,7 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
         LIMIT 500`,
       values
     );
-    res.json(rows);
+    res.json(rows.map(withAttendanceEmployeeName));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch attendance records.' });
   }
@@ -814,7 +859,7 @@ router.get('/summaries', requireAuth, requireRole(SUMMARY_ROLES), async (req, re
     }
 
     const [rows] = await pool.execute(
-      `SELECT ats.*, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+      `SELECT ats.*, e.employee_code, e.first_name, e.middle_name, e.last_name,
               d.name AS department
          FROM attendance_summary ats
          JOIN employees e ON e.id = ats.employee_id
@@ -824,7 +869,7 @@ router.get('/summaries', requireAuth, requireRole(SUMMARY_ROLES), async (req, re
         LIMIT 500`,
       values
     );
-    res.json(rows);
+    res.json(rows.map(withAttendanceEmployeeName));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch payroll attendance summaries.' });
   }
@@ -1102,7 +1147,7 @@ router.get('/audit-log', requireAuth, requireRole(AUDIT_ROLES), async (_req, res
   try {
     const [rows] = await pool.execute(
       `SELECT sal.*, u.username AS performed_by,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+              e.employee_code, e.first_name, e.middle_name, e.last_name
          FROM system_audit_log sal
          JOIN users u ON u.id = sal.user_id
          LEFT JOIN employees e ON e.id = sal.target_employee_id
@@ -1110,7 +1155,7 @@ router.get('/audit-log', requireAuth, requireRole(AUDIT_ROLES), async (_req, res
         ORDER BY sal.timestamp DESC
         LIMIT 250`
     );
-    res.json(rows);
+    res.json(rows.map(withAttendanceEmployeeName));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch attendance audit log.' });
   }

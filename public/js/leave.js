@@ -977,6 +977,35 @@ function leaveBadge(value, kind = '') {
   return `<span class="leave-badge ${(kind || value || '').toLowerCase()}">${value || '-'}</span>`;
 }
 
+function leaveEmployeeLabel(emp) {
+  const name = [emp.first_name, emp.middle_name, emp.last_name, emp.suffix]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${emp.employee_code || emp.id} - ${name || emp.employee_name || 'Employee'}`;
+}
+
+function leaveEmployeeMatchesFilter(emp, filterText) {
+  const needle = String(filterText || '').trim().toLowerCase();
+  if (!needle) return true;
+  return [
+    emp.employee_code,
+    emp.first_name,
+    emp.middle_name,
+    emp.last_name,
+    emp.suffix,
+    emp.employee_name,
+    emp.department,
+  ].filter(Boolean).join(' ').toLowerCase().includes(needle);
+}
+
+function leaveEmployeeOptions(employees, placeholder = 'Select employee') {
+  return `<option value="">${placeholder}</option>` + employees
+    .map(emp => `<option value="${emp.id}">${leaveEmployeeLabel(emp)}</option>`)
+    .join('');
+}
+
 function isLeaveManager() {
   return CURRENT_USER && CURRENT_USER.role !== 'employee';
 }
@@ -1025,9 +1054,7 @@ function setupLeaveUi() {
 
   const employeeSelect = document.getElementById('manual-employee');
   if (employeeSelect) {
-    employeeSelect.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
-      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
-      .join('');
+    employeeSelect.innerHTML = leaveEmployeeOptions(LEAVE_EMPLOYEES);
   }
 
   const balanceCard = document.getElementById('leave-balance-config-card');
@@ -1035,9 +1062,7 @@ function setupLeaveUi() {
   const balanceEmployee = document.getElementById('balance-employee');
   if (balanceEmployee) {
     const current = balanceEmployee.value;
-    balanceEmployee.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
-      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
-      .join('');
+    balanceEmployee.innerHTML = leaveEmployeeOptions(LEAVE_EMPLOYEES);
     balanceEmployee.value = current;
   }
   const balanceYear = document.getElementById('balance-year');
@@ -1047,11 +1072,7 @@ function setupLeaveUi() {
   const balanceViewerEmployee = document.getElementById('leave-balance-viewer-employee');
   if (balanceViewerField && balanceViewerEmployee) {
     balanceViewerField.style.display = isLeaveManager() ? 'block' : 'none';
-    const current = balanceViewerEmployee.value;
-    balanceViewerEmployee.innerHTML = '<option value="">Select employee</option>' + LEAVE_EMPLOYEES
-      .map(emp => `<option value="${emp.id}">${emp.employee_code || emp.id} - ${emp.first_name || ''} ${emp.last_name || ''}</option>`)
-      .join('');
-    balanceViewerEmployee.value = current;
+    renderLeaveBalanceViewerEmployeeOptions(balanceViewerEmployee.value);
   }
 
   const departments = [...new Set(LEAVE_EMPLOYEES.map(emp => emp.department).filter(Boolean))].sort();
@@ -1062,6 +1083,22 @@ function setupLeaveUi() {
     select.innerHTML = '<option value="">All Departments</option>' + departments.map(dept => `<option>${dept}</option>`).join('');
     select.value = current;
   });
+}
+
+function renderLeaveBalanceViewerEmployeeOptions(preferredValue = '') {
+  const select = document.getElementById('leave-balance-viewer-employee');
+  if (!select) return;
+  const filterText = document.getElementById('leave-balance-viewer-filter')?.value || '';
+  const filteredEmployees = LEAVE_EMPLOYEES.filter(emp => leaveEmployeeMatchesFilter(emp, filterText));
+  const current = preferredValue || select.value;
+  select.innerHTML = leaveEmployeeOptions(filteredEmployees, 'Select employee');
+  if ([...select.options].some(option => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function filterLeaveBalanceViewerEmployees() {
+  renderLeaveBalanceViewerEmployeeOptions();
 }
 
 function renderLeaveSummary() {
@@ -1995,6 +2032,8 @@ window.updateBalanceRemainingPreview = updateBalanceRemainingPreview;
 window.saveLeaveBalanceConfig = saveLeaveBalanceConfig;
 window.editLeaveBalanceConfig = editLeaveBalanceConfig;
 window.resetLeaveBalanceForm = resetLeaveBalanceForm;
+window.loadLeaveBalancesForSelection = loadLeaveBalancesForSelection;
+window.filterLeaveBalanceViewerEmployees = filterLeaveBalanceViewerEmployees;
 
 window.renderLeaveCalendar = function() {
   const calendar = document.getElementById('leave-calendar');
