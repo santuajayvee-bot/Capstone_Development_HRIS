@@ -1,7 +1,6 @@
 const express = require('express');
 const multer = require('multer');
 const argon2 = require('argon2');
-const bcrypt = require('bcrypt');
 
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
@@ -306,9 +305,8 @@ async function getUserPasswordHash(userId) {
 
 async function verifyPassword(hash, password) {
   if (!hash || !password) return false;
-  return hash.startsWith('$argon2')
-    ? argon2.verify(hash, password)
-    : bcrypt.compare(password, hash);
+  if (!hash.startsWith('$argon2')) return false;
+  return argon2.verify(hash, password);
 }
 
 function maskSensitive(value) {

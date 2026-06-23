@@ -2,7 +2,6 @@
    server/auth.js — Authentication route handlers
    ============================================================ */
 
-const bcrypt = require('bcrypt');
 const argon2 = require('argon2');
 const jwt    = require('jsonwebtoken');
 const {
@@ -94,12 +93,10 @@ async function login(req, res) {
       // Columns may not exist yet — proceed without lockout
     }
 
-    // 4. Verify password (supports both Argon2 and bcrypt)
+    // 4. Verify password. Only Argon2id hashes are accepted.
     let valid = false;
     if (user.password_hash.startsWith('$argon2')) {
       valid = await argon2.verify(user.password_hash, password);
-    } else {
-      valid = await bcrypt.compare(password, user.password_hash);
     }
     
     if (!valid) {
@@ -184,7 +181,7 @@ async function login(req, res) {
     });
 
   } catch (err) {
-    console.error('[auth/login]', err);
+    console.error('[auth/login]', err.message);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }

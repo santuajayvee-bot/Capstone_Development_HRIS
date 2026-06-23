@@ -103,6 +103,38 @@ function rejectWithAudit(req, res, status, message, audit) {
   return res.status(status).json({ error: message });
 }
 
+function createRateLimiter({
+  windowMs = 60 * 1000,
+  max = 60,
+  keyGenerator = req => requestIp(req),
+  auditAction = 'blocked_rate_limit_exceeded',
+  module = 'RATE_LIMIT_SECURITY',
+} = {}) {
+  const buckets = new Map();
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = String(keyGenerator(req) || 'unknown');
+    const bucket = buckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      buckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    bucket.count += 1;
+    if (bucket.count <= max) return next();
+
+    const retryAfterSeconds = Math.max(Math.ceil((bucket.resetAt - now) / 1000), 1);
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    return rejectWithAudit(req, res, 429, 'Too many requests. Please try again later.', {
+      action: auditAction,
+      module,
+      targetTable: req.originalUrl || null,
+      newValue: { key, path: req.originalUrl, method: req.method, retryAfterSeconds },
+      result: 'blocked',
+    });
+  };
+}
+
 function findForbiddenBodyFields(body, forbiddenFields = COMPUTED_PAYROLL_FIELDS) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
   return Object.keys(body).filter(key => forbiddenFields.has(String(key).toLowerCase()));
@@ -197,6 +229,7 @@ module.exports = {
   ALLOWED_UPLOAD_TYPES,
   COMPUTED_PAYROLL_FIELDS,
   auditSecurityEvent,
+  createRateLimiter,
   deleteUploadedFile,
   multerFileFilter,
   randomSafeFilename,

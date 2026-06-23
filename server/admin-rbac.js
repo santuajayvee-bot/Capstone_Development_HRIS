@@ -311,7 +311,7 @@ router.post('/register-role', async (req, res) => {
     }
 
     console.error('❌ [RBAC] register-role error:', err.message);
-    return res.status(500).json({ error: 'Failed to register account.', details: err.message });
+    return res.status(500).json({ error: 'Failed to register account.' });
   } finally {
     conn.release();
   }

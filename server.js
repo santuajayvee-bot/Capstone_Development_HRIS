@@ -34,6 +34,7 @@ const { hashTemporaryPassword }              = require('./services/passwordServi
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
 const {
   auditSecurityEvent,
+  createRateLimiter,
   multerFileFilter,
   randomSafeFilename,
   rejectForbiddenFields,
@@ -43,6 +44,17 @@ const {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const API_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.API_RATE_LIMIT_MAX || 300),
+  auditAction: 'blocked_api_rate_limit_exceeded',
+});
+const AUTH_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 20),
+  keyGenerator: req => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.body?.username || req.body?.email || '').toLowerCase()}`,
+  auditAction: 'blocked_auth_rate_limit_exceeded',
+});
 const EMPLOYEE_ID_ADMIN_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
 const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'role',
@@ -59,6 +71,9 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'password_hash',
   'mfa_secret',
   'refresh_token',
+  'salary',
+  'hourly_rate',
+  'daily_rate',
   'gross_pay',
   'net_pay',
   'total_deductions',
@@ -159,6 +174,31 @@ const CERTIFICATION_PII_FIELDS = [
 const TRAINING_PII_FIELDS = [
   'training_name', 'provider', 'date_from', 'date_to', 'training_hours', 'remarks'
 ];
+const EMPLOYEE_FAMILY_ALLOWED_FIELDS = new Set(FAMILY_PII_FIELDS);
+const EMPLOYEE_WORK_EXPERIENCE_ALLOWED_FIELDS = new Set(WORK_EXPERIENCE_PII_FIELDS);
+const EMPLOYEE_CERTIFICATION_ALLOWED_FIELDS = new Set(CERTIFICATION_PII_FIELDS);
+const EMPLOYEE_TRAINING_ALLOWED_FIELDS = new Set(TRAINING_PII_FIELDS);
+const EMPLOYEE_SKILL_ALLOWED_FIELDS = new Set(['skill_name', 'proficiency', 'remarks']);
+const EMPLOYEE_DOCUMENT_ALLOWED_FIELDS = new Set(['docType', 'document_type']);
+const EMPLOYEE_STATUS_ALLOWED_FIELDS = new Set(['status', 'employment_status', 'separation_date', 'separation_reason', 'offboarding_remarks']);
+const FORM_DRAFT_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status', 'expiry_days', 'draft_data']);
+const FORM_DRAFT_STATUS_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status']);
+const EMPLOYEE_ID_CONFIG_ALLOWED_FIELDS = new Set(['prefix', 'starting_number', 'number_padding', 'current_sequence', 'auto_generate_enabled']);
+const DEPARTMENT_SETUP_ALLOWED_FIELDS = new Set(['name']);
+const POSITION_SETUP_ALLOWED_FIELDS = new Set(['department_id', 'name']);
+const LEAVE_TYPE_ALLOWED_FIELDS = new Set([
+  'id', 'name', 'code', 'category', 'description', 'max_allowed_days', 'is_paid',
+  'is_active', 'requires_attachment', 'allow_unpaid_extension', 'max_extension_days',
+  'female_only', 'male_only', 'married_only', 'solo_parent_required',
+  'medical_certificate_required', 'legal_document_required', 'minimum_service_months',
+]);
+const LEAVE_BALANCE_ALLOWED_FIELDS = new Set(['employee_id', 'leave_type_id', 'leave_type', 'year', 'total_days', 'balance', 'used_days', 'used']);
+const LEAVE_REQUEST_ALLOWED_FIELDS = new Set(['type', 'leave_type_id', 'date_from', 'date_to', 'days', 'reason', 'employee_id', 'filing_source', 'remarks']);
+const LEAVE_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks', 'review_note', 'reason']);
+const GENERAL_REQUEST_ALLOWED_FIELDS = new Set(['type', 'request_type', 'purpose', 'details', 'reason', 'remarks']);
+const GENERAL_REQUEST_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks']);
+const PAYROLL_RUN_ALLOWED_FIELDS = new Set(['period_start', 'period_end']);
+const PAYROLL_RUN_APPROVE_ALLOWED_FIELDS = new Set(['remarks']);
 const EMPLOYEE_STRICT_PII_COLUMNS = [
   'first_name', 'middle_name', 'last_name', 'suffix',
   'email', 'contact_number', 'work_email', 'mailing_address',
@@ -343,11 +383,13 @@ app.use(express.json({
     req.rawBody = Buffer.from(buffer);
   }
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(encryptedCommunicationMiddleware);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
+app.use('/api/auth/login', AUTH_RATE_LIMIT);
+app.use('/api', API_RATE_LIMIT);
 app.use((req, res, next) => {
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -355,12 +397,18 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (req.originalUrl.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
   );
   next();
 });
+app.use('/uploads', (_req, res) => res.status(404).send('Not found'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/attendance/station', (_req, res) => {
@@ -612,6 +660,7 @@ app.get('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res
 app.post('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, FORM_DRAFT_ALLOWED_FIELDS, { module: 'FORM_DRAFT_SECURITY' })) return;
     const moduleName = String(req.body.module_name || '').trim();
     const formName = String(req.body.form_name || '').trim();
     const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
@@ -647,6 +696,7 @@ app.post('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, re
 app.patch('/api/form-drafts/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, FORM_DRAFT_STATUS_ALLOWED_FIELDS, { module: 'FORM_DRAFT_SECURITY' })) return;
     const moduleName = String(req.body.module_name || '').trim();
     const formName = String(req.body.form_name || '').trim();
     const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
@@ -1015,6 +1065,77 @@ async function rejectEmployeeUnknownFields(req, res, fields) {
     error: 'Request contains unsupported employee field(s).',
     fields,
   });
+}
+
+async function rejectEmployeeUnsupportedSubresourceFields(req, res, allowedFields, resource) {
+  const unknownFields = Object.keys(req.body || {}).filter(field => !allowedFields.has(field));
+  if (!unknownFields.length) return false;
+  await auditSecurityEvent(req, {
+    action: 'blocked_employee_subresource_unknown_fields',
+    module: 'EMPLOYEE_SECURITY',
+    targetTable: 'employees',
+    targetRecord: req.params?.id || null,
+    newValue: { resource, fields: unknownFields, path: req.originalUrl },
+    result: 'blocked',
+  });
+  res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
+  return true;
+}
+
+async function rejectUnsupportedRouteFields(req, res, allowedFields, { module = 'API_FIELD_VALIDATION', action = 'blocked_unsupported_route_fields' } = {}) {
+  const unknownFields = Object.keys(req.body || {}).filter(field => !allowedFields.has(field));
+  if (!unknownFields.length) return false;
+  await auditSecurityEvent(req, {
+    action,
+    module,
+    targetTable: req.originalUrl || null,
+    targetRecord: req.params?.id || req.body?.id || null,
+    newValue: { fields: unknownFields, path: req.originalUrl },
+    result: 'blocked',
+  });
+  res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
+  return true;
+}
+
+function validateEmployeeSubresourceBody(body, fields, { dateFields = [], numericFields = [] } = {}) {
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    if (dateFields.includes(field)) {
+      validateEmployeeDateField(body, field);
+      continue;
+    }
+    if (numericFields.includes(field)) {
+      const value = normalizeBlank(body[field]);
+      if (value == null) {
+        body[field] = null;
+        continue;
+      }
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0 || number > 10000) throw rejectEmployeeInput(field);
+      body[field] = String(number);
+      continue;
+    }
+    const value = normalizeBlank(body[field]);
+    body[field] = value == null ? null : validateNoDangerousText(field, value).replace(/\s+/g, ' ');
+  }
+}
+
+async function ensureEmployeeRouteAccess(pool, req, res, { param = 'id', action = 'blocked_employee_idor_attempt' } = {}) {
+  const rawId = req.params?.[param];
+  let employeeId = Number.parseInt(rawId, 10);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    const [rows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ? LIMIT 1', [rawId]);
+    employeeId = rows[0]?.id || null;
+  }
+  if (!employeeId) {
+    res.status(404).json({ error: 'Employee not found.' });
+    return null;
+  }
+  if (!canAccessEmployeeRecord(req, employeeId, { allowPermission: false })) {
+    await rejectEmployeeIdor(req, res, employeeId, action);
+    return null;
+  }
+  return employeeId;
 }
 
 function canAccessEmployeeRecord(req, targetEmployeeId, { allowPayroll = false, allowPermission = true } = {}) {
@@ -1592,6 +1713,7 @@ app.put('/api/employees/id-config', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_R
   try {
     const pool = require('./config/db');
     await ensureEmployeeIdConfigSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, EMPLOYEE_ID_CONFIG_ALLOWED_FIELDS, { module: 'EMPLOYEE_ID_SECURITY' })) return;
 
     const prefix = sanitizeEmployeeCode(req.body.prefix || 'EMP');
     const startingNumber = Number(req.body.starting_number || 1);
@@ -1904,6 +2026,7 @@ app.get('/api/employee-setup/lookups', requireAuth, requireRole(ROLES.any), asyn
 app.post('/api/employee-setup/departments', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, DEPARTMENT_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const name = String(req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Department name is required.' });
     if (name.length > 100) return res.status(400).json({ error: 'Department name is too long.' });
@@ -1927,6 +2050,7 @@ app.put('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLE
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, DEPARTMENT_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const id = Number(req.params.id);
     const name = String(req.body.name || '').trim();
     if (!id) return res.status(400).json({ error: 'Department is required.' });
@@ -1963,6 +2087,7 @@ app.post('/api/employee-setup/positions', requireAuth, requireRole([...ROLES.sta
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, POSITION_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const departmentId = Number(req.body.department_id);
     const name = String(req.body.name || '').trim();
     if (!departmentId) return res.status(400).json({ error: 'Department is required.' });
@@ -1997,6 +2122,7 @@ app.put('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, POSITION_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const id = Number(req.params.id);
     const departmentId = Number(req.body.department_id);
     const name = String(req.body.name || '').trim();
@@ -2792,6 +2918,7 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
     const { id } = req.params; // id = numeric employee id
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_STATUS_ALLOWED_FIELDS, 'status')) return;
     const { separation_date, separation_reason, offboarding_remarks } = req.body;
     const requestedStatus = normalizeBlank(req.body.employment_status || req.body.status);
 
@@ -2845,12 +2972,24 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
   try {
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
+    await ensureEmployeeLifecycleColumns(pool);
     const { id } = req.params; // id = numeric employee id
 
     console.log('DELETE /api/employees/:id - Employee ID:', id);
 
+    const [existingRows] = await pool.execute('SELECT id, status FROM employees WHERE id = ? LIMIT 1', [id]);
+    if (!existingRows.length) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+
     const [result] = await pool.execute(
-      `DELETE FROM employees WHERE id = ?`,
+      `UPDATE employees
+          SET status = 'Inactive',
+              separation_date = COALESCE(separation_date, CURDATE()),
+              separation_reason = COALESCE(separation_reason, 'Soft deleted by HR'),
+              offboarding_remarks = COALESCE(offboarding_remarks, 'Employee record removed from active use.'),
+              updated_at = NOW()
+        WHERE id = ?`,
       [id]
     );
 
@@ -2858,7 +2997,14 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
       return res.status(404).json({ error: 'Employee not found.' });
     }
 
-    return res.status(200).json({ message: 'Employee deleted successfully.' });
+    await deactivateLinkedUserAccounts(pool, Number(id), 'Inactive', req);
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_SOFT_DELETED', Number(id), {
+      status: existingRows[0].status,
+    }, {
+      status: 'Inactive',
+    });
+
+    return res.status(200).json({ message: 'Employee removed from active records.' });
   } catch (err) {
     console.error('Error deleting employee:', err.message, err.sqlMessage);
     return res.status(500).json({ error: 'Failed to delete employee.' });
@@ -2870,6 +3016,10 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
   try {
     const pool = require('./config/db');
     const { id } = req.params; // id = employee_code
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_DOCUMENT_ALLOWED_FIELDS, 'documents')) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
     const allowedDocTypes = new Set(['Resume', 'Government_ID', 'NBI_Clearance', 'Contract', 'Other']);
     const docType = allowedDocTypes.has(req.body.docType) ? req.body.docType : 'Other';
     
@@ -2899,6 +3049,10 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
        VALUES (?, ?, ?, ?)`,
       [employeeId, docType, req.file.originalname, filePath]
     );
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_DOCUMENT_UPLOADED', employeeId, null, {
+      document_id: result.insertId,
+      document_type: docType,
+    });
     
     console.log('✅ Document uploaded successfully');
     return res.status(200).json({
@@ -2994,9 +3148,14 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
   try {
     const pool = require('./config/db');
     const { id, docId } = req.params;
-    
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      param: 'id',
+      action: 'blocked_employee_document_delete_idor_attempt',
+    });
+    if (!employeeId) return;
+
     // Get document info
-    const [docs] = await pool.execute('SELECT file_path FROM documents WHERE id = ?', [docId]);
+    const [docs] = await pool.execute('SELECT file_path FROM documents WHERE id = ? AND employee_id = ?', [docId, employeeId]);
     if (docs.length === 0) {
       return res.status(404).json({ error: 'Document not found.' });
     }
@@ -3009,7 +3168,10 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
     }
     
     // Delete database record
-    await pool.execute('DELETE FROM documents WHERE id = ?', [docId]);
+    await pool.execute('DELETE FROM documents WHERE id = ? AND employee_id = ?', [docId, employeeId]);
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_DOCUMENT_DELETED', employeeId, {
+      document_id: docId,
+    }, null);
     
     console.log('✅ Document deleted successfully');
     return res.status(200).json({ message: 'Document deleted successfully.' });
@@ -3025,6 +3187,10 @@ app.get('/api/employees/:id/family', requireAuth, requireRole(ROLES.any), async 
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_family_idor_attempt',
+    });
+    if (!employeeId) return;
 
     const [rows] = await pool.execute(
       `SELECT id, employee_id, relationship_type, extension_name, first_name, middle_name, last_name,
@@ -3033,7 +3199,7 @@ app.get('/api/employees/:id/family', requireAuth, requireRole(ROLES.any), async 
        FROM employee_family_members
        WHERE employee_id = ?
        ORDER BY id`,
-      [id]
+      [employeeId]
     );
 
     res.json(rows.map(row => decryptRowPii(row, 'pii_encrypted', FAMILY_PII_FIELDS)));
@@ -3043,10 +3209,12 @@ app.get('/api/employees/:id/family', requireAuth, requireRole(ROLES.any), async 
   }
 });
 
-app.post('/api/employees/:id/family', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employees/:id/family', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_FAMILY_ALLOWED_FIELDS, 'family')) return;
+    validateEmployeeSubresourceBody(req.body, EMPLOYEE_FAMILY_ALLOWED_FIELDS, { dateFields: ['date_of_birth'] });
     const {
       relationship_type,
       extension_name,
@@ -3088,9 +3256,13 @@ app.post('/api/employees/:id/family', requireAuth, requireRole(ROLES.staff_manag
       ]
     );
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_FAMILY_MEMBER_ADDED', Number(id), null, {
+      family_member_id: result.insertId,
+    });
     res.status(201).json({ id: result.insertId, message: 'Family member added.' });
   } catch (err) {
     console.error('Error adding family member:', err.message);
+    if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid family member details.' });
     res.status(500).json({ error: 'Failed to add family member.' });
   }
 });
@@ -3109,6 +3281,9 @@ app.delete('/api/employees/:id/family/:familyId', requireAuth, requireRole(ROLES
       return res.status(404).json({ error: 'Family member not found.' });
     }
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_FAMILY_MEMBER_DELETED', Number(id), {
+      family_member_id: familyId,
+    }, null);
     res.json({ message: 'Family member deleted.' });
   } catch (err) {
     console.error('Error deleting family member:', err.message);
@@ -3121,6 +3296,10 @@ app.get('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.an
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_work_experience_idor_attempt',
+    });
+    if (!employeeId) return;
 
     const [rows] = await pool.execute(
       `SELECT id, employee_id, company_name, position_title, employment_type, date_from, date_to,
@@ -3128,7 +3307,7 @@ app.get('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.an
        FROM employee_work_experiences
        WHERE employee_id = ?
        ORDER BY id DESC`,
-      [id]
+      [employeeId]
     );
 
     res.json(rows.map(row => decryptRowPii(row, 'pii_encrypted', WORK_EXPERIENCE_PII_FIELDS)));
@@ -3138,10 +3317,13 @@ app.get('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.an
   }
 });
 
-app.post('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_WORK_EXPERIENCE_ALLOWED_FIELDS, 'work-experiences')) return;
+    validateEmployeeSubresourceBody(req.body, EMPLOYEE_WORK_EXPERIENCE_ALLOWED_FIELDS, { dateFields: ['date_from', 'date_to'] });
+    validateDateOrder(req.body, 'date_from', 'date_to');
     const {
       company_name,
       position_title,
@@ -3177,9 +3359,13 @@ app.post('/api/employees/:id/work-experiences', requireAuth, requireRole(ROLES.s
       ]
     );
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_WORK_EXPERIENCE_ADDED', Number(id), null, {
+      work_experience_id: result.insertId,
+    });
     res.status(201).json({ id: result.insertId, message: 'Work experience added.' });
   } catch (err) {
     console.error('Error adding work experience:', err.message);
+    if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid work experience details.' });
     res.status(500).json({ error: 'Failed to add work experience.' });
   }
 });
@@ -3198,6 +3384,9 @@ app.delete('/api/employees/:id/work-experiences/:experienceId', requireAuth, req
       return res.status(404).json({ error: 'Work experience not found.' });
     }
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_WORK_EXPERIENCE_DELETED', Number(id), {
+      work_experience_id: experienceId,
+    }, null);
     res.json({ message: 'Work experience deleted.' });
   } catch (err) {
     console.error('Error deleting work experience:', err.message);
@@ -3210,13 +3399,17 @@ app.get('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.any)
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_certification_idor_attempt',
+    });
+    if (!employeeId) return;
     const [rows] = await pool.execute(
       `SELECT id, employee_id, certification_name, issuing_organization, issue_date, expiry_date,
               certificate_file_name, certificate_file_path, pii_encrypted
        FROM employee_certifications
        WHERE employee_id = ?
        ORDER BY id DESC`,
-      [id]
+      [employeeId]
     );
     res.json(rows.map(row => decryptRowPii(row, 'pii_encrypted', CERTIFICATION_PII_FIELDS)));
   } catch (err) {
@@ -3225,10 +3418,16 @@ app.get('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.any)
   }
 });
 
-app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.staff_management), uploadSingle('certificate'), async (req, res) => {
+app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('certificate'), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_CERTIFICATION_ALLOWED_FIELDS, 'certifications')) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
+    validateEmployeeSubresourceBody(req.body, EMPLOYEE_CERTIFICATION_ALLOWED_FIELDS, { dateFields: ['issue_date', 'expiry_date'] });
+    validateDateOrder(req.body, 'issue_date', 'expiry_date');
     const { certification_name, issuing_organization, issue_date, expiry_date } = req.body;
 
     if (!certification_name) return res.status(400).json({ error: 'Certification name is required.' });
@@ -3245,9 +3444,14 @@ app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.sta
       ]
     );
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_CERTIFICATION_ADDED', Number(id), null, {
+      certification_id: result.insertId,
+    });
     res.status(201).json({ id: result.insertId, message: 'Certification added.' });
   } catch (err) {
     console.error('Error adding certification:', err.message);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid certification details.' });
     res.status(500).json({ error: 'Failed to add certification.' });
   }
 });
@@ -3266,6 +3470,9 @@ app.delete('/api/employees/:id/certifications/:certificationId', requireAuth, re
     }
 
     await pool.execute('DELETE FROM employee_certifications WHERE id = ? AND employee_id = ?', [certificationId, id]);
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_CERTIFICATION_DELETED', Number(id), {
+      certification_id: certificationId,
+    }, null);
     res.json({ message: 'Certification deleted.' });
   } catch (err) {
     console.error('Error deleting certification:', err.message);
@@ -3277,12 +3484,16 @@ app.get('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.any), asy
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_training_idor_attempt',
+    });
+    if (!employeeId) return;
     const [rows] = await pool.execute(
       `SELECT id, employee_id, training_name, provider, date_from, date_to, training_hours, remarks, pii_encrypted
        FROM employee_trainings
        WHERE employee_id = ?
        ORDER BY id DESC`,
-      [id]
+      [employeeId]
     );
     res.json(rows.map(row => decryptRowPii(row, 'pii_encrypted', TRAINING_PII_FIELDS)));
   } catch (err) {
@@ -3291,10 +3502,16 @@ app.get('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.any), asy
   }
 });
 
-app.post('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_TRAINING_ALLOWED_FIELDS, 'trainings')) return;
+    validateEmployeeSubresourceBody(req.body, EMPLOYEE_TRAINING_ALLOWED_FIELDS, {
+      dateFields: ['date_from', 'date_to'],
+      numericFields: ['training_hours'],
+    });
+    validateDateOrder(req.body, 'date_from', 'date_to');
     const { training_name, provider, date_from, date_to, training_hours, remarks } = req.body;
 
     if (!training_name) return res.status(400).json({ error: 'Training name is required.' });
@@ -3309,9 +3526,13 @@ app.post('/api/employees/:id/trainings', requireAuth, requireRole(ROLES.staff_ma
       ]
     );
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_TRAINING_ADDED', Number(id), null, {
+      training_id: result.insertId,
+    });
     res.status(201).json({ id: result.insertId, message: 'Training added.' });
   } catch (err) {
     console.error('Error adding training:', err.message);
+    if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid training details.' });
     res.status(500).json({ error: 'Failed to add training.' });
   }
 });
@@ -3323,6 +3544,9 @@ app.delete('/api/employees/:id/trainings/:trainingId', requireAuth, requireRole(
     const [result] = await pool.execute('DELETE FROM employee_trainings WHERE id = ? AND employee_id = ?', [trainingId, id]);
 
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Training not found.' });
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_TRAINING_DELETED', Number(id), {
+      training_id: trainingId,
+    }, null);
     res.json({ message: 'Training deleted.' });
   } catch (err) {
     console.error('Error deleting training:', err.message);
@@ -3334,12 +3558,16 @@ app.get('/api/employees/:id/skills', requireAuth, requireRole(ROLES.any), async 
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    const employeeId = await ensureEmployeeRouteAccess(pool, req, res, {
+      action: 'blocked_employee_skill_idor_attempt',
+    });
+    if (!employeeId) return;
     const [rows] = await pool.execute(
       `SELECT id, employee_id, skill_name, proficiency, remarks
        FROM employee_skills
        WHERE employee_id = ?
        ORDER BY skill_name`,
-      [id]
+      [employeeId]
     );
     res.json(rows);
   } catch (err) {
@@ -3348,10 +3576,12 @@ app.get('/api/employees/:id/skills', requireAuth, requireRole(ROLES.any), async 
   }
 });
 
-app.post('/api/employees/:id/skills', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+app.post('/api/employees/:id/skills', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params;
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_SKILL_ALLOWED_FIELDS, 'skills')) return;
+    validateEmployeeSubresourceBody(req.body, EMPLOYEE_SKILL_ALLOWED_FIELDS);
     const { skill_name, proficiency, remarks } = req.body;
 
     if (!skill_name) return res.status(400).json({ error: 'Skill name is required.' });
@@ -3361,9 +3591,13 @@ app.post('/api/employees/:id/skills', requireAuth, requireRole(ROLES.staff_manag
       [id, skill_name, proficiency || null, remarks || null]
     );
 
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_SKILL_ADDED', Number(id), null, {
+      skill_id: result.insertId,
+    });
     res.status(201).json({ id: result.insertId, message: 'Skill added.' });
   } catch (err) {
     console.error('Error adding skill:', err.message);
+    if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid skill details.' });
     res.status(500).json({ error: 'Failed to add skill.' });
   }
 });
@@ -3375,6 +3609,9 @@ app.delete('/api/employees/:id/skills/:skillId', requireAuth, requireRole(ROLES.
     const [result] = await pool.execute('DELETE FROM employee_skills WHERE id = ? AND employee_id = ?', [skillId, id]);
 
     if (result.affectedRows === 0) return res.status(404).json({ error: 'Skill not found.' });
+    await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_SKILL_DELETED', Number(id), {
+      skill_id: skillId,
+    }, null);
     res.json({ message: 'Skill deleted.' });
   } catch (err) {
     console.error('Error deleting skill:', err.message);
@@ -3646,6 +3883,7 @@ app.get('/api/leave/types', requireAuth, requireRole(ROLES.any), async (req, res
 app.post('/api/leave/types', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_TYPE_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const body = req.body || {};
     const name = String(body.name || '').trim();
     const category = body.category === 'Statutory' ? 'Statutory' : 'Company';
@@ -3784,6 +4022,7 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
 app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_BALANCE_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const employeeId = parseInt(req.body.employee_id, 10);
     const leaveType = await getLeaveType(pool, { id: req.body.leave_type_id, name: req.body.leave_type, includeInactive: true });
     const year = parseInt(req.body.year, 10) || new Date().getFullYear();
@@ -3830,6 +4069,10 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
 app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_REQUEST_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
     const { type, leave_type_id, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
     const source = filing_source === 'Manual' ? 'Manual' : 'Portal';
 
@@ -3953,6 +4196,7 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
   const pool = require('./config/db');
   const connection = await pool.getConnection();
   try {
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_STATUS_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     await connection.beginTransaction();
     const status = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
     const remarks = req.body.remarks || null;
@@ -4115,6 +4359,7 @@ app.get('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res
 app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
     const { type, reason } = req.body;
     const empId = req.user.employeeId;
     if (!empId) return res.status(400).json({ error: 'Your account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
@@ -4130,9 +4375,14 @@ app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, re
 app.patch('/api/requests/:id/status', requireAuth, requireRole(ROLES.hr_final_approval), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_STATUS_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
+    const status = String(req.body.status || '').trim();
+    if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid request status.' });
+    }
     await pool.execute(
       `UPDATE general_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
-      [req.body.status, req.user.id, req.params.id]
+      [status, req.user.id, req.params.id]
     );
     res.json({ message: 'Request status updated.' });
   } catch (err) { res.status(500).json({ error: 'Failed to update request.' }); }
@@ -4150,6 +4400,7 @@ app.get('/api/payroll/runs', requireAuth, requireRole(ROLES.payroll_any), async 
 app.post('/api/payroll/runs', requireAuth, requireRole(['payroll_officer']), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, PAYROLL_RUN_ALLOWED_FIELDS, { module: 'PAYROLL_SECURITY' })) return;
     const { period_start, period_end } = req.body;
     const [result] = await pool.execute(
       `INSERT INTO payroll_runs (period_start,period_end,run_date,status,created_by) VALUES (?,?,CURDATE(),'Draft',?)`,
@@ -4162,9 +4413,10 @@ app.post('/api/payroll/runs', requireAuth, requireRole(['payroll_officer']), asy
 app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['payroll_manager']), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, PAYROLL_RUN_APPROVE_ALLOWED_FIELDS, { module: 'PAYROLL_SECURITY' })) return;
     await pool.execute(
       `UPDATE payroll_runs SET status=?, approved_by=?, approved_at=NOW() WHERE id=?`,
-      [req.body.status, req.user.id, req.params.id]
+      ['Approved', req.user.id, req.params.id]
     );
     res.json({ message: 'Payroll run updated.' });
   } catch (err) { res.status(500).json({ error: 'Failed to update payroll run.' }); }
