@@ -362,9 +362,6 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/attendance/scan', (_req, res) => {
-  res.status(410).type('text/plain').send('QR attendance has been disabled. Please use fingerprint biometric attendance.');
-});
 
 app.get('/attendance/station', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'attendance-station.html'));

@@ -503,14 +503,6 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
   }
 });
 
-/* ============================================================
-   Disabled legacy QR/geofence endpoints
-   ============================================================ */
-
-router.get('/qr/generate', requireAuth, requireRole(HR_ROLES), async (_req, res) => {
-  res.status(410).json({ error: 'QR attendance has been disabled. Please use biometric attendance.' });
-});
-
 router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
     const [rows] = await pool.execute(
@@ -528,30 +520,6 @@ router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
     console.error('[attendance/biometric-events]', err.message);
     res.status(500).json({ error: 'Failed to fetch recent fingerprint attendance activity.' });
   }
-});
-
-router.post('/clock-in', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'QR/geofence clock-in has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/clock-out', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'QR/geofence clock-out has been disabled. Please use biometric attendance.' });
-});
-
-router.get('/static-qr', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.get('/static-qr/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/static-qr/gps-denied', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'GPS/QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/static-qr/scan', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance scan has been disabled. Please use biometric attendance.' });
 });
 
 /* ============================================================

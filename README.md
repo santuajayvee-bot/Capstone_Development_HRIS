@@ -963,7 +963,7 @@ The attendance module stores biometric reference IDs and attendance metadata onl
 npm run migrate:attendance-biometric
 ```
 
-The migration is idempotent. Existing QR attendance records are preserved, summarized for payroll, and added to the local integrity chain.
+The migration is idempotent. Existing legacy attendance records are preserved, summarized for payroll, and added to the local integrity chain.
 
 ### 2. Configure transport security
 
