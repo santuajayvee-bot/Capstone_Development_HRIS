@@ -10,6 +10,7 @@ const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
 const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
 const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
 const { computePayrollHash } = require('./utils/payrollHash');
+const { decryptColumnValue } = require('./data-protection');
 const {
   isTripBasedWageType,
   normalizeTripType,
@@ -86,6 +87,39 @@ function safePayrollError(err, fallback) {
     return fallback;
   }
   return message || fallback;
+}
+
+function decryptPayrollDisplayValue(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function payrollEmployeeDisplayName(row, options = {}) {
+  const firstKey = options.firstKey || 'first_name';
+  const middleKey = options.middleKey || 'middle_name';
+  const lastKey = options.lastKey || 'last_name';
+  const first = decryptPayrollDisplayValue(row?.[firstKey]);
+  const middle = decryptPayrollDisplayValue(row?.[middleKey]);
+  const last = decryptPayrollDisplayValue(row?.[lastKey]);
+  const name = options.order === 'lastFirst'
+    ? [last, [first, middle].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+    : [first, middle, last].filter(Boolean).join(' ');
+  if (name) return name;
+  if (options.fallbackCode === false) return '';
+  return name || row?.employee_code || (row?.employee_id ? `Employee #${row.employee_id}` : '');
+}
+
+function withPayrollEmployeeDisplay(row, options = {}) {
+  return {
+    ...row,
+    [options.nameKey || 'employee_name']: payrollEmployeeDisplayName(row, options),
+    [options.firstKey || 'first_name']: decryptPayrollDisplayValue(row?.[options.firstKey || 'first_name']),
+    [options.middleKey || 'middle_name']: decryptPayrollDisplayValue(row?.[options.middleKey || 'middle_name']),
+    [options.lastKey || 'last_name']: decryptPayrollDisplayValue(row?.[options.lastKey || 'last_name']),
+  };
 }
 
 async function logPayrollAudit(pool, req, action, options = {}) {
@@ -843,8 +877,10 @@ function parseJsonSafe(value) {
 async function getSalaryCalculationForPayslip(pool, calculationId) {
   const [rows] = await pool.execute(`
     SELECT sc.*,
-           CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
            e.employee_code,
+           e.first_name,
+           e.middle_name,
+           e.last_name,
            e.position,
            d.name AS department,
            wt.name AS wage_type,
@@ -857,7 +893,7 @@ async function getSalaryCalculationForPayslip(pool, calculationId) {
      WHERE sc.id = ?
      LIMIT 1
   `, [calculationId]);
-  return rows[0] || null;
+  return rows[0] ? withPayrollEmployeeDisplay(rows[0]) : null;
 }
 
 function canAccessPayslip(req, record) {
@@ -1242,14 +1278,14 @@ async function validateDailyHourlyPayroll(pool, options) {
   const policy = await getPayrollPolicy(pool);
 
   const [employeeRows] = await pool.execute(`
-    SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+    SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
            e.status, e.wage_type_id, wt.name AS wage_type
       FROM employees e
       LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
      WHERE e.id = ?
      LIMIT 1
   `, [employeeId]);
-  const employee = employeeRows[0];
+  const employee = employeeRows[0] ? withPayrollEmployeeDisplay(employeeRows[0]) : null;
   if (!employee) {
     return { ok: false, errors: ['Employee does not exist.'], warnings: [], employee: null };
   }
@@ -2067,7 +2103,7 @@ async function activePieceRate(pool, productType, productCategory, dateValue) {
 
 async function getEmployeeProductionRole(pool, employeeId) {
   const [rows] = await pool.execute(`
-    SELECT e.id, e.employee_code, e.first_name, e.last_name,
+    SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
            COALESCE(e.position, '') AS position,
            w.name AS wage_type
       FROM employees e
@@ -2075,7 +2111,7 @@ async function getEmployeeProductionRole(pool, employeeId) {
      WHERE e.id = ?
      LIMIT 1
   `, [employeeId]);
-  const employee = rows[0];
+  const employee = rows[0] ? withPayrollEmployeeDisplay(rows[0]) : null;
   if (!employee) throw new Error('Selected worker was not found.');
   const position = String(employee.position || '').toLowerCase();
   const role = position.includes('fixer') ? 'Fixer' : position.includes('sewer') ? 'Sewer' : '';
@@ -2967,14 +3003,14 @@ router.get('/logistics/employees', requireAuth, requireRole(LOGISTICS_TRIP_PERMI
   try {
     const pool = require('../config/db');
     const [rows] = await pool.execute(`
-      SELECT e.id, e.employee_code, e.first_name, e.last_name, e.position, w.name AS wage_type
+      SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position, w.name AS wage_type
         FROM employees e
         JOIN wage_types w ON w.id = e.wage_type_id
        WHERE (LOWER(w.name) LIKE '%trip%' OR LOWER(w.name) LIKE '%logistics%')
          AND COALESCE(e.status, 'Active') = 'Active'
        ORDER BY e.last_name, e.first_name
     `);
-    res.json(rows);
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row, { order: 'lastFirst' })));
   } catch (err) {
     console.error('[logistics/employees:get]', err.message);
     res.status(500).json({ error: 'Failed to load trip-based employees.' });
@@ -3029,7 +3065,7 @@ router.get('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
     if (req.query.end_date) { where.push('dt.trip_date <= ?'); values.push(logisticsDate(req.query.end_date, 'End date')); }
     if (req.query.employee_id) { where.push('dt.employee_id = ?'); values.push(logisticsPositiveId(req.query.employee_id, 'Employee')); }
     const [rows] = await pool.execute(`
-      SELECT dt.*, e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
+      SELECT dt.*, e.employee_code, e.first_name, e.middle_name, e.last_name,
              tt.name AS truck_type, ll.name AS location_name, ll.location_category,
              creator.username AS created_by_username, approver.username AS approved_by_username
         FROM delivery_trips dt
@@ -3042,7 +3078,7 @@ router.get('/logistics/trips', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
        ORDER BY dt.trip_date DESC, dt.id DESC
        LIMIT 500
     `, values);
-    res.json(rows);
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row, { order: 'lastFirst' })));
   } catch (err) {
     console.error('[logistics/trips:get]', err.message);
     res.status(400).json({ error: safePayrollError(err, 'Failed to load delivery trips.') });
@@ -3184,17 +3220,22 @@ router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP
     const startDate = logisticsDate(req.query.start_date || monthRange(req.query.month_year).start, 'Start date');
     const endDate = logisticsDate(req.query.end_date || monthRange(req.query.month_year).end, 'End date');
     const [rows] = await pool.execute(`
-      SELECT dt.employee_id, e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name, e.position,
+      SELECT dt.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position,
              COUNT(*) AS approved_trip_count, COALESCE(SUM(dt.total_trip_pay), 0) AS total_logistics_pay
         FROM delivery_trips dt
         JOIN employees e ON e.id = dt.employee_id
        WHERE dt.status IN ('Approved', 'Included in Payroll', 'Paid')
          AND dt.trip_date BETWEEN ? AND ?
-       GROUP BY dt.employee_id, e.employee_code, e.last_name, e.first_name, e.position
+       GROUP BY dt.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position
        ORDER BY e.last_name, e.first_name
     `, [startDate, endDate]);
     const totalLogisticsPay = rows.reduce((sum, row) => sum + numeric(row.total_logistics_pay), 0);
-    res.json({ start_date: startDate, end_date: endDate, rows, total_logistics_pay: totalLogisticsPay });
+    res.json({
+      start_date: startDate,
+      end_date: endDate,
+      rows: rows.map(row => withPayrollEmployeeDisplay(row, { order: 'lastFirst' })),
+      total_logistics_pay: totalLogisticsPay
+    });
   } catch (err) {
     console.error('[logistics/payroll-summary:get]', err.message);
     res.status(400).json({ error: safePayrollError(err, 'Failed to load logistics payroll summary.') });
@@ -3213,7 +3254,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
 
     // Get employee with current wage type
     const [empRows] = await pool.execute(`
-      SELECT e.id, e.employee_code, e.first_name, e.last_name, 
+      SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
              e.wage_type_id, w.name AS wage_type, w.id AS wage_type_id_val,
              e.department_id, d.name AS department,
              e.employment_type, e.hiring_type, e.agency_name
@@ -3228,7 +3269,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    const emp = empRows[0];
+    const emp = withPayrollEmployeeDisplay(empRows[0]);
     console.log('✅ Employee found:', emp.employee_code, '| Wage type ID:', emp.wage_type_id, '| Wage type name:', emp.wage_type);
 
     // Get rates for this employee
@@ -3795,14 +3836,14 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
     const [pairRules] = await pool.execute('SELECT * FROM payroll_production_share_rules ORDER BY is_active DESC, effective_date DESC, pairing_type');
     const [incentives] = await pool.execute('SELECT * FROM payroll_piece_incentives ORDER BY is_active DESC, effective_date DESC, incentive_category, incentive_name');
     const [incentiveEntries] = await pool.execute(`
-      SELECT pie.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, e.employee_code
+      SELECT pie.*, e.first_name, e.middle_name, e.last_name, e.employee_code
         FROM payroll_piece_incentive_entries pie
         LEFT JOIN employees e ON e.id = pie.employee_id
        ORDER BY pie.created_at DESC, pie.id DESC
        LIMIT 100
     `);
     const [outputs] = await pool.execute(`
-      SELECT po.*, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, e.employee_code
+      SELECT po.*, e.first_name, e.middle_name, e.last_name, e.employee_code
         FROM payroll_production_outputs po
         LEFT JOIN employees e ON e.id = po.employee_id
        ORDER BY po.output_date DESC, po.id DESC
@@ -3810,8 +3851,12 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
     `);
     const [pairs] = await pool.execute(`
       SELECT pp.*,
-             CONCAT(w1.first_name, ' ', w1.last_name) AS worker1_name,
-             CONCAT(w2.first_name, ' ', w2.last_name) AS worker2_name
+             w1.first_name AS worker1_first_name,
+             w1.middle_name AS worker1_middle_name,
+             w1.last_name AS worker1_last_name,
+             w2.first_name AS worker2_first_name,
+             w2.middle_name AS worker2_middle_name,
+             w2.last_name AS worker2_last_name
         FROM payroll_production_pairs pp
         LEFT JOIN employees w1 ON w1.id = pp.worker1_employee_id
         LEFT JOIN employees w2 ON w2.id = pp.worker2_employee_id
@@ -3826,9 +3871,21 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
       production_shares: shares,
       production_share_rules: pairRules,
       incentives,
-      incentive_entries: incentiveEntries,
-      production_outputs: outputs,
-      production_pairs: pairs
+      incentive_entries: incentiveEntries.map(row => withPayrollEmployeeDisplay(row)),
+      production_outputs: outputs.map(row => withPayrollEmployeeDisplay(row)),
+      production_pairs: pairs.map(row => ({
+        ...row,
+        worker1_name: payrollEmployeeDisplayName(row, {
+          firstKey: 'worker1_first_name',
+          middleKey: 'worker1_middle_name',
+          lastKey: 'worker1_last_name'
+        }),
+        worker2_name: payrollEmployeeDisplayName(row, {
+          firstKey: 'worker2_first_name',
+          middleKey: 'worker2_middle_name',
+          lastKey: 'worker2_last_name'
+        })
+      }))
     });
   } catch (err) {
     console.error('Error fetching piece-rate config:', err);
@@ -5088,7 +5145,7 @@ router.get('/payroll/:monthYear', requireAuth, requireRole(ROLES.payroll_any), a
     }
 
     const [payslips] = await pool.execute(`
-      SELECT ps.*, e.employee_code, e.first_name, e.last_name, 
+      SELECT ps.*, e.employee_code, e.first_name, e.middle_name, e.last_name,
              d.name AS department, w.name AS wage_type
       FROM payslips ps
       JOIN employees e ON e.id = ps.employee_id
@@ -5100,7 +5157,7 @@ router.get('/payroll/:monthYear', requireAuth, requireRole(ROLES.payroll_any), a
 
     res.json({
       payrollRun: payrollRun[0],
-      payslips: payslips
+      payslips: payslips.map(row => withPayrollEmployeeDisplay(row))
     });
   } catch (err) {
     console.error('Error fetching payroll:', err);
@@ -5188,7 +5245,7 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
     const [payslipRows] = await pool.execute(
       `SELECT ps.id, ps.payroll_run_id, ps.employee_id, ps.total_earning, ps.total_deduction, ps.net_pay,
               ps.status, pr.month_year, e.employee_code,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+              e.first_name, e.middle_name, e.last_name,
               d.name AS department, w.name AS wage_type
          FROM payslips ps
          JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
@@ -5222,7 +5279,7 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
         deductions: numeric(estimate.deductions),
         net: numeric(estimate.net)
       },
-      records: payslipRows
+      records: payslipRows.map(row => withPayrollEmployeeDisplay(row))
     });
   } catch (err) {
     console.error('Error loading payroll dashboard:', err);
@@ -5247,8 +5304,8 @@ async function buildWeeklyPayrollRegistry(pool, query = {}) {
     params.push(String(query.department).trim());
   }
   if (query.employee) {
-    where.push('(CONCAT(e.first_name, " ", e.last_name) LIKE ? OR e.employee_code LIKE ?)');
-    params.push(`%${query.employee}%`, `%${query.employee}%`);
+    where.push('e.employee_code LIKE ?');
+    params.push(`%${query.employee}%`);
   }
   if (query.employee_id) {
     where.push('e.id = ?');
@@ -5290,7 +5347,9 @@ async function buildWeeklyPayrollRegistry(pool, query = {}) {
            sc.validation_snapshot,
            e.id AS employee_id,
            e.employee_code,
-           CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+           e.first_name,
+           e.middle_name,
+           e.last_name,
            d.name AS department,
            w.name AS wage_type
       FROM payslips ps
@@ -5316,7 +5375,7 @@ async function buildWeeklyPayrollRegistry(pool, query = {}) {
       payslip_id: row.payslip_id,
       employee_id: row.employee_id,
       employee_code: row.employee_code,
-      employee_name: row.employee_name,
+      employee_name: payrollEmployeeDisplayName(row),
       department: row.department || '-',
       pay_type: payType,
       payroll_period: row.period_label || `${String(row.start_date).slice(0, 10)} to ${String(row.end_date).slice(0, 10)}`,
@@ -5393,9 +5452,9 @@ router.get('/filter-options', requireAuth, requireRole(PAYROLL_PERMISSIONS.view)
       employees: employees.map(row => ({
         id: row.id,
         employee_code: row.employee_code,
-        first_name: row.first_name,
-        last_name: row.last_name,
-        employee_name: `${row.last_name || ''}, ${row.first_name || ''}`.replace(/^,\s*/, '').trim(),
+        first_name: decryptPayrollDisplayValue(row.first_name),
+        last_name: decryptPayrollDisplayValue(row.last_name),
+        employee_name: payrollEmployeeDisplayName(row, { order: 'lastFirst' }),
         position: row.position,
         department_id: row.department_id,
         department: row.department,
@@ -5466,7 +5525,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
     }
 
     const [employees] = await connection.execute(`
-      SELECT e.id, e.employee_code, e.first_name, e.last_name, e.position, e.department_id,
+      SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position, e.department_id,
              COALESCE(NULLIF(e.agency_name, ''), NULL) AS agency_name,
              e.wage_type_id, w.name AS wage_type, d.name AS department
       FROM employees e
@@ -5489,7 +5548,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
           skipped.push({
             employee_id: emp.id,
             employee_code: emp.employee_code,
-            employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+            employee_name: payrollEmployeeDisplayName(emp),
             department: emp.department || '-',
             pay_type: normalizedWageType || emp.wage_type || '-',
             reason
@@ -5684,7 +5743,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
         registry.push({
           employee_id: emp.id,
           employee_code: emp.employee_code,
-          employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+          employee_name: payrollEmployeeDisplayName(emp),
           department: emp.department,
           pay_type: normalizedWageType,
           payroll_period: period.period_label,
@@ -5709,7 +5768,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
         skipped.push({
           employee_id: emp.id,
           employee_code: emp.employee_code,
-          employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim(),
+          employee_name: payrollEmployeeDisplayName(emp),
           department: emp.department || '-',
           pay_type: normalizePayrollWageType(emp.wage_type) || emp.wage_type || '-',
           reason: slipErr.message
@@ -5757,10 +5816,12 @@ router.get('/employees/:id/readonly', requireAuth, requireRole(ROLES.payroll_any
 
     const [rows] = await pool.execute(`
       SELECT 
-        e.id, e.employee_code, e.first_name, e.last_name, e.email,
+        e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.email,
         e.contact_number, e.residential_address, e.birth_date,
         d.name AS department, e.position AS position, s.id AS supervisor_id,
-        CONCAT(s.first_name, ' ', s.last_name) AS supervisor_name,
+        s.first_name AS supervisor_first_name,
+        s.middle_name AS supervisor_middle_name,
+        s.last_name AS supervisor_last_name,
         e.date_hired, e.employment_status, e.wage_type_id, w.name AS wage_type,
         e.sss_number, e.philhealth_number, e.pagibig_number, e.tin,
         e.bank_name, e.bank_account, e.status
@@ -5775,7 +5836,16 @@ router.get('/employees/:id/readonly', requireAuth, requireRole(ROLES.payroll_any
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    res.json(rows[0]);
+    const employee = withPayrollEmployeeDisplay(rows[0]);
+    res.json({
+      ...employee,
+      supervisor_name: payrollEmployeeDisplayName(employee, {
+        firstKey: 'supervisor_first_name',
+        middleKey: 'supervisor_middle_name',
+        lastKey: 'supervisor_last_name',
+        fallbackCode: false
+      })
+    });
   } catch (err) {
     console.error('Error fetching employee readonly:', err);
     res.status(500).json({ error: 'Failed to fetch employee details' });
@@ -5831,7 +5901,7 @@ router.get('/payroll-records/:monthYear', requireAuth, requireRole(PAYROLL_PERMI
 
     const [payslips] = await pool.execute(`
       SELECT ps.id, ps.payroll_run_id, ps.employee_id, ps.total_earning, ps.total_deduction, ps.net_pay,
-             e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
+             e.employee_code, e.first_name, e.middle_name, e.last_name,
              d.name AS department, w.name AS wage_type, pr.month_year, pr.start_date, pr.end_date,
              ps.created_at, ps.status
       FROM payslips ps
@@ -5858,7 +5928,7 @@ router.get('/payroll-records/:monthYear', requireAuth, requireRole(PAYROLL_PERMI
         totalEmployees: payslips.length,
         monthYear
       },
-      payslips
+      payslips: payslips.map(row => withPayrollEmployeeDisplay(row))
     });
   } catch (err) {
     console.error('Error fetching payroll records:', err);
@@ -5938,7 +6008,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
 
     // Get employee info
     const [empData] = await pool.execute(`
-      SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name) AS name, 
+      SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
              e.wage_type_id, e.department_id, w.name AS wage_type, d.name AS department,
              e.position, e.sss_number, e.philhealth_number, e.pagibig_number
       FROM employees e
@@ -5951,7 +6021,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    const emp = empData[0];
+    const emp = withPayrollEmployeeDisplay(empData[0]);
     let totalEarning = 0;
     let earnings = {};
 
@@ -6008,7 +6078,7 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
       employee: {
         id: emp.id,
         code: emp.employee_code,
-        name: emp.name,
+        name: emp.employee_name,
         department: emp.department,
         position: emp.position,
         wageType: emp.wage_type,
@@ -6042,8 +6112,10 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       SELECT 
         sc.id,
         sc.employee_id,
-        CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
         e.employee_code,
+        e.first_name,
+        e.middle_name,
+        e.last_name,
         d.name AS department,
         e.position,
         w.name AS wage_type,
@@ -6106,15 +6178,16 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     query += ` ORDER BY sc.created_at DESC LIMIT ${safeLimit}`;
 
     const [records] = await pool.execute(query, params);
+    const displayRecords = records.map(row => withPayrollEmployeeDisplay(row));
 
     // Calculate summary statistics
-    const totalRecords = records.length;
-    const totalGross = records.reduce((sum, r) => sum + parseFloat(r.gross_pay || 0), 0);
-    const totalNet = records.reduce((sum, r) => sum + parseFloat(r.net_pay || 0), 0);
-    const totalDeductions = records.reduce((sum, r) => sum + parseFloat(r.total_deductions || 0), 0);
+    const totalRecords = displayRecords.length;
+    const totalGross = displayRecords.reduce((sum, r) => sum + parseFloat(r.gross_pay || 0), 0);
+    const totalNet = displayRecords.reduce((sum, r) => sum + parseFloat(r.net_pay || 0), 0);
+    const totalDeductions = displayRecords.reduce((sum, r) => sum + parseFloat(r.total_deductions || 0), 0);
 
     res.json({
-      records,
+      records: displayRecords,
       summary: {
         totalRecords,
         totalGross,
@@ -6398,14 +6471,16 @@ router.get('/employee-deductions', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     const [rows] = await pool.execute(`
       SELECT eda.*,
              e.employee_code,
-             CONCAT(e.first_name, ' ', COALESCE(e.middle_name, ''), ' ', e.last_name) AS employee_name
+             e.first_name,
+             e.middle_name,
+             e.last_name
       FROM employee_deduction_accounts eda
       JOIN employees e ON e.id = eda.employee_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY eda.status = 'Active' DESC, eda.start_date DESC, eda.id DESC
       LIMIT 300
     `, params);
-    res.json(rows);
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
   } catch (err) {
     console.error('Error fetching employee deductions:', err);
     res.status(500).json({ error: 'Failed to fetch employee deductions' });
@@ -6721,14 +6796,14 @@ router.get('/audit', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (
   try {
     const pool = require('../config/db');
     const [rows] = await pool.execute(`
-      SELECT pat.*, u.username, CONCAT(e.first_name, ' ', e.last_name) AS employee_name
+      SELECT pat.*, u.username, e.first_name, e.middle_name, e.last_name, e.employee_code
       FROM payroll_audit_trail pat
       LEFT JOIN users u ON u.id = pat.user_id
       LEFT JOIN employees e ON e.id = pat.employee_id
       ORDER BY pat.created_at DESC
       LIMIT 100
     `);
-    res.json(rows);
+    res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
   } catch (err) {
     console.error('Error fetching payroll audit:', err);
     res.status(500).json({ error: 'Failed to fetch payroll audit trail' });
@@ -6750,10 +6825,14 @@ async function buildPiecePayrollRegister(pool, monthYear) {
            pp.production_date,
            pp.payroll_period,
            w1.employee_code AS sewer_code,
-           CONCAT(w1.last_name, ', ', w1.first_name) AS sewer,
+           w1.first_name AS sewer_first_name,
+           w1.middle_name AS sewer_middle_name,
+           w1.last_name AS sewer_last_name,
            COALESCE(NULLIF(w1.agency_name, ''), 'Direct') AS sewer_agency,
            w2.employee_code AS fixer_code,
-           CONCAT(w2.last_name, ', ', w2.first_name) AS fixer,
+           w2.first_name AS fixer_first_name,
+           w2.middle_name AS fixer_middle_name,
+           w2.last_name AS fixer_last_name,
            COALESCE(NULLIF(w2.agency_name, ''), 'Direct') AS fixer_agency,
            pp.sew_type_code,
            pp.size_range,
@@ -6771,6 +6850,20 @@ async function buildPiecePayrollRegister(pool, monthYear) {
       ${where}
      ORDER BY pp.production_date DESC, pp.id DESC
   `, values);
+  production.forEach(row => {
+    row.sewer = payrollEmployeeDisplayName(row, {
+      firstKey: 'sewer_first_name',
+      middleKey: 'sewer_middle_name',
+      lastKey: 'sewer_last_name',
+      order: 'lastFirst'
+    });
+    row.fixer = payrollEmployeeDisplayName(row, {
+      firstKey: 'fixer_first_name',
+      middleKey: 'fixer_middle_name',
+      lastKey: 'fixer_last_name',
+      order: 'lastFirst'
+    });
+  });
 
   const employeeTotals = new Map();
   const addEmployee = (employeeId, employeeCode, employee, agency, role, amount, productionDate) => {
@@ -6856,7 +6949,7 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
     SELECT o.id, o.output_date, o.operation_type, o.size_range, o.quantity_produced,
            o.rate_per_piece, o.full_amount, o.output_mode, o.split_rule,
            s.employee_id, s.partner_role, s.share_percentage, s.share_amount,
-           e.employee_code, CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
+           e.employee_code, e.first_name, e.middle_name, e.last_name,
            COALESCE(NULLIF(e.agency_name, ''), 'Direct') AS agency
       FROM piece_rate_outputs o
       JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
@@ -6871,7 +6964,7 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
     if (!outputDate) continue;
     const key = [row.employee_id, row.operation_type, row.size_range || '', row.rate_per_piece].join('|');
     const current = grouped.get(key) || {
-      employee_id: row.employee_id, employee_name: row.employee_name, employee_code: row.employee_code,
+      employee_id: row.employee_id, employee_name: payrollEmployeeDisplayName(row, { order: 'lastFirst' }), employee_code: row.employee_code,
       agency: row.agency, operation_type: row.operation_type, size_range: row.size_range,
       rate_per_piece: Number(row.rate_per_piece), partner_roles: new Set(), daily: {}, total_output: 0, amount: 0
     };
@@ -6925,10 +7018,14 @@ async function buildSwrFxrSummary(pool, payrollPeriod) {
   const [rows] = await pool.execute(`
     SELECT o.id, o.output_date, o.split_rule, o.full_amount,
            sewer.employee_id AS sewer_id, sewer.share_amount AS sewer_amount,
-           CONCAT(es.last_name, ', ', es.first_name) AS sewer_employee,
+           es.first_name AS sewer_first_name,
+           es.middle_name AS sewer_middle_name,
+           es.last_name AS sewer_last_name,
            COALESCE(NULLIF(es.agency_name, ''), 'Direct') AS agency,
            fixer.employee_id AS fixer_id, fixer.share_amount AS fixer_amount,
-           CONCAT(ef.last_name, ', ', ef.first_name) AS fixer_employee
+           ef.first_name AS fixer_first_name,
+           ef.middle_name AS fixer_middle_name,
+           ef.last_name AS fixer_last_name
       FROM piece_rate_outputs o
       JOIN piece_rate_output_shares sewer ON sewer.piece_rate_output_id = o.id AND sewer.partner_role = 'Sewer'
       JOIN piece_rate_output_shares fixer ON fixer.piece_rate_output_id = o.id AND fixer.partner_role = 'Fixer'
@@ -6936,12 +7033,30 @@ async function buildSwrFxrSummary(pool, payrollPeriod) {
       JOIN employees ef ON ef.id = fixer.employee_id
      WHERE o.payroll_period_id = ? AND o.output_mode = 'partner'
        AND o.split_rule = 'Standard Sewer-Fixer' AND o.status <> 'Voided'
-     ORDER BY agency, sewer_employee, fixer_employee, o.output_date
+     ORDER BY agency, es.last_name, es.first_name, ef.last_name, ef.first_name, o.output_date
   `, [payrollPeriod]);
   const pairs = new Map();
   for (const row of rows) {
     const key = `${row.sewer_id}|${row.fixer_id}|${row.agency}`;
-    const current = pairs.get(key) || { agency: row.agency, no_of_days: new Set(), sewer_employee: row.sewer_employee, sewer_amount: 0, fixer_employee: row.fixer_employee, fixer_amount: 0, partner_information: 'Sewer + Fixer (55% / 45%)' };
+    const current = pairs.get(key) || {
+      agency: row.agency,
+      no_of_days: new Set(),
+      sewer_employee: payrollEmployeeDisplayName(row, {
+        firstKey: 'sewer_first_name',
+        middleKey: 'sewer_middle_name',
+        lastKey: 'sewer_last_name',
+        order: 'lastFirst'
+      }),
+      sewer_amount: 0,
+      fixer_employee: payrollEmployeeDisplayName(row, {
+        firstKey: 'fixer_first_name',
+        middleKey: 'fixer_middle_name',
+        lastKey: 'fixer_last_name',
+        order: 'lastFirst'
+      }),
+      fixer_amount: 0,
+      partner_information: 'Sewer + Fixer (55% / 45%)'
+    };
     current.no_of_days.add(String(row.output_date).slice(0, 10));
     current.sewer_amount += Number(row.sewer_amount);
     current.fixer_amount += Number(row.fixer_amount);
@@ -7103,8 +7218,8 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
       params.push(wage_type);
     }
     if (employee) {
-      where += ' AND (CONCAT(e.first_name, " ", e.last_name) LIKE ? OR e.employee_code LIKE ?)';
-      params.push(`%${employee}%`, `%${employee}%`);
+      where += ' AND e.employee_code LIKE ?';
+      params.push(`%${employee}%`);
     }
 
     let rows = [];
@@ -7113,7 +7228,10 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
         SELECT pat.created_at AS date_time,
                u.username AS user,
                pat.action,
-               CONCAT(e.first_name, ' ', e.last_name) AS employee,
+               e.first_name,
+               e.middle_name,
+               e.last_name,
+               e.employee_code,
                pat.remarks
           FROM payroll_audit_trail pat
           LEFT JOIN users u ON u.id = pat.user_id
@@ -7121,7 +7239,13 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
          ORDER BY pat.created_at DESC
          LIMIT 1000
       `);
-      rows = auditRows;
+      rows = auditRows.map(row => ({
+        date_time: row.date_time,
+        user: row.user,
+        action: row.action,
+        employee: payrollEmployeeDisplayName(row),
+        remarks: row.remarks
+      }));
     } else if (report === 'deductions' || report === 'government') {
       const [settings] = await pool.execute(`
         SELECT name, category, computation_type, rate_or_amount, apply_schedule, is_active, effective_date
@@ -7247,7 +7371,9 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
       const [records] = await pool.execute(`
         SELECT sc.id AS payroll_id,
                e.employee_code,
-               CONCAT(e.first_name, ' ', e.last_name) AS employee,
+               e.first_name,
+               e.middle_name,
+               e.last_name,
                d.name AS department,
                e.position,
                COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, "%Y-%m")) AS period,
@@ -7276,7 +7402,7 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
           return {
             payroll_id: row.payroll_id,
             employee_code: row.employee_code,
-            employee: row.employee,
+            employee: payrollEmployeeDisplayName(row),
             department: row.department,
             period: row.period,
             wage_type: row.wage_type,
@@ -7292,7 +7418,7 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
         return {
           payroll_id: row.payroll_id,
           employee_code: row.employee_code,
-          employee: row.employee,
+          employee: payrollEmployeeDisplayName(row),
           department: row.department,
           position: row.position,
           period: row.period,
@@ -7309,7 +7435,11 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
       });
     } else {
       const [records] = await pool.execute(`
-        SELECT sc.id AS payroll_id, CONCAT(e.first_name, ' ', e.last_name) AS employee,
+        SELECT sc.id AS payroll_id,
+               e.employee_code,
+               e.first_name,
+               e.middle_name,
+               e.last_name,
                COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, "%Y-%m")) AS period,
                w.name AS wage_type, sc.gross_pay, sc.total_allowances, sc.total_deductions, sc.net_pay, sc.status
         FROM salary_calculations sc
@@ -7318,7 +7448,18 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
         ${where}
         ORDER BY sc.created_at DESC
       `, params);
-      rows = records;
+      rows = records.map(row => ({
+        payroll_id: row.payroll_id,
+        employee_code: row.employee_code,
+        employee: payrollEmployeeDisplayName(row),
+        period: row.period,
+        wage_type: row.wage_type,
+        gross_pay: row.gross_pay,
+        total_allowances: row.total_allowances,
+        total_deductions: row.total_deductions,
+        net_pay: row.net_pay,
+        status: row.status
+      }));
     }
 
     const csv = toCsv(rows);
