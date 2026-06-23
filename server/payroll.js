@@ -50,13 +50,16 @@ const PAYROLL_SETTINGS_TAMPER_FIELDS = new Set([
   'gross_pay',
   'net_pay',
   'base_pay',
+  'salary',
   'total_deductions',
   'sss_deduction',
   'philhealth_deduction',
   'pagibig_deduction',
   'payroll_status',
   'role',
+  'role_id',
   'access_level',
+  'permissions',
   'employee_id_override',
 ]);
 
@@ -2655,7 +2658,7 @@ router.get('/policy-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.view
   }
 });
 
-router.post('/policy-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/policy-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3335,7 +3338,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
 });
 
 // Set employee wage type and rates (ADMIN only)
-router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const empId = req.params.id;
@@ -3424,7 +3427,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMI
 });
 
 // Record production transaction (pieces produced)
-router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3683,7 +3686,7 @@ async function upsertLogisticsPeriodCalculation(pool, employeeId, payrollPeriod,
 }
 
 // Record logistics transaction (trips completed)
-router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3893,7 +3896,7 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
   }
 });
 
-router.post('/sew-types', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/sew-types', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3927,7 +3930,7 @@ router.post('/sew-types', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings)
   }
 });
 
-router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -3960,7 +3963,7 @@ router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
   }
 });
 
-router.post('/production-share-rules', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/production-share-rules', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -4049,7 +4052,7 @@ router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
   }
 });
 
-router.post('/production-splits', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/production-splits', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   const pool = require('../config/db');
   const connection = await pool.getConnection();
   try {
@@ -4102,7 +4105,7 @@ router.post('/production-splits', requireAuth, requireRole(PAYROLL_PERMISSIONS.s
   }
 });
 
-router.post('/production-shares', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), async (req, res) => {
+router.post('/production-shares', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   const pool = require('../config/db');
   const connection = await pool.getConnection();
   try {
@@ -4537,7 +4540,7 @@ router.delete('/piece-rate-outputs/:id', requireAuth, requireRole(ROLES.payroll_
   } finally { if (connection) connection.release(); }
 });
 
-router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const payroll = await computePieceRatePayroll(pool, req.body);
@@ -4579,7 +4582,7 @@ router.post('/production-output', requireAuth, requireRole(ROLES.payroll_any), a
   }
 });
 
-router.post('/production-pairs', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/production-pairs', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const pair = await computeProductionPairPayroll(pool, req.body);
@@ -6262,7 +6265,7 @@ router.get('/salary-calculations/:id/payslip.pdf', requireAuth, async (req, res)
 });
 
 // Convert pending salary calculations to payslips for a specific period
-router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const { month_year } = req.body;
@@ -7115,7 +7118,7 @@ router.get('/swr-fxr-sum/periods', requireAuth, requireRole(PAYROLL_PERMISSIONS.
   }
 });
 
-router.post('/swr-fxr-sum/generate', requireAuth, requireRole(PAYROLL_PERMISSIONS.reports), async (req, res) => {
+router.post('/swr-fxr-sum/generate', requireAuth, requireRole(PAYROLL_PERMISSIONS.reports), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const monthYear = String(req.body.month_year || '').trim();
     if (!/^\d{4}-\d{2}$/.test(monthYear)) return res.status(400).json({ error: 'A valid payroll period is required.' });
@@ -7178,7 +7181,7 @@ router.get('/swr-fxr-sum', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), a
   }
 });
 
-router.post('/piece-payroll-register/generate', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+router.post('/piece-payroll-register/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const monthYear = req.body.month_year || new Date().toISOString().slice(0, 7);

@@ -351,6 +351,19 @@ function requireSelf(req, res, next) {
   // Employees can only access their own record
   const requestedId = parseInt(req.params.employeeId || req.params.id, 10);
   if (requestedId !== employeeId) {
+    auditSecurityEvent(req, {
+      action: 'blocked_employee_self_scope_idor_attempt',
+      module: 'IDOR_SECURITY',
+      targetTable: req.originalUrl || null,
+      targetRecord: requestedId || null,
+      newValue: {
+        method: req.method,
+        path: req.originalUrl,
+        requested_employee_id: requestedId || null,
+        authenticated_employee_id: employeeId || null,
+      },
+      result: 'blocked',
+    }).catch(() => {});
     return res.status(403).json({ error: 'You can only access your own records.' });
   }
   next();

@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const router = express.Router();
 const pool = require('../config/db');
+const { requireRole, ROLES } = require('./middleware');
 const {
   decryptNullable,
   encryptNullable,
@@ -36,6 +37,31 @@ const DOCUMENT_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   module: 'DOCUMENT_SECURITY',
   targetTable: 'documents',
 });
+const HR_DOCUMENT_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
+const DOCUMENT_TYPE_VALUES = new Set(['Resume', 'Government_ID', 'NBI_Clearance', 'Contract', 'Other']);
+const SENSITIVE_DATA_FIELDS = new Set([
+  'ssn',
+  'tax_id',
+  'bank_account_number',
+  'bank_routing_number',
+  'emergency_contact_phone',
+  'other_sensitive_info',
+]);
+
+function rejectUnsupportedFields(req, res, allowedFields, module = 'DOCUMENT_SECURITY') {
+  const unknownFields = Object.keys(req.body || {}).filter(field => !allowedFields.has(field));
+  if (!unknownFields.length) return false;
+  auditSecurityEvent(req, {
+    action: 'blocked_unsupported_201_file_fields',
+    module,
+    targetTable: req.originalUrl || null,
+    targetRecord: req.params?.employeeId || null,
+    newValue: { fields: unknownFields, path: req.originalUrl },
+    result: 'blocked',
+  }).catch(() => {});
+  res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
+  return true;
+}
 
 const uploadsDir = path.join(__dirname, '..', 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -73,7 +99,7 @@ function uploadDocument(req, res, next) {
 }
 
 function isHrDocumentRole(role) {
-  return ['hr_admin', 'hr_manager', 'admin'].includes(role);
+  return HR_DOCUMENT_ROLES.includes(role);
 }
 
 function encryptedOrPlain(row, encryptedField, plainField) {
@@ -136,7 +162,7 @@ async function logAccessLog(employeeId, userId, action, resourceType, resourceId
 }
 
 // GET /api/201-files → List all employees for 201-file management
-router.get('/list', async (req, res) => {
+router.get('/list', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
   try {
     const [employees] = await pool.execute(`
       SELECT 
@@ -321,11 +347,12 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
 });
 
 // PUT /api/201-files/:employeeId/sensitive-data → Create or update sensitive employee data
-router.put('/:employeeId/sensitive-data', DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
+router.put('/:employeeId/sensitive-data', requireRole(HR_DOCUMENT_ROLES), DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
+    if (rejectUnsupportedFields(req, res, SENSITIVE_DATA_FIELDS)) return;
     const encryptedFields = encryptedSensitiveDataParams(req.body);
 
     // Permission check: Only HR document roles can edit sensitive data
@@ -417,12 +444,16 @@ router.put('/:employeeId/sensitive-data', DOCUMENT_PARAMETER_TAMPER_GUARD, async
 });
 
 // POST /api/201-files/:employeeId/documents → Upload a document to the 201-file
-router.post('/:employeeId/documents', DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDocument, async (req, res) => {
+router.post('/:employeeId/documents', requireRole(HR_DOCUMENT_ROLES), DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDocument, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
     const { document_type } = req.body;
+    if (rejectUnsupportedFields(req, res, new Set(['document_type']))) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
 
     // Permission check: Only HR document roles can upload documents
     const isHrAdmin = isHrDocumentRole(userRole);
@@ -436,6 +467,11 @@ router.post('/:employeeId/documents', DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDoc
 
     const fileName = req.file.originalname;
     const filePath = `/uploads/${req.file.filename}`;
+
+    if (!DOCUMENT_TYPE_VALUES.has(document_type || 'Other')) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Invalid document type.' });
+    }
 
     const [result] = await pool.execute(`
       INSERT INTO documents (employee_id, document_type, file_name, file_path)
@@ -456,7 +492,7 @@ router.post('/:employeeId/documents', DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDoc
 });
 
 // DELETE /api/201-files/:employeeId/documents/:docId → Delete an attached document
-router.delete('/:employeeId/documents/:docId', async (req, res) => {
+router.delete('/:employeeId/documents/:docId', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
   try {
     const { employeeId, docId } = req.params;
     const userId = req.user.id;
@@ -501,12 +537,13 @@ router.delete('/:employeeId/documents/:docId', async (req, res) => {
 });
 
 // PUT /api/201-files/:employeeId/verify-document/:docId → Verify or reject a document
-router.put('/:employeeId/verify-document/:docId', DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
+router.put('/:employeeId/verify-document/:docId', requireRole(HR_DOCUMENT_ROLES), DOCUMENT_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     const { employeeId, docId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
     const { verification_status, rejection_reason } = req.body;
+    if (rejectUnsupportedFields(req, res, new Set(['verification_status', 'rejection_reason']))) return;
 
     // Permission check: Only HR document roles can verify documents
     const isHrAdmin = isHrDocumentRole(userRole);
@@ -518,11 +555,14 @@ router.put('/:employeeId/verify-document/:docId', DOCUMENT_PARAMETER_TAMPER_GUAR
       return res.status(400).json({ error: 'Invalid verification status.' });
     }
 
-    await pool.execute(`
+    const [result] = await pool.execute(`
       UPDATE documents
       SET verification_status = ?, verified_by = ?, verified_at = NOW(), rejection_reason = ?
       WHERE id = ? AND employee_id = ?
     `, [verification_status, userId, rejection_reason || null, docId, employeeId]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Document not found.' });
+    }
 
     await logAccessLog(employeeId, userId, 'document_verify', 'document', docId, { 
       action: 'verified_document',
@@ -538,7 +578,7 @@ router.put('/:employeeId/verify-document/:docId', DOCUMENT_PARAMETER_TAMPER_GUAR
 });
 
 // GET /api/201-files/:employeeId/access-log → Retrieve audit log for 201-file access
-router.get('/:employeeId/access-log', async (req, res) => {
+router.get('/:employeeId/access-log', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
   try {
     const { employeeId } = req.params;
 
