@@ -165,6 +165,7 @@ function showMfaStep(data) {
     codeLength: Number(data.codeLength) || 6,
   };
   document.getElementById('mfa-phone-number').textContent = data.maskedPhoneNumber || '';
+  updateMfaDevelopmentCode(data.mockCode);
   const codeInput = document.getElementById('mfa-code');
   codeInput.value = '';
   codeInput.maxLength = activeMfaChallenge.codeLength;
@@ -172,10 +173,23 @@ function showMfaStep(data) {
   document.getElementById('mfa-code').focus();
 }
 
+function updateMfaDevelopmentCode(mockCode) {
+  const devCode = document.getElementById('mfa-dev-code');
+  if (!devCode) return;
+  if (mockCode) {
+    devCode.hidden = false;
+    devCode.textContent = `Development OTP: ${mockCode}`;
+  } else {
+    devCode.hidden = true;
+    devCode.textContent = '';
+  }
+}
+
 function cancelMfaLogin() {
   activeMfaChallenge = null;
   const password = document.getElementById('password');
   if (password) password.value = '';
+  updateMfaDevelopmentCode(null);
   setLoginStep(false);
   clearLoginError();
   document.getElementById('username')?.focus();
@@ -242,6 +256,7 @@ async function resendMfaCode() {
       return;
     }
     document.getElementById('mfa-phone-number').textContent = data.maskedPhoneNumber || document.getElementById('mfa-phone-number').textContent;
+    updateMfaDevelopmentCode(data.mockCode);
     loginError('A new verification code has been sent.', true);
   } catch (_) {
     loginError('Cannot reach the server. Please try again.');

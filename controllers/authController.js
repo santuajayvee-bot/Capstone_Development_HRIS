@@ -271,7 +271,9 @@ async function login(req, res) {
           challengeId: challenge.challengeId,
           mfaToken: challenge.mfaToken,
           maskedPhoneNumber: challenge.maskedPhoneNumber,
+          codeLength: challenge.codeLength,
           expiresIn: challenge.expiresIn,
+          mockCode: challenge.mockCode || undefined,
         });
       } catch (error) {
         console.error('[authController] MFA challenge failed:', error.code || error.message);

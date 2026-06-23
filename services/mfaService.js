@@ -121,8 +121,8 @@ async function getEmployeePhone(employeeId) {
 
 async function sendVerification(phoneNumber, config) {
   if (config.mockMode) {
-    console.warn('[MFA] Mock mode is active; no SMS was sent.');
-    return { mock: true };
+    console.warn('[MFA] Mock mode is active; fake OTP was issued.');
+    return { mock: true, mockCode: config.mockCode };
   }
   await sendOtp(phoneNumber);
   return { mock: false };
@@ -202,7 +202,7 @@ async function createMfaChallenge({ employeeId, req }) {
     await auditMfa(
       employeeId,
       delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-      delivery.mock ? 'MFA mock challenge created; no SMS was sent.' : 'IPROG OTP request accepted.',
+      delivery.mock ? 'MFA mock challenge created; fake OTP issued for development.' : 'IPROG OTP request accepted.',
       req
     );
   } catch (error) {
@@ -218,6 +218,7 @@ async function createMfaChallenge({ employeeId, req }) {
     maskedPhoneNumber: maskPhoneNumber(phoneNumber),
     codeLength: config.codeLength,
     expiresIn: config.pinValidity,
+    mockCode: delivery?.mock ? delivery.mockCode : null,
   };
 }
 
@@ -349,14 +350,16 @@ async function resendMfaChallenge({ challengeId: rawChallengeId, mfaToken, req }
   await auditMfa(
     challenge.Employee_ID,
     delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-    delivery.mock ? 'MFA mock challenge resent; no SMS was sent.' : 'IPROG OTP resend request accepted.',
+    delivery.mock ? 'MFA mock challenge resent; fake OTP issued for development.' : 'IPROG OTP resend request accepted.',
     req
   );
 
   return {
     maskedPhoneNumber: maskPhoneNumber(phoneNumber),
+    codeLength: config.codeLength,
     expiresIn: config.pinValidity,
     resendCooldown: RESEND_COOLDOWN_SECONDS,
+    mockCode: delivery?.mock ? delivery.mockCode : null,
   };
 }
 
