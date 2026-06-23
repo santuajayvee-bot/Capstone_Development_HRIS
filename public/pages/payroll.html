@@ -141,6 +141,7 @@
     <h3>Employee and Payroll Period</h3>
     <div class="salary-form-row">
       <label>Payroll Period<input id="salary-payroll-period" type="month" /></label>
+      <label>Filter by Department<select id="salary-department-filter"><option value="">All departments</option></select></label>
       <label class="salary-form-wide">Search / Select Employee
         <span class="payroll-search-box">
           <input id="salary-employee-search" type="text" placeholder="Search by name, code, or department..." autocomplete="off" />
@@ -197,7 +198,7 @@
       <h3>Piece-Rate Work Output</h3>
       <div class="salary-form-row">
         <label>Production Date<input id="salary-piece-production-date" type="date" /></label>
-        <label>Sewer Employee<span class="salary-readonly" id="salary-piece-sewer">-</span></label>
+        <label>Selected Employee<span class="salary-readonly" id="salary-piece-sewer">-</span></label>
         <label class="salary-form-wide">Partner Employee
           <span class="payroll-search-box">
             <input id="salary-piece-partner-search" type="text" placeholder="Search fixer or substitute sewer..." autocomplete="off" />

@@ -503,14 +503,6 @@ router.get('/biometric/exceptions', requireAuth, requireRole(HR_ROLES), async (_
   }
 });
 
-/* ============================================================
-   Disabled legacy QR/geofence endpoints
-   ============================================================ */
-
-router.get('/qr/generate', requireAuth, requireRole(HR_ROLES), async (_req, res) => {
-  res.status(410).json({ error: 'QR attendance has been disabled. Please use biometric attendance.' });
-});
-
 router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (_req, res) => {
   try {
     const [rows] = await pool.execute(
@@ -528,30 +520,6 @@ router.get('/biometric/events', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
     console.error('[attendance/biometric-events]', err.message);
     res.status(500).json({ error: 'Failed to fetch recent fingerprint attendance activity.' });
   }
-});
-
-router.post('/clock-in', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'QR/geofence clock-in has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/clock-out', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'QR/geofence clock-out has been disabled. Please use biometric attendance.' });
-});
-
-router.get('/static-qr', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.get('/static-qr/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/static-qr/gps-denied', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'GPS/QR attendance has been disabled. Please use biometric attendance.' });
-});
-
-router.post('/static-qr/scan', requireAuth, requireRole(ROLES.any), async (req, res) => {
-  res.status(410).json({ error: 'Static QR attendance scan has been disabled. Please use biometric attendance.' });
 });
 
 /* ============================================================
@@ -883,6 +851,10 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
       return res.status(400).json({ error: 'Valid date and time values are required.' });
     }
     if (!timeIn && !timeOut) return res.status(400).json({ error: 'At least one manual punch is required.' });
+    const [employeeRows] = await pool.execute('SELECT status FROM employees WHERE id = ? LIMIT 1', [employeeId]);
+    if (!employeeRows.length || String(employeeRows[0].status || 'Active') !== 'Active') {
+      return res.status(400).json({ error: 'Attendance can only be recorded for active employees.' });
+    }
 
     await conn.beginTransaction();
     const [existing] = await conn.execute('SELECT * FROM attendance_log WHERE employee_id = ? AND date = ? FOR UPDATE', [employeeId, date]);

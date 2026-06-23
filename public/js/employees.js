@@ -7,6 +7,8 @@ let EMPLOYEES_RAW = []; // Store raw API data for editing
 let wageTypesForPayroll = [];
 let EMPLOYEE_DIRECTORY_PAGE = 1;
 const EMPLOYEE_DIRECTORY_PAGE_SIZE = 10;
+const EMPLOYMENT_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended'];
+const OFFBOARDING_DETAIL_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended']);
 const ORG_SETUP_DEFAULT_PAGE_SIZE = 10;
 const ORG_SETUP_PAGINATION = {
   departments: 1,
@@ -41,6 +43,20 @@ function isPayrollWageType(idOrName, target) {
 
 function usesPayrollBaseRate(idOrName) {
   return isPayrollWageType(idOrName, 'Daily') || isPayrollWageType(idOrName, 'Hourly');
+}
+
+function statusClassName(status) {
+  return String(status || 'Active').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function statusBadgeText(status) {
+  return EMPLOYMENT_STATUS_OPTIONS.includes(status) ? status : 'Active';
+}
+
+function toggleProfileOffboardingFields() {
+  const status = document.getElementById('profile-edit-status')?.value || 'Active';
+  const fields = document.getElementById('profile-edit-offboarding-fields');
+  if (fields) fields.style.display = OFFBOARDING_DETAIL_STATUSES.has(status) ? 'grid' : 'none';
 }
 
 function setPayrollBaseRateVisibility(wageTypeId, prefix = 'emp-payroll') {
@@ -451,7 +467,7 @@ async function deleteEmployeeSetupPosition(positionId) {
 async function fetchEmployees() {
   try {
     console.log('📡 Fetching employees from API...');
-    const response = await apiFetch('/api/employees');
+    const response = await apiFetch('/api/employees?status=all');
     if (!response) {
       console.error('❌ No response from API (401 logout triggered?)');
       return;
@@ -543,6 +559,11 @@ function renderEmployees(list) {
   
   const renderedRows = pageEmployees.map(e => {
     const employeeId = Number(e.id);
+    const employmentStatus = statusBadgeText(e.status);
+    const employmentStatusClass = statusClassName(employmentStatus);
+    const statusMenuItems = EMPLOYMENT_STATUS_OPTIONS.map(option => `
+            <button class="emp-menu-item status-${statusClassName(option)}" type="button" onclick="setEmployeeStatus('${employeeId}', '${option}')" ${employmentStatus === option ? 'disabled' : ''}>Mark ${option}</button>
+    `).join('');
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     
@@ -556,14 +577,13 @@ function renderEmployees(list) {
       <td>${escapeHtml(e.dept)}</td>
       <td>${escapeHtml(e.position)}</td>
       <td>${escapeHtml(e.supervisor)}</td>
-      <td><span class="emp-status ${statusClass}">${statusDisplay}</span></td>
+      <td><span class="emp-status ${employmentStatusClass}">${escapeHtml(employmentStatus)}</span></td>
       <td class="emp-action" onclick="event.stopPropagation();">
         <div class="emp-action-menu">
           <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${employeeId}')">${employeeActionDotsIcon()}</button>
           <div class="emp-action-dropdown" id="emp-action-menu-${employeeId}">
             <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${employeeId}', 'personal')">View Profile</button>
-            <button class="emp-menu-item activate" type="button" onclick="setEmployeeStatus('${employeeId}', 'Active')" ${e.status === 'Active' ? 'disabled' : ''}>Activate</button>
-            <button class="emp-menu-item deactivate" type="button" onclick="setEmployeeStatus('${employeeId}', 'Inactive')" ${e.status === 'Inactive' ? 'disabled' : ''}>Deactivate</button>
+${statusMenuItems}
           </div>
         </div>
       </td>
@@ -827,7 +847,7 @@ async function toggleEmployeeStatus(employeeId, currentStatus) {
 }
 
 async function setEmployeeStatus(employeeId, newStatus) {
-  const confirmMsg = `Are you sure you want to ${newStatus === 'Active' ? 'activate' : 'deactivate'} this employee?`;
+  const confirmMsg = `Mark this employee as ${newStatus}?`;
 
   closeEmployeeActionMenus();
   const confirmed = await showConfirm(confirmMsg, 'Confirm Action', 'Yes', 'Cancel');
@@ -837,7 +857,7 @@ async function setEmployeeStatus(employeeId, newStatus) {
     const response = await apiFetch(`/api/employees/${employeeId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
+      body: JSON.stringify({ employment_status: newStatus })
     });
 
     if (!response.ok) {
@@ -2939,7 +2959,10 @@ function populateProfileEditForm(employee) {
     'profile-edit-shift-schedule': employee.shift_schedule,
     'profile-edit-employee-level': employee.employee_level,
     'profile-edit-employment-history': employee.employment_history,
-    'profile-edit-status': employee.status || 'Active',
+    'profile-edit-status': employee.employment_status || employee.status || 'Active',
+    'profile-edit-separation-date': formatValue(employee.separation_date) === '-' ? '' : formatValue(employee.separation_date),
+    'profile-edit-separation-reason': employee.separation_reason,
+    'profile-edit-offboarding-remarks': employee.offboarding_remarks,
     'profile-edit-emergency-name': employee.emergency_contact_name,
     'profile-edit-emergency-relationship': employee.emergency_contact_relationship,
     'profile-edit-emergency-phone': employee.emergency_contact_num,
@@ -2993,6 +3016,9 @@ function populateProfileEditForm(employee) {
   updateProfileBaseSalaryVisibility();
   const profileWageType = document.getElementById('profile-edit-wage-type');
   if (profileWageType) profileWageType.onchange = updateProfileBaseSalaryVisibility;
+  const profileStatus = document.getElementById('profile-edit-status');
+  if (profileStatus) profileStatus.onchange = toggleProfileOffboardingFields;
+  toggleProfileOffboardingFields();
 
   bindProfileAgencyFields();
   toggleProfileAgencyFields();
@@ -3092,7 +3118,12 @@ function focusProfileEditField(field) {
     pagibig_number: 'profile-edit-pagibig',
     base_rate: 'profile-edit-basic-salary',
     allowances: 'profile-edit-allowances',
-    bank_account: 'profile-edit-bank-account'
+    bank_account: 'profile-edit-bank-account',
+    status: 'profile-edit-status',
+    employment_status: 'profile-edit-status',
+    separation_date: 'profile-edit-separation-date',
+    separation_reason: 'profile-edit-separation-reason',
+    offboarding_remarks: 'profile-edit-offboarding-remarks'
   };
   const element = document.getElementById(fieldToId[field] || `profile-edit-${String(field || '').replace(/_/g, '-')}`);
   if (!element) return;
@@ -3140,6 +3171,8 @@ async function saveProfilePageChanges() {
   const profileHiringType = hasProfileAgencyDetails
     ? 'Agency-Hired'
     : document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire';
+  const profileEmploymentStatus = document.getElementById('profile-edit-status')?.value || 'Active';
+  const includeOffboardingDetails = OFFBOARDING_DETAIL_STATUSES.has(profileEmploymentStatus);
 
   const payload = {
     first_name: document.getElementById('profile-edit-first-name')?.value || '',
@@ -3173,7 +3206,11 @@ async function saveProfilePageChanges() {
     shift_schedule: document.getElementById('profile-edit-shift-schedule')?.value || null,
     employee_level: document.getElementById('profile-edit-employee-level')?.value || null,
     employment_history: document.getElementById('profile-edit-employment-history')?.value || null,
-    status: document.getElementById('profile-edit-status')?.value || 'Active',
+    status: profileEmploymentStatus,
+    employment_status: profileEmploymentStatus,
+    separation_date: includeOffboardingDetails ? document.getElementById('profile-edit-separation-date')?.value || null : null,
+    separation_reason: includeOffboardingDetails ? document.getElementById('profile-edit-separation-reason')?.value || null : null,
+    offboarding_remarks: includeOffboardingDetails ? document.getElementById('profile-edit-offboarding-remarks')?.value || null : null,
     emergency_contact_name: document.getElementById('profile-edit-emergency-name')?.value || null,
     emergency_contact_num: document.getElementById('profile-edit-emergency-phone')?.value || null,
     emergency_contact_relationship: document.getElementById('profile-edit-emergency-relationship')?.value || null,

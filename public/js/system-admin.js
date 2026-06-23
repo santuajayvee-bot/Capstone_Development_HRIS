@@ -9,6 +9,7 @@ let sysAllRoles     = [];
 let sysAllEmployees = [];
 let sysBiometricDevices = [];
 let sysCurrentStep  = 1;
+let sysAccountRealtimeTimer = null;
 
 function sysEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -19,6 +20,24 @@ function sysEsc(value) {
 function sysFormatDateTime(value) {
   if (!value) return '—';
   return new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function sysJsString(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function sysFormatDuration(seconds) {
+  const total = Math.max(Number(seconds || 0), 0);
+  if (!Number.isFinite(total) || total <= 0) return '—';
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  if (minutes > 0 && remainingSeconds > 0) return `${minutes}m ${remainingSeconds}s`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${remainingSeconds}s`;
+}
+
+function isUserLocked(user) {
+  return Boolean(Number(user?.is_locked || 0)) && Number(user?.lock_seconds_remaining || 0) > 0;
 }
 
 function sysPasswordErrors(password) {
@@ -46,7 +65,12 @@ function switchSysAdminTab(tabId, el) {
   const panel = document.getElementById('panel-' + tabId);
   if (panel) panel.classList.add('active');
 
-  if (tabId === 'accounts') loadUsersTable();
+  if (tabId === 'accounts') {
+    loadUsersTable();
+    startAccountRealtime();
+  } else {
+    stopAccountRealtime();
+  }
   if (tabId === 'roles')    loadRolesGrid();
   if (tabId === 'audit')    loadAuditLog();
   if (tabId === 'biometric-settings') loadBiometricSettings();
@@ -56,6 +80,7 @@ function switchSysAdminTab(tabId, el) {
 function initSystemAdmin() {
   loadUsersTable();
   loadRolesList();
+  startAccountRealtime();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -77,10 +102,28 @@ async function loadUsersTable() {
       sysAllEmployees = await empRes.json();
     }
 
-    renderUsersTable(sysAllUsers);
     updateStats();
+    filterUserTable();
   } catch (err) {
     console.error('[SysAdmin] loadUsersTable error:', err);
+  }
+}
+
+function startAccountRealtime() {
+  stopAccountRealtime();
+  sysAccountRealtimeTimer = setInterval(() => {
+    const panel = document.getElementById('panel-accounts');
+    const modalOpen = document.querySelector('.sysadmin-modal-overlay[style*="flex"]');
+    if (panel?.classList.contains('active') && !modalOpen) {
+      loadUsersTable();
+    }
+  }, 5000);
+}
+
+function stopAccountRealtime() {
+  if (sysAccountRealtimeTimer) {
+    clearInterval(sysAccountRealtimeTimer);
+    sysAccountRealtimeTimer = null;
   }
 }
 
@@ -88,12 +131,14 @@ function updateStats() {
   const total    = sysAllUsers.length;
   const active   = sysAllUsers.filter(u => u.is_active).length;
   const inactive = total - active;
+  const locked   = sysAllUsers.filter(isUserLocked).length;
   const linkedIds = sysAllUsers.map(u => u.employee_id).filter(Boolean);
   const unlinked  = sysAllEmployees.filter(e => !linkedIds.includes(e.id)).length;
 
   document.getElementById('stat-total-users').textContent     = total;
   document.getElementById('stat-active-users').textContent    = active;
   document.getElementById('stat-inactive-users').textContent  = inactive;
+  document.getElementById('stat-locked-users').textContent    = locked;
   document.getElementById('stat-unlinked-employees').textContent = unlinked;
 }
 
@@ -102,7 +147,7 @@ function renderUsersTable(users) {
   if (!tbody) return;
 
   if (users.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No accounts found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No accounts found.</td></tr>';
     return;
   }
 
@@ -110,10 +155,16 @@ function renderUsersTable(users) {
     const levelNum = u.access_level ? u.access_level.replace('Level ', '') : '1';
     const statusClass = u.is_active ? 'badge-active' : 'badge-inactive';
     const statusText  = u.is_active ? 'Active' : 'Inactive';
+    const locked = isUserLocked(u);
+    const lockoutText = locked
+      ? `Locked for ${sysFormatDuration(u.lock_seconds_remaining)}`
+      : Number(u.failed_login_attempts || 0) > 0
+        ? `${Number(u.failed_login_attempts)} failed attempt(s)`
+        : 'Clear';
     const empName = (u.first_name && u.last_name) 
-      ? `${u.first_name} ${u.last_name}` 
+      ? `${sysEsc(u.first_name)} ${sysEsc(u.last_name)}` 
       : '<span style="color:var(--muted)">Unlinked</span>';
-    const empCode = u.employee_code || '—';
+    const empCode = sysEsc(u.employee_code || '—');
     const lastLogin = u.last_login 
       ? new Date(u.last_login).toLocaleString('en-PH', { dateStyle: 'short', timeStyle: 'short' })
       : '—';
@@ -123,21 +174,22 @@ function renderUsersTable(users) {
 
     return `
       <tr>
-        <td>${u.id}</td>
-        <td><strong>${u.username}</strong></td>
+        <td>${Number(u.id)}</td>
+        <td><strong>${sysEsc(u.username)}</strong></td>
         <td>${empName}<br><small style="color:var(--muted)">${empCode}</small></td>
-        <td>${u.role_label || u.role_name}</td>
+        <td>${sysEsc(u.role_label || u.role_name)}</td>
         <td><span class="badge-level badge-level-${levelNum}">${u.access_level || '—'}</span></td>
         <td><span class="${statusClass}">${statusText}</span></td>
+        <td><span class="${locked ? 'badge-locked' : 'badge-clear'}">${sysEsc(lockoutText)}</span></td>
         <td><small>${lastLogin}</small></td>
         <td>
           <div class="action-group">
             ${!isSelf ? `
-              <button class="btn-sysadmin-sm" onclick="showRoleModal(${u.id}, '${u.username}', '${u.role_label || u.role_name}', ${u.role_id})" title="Change Role">🛡️</button>
-              <button class="btn-sysadmin-sm" onclick="showCredentialsModal(${u.id}, '${u.username}')" title="Reset Password">🔑</button>
+              <button class="btn-sysadmin-sm" onclick="showRoleModal(${Number(u.id)}, ${sysJsString(u.username)}, ${sysJsString(u.role_label || u.role_name)}, ${Number(u.role_id)})" title="Change Role">🛡️</button>
+              <button class="btn-sysadmin-sm" onclick="showCredentialsModal(${Number(u.id)}, ${sysJsString(u.username)})" title="Reset Password">🔑</button>
               ${u.is_active 
-                ? `<button class="btn-sysadmin-danger" onclick="toggleUserStatus(${u.id}, false)" title="Deactivate">⏸</button>`
-                : `<button class="btn-sysadmin-sm" onclick="toggleUserStatus(${u.id}, true)" title="Activate">▶</button>`
+                ? `<button class="btn-sysadmin-danger" onclick="toggleUserStatus(${Number(u.id)}, false)" title="Deactivate">⏸</button>`
+                : `<button class="btn-sysadmin-sm" onclick="toggleUserStatus(${Number(u.id)}, true)" title="Activate">▶</button>`
               }
             ` : '<small style="color:var(--muted)">You</small>'}
           </div>
@@ -169,7 +221,7 @@ function filterUserTable() {
 
   if (statusFilter) {
     filtered = filtered.filter(u => 
-      statusFilter === 'active' ? u.is_active : !u.is_active
+      statusFilter === 'locked' ? isUserLocked(u) : statusFilter === 'active' ? u.is_active : !u.is_active
     );
   }
 

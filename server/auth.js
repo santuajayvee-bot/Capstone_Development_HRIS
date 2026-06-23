@@ -64,6 +64,18 @@ async function login(req, res) {
       return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
     }
 
+    if (user.employee_id) {
+      const [employeeRows] = await pool.execute(
+        'SELECT status FROM employees WHERE id = ? LIMIT 1',
+        [user.employee_id]
+      );
+      const employmentStatus = employeeRows[0]?.status;
+      if (['Inactive', 'Resigned', 'Terminated', 'End of Contract'].includes(employmentStatus)) {
+        await pool.execute('UPDATE users SET is_active = 0 WHERE id = ?', [user.id]);
+        return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+      }
+    }
+
     // 3. Check account lockout (Spoofing mitigation — STRIDE)
     try {
       const [lockRows] = await pool.execute(

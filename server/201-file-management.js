@@ -10,6 +10,11 @@ const fs = require('fs');
 const router = express.Router();
 const pool = require('../config/db');
 const {
+  decryptNullable,
+  encryptNullable,
+  hashNullable,
+} = require('./data-protection');
+const {
   auditSecurityEvent,
   multerFileFilter,
   randomSafeFilename,
@@ -69,6 +74,51 @@ function uploadDocument(req, res, next) {
 
 function isHrDocumentRole(role) {
   return ['hr_admin', 'hr_manager', 'admin'].includes(role);
+}
+
+function encryptedOrPlain(row, encryptedField, plainField) {
+  if (!row) return null;
+  if (row[encryptedField]) return decryptNullable(row[encryptedField]);
+  return row[plainField] || null;
+}
+
+function present(row, encryptedField, plainField) {
+  return row?.[encryptedField] || row?.[plainField] ? 'Present' : 'Not Set';
+}
+
+function sensitiveDataResponse(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    employee_id: row.employee_id,
+    ssn: encryptedOrPlain(row, 'ssn_encrypted', 'ssn'),
+    tax_id: encryptedOrPlain(row, 'tax_id_encrypted', 'tax_id'),
+    bank_account_number: encryptedOrPlain(row, 'bank_account_number_encrypted', 'bank_account_number'),
+    bank_routing_number: encryptedOrPlain(row, 'bank_routing_number_encrypted', 'bank_routing_number'),
+    emergency_contact_phone: encryptedOrPlain(row, 'emergency_contact_phone_encrypted', 'emergency_contact_phone'),
+    other_sensitive_info: encryptedOrPlain(row, 'other_sensitive_info_encrypted', 'other_sensitive_info'),
+    ssn_status: present(row, 'ssn_encrypted', 'ssn'),
+    tax_id_status: present(row, 'tax_id_encrypted', 'tax_id'),
+    bank_status: present(row, 'bank_account_number_encrypted', 'bank_account_number'),
+    updated_at: row.updated_at,
+    updated_by_name: row.updated_by_name,
+  };
+}
+
+function encryptedSensitiveDataParams(body) {
+  return {
+    ssnEncrypted: encryptNullable(body.ssn),
+    ssnHash: hashNullable(body.ssn),
+    taxIdEncrypted: encryptNullable(body.tax_id),
+    taxIdHash: hashNullable(body.tax_id),
+    bankAccountEncrypted: encryptNullable(body.bank_account_number),
+    bankAccountHash: hashNullable(body.bank_account_number),
+    bankRoutingEncrypted: encryptNullable(body.bank_routing_number),
+    bankRoutingHash: hashNullable(body.bank_routing_number),
+    emergencyPhoneEncrypted: encryptNullable(body.emergency_contact_phone),
+    emergencyPhoneHash: hashNullable(body.emergency_contact_phone),
+    otherInfoEncrypted: encryptNullable(body.other_sensitive_info),
+  };
 }
 
 // Helper: Log 201-file access to audit trail
@@ -171,14 +221,17 @@ router.get('/:employeeId', async (req, res) => {
         id,
         employee_id,
         ssn,
+        ssn_encrypted,
         tax_id,
+        tax_id_encrypted,
         bank_account_number,
+        bank_account_number_encrypted,
         bank_routing_number,
+        bank_routing_number_encrypted,
         emergency_contact_phone,
+        emergency_contact_phone_encrypted,
         other_sensitive_info,
-        CASE WHEN ssn IS NOT NULL THEN 'Present' ELSE 'Not Set' END AS ssn_status,
-        CASE WHEN tax_id IS NOT NULL THEN 'Present' ELSE 'Not Set' END AS tax_id_status,
-        CASE WHEN bank_account_number IS NOT NULL THEN 'Present' ELSE 'Not Set' END AS bank_status,
+        other_sensitive_info_encrypted,
         updated_at,
         (SELECT CONCAT(u.username, ' (', r.label, ')') FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = updated_by) AS updated_by_name
       FROM sensitive_employee_data
@@ -211,7 +264,7 @@ router.get('/:employeeId', async (req, res) => {
         createdAt: employee.created_at,
       },
       documents,
-      sensitiveData: sensitiveData || null,
+      sensitiveData: sensitiveDataResponse(sensitiveData),
     });
   } catch (err) {
     console.error('Error fetching 201-file:', err);
@@ -240,11 +293,17 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
         id,
         employee_id,
         ssn,
+        ssn_encrypted,
         tax_id,
+        tax_id_encrypted,
         bank_account_number,
+        bank_account_number_encrypted,
         bank_routing_number,
+        bank_routing_number_encrypted,
         emergency_contact_phone,
+        emergency_contact_phone_encrypted,
         other_sensitive_info,
+        other_sensitive_info_encrypted,
         updated_at
       FROM sensitive_employee_data
       WHERE employee_id = ?
@@ -254,7 +313,7 @@ router.get('/:employeeId/sensitive-data', async (req, res) => {
       return res.status(404).json({ error: 'Sensitive data not found.' });
     }
 
-    res.json(data);
+    res.json(sensitiveDataResponse(data));
   } catch (err) {
     console.error('Error fetching sensitive data:', err);
     res.status(500).json({ error: 'Failed to fetch sensitive data.' });
@@ -267,7 +326,7 @@ router.put('/:employeeId/sensitive-data', DOCUMENT_PARAMETER_TAMPER_GUARD, async
     const { employeeId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
-    const { ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info } = req.body;
+    const encryptedFields = encryptedSensitiveDataParams(req.body);
 
     // Permission check: Only HR document roles can edit sensitive data
     const isHrAdmin = isHrDocumentRole(userRole);
@@ -285,19 +344,67 @@ router.put('/:employeeId/sensitive-data', DOCUMENT_PARAMETER_TAMPER_GUARD, async
       // Update
       await pool.execute(`
         UPDATE sensitive_employee_data 
-        SET ssn=?, tax_id=?, bank_account_number=?, bank_routing_number=?, 
-            emergency_contact_phone=?, other_sensitive_info=?, updated_by=?
+        SET ssn = NULL,
+            tax_id = NULL,
+            bank_account_number = NULL,
+            bank_routing_number = NULL,
+            emergency_contact_phone = NULL,
+            other_sensitive_info = NULL,
+            ssn_encrypted = ?,
+            ssn_hash = ?,
+            tax_id_encrypted = ?,
+            tax_id_hash = ?,
+            bank_account_number_encrypted = ?,
+            bank_account_number_hash = ?,
+            bank_routing_number_encrypted = ?,
+            bank_routing_number_hash = ?,
+            emergency_contact_phone_encrypted = ?,
+            emergency_contact_phone_hash = ?,
+            other_sensitive_info_encrypted = ?,
+            updated_by=?
         WHERE employee_id = ?
-      `, [ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info, userId, employeeId]);
+      `, [
+        encryptedFields.ssnEncrypted,
+        encryptedFields.ssnHash,
+        encryptedFields.taxIdEncrypted,
+        encryptedFields.taxIdHash,
+        encryptedFields.bankAccountEncrypted,
+        encryptedFields.bankAccountHash,
+        encryptedFields.bankRoutingEncrypted,
+        encryptedFields.bankRoutingHash,
+        encryptedFields.emergencyPhoneEncrypted,
+        encryptedFields.emergencyPhoneHash,
+        encryptedFields.otherInfoEncrypted,
+        userId,
+        employeeId
+      ]);
 
       await logAccessLog(employeeId, userId, 'edit', 'sensitive_data', existing.id, { action: 'updated_sensitive_data' });
     } else {
       // Insert
       const [result] = await pool.execute(`
         INSERT INTO sensitive_employee_data 
-        (employee_id, ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info, updated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [employeeId, ssn, tax_id, bank_account_number, bank_routing_number, emergency_contact_phone, other_sensitive_info, userId]);
+        (employee_id, ssn_encrypted, ssn_hash, tax_id_encrypted, tax_id_hash,
+         bank_account_number_encrypted, bank_account_number_hash,
+         bank_routing_number_encrypted, bank_routing_number_hash,
+         emergency_contact_phone_encrypted, emergency_contact_phone_hash,
+         other_sensitive_info_encrypted, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        employeeId,
+        encryptedFields.ssnEncrypted,
+        encryptedFields.ssnHash,
+        encryptedFields.taxIdEncrypted,
+        encryptedFields.taxIdHash,
+        encryptedFields.bankAccountEncrypted,
+        encryptedFields.bankAccountHash,
+        encryptedFields.bankRoutingEncrypted,
+        encryptedFields.bankRoutingHash,
+        encryptedFields.emergencyPhoneEncrypted,
+        encryptedFields.emergencyPhoneHash,
+        encryptedFields.otherInfoEncrypted,
+        userId
+      ]);
 
       await logAccessLog(employeeId, userId, 'edit', 'sensitive_data', result.insertId, { action: 'created_sensitive_data' });
     }

@@ -13,6 +13,7 @@ const multer = require('multer');
 const argon2 = require('argon2');
 const pool = require('../config/db');
 const { encryptAES256, decryptAES256, encryptPII } = require('./crypto');
+const { encryptColumnValue } = require('./data-protection');
 const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
 
@@ -24,6 +25,7 @@ const SCREENING_STATUSES = [
   'Pending Screening', 'For Interview', 'For Requirements Checking',
   'Passed Screening', 'Failed Screening', 'Not Required',
 ];
+const employeePiiDb = value => encryptColumnValue(nullable(value));
 const TRAINING_STATUSES = [
   'Not Yet Started', 'In Training', 'Completed Training',
   'Failed Training', 'For Final Evaluation', 'Not Required',
@@ -1101,25 +1103,25 @@ async function transferApprovedApplicant(connection, req, applicant, reason, emp
         agency_contact_number, deployment_status, contract_start_date, contract_end_date, lifecycle_status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, 'Active', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')`,
     [
-      employeeCode, applicant.first_name, applicant.middle_name, applicant.last_name, applicant.suffix, email, nullable(pii.contact_number),
-      nullable(pii.work_email), nullable(pii.mailing_address), nullable(pii.nationality) || 'Filipino', nullable(pii.civil_status), nullable(pii.date_of_birth), nullable(pii.place_of_birth),
-      nullable(pii.gender), nullable(pii.blood_type), nullable(pii.religion), nullable(pii.residential_address), nullable(pii.current_address),
-      nullable(pii.emergency_contact_name), nullable(pii.emergency_contact_number), nullable(pii.emergency_contact_relationship),
-      nullable(pii.emergency_contact_secondary_number), nullable(pii.emergency_contact_email), nullable(pii.emergency_contact_address),
-      nullable(pii.education_school), nullable(pii.education_attainment), nullable(pii.education_units), nullable(pii.education_year_graduated),
-      nullable(pii.education_jhs_school), nullable(pii.education_jhs_attainment), nullable(pii.education_jhs_from), nullable(pii.education_jhs_to), nullable(pii.education_jhs_year_graduated),
-      nullable(pii.education_shs_school), nullable(pii.education_shs_attainment), nullable(pii.education_shs_from), nullable(pii.education_shs_to), nullable(pii.education_shs_year_graduated),
-      nullable(pii.education_vocational_school), nullable(pii.education_vocational_attainment), nullable(pii.education_vocational_units), nullable(pii.education_vocational_from), nullable(pii.education_vocational_to), nullable(pii.education_vocational_year_graduated),
-      nullable(pii.education_college_school), nullable(pii.education_college_attainment), nullable(pii.education_college_units), nullable(pii.education_college_from), nullable(pii.education_college_to), nullable(pii.education_college_year_graduated),
+      employeeCode, employeePiiDb(applicant.first_name), employeePiiDb(applicant.middle_name), employeePiiDb(applicant.last_name), employeePiiDb(applicant.suffix), employeePiiDb(email), employeePiiDb(pii.contact_number),
+      employeePiiDb(pii.work_email), employeePiiDb(pii.mailing_address), employeePiiDb(nullable(pii.nationality) || 'Filipino'), employeePiiDb(pii.civil_status), employeePiiDb(pii.date_of_birth), employeePiiDb(pii.place_of_birth),
+      employeePiiDb(pii.gender), employeePiiDb(pii.blood_type), employeePiiDb(pii.religion), employeePiiDb(pii.residential_address), employeePiiDb(pii.current_address),
+      employeePiiDb(pii.emergency_contact_name), employeePiiDb(pii.emergency_contact_number), employeePiiDb(pii.emergency_contact_relationship),
+      employeePiiDb(pii.emergency_contact_secondary_number), employeePiiDb(pii.emergency_contact_email), employeePiiDb(pii.emergency_contact_address),
+      employeePiiDb(pii.education_school), employeePiiDb(pii.education_attainment), employeePiiDb(pii.education_units), employeePiiDb(pii.education_year_graduated),
+      employeePiiDb(pii.education_jhs_school), employeePiiDb(pii.education_jhs_attainment), employeePiiDb(pii.education_jhs_from), employeePiiDb(pii.education_jhs_to), employeePiiDb(pii.education_jhs_year_graduated),
+      employeePiiDb(pii.education_shs_school), employeePiiDb(pii.education_shs_attainment), employeePiiDb(pii.education_shs_from), employeePiiDb(pii.education_shs_to), employeePiiDb(pii.education_shs_year_graduated),
+      employeePiiDb(pii.education_vocational_school), employeePiiDb(pii.education_vocational_attainment), employeePiiDb(pii.education_vocational_units), employeePiiDb(pii.education_vocational_from), employeePiiDb(pii.education_vocational_to), employeePiiDb(pii.education_vocational_year_graduated),
+      employeePiiDb(pii.education_college_school), employeePiiDb(pii.education_college_attainment), employeePiiDb(pii.education_college_units), employeePiiDb(pii.education_college_from), employeePiiDb(pii.education_college_to), employeePiiDb(pii.education_college_year_graduated),
       applicant.department_id, applicant.applied_position, employmentType, applicant.contract_end_date || null, nullable(pii.supervisor),
       applicant.branch, nullable(pii.shift_schedule), nullable(pii.employee_level), nullable(pii.employment_history),
       initialPasswordHash,
-      nullable(pii.salary_grade), pii.allowances == null ? null : pii.allowances, nullable(pii.payroll_schedule), nullable(pii.sss_number), nullable(pii.philhealth_number),
-      nullable(pii.pagibig_number), nullable(pii.tin), nullable(pii.tax_status), nullable(pii.bank_name), nullable(pii.bank_account),
+      nullable(pii.salary_grade), pii.allowances == null ? null : pii.allowances, nullable(pii.payroll_schedule), employeePiiDb(pii.sss_number), employeePiiDb(pii.philhealth_number),
+      employeePiiDb(pii.pagibig_number), employeePiiDb(pii.tin), employeePiiDb(pii.tax_status), employeePiiDb(pii.bank_name), employeePiiDb(pii.bank_account),
       nullable(pii.residential_address_lat), nullable(pii.residential_address_lng), nullable(pii.current_address_lat), nullable(pii.current_address_lng),
       pii.current_address_same_as_home ? 1 : 0, nullable(pii.mailing_address_lat), nullable(pii.mailing_address_lng), pii.mailing_address_same_as_home ? 1 : 0,
-      applicant.expected_wage_type_id, employeePii, applicant.hiring_type || 'Direct Hire', applicant.agency_name || null, nullable(pii.agency_contact_person),
-      nullable(pii.agency_contact_number), applicant.deployment_status || null, applicant.contract_start_date || null, applicant.contract_end_date || null,
+      applicant.expected_wage_type_id, employeePii, applicant.hiring_type || 'Direct Hire', applicant.agency_name || null, employeePiiDb(pii.agency_contact_person),
+      employeePiiDb(pii.agency_contact_number), applicant.deployment_status || null, applicant.contract_start_date || null, applicant.contract_end_date || null,
     ]
   );
   const employeeId = employee.insertId;

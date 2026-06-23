@@ -3,6 +3,7 @@
    ============================================================ */
 
 const pool = require('../config/db');
+const { decryptNullable } = require('./data-protection');
 
 /**
  * Find a user by username, joining their role name.
@@ -97,7 +98,8 @@ async function getUserProfile(userId) {
        e.employee_code,
        e.first_name,
        e.last_name,
-       e.email,
+       COALESCE(u.email, e.email) AS email,
+       u.email_encrypted,
        e.position,
        d.name        AS department
      FROM users u
@@ -108,7 +110,10 @@ async function getUserProfile(userId) {
      LIMIT 1`,
     [userId]
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (row?.email_encrypted && !row.email) row.email = decryptNullable(row.email_encrypted);
+  if (row) delete row.email_encrypted;
+  return row;
 }
 
 module.exports = { findByUsername, updateLastLogin, getUserProfile, getUserPermissions, getLinkedEmployeeProfile };

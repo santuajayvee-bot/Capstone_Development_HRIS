@@ -13,12 +13,24 @@
 const express  = require('express');
 const router   = express.Router();
 const pool     = require('../config/db');
-const { requireAuth }    = require('./middleware');
+const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const {
   hashTemporaryPassword,
   validateTemporaryPassword,
 } = require('../services/passwordService');
+
+async function hasColumn(tableName, columnName) {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND COLUMN_NAME = ?`,
+    [tableName, columnName]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+}
 
 // ── Argon2 Configuration (OWASP recommended) ────────────────
 /* ================================================================
@@ -108,6 +120,7 @@ async function revokeEmployeeSessions(conn, employeeId, reason) {
 // ── Apply auth + Level 4 guard to ALL routes in this router ──
 router.use(requireAuth);
 router.use(requireLevel4);
+router.use(requirePermission('admin_panel:access'));
 
 router.put('/users/:userId/reset-password', accountController.resetUserPassword);
 
@@ -322,6 +335,12 @@ router.put('/update-role/:userId', async (req, res) => {
 
     // Prevent self-demotion
     if (targetUserId === req.user.id) {
+      await logAuditEntry(req, {
+        action: `DENIED_ROLE_CHANGE_ATTEMPT: User '${req.user.username || req.user.id}' attempted to change their own role`,
+        module: 'RBAC_SECURITY',
+        targetEmployeeId: req.user.employeeId || null,
+        newValue: JSON.stringify({ target_user_id: targetUserId, requested_role_id: role_id, result: 'denied' }),
+      }).catch(() => {});
       return res.status(403).json({ error: 'You cannot change your own role.' });
     }
 
@@ -342,6 +361,12 @@ router.put('/update-role/:userId', async (req, res) => {
       [role_id]
     );
     if (roleRows.length === 0) {
+      await logAuditEntry(req, {
+        action: `DENIED_ROLE_CHANGE_ATTEMPT: Invalid role '${role_id}' requested for user ID ${targetUserId}`,
+        module: 'RBAC_SECURITY',
+        targetEmployeeId: targetUser.employee_id || null,
+        newValue: JSON.stringify({ target_user_id: targetUserId, requested_role_id: role_id, result: 'denied' }),
+      }).catch(() => {});
       return res.status(404).json({ error: 'Role not found.' });
     }
     const newRole = roleRows[0];
@@ -499,9 +524,31 @@ router.get('/roles', async (req, res) => {
    ================================================================ */
 router.get('/users', async (req, res) => {
   try {
+    const hasFailedAttempts = await hasColumn('users', 'failed_login_attempts');
+    const hasAccountLockedUntil = await hasColumn('users', 'account_locked_until');
+    const hasLoginAttempts = await hasColumn('users', 'login_attempts');
+    const hasLockedUntil = await hasColumn('users', 'locked_until');
+    const attemptsExpr = hasFailedAttempts
+      ? 'u.failed_login_attempts'
+      : hasLoginAttempts
+        ? 'u.login_attempts'
+        : '0';
+    const lockedUntilExpr = hasAccountLockedUntil
+      ? 'u.account_locked_until'
+      : hasLockedUntil
+        ? 'u.locked_until'
+        : 'NULL';
+
     const [rows] = await pool.execute(
       `SELECT u.id, u.username, u.role_id, u.employee_id, u.is_active, u.last_login,
               u.password_changed_at, u.force_password_change, u.created_at,
+              COALESCE(${attemptsExpr}, 0) AS failed_login_attempts,
+              ${lockedUntilExpr} AS account_locked_until,
+              CASE
+                WHEN ${lockedUntilExpr} IS NOT NULL AND ${lockedUntilExpr} > NOW() THEN 1
+                ELSE 0
+              END AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), ${lockedUntilExpr}), 0) AS lock_seconds_remaining,
               r.name AS role_name, r.label AS role_label, r.access_level,
               e.first_name, e.last_name, e.employee_code
        FROM users u

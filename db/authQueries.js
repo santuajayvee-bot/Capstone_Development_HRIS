@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { decryptNullable, sha256 } = require('../server/data-protection');
 
 const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_LOCK_MINUTES = 15;
@@ -59,11 +60,12 @@ const USER_SELECT_FIELDS = `
   u.id AS id,
   e.id AS employee_table_id,
   COALESCE(u.email, e.email) AS Email,
+  u.email_encrypted AS User_Email_Encrypted,
   COALESCE(u.password_hash, e.Password_Hash) AS Password_Hash,
   u.role_id AS Role_ID,
   r.access_level AS Access_Level,
-  COALESCE(e.Failed_Login_Attempts, u.failed_login_attempts, 0) AS Failed_Login_Attempts,
-  COALESCE(e.Locked_Until, u.account_locked_until) AS Locked_Until,
+  COALESCE(u.failed_login_attempts, e.Failed_Login_Attempts, 0) AS Failed_Login_Attempts,
+  COALESCE(u.account_locked_until, e.Locked_Until) AS Locked_Until,
   COALESCE(u.password_changed_at, e.Password_Changed_At) AS Password_Changed_At,
   COALESCE(e.Last_Login_At, u.last_login_at, u.last_login) AS Last_Login_At,
   (COALESCE(u.force_password_change, 0) OR COALESCE(e.force_password_change, 0)) AS force_password_change,
@@ -74,6 +76,15 @@ const USER_SELECT_FIELDS = `
   r.label AS role_label
 `;
 
+function hydrateUserRow(row) {
+  if (!row) return row;
+  if (!row.Email && row.User_Email_Encrypted) {
+    row.Email = decryptNullable(row.User_Email_Encrypted);
+  }
+  delete row.User_Email_Encrypted;
+  return row;
+}
+
 async function findUserByEmail(email) {
   if (!isNonEmptyString(email)) return null;
 
@@ -83,14 +94,15 @@ async function findUserByEmail(email) {
          FROM users u
          LEFT JOIN employees e ON e.id = u.employee_id
          LEFT JOIN roles r ON r.id = u.role_id
-        WHERE LOWER(e.email) = LOWER(?)
+        WHERE u.email_hash = ?
+           OR LOWER(e.email) = LOWER(?)
            OR LOWER(u.email) = LOWER(?)
            OR LOWER(u.username) = LOWER(?)
         LIMIT 1`,
-      [email.trim(), email.trim(), email.trim()]
+      [sha256(email), email.trim(), email.trim(), email.trim()]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserByEmail');
   }
@@ -110,7 +122,7 @@ async function findUserById(employeeId) {
       [employeeId, employeeId, employeeId]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserById');
   }
@@ -130,7 +142,7 @@ async function findUserByUserId(userId) {
       [userId]
     );
 
-    return rows[0] || null;
+    return hydrateUserRow(rows[0] || null);
   } catch (error) {
     logAndThrow(error, 'findUserByUserId');
   }
@@ -253,6 +265,120 @@ async function recordFailedLoginFailure(employeeId, options = {}) {
   }
 }
 
+async function recordFailedLoginFailureForUser(userId, options = {}) {
+  ensureEmployeeId(userId);
+
+  const maxAttempts = normalizeMaxFailedAttempts(options.maxAttempts);
+  const lockMinutes = normalizeLockMinutes(options.lockMinutes);
+  let connection;
+
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT id, employee_id, failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked,
+              account_locked_until IS NOT NULL AND account_locked_until <= NOW() AS lock_expired,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
+         FROM users
+        WHERE id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [userId]
+    );
+    const user = rows[0];
+    if (!user) {
+      await connection.rollback();
+      return null;
+    }
+
+    if (Number(user.is_locked || 0) === 1) {
+      await connection.commit();
+      return {
+        attempts: Number(user.failed_login_attempts || 0),
+        locked: true,
+        newlyLocked: false,
+        lockedUntil: user.account_locked_until,
+        lockSecondsRemaining: Number(user.lock_seconds_remaining || 0),
+      };
+    }
+
+    const previousAttempts = Number(user.lock_expired || 0) === 1 ? 0 : Number(user.failed_login_attempts || 0);
+    const attempts = previousAttempts + 1;
+    const newlyLocked = attempts >= maxAttempts;
+
+    await connection.execute(
+      `UPDATE users
+          SET failed_login_attempts = ?,
+              account_locked_until = CASE WHEN ? THEN DATE_ADD(NOW(), INTERVAL ? MINUTE) ELSE NULL END
+        WHERE id = ?`,
+      [attempts, newlyLocked ? 1 : 0, lockMinutes, user.id]
+    );
+
+    const [stateRows] = await connection.execute(
+      `SELECT failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
+      [user.id]
+    );
+    const state = stateRows[0];
+
+    if (user.employee_id) {
+      await connection.execute(
+        `UPDATE employees
+            SET Failed_Login_Attempts = ?,
+                Locked_Until = ?
+          WHERE id = ?`,
+        [state.failed_login_attempts, state.account_locked_until, user.employee_id]
+      );
+    }
+
+    await connection.commit();
+    return {
+      attempts: Number(state.failed_login_attempts || 0),
+      locked: Number(state.is_locked || 0) === 1,
+      newlyLocked,
+      lockedUntil: state.account_locked_until,
+      lockSecondsRemaining: Number(state.lock_seconds_remaining || 0),
+    };
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    logAndThrow(error, 'recordFailedLoginFailureForUser');
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+async function getUserLoginLockState(userId) {
+  ensureEmployeeId(userId);
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT failed_login_attempts, account_locked_until,
+              account_locked_until > NOW() AS is_locked,
+              GREATEST(TIMESTAMPDIFF(SECOND, NOW(), account_locked_until), 0) AS lock_seconds_remaining
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
+      [userId]
+    );
+    const state = rows[0] || null;
+    if (!state) return null;
+    return {
+      attempts: Number(state.failed_login_attempts || 0),
+      locked: Number(state.is_locked || 0) === 1,
+      lockedUntil: state.account_locked_until,
+      lockSecondsRemaining: Number(state.lock_seconds_remaining || 0),
+    };
+  } catch (error) {
+    logAndThrow(error, 'getUserLoginLockState');
+  }
+}
+
 async function resetFailedLoginAttempts(employeeId) {
   ensureEmployeeId(employeeId);
 
@@ -276,6 +402,32 @@ async function resetFailedLoginAttempts(employeeId) {
     return result.affectedRows;
   } catch (error) {
     logAndThrow(error, 'resetFailedLoginAttempts');
+  }
+}
+
+async function resetFailedLoginAttemptsForUser(userId) {
+  ensureEmployeeId(userId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE users
+          SET failed_login_attempts = 0,
+              account_locked_until = NULL
+        WHERE id = ?`,
+      [userId]
+    );
+    await pool.execute(
+      `UPDATE employees e
+        JOIN users u ON u.employee_id = e.id
+           SET e.Failed_Login_Attempts = 0,
+               e.Locked_Until = NULL
+         WHERE u.id = ?`,
+      [userId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'resetFailedLoginAttemptsForUser');
   }
 }
 
@@ -635,7 +787,10 @@ module.exports = {
   findUserByUserId,
   incrementFailedLoginAttempts,
   recordFailedLoginFailure,
+  recordFailedLoginFailureForUser,
+  getUserLoginLockState,
   resetFailedLoginAttempts,
+  resetFailedLoginAttemptsForUser,
   lockUserAccount,
   updateLastLogin,
   updatePasswordHash,

@@ -5,6 +5,10 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { auditSecurityEvent } = require('./security-controls');
+const {
+  getLinkedEmployeeProfile,
+  getUserPermissions,
+} = require('./users');
 
 const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
   '/api/account/password',
@@ -13,6 +17,10 @@ const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
 
 function getJwtSecret() {
   return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 // ── Role hierarchy ───────────────────────────────────────────
@@ -43,6 +51,38 @@ const ROLES = {
   any:             ['hr_admin', 'hr_manager', 'system_admin', 'admin', 'payroll_officer', 'payroll_manager', 'employee'],
 };
 
+const PERMISSION_ALIASES = {
+  'admin_panel:access': 'settings.manage',
+  'employee:read': 'employee.view',
+  'employee:update': 'employee.manage',
+  'files:read': 'employee.view',
+  'payroll:read': 'payroll.view',
+  'payroll:update': 'payroll.settings.manage',
+  'system_settings:update': 'settings.manage',
+  'user_roles:update': 'settings.manage',
+};
+
+const CLIENT_AUTHORITY_FIELDS = new Set([
+  'access_level',
+  'account_status',
+  'admin',
+  'admin_flag',
+  'is_admin',
+  'is_super_admin',
+  'permissions',
+  'role',
+  'roles',
+  'user_type',
+]);
+
+function normalizeRole(role) {
+  return ROLE_ALIASES[role] || role || 'employee';
+}
+
+function normalizeAllowedRoles(allowedRoles) {
+  return [...new Set((Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles]).map(normalizeRole))];
+}
+
 /**
  * requireAuth — verifies JWT and attaches req.user.
  * Use on every protected API route.
@@ -59,66 +99,154 @@ function isTokenOlderThanPasswordChange(tokenPayload, passwordChangedAt) {
 }
 
 async function getAccountSessionState(tokenPayload) {
+  const verifiedUserId = Number.parseInt(tokenPayload?.id || tokenPayload?.userId, 10);
+  if (!Number.isFinite(verifiedUserId) || verifiedUserId <= 0) return null;
+
   const [rows] = await pool.execute(
     `SELECT
+       u.id AS user_id,
+       u.username,
+       u.employee_id AS employee_table_id,
+       u.is_active,
+       u.role_id,
+       r.name AS role_name,
+       r.label AS role_label,
+       r.access_level,
+       e.Employee_ID,
+       e.status AS employee_status,
        u.force_password_change,
        COALESCE(u.password_changed_at, e.Password_Changed_At) AS password_changed_at,
        s.Session_ID,
        s.Revoked_At,
        s.Expires_At
      FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
      LEFT JOIN employees e ON e.id = u.employee_id
      LEFT JOIN USER_SESSION s ON s.JWT_ID = ?
-     WHERE u.id = ? OR e.id = ? OR e.Employee_ID = ?
+     WHERE u.id = ?
      LIMIT 1`,
     [
       tokenPayload.jti || '',
-      tokenPayload.id || 0,
-      tokenPayload.employeeId || 0,
-      tokenPayload.Employee_ID || 0,
+      verifiedUserId,
     ]
   );
 
   return rows[0] || null;
 }
 
+function isInactiveAccount(accountState) {
+  if (!accountState) return true;
+  if (accountState.is_active === 0 || accountState.is_active === false) return true;
+  return ['inactive', 'resigned', 'terminated', 'end of contract'].includes(
+    String(accountState.employee_status || '').trim().toLowerCase()
+  );
+}
+
+function authError(res, message = 'Invalid token.') {
+  return res.status(401).json({ error: message });
+}
+
+function findClientAuthorityFields(body, path = '') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  const found = [];
+  for (const [key, value] of Object.entries(body)) {
+    const normalized = String(key || '')
+      .replace(/([a-z])([A-Z])/g, '$1_$2')
+      .replace(/[\s-]+/g, '_')
+      .toLowerCase();
+    const fieldPath = path ? `${path}.${key}` : key;
+    if (CLIENT_AUTHORITY_FIELDS.has(normalized)) found.push(fieldPath);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      found.push(...findClientAuthorityFields(value, fieldPath));
+    }
+  }
+  return found;
+}
+
+async function rejectClientAuthorityTampering(req, res) {
+  if (!['POST', 'PUT', 'PATCH'].includes(req.method)) return false;
+  const fields = findClientAuthorityFields(req.body);
+  if (!fields.length) return false;
+  await auditSecurityEvent(req, {
+    action: 'blocked_client_authority_field_tampering',
+    module: 'PARAMETER_TAMPERING',
+    targetTable: req.originalUrl || null,
+    newValue: { fields, method: req.method, path: req.originalUrl },
+    result: 'blocked',
+  }).catch(() => {});
+  res.status(403).json({ error: 'Request contains unauthorized fields.' });
+  return true;
+}
+
 async function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
-  console.log('[requireAuth] Authorization header present:', !!authHeader);
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.log('[requireAuth] No Bearer token found');
-    return res.status(401).json({ error: 'No token provided.' });
+    return authError(res, 'No token provided.');
   }
 
   const token = authHeader.slice(7);
   const jwtSecret = getJwtSecret();
-  console.log('[requireAuth] Token received, length:', token.length);
-  console.log('[requireAuth] JWT secret configured:', !!jwtSecret);
+  if (!isNonEmptyString(jwtSecret)) {
+    console.error('[requireAuth] JWT secret is not configured.');
+    return res.status(500).json({ error: 'Authentication is not configured.' });
+  }
 
   try {
-    req.user = jwt.verify(token, jwtSecret);
-    req.user.role = ROLE_ALIASES[req.user.role] || req.user.role;
+    const verifiedToken = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
+    const accountState = await getAccountSessionState(verifiedToken);
 
-    const accountState = await getAccountSessionState(req.user);
     if (!accountState) {
-      return res.status(401).json({ error: 'Invalid session.' });
+      return authError(res, 'Invalid session.');
     }
 
-    if (req.user.jti) {
+    if (isInactiveAccount(accountState)) {
+      await auditSecurityEvent(req, {
+        action: 'blocked_inactive_account_token_use',
+        module: 'AUTH_SECURITY',
+        targetTable: 'users',
+        targetRecord: accountState.user_id,
+        newValue: { username: accountState.username, path: req.originalUrl },
+        result: 'blocked',
+      }).catch(() => {});
+      return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+    }
+
+    if (verifiedToken.jti) {
       if (!accountState.Session_ID || accountState.Revoked_At || new Date(accountState.Expires_At) <= new Date()) {
-        return res.status(401).json({ error: 'Session expired. Please log in again.' });
+        return authError(res, 'Session expired. Please log in again.');
       }
     }
 
-    if (isTokenOlderThanPasswordChange(req.user, accountState.password_changed_at)) {
-      return res.status(401).json({ error: 'Session expired. Please log in again.' });
+    if (isTokenOlderThanPasswordChange(verifiedToken, accountState.password_changed_at)) {
+      return authError(res, 'Session expired. Please log in again.');
     }
 
     const forcePasswordChange = Boolean(Number(accountState.force_password_change));
+    const role = normalizeRole(accountState.role_name);
+    const permissions = await getUserPermissions(accountState.user_id, role);
+    const employeeProfile = await getLinkedEmployeeProfile(accountState.employee_table_id);
+
+    req.user = {
+      id: accountState.user_id,
+      username: accountState.username,
+      role,
+      roleLabel: accountState.role_label,
+      roleId: accountState.role_id,
+      accessLevel: accountState.access_level,
+      employeeId: accountState.employee_table_id,
+      Employee_ID: accountState.Employee_ID || accountState.employee_table_id,
+      permissions,
+      employeeProfile,
+      jti: verifiedToken.jti || null,
+      iat: verifiedToken.iat || null,
+      exp: verifiedToken.exp || null,
+    };
     req.user.forcePasswordChange = forcePasswordChange;
     req.user.mustChangePassword = forcePasswordChange;
     req.user.passwordChangedAt = accountState.password_changed_at || null;
+
+    if (await rejectClientAuthorityTampering(req, res)) return;
 
     if (forcePasswordChange && !isAllowedDuringForcedPasswordChange(req)) {
       return res.status(403).json({
@@ -128,14 +256,19 @@ async function requireAuth(req, res, next) {
       });
     }
 
-    console.log('[requireAuth] Token verified successfully for user:', req.user.username);
     next();
   } catch (err) {
-    console.error('[requireAuth] JWT verification failed:', err.name, err.message);
+    await auditSecurityEvent(req, {
+      action: err.name === 'TokenExpiredError' ? 'expired_jwt_attempt' : 'invalid_or_tampered_jwt_attempt',
+      module: 'AUTH_SECURITY',
+      targetTable: req.originalUrl || null,
+      newValue: { error_name: err.name, method: req.method, path: req.originalUrl },
+      result: 'blocked',
+    }).catch(() => {});
     if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Session expired. Please log in again.' });
+      return authError(res, 'Session expired. Please log in again.');
     }
-    return res.status(401).json({ error: 'Invalid token.' });
+    return authError(res, 'Invalid token.');
   }
 }
 
@@ -148,8 +281,9 @@ async function requireAuth(req, res, next) {
  *   router.get('/payroll', requireAuth, requireRole(ROLES.payroll_any), handler)
  */
 function requireRole(allowedRoles) {
+  const normalizedAllowedRoles = normalizeAllowedRoles(allowedRoles);
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
+    if (!req.user || !normalizedAllowedRoles.includes(normalizeRole(req.user.role))) {
       auditSecurityEvent(req, {
         action: 'failed_unauthorized_access_attempt',
         module: 'RBAC_SECURITY',
@@ -157,16 +291,49 @@ function requireRole(allowedRoles) {
         newValue: {
           method: req.method,
           path: req.originalUrl,
-          required_roles: allowedRoles,
+          required_roles: normalizedAllowedRoles,
           actual_role: req.user?.role || 'anonymous',
         },
         result: 'blocked',
       }).catch(() => {});
       return res.status(403).json({
-        error: `Access denied. Required role: ${allowedRoles.join(' or ')}.`,
+        error: 'Access denied.',
       });
     }
     next();
+  };
+}
+
+function permissionCandidates(permission) {
+  const key = String(permission || '').trim();
+  return [...new Set([key, PERMISSION_ALIASES[key]].filter(Boolean))];
+}
+
+function hasPermission(req, permission) {
+  const permissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+  const candidates = permissionCandidates(permission);
+  return candidates.some(candidate => permissions.includes(candidate));
+}
+
+function requirePermission(permission) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'No token provided.' });
+    if (hasPermission(req, permission)) return next();
+
+    auditSecurityEvent(req, {
+      action: 'failed_permission_check',
+      module: 'RBAC_SECURITY',
+      targetTable: req.originalUrl || null,
+      newValue: {
+        method: req.method,
+        path: req.originalUrl,
+        required_permission: permission,
+        mapped_permissions: permissionCandidates(permission),
+        actual_role: req.user.role,
+      },
+      result: 'blocked',
+    }).catch(() => {});
+    return res.status(403).json({ error: 'Access denied.' });
   };
 }
 
@@ -189,4 +356,4 @@ function requireSelf(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireRole, requireSelf, ROLES };
+module.exports = { hasPermission, requireAuth, requirePermission, requireRole, requireSelf, ROLES };

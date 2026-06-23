@@ -15,6 +15,7 @@ let salaryPieceRowCounter = 0;
 let salaryPayrollValidation = null;
 let salaryAgencyList = [];
 let currentSalaryDraftId = null;
+let salaryDepartmentFilterListenerAttached = false;
 
 function salaryEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -392,21 +393,27 @@ function updateSalarySummary(qty, base, allowances, gross, appliedDeductions, de
 }
 
 function calculatePieceSalaryNow() {
+  updatePiecePartnerControls();
   const rows = getSalaryPieceRows();
   const validRows = rows.filter(row => row.sew_type_code && row.size_range && row.quantity_produced > 0 && row.piece_rate > 0);
   const rawTotal = validRows.reduce((sum, row) => sum + row.amount, 0);
   const qty = validRows.reduce((sum, row) => sum + row.quantity_produced, 0);
-  const pairingType = document.getElementById('salary-piece-pairing')?.value || 'Standard Sewer-Fixer';
+  const selectedRole = salaryProductionKind(currentSalaryEmployee?.pos || currentSalaryEmployee?.position);
+  const pairingType = selectedRole === 'Fixer'
+    ? 'Standard Sewer-Fixer'
+    : document.getElementById('salary-piece-pairing')?.value || 'Standard Sewer-Fixer';
   const rule = getActivePairRule(pairingType);
   const worker1Share = Number(rule?.worker1_share || (pairingType === 'Substitute Sewer-Sewer' ? 50 : 55));
   const worker2Share = Number(rule?.worker2_share || (pairingType === 'Substitute Sewer-Sewer' ? 50 : 45));
   const worker1Earnings = rawTotal * (worker1Share / 100);
   const worker2Earnings = rawTotal * (worker2Share / 100);
+  const selectedShare = selectedRole === 'Fixer' ? worker2Share : worker1Share;
+  const selectedEarnings = selectedRole === 'Fixer' ? worker2Earnings : worker1Earnings;
   const quota = Number(document.getElementById('salary-quota-incentive')?.value || 0);
   const sunday = Number(document.getElementById('salary-sunday-incentive')?.value || 0);
   const special = Number(document.getElementById('salary-special-incentive')?.value || 0);
   const incentives = quota + sunday + special;
-  const base = worker1Earnings + incentives;
+  const base = selectedEarnings + incentives;
   const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
   const meal = parseFloat(document.getElementById('salary-meal').value) || 0;
   const transport = parseFloat(document.getElementById('salary-transport').value) || 0;
@@ -422,10 +429,10 @@ function calculatePieceSalaryNow() {
     product_category: validRows[0].size_range,
     sew_type_code: validRows[0].sew_type_code,
     size_range: validRows[0].size_range,
-    worker_category: 'Sewer',
+    worker_category: selectedRole || 'Sewer',
     piece_rate: validRows[0].piece_rate,
     production_value: rawTotal,
-    share_percentage: worker1Share,
+    share_percentage: selectedShare,
     worker2_share_percentage: worker2Share,
     worker1_earnings: worker1Earnings,
     worker2_earnings: worker2Earnings,
@@ -442,8 +449,8 @@ function calculatePieceSalaryNow() {
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   document.getElementById('salary-pieces').value = qty;
   set('salary-piece-raw-total', salaryMoney(rawTotal));
-  set('salary-share-view', `${worker1Share}%`);
-  set('salary-piece-worker1-earnings', salaryMoney(worker1Earnings));
+  set('salary-share-view', `${selectedShare}%`);
+  set('salary-piece-worker1-earnings', salaryMoney(selectedEarnings));
   set('salary-piece-worker2-share', `${worker2Share}%`);
   set('salary-piece-worker2-earnings', salaryMoney(worker2Earnings));
   set('salary-piece-final', salaryMoney(base));
@@ -502,10 +509,62 @@ async function fetchSalaryEmpList() {
     console.log(`✅ Got ${salaryEmpList.length} employees for salary page`);
     await fetchSalaryAgencies();
     populateSalaryAgencyOptions();
+    populateSalaryDepartmentFilter();
     attachSearchListener();
     attachPartnerSearchListener();
   } catch (e) {
     console.error('❌ Failed to fetch employees:', e);
+  }
+}
+
+function salaryEmployeeDepartmentKey(emp) {
+  return String(emp?.department_id || emp?.department || '').trim();
+}
+
+function selectedSalaryDepartmentKey() {
+  return String(document.getElementById('salary-department-filter')?.value || '').trim();
+}
+
+function getDepartmentFilteredSalaryEmployees() {
+  const departmentKey = selectedSalaryDepartmentKey();
+  return (salaryEmpList || []).filter(emp => !departmentKey || salaryEmployeeDepartmentKey(emp) === departmentKey);
+}
+
+function filterSalaryEmployees(term = '') {
+  return getDepartmentFilteredSalaryEmployees().filter(emp => employeeMatchesTerm(emp, term));
+}
+
+function populateSalaryDepartmentFilter() {
+  const select = document.getElementById('salary-department-filter');
+  if (!select) return;
+
+  const current = select.value || '';
+  const departments = [...new Map((salaryEmpList || [])
+    .map(emp => {
+      const key = salaryEmployeeDepartmentKey(emp);
+      const label = String(emp.department || '').trim();
+      return key && label ? [key, label] : null;
+    })
+    .filter(Boolean))]
+    .sort((a, b) => a[1].localeCompare(b[1]));
+
+  select.innerHTML = '<option value="">All departments</option>' + departments
+    .map(([key, label]) => `<option value="${salaryEscape(key)}">${salaryEscape(label)}</option>`)
+    .join('');
+
+  if (departments.some(([key]) => key === current)) select.value = current;
+
+  if (!salaryDepartmentFilterListenerAttached) {
+    salaryDepartmentFilterListenerAttached = true;
+    select.addEventListener('change', () => {
+      const search = document.getElementById('salary-employee-search');
+      const dropdown = document.getElementById('salary-employee-dropdown');
+      if (currentSalaryEmployee && selectedSalaryDepartmentKey() && salaryEmployeeDepartmentKey(currentSalaryEmployee) !== selectedSalaryDepartmentKey()) {
+        resetCalculationForm();
+      }
+      if (dropdown && search === document.activeElement) showDropdownList(filterSalaryEmployees(search.value));
+      else if (dropdown) dropdown.style.display = 'none';
+    });
   }
 }
 
@@ -575,23 +634,13 @@ function attachSearchListener() {
   search.addEventListener('focus', async () => {
     console.log('Focus event - showing dropdown');
     await fetchSalaryEmpList();
-    showDropdownList(salaryEmpList);
+    showDropdownList(filterSalaryEmployees(search.value));
   });
   
   // On input - filter
   search.addEventListener('input', () => {
     const term = search.value.toLowerCase().trim();
-    if (!term) {
-      showDropdownList(salaryEmpList);
-      return;
-    }
-    
-    const filtered = salaryEmpList.filter(e => {
-      const fullName = `${e.first_name} ${e.last_name}`.toLowerCase();
-      const code = e.employee_code.toLowerCase();
-      const dept = (e.department || '').toLowerCase();
-      return fullName.includes(term) || code.includes(term) || dept.includes(term);
-    });
+    const filtered = filterSalaryEmployees(term);
     
     console.log(`🔍 Filtered to ${filtered.length} employees`);
     showDropdownList(filtered);
@@ -659,14 +708,13 @@ function attachPartnerSearchListener() {
 
   search.addEventListener('focus', async () => {
     if (!salaryEmpList.length) await fetchSalaryEmpList();
-    showPartnerDropdown(salaryEmpList);
+    showPartnerDropdown(filterPiecePartnerEmployees(search.value));
   });
 
   search.addEventListener('input', () => {
     hiddenInput.value = '';
     const term = search.value.toLowerCase().trim();
-    const filtered = salaryEmpList.filter(emp => employeeMatchesTerm(emp, term));
-    showPartnerDropdown(filtered);
+    showPartnerDropdown(filterPiecePartnerEmployees(term));
     calculateSalaryNow();
   });
 
@@ -677,21 +725,74 @@ function attachPartnerSearchListener() {
   });
 }
 
+function salaryProductionKind(position) {
+  const value = String(position || '').toLowerCase();
+  if (value.includes('fixer')) return 'Fixer';
+  if (value.includes('sewer')) return 'Sewer';
+  return '';
+}
+
+function requiredPiecePartnerRole() {
+  const selectedRole = salaryProductionKind(currentSalaryEmployee?.pos || currentSalaryEmployee?.position);
+  if (selectedRole === 'Fixer') return 'Sewer';
+  const pairingType = document.getElementById('salary-piece-pairing')?.value || 'Standard Sewer-Fixer';
+  return pairingType === 'Substitute Sewer-Sewer' ? 'Sewer' : 'Fixer';
+}
+
+function filterPiecePartnerEmployees(term = '') {
+  const requiredRole = requiredPiecePartnerRole();
+  return (salaryEmpList || [])
+    .filter(emp => String(emp.id) !== String(currentSalaryEmployee?.id || ''))
+    .filter(emp => !requiredRole || salaryProductionKind(emp.position) === requiredRole)
+    .filter(emp => employeeMatchesTerm(emp, term));
+}
+
+function clearSalaryPiecePartner() {
+  const search = document.getElementById('salary-piece-partner-search');
+  const hiddenInput = document.getElementById('salary-piece-partner');
+  const dropdown = document.getElementById('salary-piece-partner-dropdown');
+  if (search) search.value = '';
+  if (hiddenInput) hiddenInput.value = '';
+  if (dropdown) dropdown.style.display = 'none';
+}
+
+function updatePiecePartnerControls() {
+  const pairingSelect = document.getElementById('salary-piece-pairing');
+  const partnerSearch = document.getElementById('salary-piece-partner-search');
+  const selectedRole = salaryProductionKind(currentSalaryEmployee?.pos || currentSalaryEmployee?.position);
+  if (pairingSelect) {
+    const substituteOption = [...pairingSelect.options].find(option => option.value === 'Substitute Sewer-Sewer' || option.textContent === 'Substitute Sewer-Sewer');
+    if (selectedRole === 'Fixer') {
+      pairingSelect.value = 'Standard Sewer-Fixer';
+      if (substituteOption) substituteOption.disabled = true;
+    } else if (substituteOption) {
+      substituteOption.disabled = false;
+    }
+  }
+  const role = requiredPiecePartnerRole();
+  if (partnerSearch) {
+    partnerSearch.placeholder = role
+      ? `Search ${role.toLowerCase()} employee...`
+      : 'Search partner employee...';
+  }
+  const selectedPartner = (salaryEmpList || []).find(emp => String(emp.id) === String(document.getElementById('salary-piece-partner')?.value || ''));
+  if (selectedPartner && role && salaryProductionKind(selectedPartner.position) !== role) clearSalaryPiecePartner();
+}
+
 function showPartnerDropdown(empList) {
   const dropdown = document.getElementById('salary-piece-partner-dropdown');
   if (!dropdown) return;
 
   dropdown.innerHTML = '';
-  const currentId = currentSalaryEmployee?.id ? String(currentSalaryEmployee.id) : '';
-  const options = (empList || [])
-    .filter(emp => String(emp.id) !== currentId)
-    .slice(0, 30);
+  updatePiecePartnerControls();
+  const requiredRole = requiredPiecePartnerRole();
+  const options = (empList || []).slice(0, 30);
 
   if (!options.length) {
     const empty = document.createElement('div');
     empty.style.padding = '10px';
     empty.style.color = 'var(--muted)';
-    empty.textContent = 'No employees found';
+    empty.textContent = requiredRole ? `No ${requiredRole.toLowerCase()} employees found` : 'No employees found';
     dropdown.appendChild(empty);
     dropdown.style.display = 'block';
     return;
@@ -738,6 +839,47 @@ function selectSalaryPiecePartner(emp) {
   if (dropdown) dropdown.style.display = 'none';
 
   calculateSalaryNow();
+}
+
+function selectedSalaryPiecePartner() {
+  const partnerId = document.getElementById('salary-piece-partner')?.value || '';
+  return (salaryEmpList || []).find(emp => String(emp.id) === String(partnerId)) || null;
+}
+
+function getPieceOutputPairPayload() {
+  const partner = selectedSalaryPiecePartner();
+  const partnerId = partner?.id ? String(partner.id) : '';
+  const selectedId = currentSalaryEmployee?.id ? String(currentSalaryEmployee.id) : '';
+  const selectedRole = salaryProductionKind(currentSalaryEmployee?.pos || currentSalaryEmployee?.position);
+  const partnerRole = salaryProductionKind(partner?.position);
+  const requiredRole = requiredPiecePartnerRole();
+
+  if (!selectedRole || !['Sewer', 'Fixer'].includes(selectedRole)) {
+    throw new Error('Selected employee must have a Sewer or Fixer position for per-piece partner output.');
+  }
+  if (!partnerId) throw new Error('Please enter the partner employee for this per-piece output.');
+  if (partnerId === selectedId) throw new Error('Sewer and partner cannot be the same employee.');
+  if (requiredRole && partnerRole !== requiredRole) {
+    throw new Error(`Partner employee must be classified as ${requiredRole}.`);
+  }
+
+  if (selectedRole === 'Fixer') {
+    return {
+      employee_id: Number(partnerId),
+      partner_employee_id: Number(selectedId),
+      pairing_type: 'Standard Sewer-Fixer',
+      selected_role: selectedRole,
+      partner_role: partnerRole
+    };
+  }
+
+  return {
+    employee_id: Number(selectedId),
+    partner_employee_id: Number(partnerId),
+    pairing_type: document.getElementById('salary-piece-pairing')?.value || 'Standard Sewer-Fixer',
+    selected_role: selectedRole,
+    partner_role: partnerRole
+  };
 }
 
 function salaryPositionKind(position) {
@@ -929,6 +1071,12 @@ async function refreshLogisticsConfiguredRates() {
 
 // Handle employee selection
 async function clickSalaryEmployee(id, code, first, last, dept, pos) {
+  const selectedEmployee = (salaryEmpList || []).find(emp => String(emp.id) === String(id)) || {};
+  code = code || selectedEmployee.employee_code || '';
+  first = first || selectedEmployee.first_name || '';
+  last = last || selectedEmployee.last_name || '';
+  dept = dept || selectedEmployee.department || '';
+  pos = pos || selectedEmployee.position || '';
   console.log(`\n=== Employee Selection ===`);
   console.log(`✅ Selected: ${code} - ${first} ${last}`);
   console.log(`Employee ID (from frontend): ${id}`);
@@ -958,6 +1106,9 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
       currentSalaryEmployee = {
         id: parseInt(id),
         code, first, last, dept, pos,
+        department_id: selectedEmployee.department_id || null,
+        department: dept,
+        position: pos,
         wageType: 'Not Set',
         rate: 0
       };
@@ -988,6 +1139,9 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     currentSalaryEmployee = {
       id: parseInt(id),
       code, first, last, dept, pos,
+      department_id: selectedEmployee.department_id || config.employee?.department_id || null,
+      department: dept,
+      position: pos,
       wageType: normalizedWageType,
       wageTypeId: config.wage_type_id || config.employee?.wage_type_id,
       rate: parseFloat(config.current_rate) || 0,
@@ -1039,6 +1193,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     if (pieceProductionDate && !pieceProductionDate.value) pieceProductionDate.value = new Date().toISOString().split('T')[0];
     const pieceSewer = document.getElementById('salary-piece-sewer');
     if (pieceSewer) pieceSewer.textContent = `${code} - ${first} ${last}`;
+    updatePiecePartnerControls();
     const tripDate = document.getElementById('salary-trip-date');
     if (tripDate && !tripDate.value) tripDate.value = new Date().toISOString().split('T')[0];
     document.getElementById('salary-trips').value = normalizedWageType === 'Per-Trip' ? '1' : '';
@@ -1406,6 +1561,14 @@ function attachSalaryInputListeners() {
       elem.addEventListener('input', calculateSalaryNow);
       elem.addEventListener('change', calculateSalaryNow);
       if (id === 'salary-agency') elem.addEventListener('change', updateSalaryAgencySummary);
+      if (id === 'salary-piece-pairing') {
+        elem.addEventListener('change', () => {
+          updatePiecePartnerControls();
+          const search = document.getElementById('salary-piece-partner-search');
+          const dropdown = document.getElementById('salary-piece-partner-dropdown');
+          if (dropdown && search === document.activeElement) showPartnerDropdown(filterPiecePartnerEmployees(search.value));
+        });
+      }
       if (['salary-trip-date', 'salary-delivery-location', 'salary-truck-type', 'salary-trip-type'].includes(id)) {
         elem.addEventListener('change', refreshLogisticsConfiguredRates);
       }
@@ -1663,19 +1826,17 @@ async function saveSalaryRecord(status = 'Submitted') {
     }
   } else if (currentSalaryEmployee.wageType === 'Per-Piece') {
     calculateSalaryNow();
-    const partnerId = document.getElementById('salary-piece-partner')?.value || '';
+    let pairPayload = null;
+    try {
+      pairPayload = getPieceOutputPairPayload();
+    } catch (error) {
+      await showAlert(error.message, 'Warning', 'warning');
+      return;
+    }
     const pieceRows = getSalaryPieceRows();
     const invalidRows = pieceRows.filter(row => row.sew_type_code || row.size_range || row.quantity_produced > 0)
       .filter(row => !row.sew_type_code || !row.size_range || !(row.quantity_produced > 0) || !(row.piece_rate > 0));
     quantity = pieceRows.reduce((sum, row) => sum + (row.piece_rate > 0 ? row.quantity_produced : 0), 0);
-    if (!partnerId) {
-      await showAlert('Please enter the partner employee for this per-piece output.', 'Warning', 'warning');
-      return;
-    }
-    if (String(partnerId) === String(currentSalaryEmployee.id)) {
-      await showAlert('Sewer and partner cannot be the same employee.', 'Warning', 'warning');
-      return;
-    }
     if (invalidRows.length || !currentSalaryEmployee.piecePreview) {
       await showAlert('Please complete at least one valid Type of Sew, Size Range, and quantity row with an active configured rate.', 'Warning', 'warning');
       return;
@@ -1797,8 +1958,9 @@ async function saveSalaryRecord(status = 'Submitted') {
     payload.worker_category = currentSalaryEmployee.piecePreview?.worker_category || document.getElementById('salary-worker-category')?.value || null;
     payload.quantity_produced = quantity;
     payload.is_sunday = false;
-    payload.partner_employee_id = currentSalaryEmployee.piecePreview?.partner_employee_id || null;
-    payload.pairing_type = currentSalaryEmployee.piecePreview?.pairing_type || 'Standard Sewer-Fixer';
+    const pairPayload = getPieceOutputPairPayload();
+    payload.partner_employee_id = pairPayload.partner_employee_id;
+    payload.pairing_type = pairPayload.pairing_type;
     payload.production_date = currentSalaryEmployee.piecePreview?.production_date || payload.calculation_date;
     payload.piece_rows = currentSalaryEmployee.piecePreview?.rows || [];
     payload.quota_incentive = currentSalaryEmployee.piecePreview?.quota_incentive || 0;
@@ -1817,7 +1979,7 @@ async function saveSalaryRecord(status = 'Submitted') {
         body: JSON.stringify({
           payroll_period: payload.payroll_period,
           production_date: payload.production_date,
-          employee_id: currentSalaryEmployee.id,
+          employee_id: pairPayload.employee_id,
           partner_employee_id: payload.partner_employee_id,
           output_mode: 'partner',
           calculation_status: status,

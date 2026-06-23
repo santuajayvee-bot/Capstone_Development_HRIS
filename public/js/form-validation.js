@@ -101,7 +101,9 @@
     const wrappingLabel = element.closest('label');
     if (wrappingLabel) {
       const clone = wrappingLabel.cloneNode(true);
-      clone.querySelectorAll('input, select, textarea, button').forEach(child => child.remove());
+      clone
+        .querySelectorAll('input, select, textarea, button, .field-validation-message')
+        .forEach(child => child.remove());
       const text = clone.textContent.trim();
       if (text) return text;
     }

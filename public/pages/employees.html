@@ -306,6 +306,49 @@
     background: transparent;
   }
 
+  .emp-status {
+    display: inline-flex;
+    align-items: center;
+    min-width: 86px;
+    justify-content: center;
+    padding: 5px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    border: 1px solid transparent;
+  }
+
+  .emp-status.active {
+    color: #126b35;
+    background: #dff8e7;
+    border-color: #9ee6b0;
+  }
+
+  .emp-status.inactive,
+  .emp-status.end-of-contract {
+    color: #5b6472;
+    background: #e9edf3;
+    border-color: #c8d0dc;
+  }
+
+  .emp-status.resigned {
+    color: #6b4d12;
+    background: #fff1cf;
+    border-color: #f3d487;
+  }
+
+  .emp-status.terminated {
+    color: #8b1e1e;
+    background: #ffe0e0;
+    border-color: #ffabab;
+  }
+
+  .emp-status.suspended {
+    color: #79401c;
+    background: #ffe8d6;
+    border-color: #ffc49c;
+  }
+
 </style>
 <div class="page-header">
   <div>
@@ -331,6 +374,10 @@
     <option>All Status</option>
     <option>Active</option>
     <option>Inactive</option>
+    <option>Resigned</option>
+    <option>Terminated</option>
+    <option>End of Contract</option>
+    <option>Suspended</option>
   </select>
 </div>
 

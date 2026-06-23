@@ -8,7 +8,6 @@ const {
 } = require('../services/tokenService');
 const {
   findUserByEmail,
-  findUserById,
   recordFailedLoginFailure,
   resetFailedLoginAttempts,
   updateLastLogin,
@@ -130,25 +129,12 @@ function invalidLoginResponse(res) {
   });
 }
 
-function mfaErrorResponse(res, error) {
-  const statusCode = error instanceof MfaServiceError ? error.statusCode : 500;
-  const message = error instanceof MfaServiceError
-    ? error.message
-    : 'Unable to complete MFA verification. Please try again.';
-  return res.status(statusCode).json({
-    success: false,
-    mfaRequired: true,
-    code: error instanceof MfaServiceError ? error.code : 'MFA_FAILED',
-    message,
-  });
-}
-
 async function issueAuthenticatedSession(req, res, user) {
   const employeeId = getAuthEmployeeId(user);
   const ipAddress = getRequestIp(req);
   const userAgent = getUserAgent(req);
 
-  await resetFailedLoginAttempts(employeeId);
+  await resetFailedLoginAttemptsForUser(user.id);
   await updateLastLogin(employeeId);
 
   const authenticatedUser = await buildAuthenticatedUser(user);
@@ -230,7 +216,8 @@ async function login(req, res) {
       });
     }
 
-    if (isFutureDate(user.Locked_Until)) {
+    const lockState = await getUserLoginLockState(user.id);
+    if (lockState?.locked || isFutureDate(user.Locked_Until)) {
       await safeCreateAuditLog({
         Employee_ID: employeeId,
         Action_Type: 'LOGIN_BLOCKED_LOCKED_ACCOUNT',
@@ -239,16 +226,13 @@ async function login(req, res) {
         User_Agent: userAgent,
       });
 
-      return res.status(423).json({
-        success: false,
-        message: LOCKED_ACCOUNT_MESSAGE,
-      });
+      return lockedAccountResponse(res, lockState || { lockedUntil: user.Locked_Until });
     }
 
     const passwordMatches = await verifyPassword(user.Password_Hash, password);
 
     if (!passwordMatches) {
-      const failure = await recordFailedLoginFailure(employeeId, {
+      const failure = await recordFailedLoginFailureForUser(user.id, {
         maxAttempts: MAX_FAILED_ATTEMPTS,
         lockMinutes: LOCK_MINUTES,
       });
@@ -261,10 +245,7 @@ async function login(req, res) {
           IP_Address: ipAddress,
           User_Agent: userAgent,
         });
-        return res.status(423).json({
-          success: false,
-          message: LOCKED_ACCOUNT_MESSAGE,
-        });
+        return lockedAccountResponse(res, failure);
       } else {
         await safeCreateAuditLog({
           Employee_ID: employeeId,
@@ -275,7 +256,7 @@ async function login(req, res) {
         });
       }
 
-      return invalidLoginResponse(res);
+      return invalidLoginAttemptResponse(res, failure);
     }
 
     // A correct password resets password-lockout state, but never creates an
@@ -351,6 +332,7 @@ async function resendMfa(req, res) {
 
 module.exports = {
   login,
+  verifyMfa,  
   resendMfa,
-  verifyMfa,
+  lockoutStatus
 };

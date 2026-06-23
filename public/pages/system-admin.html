@@ -39,6 +39,10 @@
       <div class="stat-label">Inactive</div>
     </div>
     <div class="stat-card">
+      <div class="stat-value" id="stat-locked-users">—</div>
+      <div class="stat-label">Locked</div>
+    </div>
+    <div class="stat-card">
       <div class="stat-value" id="stat-unlinked-employees">—</div>
       <div class="stat-label">Unlinked Employees</div>
     </div>
@@ -55,6 +59,7 @@
         <option value="">All Status</option>
         <option value="active">Active</option>
         <option value="inactive">Inactive</option>
+        <option value="locked">Locked</option>
       </select>
     </div>
     <button class="btn-sysadmin-primary" onclick="showRegisterModal()">
@@ -73,12 +78,13 @@
           <th>Role</th>
           <th>Access Level</th>
           <th>Status</th>
+          <th>Lockout</th>
           <th>Last Login</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody id="users-tbody">
-        <tr><td colspan="8" class="table-empty">Loading accounts...</td></tr>
+        <tr><td colspan="9" class="table-empty">Loading accounts...</td></tr>
       </tbody>
     </table>
   </div>

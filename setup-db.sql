@@ -20,6 +20,8 @@ CREATE TABLE departments (
 CREATE TABLE users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(100) NOT NULL UNIQUE,
+  email_hash CHAR(64) NULL,
+  email_encrypted TEXT NULL,
   password_hash VARCHAR(255) NOT NULL,
   role_id INT NOT NULL,
   employee_id INT NULL,
@@ -51,7 +53,11 @@ CREATE TABLE employees (
   date_hired DATE NULL,
   supervisor VARCHAR(100) NULL,
   work_location VARCHAR(100) NULL,
-  status ENUM('Active','Inactive','Resigned') DEFAULT 'Active',
+  status ENUM('Active','Inactive','Resigned','Terminated','End of Contract','Suspended') DEFAULT 'Active',
+  separation_date DATE NULL,
+  separation_reason VARCHAR(120) NULL,
+  offboarding_remarks VARCHAR(500) NULL,
+  encrypted_pii LONGTEXT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (department_id) REFERENCES departments(id)
 );
@@ -66,6 +72,34 @@ CREATE TABLE documents (
   uploaded_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
   INDEX idx_documents_employee_type_uploaded (employee_id, document_type, uploaded_date)
+);
+
+CREATE TABLE sensitive_employee_data (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  employee_id BIGINT NOT NULL,
+  ssn VARCHAR(100) NULL,
+  ssn_encrypted TEXT NULL,
+  ssn_hash CHAR(64) NULL,
+  tax_id VARCHAR(100) NULL,
+  tax_id_encrypted TEXT NULL,
+  tax_id_hash CHAR(64) NULL,
+  bank_account_number VARCHAR(100) NULL,
+  bank_account_number_encrypted TEXT NULL,
+  bank_account_number_hash CHAR(64) NULL,
+  bank_routing_number VARCHAR(100) NULL,
+  bank_routing_number_encrypted TEXT NULL,
+  bank_routing_number_hash CHAR(64) NULL,
+  emergency_contact_phone VARCHAR(50) NULL,
+  emergency_contact_phone_encrypted TEXT NULL,
+  emergency_contact_phone_hash CHAR(64) NULL,
+  other_sensitive_info TEXT NULL,
+  other_sensitive_info_encrypted LONGTEXT NULL,
+  updated_by BIGINT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sensitive_employee_data_employee (employee_id),
+  INDEX idx_sensitive_employee_data_ssn_hash (ssn_hash),
+  INDEX idx_sensitive_employee_data_tax_hash (tax_id_hash),
+  INDEX idx_sensitive_employee_data_bank_hash (bank_account_number_hash)
 );
 
 -- Leave Requests table
