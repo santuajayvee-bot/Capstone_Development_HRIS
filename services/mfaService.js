@@ -191,8 +191,9 @@ async function createMfaChallenge({ employeeId, req }) {
   const challengeId = created.insertId;
   await auditMfa(employeeId, 'MFA_CHALLENGE_CREATED', `MFA challenge ${challengeId} created.`, req);
 
+  let delivery;
   try {
-    const delivery = await sendVerification(phoneNumber, config);
+    delivery = await sendVerification(phoneNumber, config);
     await pool.execute(
       `UPDATE MFA_CHALLENGE
           SET Last_Sent_At = NOW()
