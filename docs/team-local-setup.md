@@ -87,13 +87,12 @@ AUTH_LOCKOUT_MINUTES=15
 
 # SMS MFA: use mock mode locally before testing a real provider account.
 MFA_ENABLED=false
-MFA_PROVIDER=mocean
+MFA_PROVIDER=iprog
 MFA_MOCK_MODE=true
 MFA_MOCK_CODE=123456
-MOCEAN_API_TOKEN=
-MOCEAN_BRAND=LGSVHR
-MOCEAN_CODE_LENGTH=6
-MOCEAN_PIN_VALIDITY=300
+IPROG_API_TOKEN=
+IPROG_OTP_EXPIRES_IN_MINUTES=5
+IPROG_OTP_MESSAGE=Your LGSV HR verification code is :otp. It is valid for 5 minutes. Do not share this code with anyone.
 
 FABRIC_ENABLED=true
 FABRIC_CHANNEL_NAME=lgsvhr-payroll-channel
@@ -122,11 +121,11 @@ Do not share or commit the resulting `.env` file. Local Fabric certificates are 
 
 ### SMS MFA Setup
 
-MFA is disabled by default so a fresh local environment can use the normal login flow. The MFA migration uses the existing `employees.contact_number` field as the registered phone number; it accepts Philippine mobile numbers such as `09171234567`, `9171234567`, `+639171234567`, or `639171234567`.
+MFA is disabled by default so a fresh local environment can use the normal login flow. The MFA migration uses the existing `employees.contact_number` field as the registered phone number. IPROG receives the number in Philippine local format (`09XXXXXXXXX`), so `09913845895`, `+639913845895`, and `639913845895` all resolve to `09913845895`.
 
 For local MFA testing without using SMS credits, set `MFA_ENABLED=true` and keep `MFA_MOCK_MODE=true`. The code is read only from `MFA_MOCK_CODE`; it is not shown by the application or written to the database.
 
-For real Mocean verification, set `MFA_MOCK_MODE=false` and add the private `MOCEAN_API_TOKEN` from the Mocean dashboard. Never commit that token. Restart Node.js after changing MFA settings.
+For real IPROG verification, set `MFA_ENABLED=true`, `MFA_MOCK_MODE=false`, and add the private `IPROG_API_TOKEN` from the IPROG account. Keep `MFA_PROVIDER=iprog`. `IPROG_OTP_MESSAGE` must include the `:otp` placeholder so IPROG can insert the generated code. Never commit that token. Restart Node.js after changing MFA settings.
 
 ### Secret Compatibility Notes
 

@@ -2,11 +2,14 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { createAuditLog } = require('../db/authQueries');
 const {
-  MoceanServiceError,
-  checkSmsVerification,
-  getMoceanConfig,
-  requestSmsVerification,
-} = require('./moceanService');
+  getIprogConfig,
+  sendOtp,
+  verifyOtp,
+} = require('./iprogSmsService');
+const {
+  maskPhoneNumber,
+  normalizePhilippineMobileNumber,
+} = require('../utils/phoneNumberUtil');
 
 const MAX_MFA_ATTEMPTS = 5;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -27,16 +30,16 @@ function booleanEnv(name, fallback = false) {
 }
 
 function mfaConfig() {
-  const provider = String(process.env.MFA_PROVIDER || 'mocean').trim().toLowerCase();
+  const provider = String(process.env.MFA_PROVIDER || 'iprog').trim().toLowerCase();
   const mockMode = booleanEnv('MFA_MOCK_MODE', false);
-  const mocean = getMoceanConfig();
+  const iprog = getIprogConfig();
   return {
     enabled: booleanEnv('MFA_ENABLED', false),
     provider,
     mockMode,
     mockCode: String(process.env.MFA_MOCK_CODE || '').trim(),
-    codeLength: mocean.codeLength,
-    pinValidity: mocean.pinValidity,
+    codeLength: 6,
+    pinValidity: iprog.expiresInMinutes * 60,
   };
 }
 
@@ -71,20 +74,6 @@ async function auditMfa(employeeId, actionType, description, req) {
   }
 }
 
-function normalizePhilippinePhone(value) {
-  let phone = String(value || '').trim().replace(/[\s().-]/g, '');
-  if (phone.startsWith('+')) phone = phone.slice(1);
-  if (phone.startsWith('00')) phone = phone.slice(2);
-  if (/^09\d{9}$/.test(phone)) return `63${phone.slice(1)}`;
-  if (/^9\d{9}$/.test(phone)) return `63${phone}`;
-  if (/^639\d{9}$/.test(phone)) return phone;
-  return null;
-}
-
-function maskPhoneNumber(phoneNumber) {
-  return `+63 *** *** ${String(phoneNumber).slice(-4)}`;
-}
-
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -111,7 +100,7 @@ function normalizeChallengeId(value) {
 }
 
 function assertMfaConfiguration(config) {
-  if (config.provider !== 'mocean') {
+  if (config.provider !== 'iprog') {
     throw new MfaServiceError('MFA provider is not configured.', 'MFA_PROVIDER_UNSUPPORTED', 503);
   }
   if (config.mockMode && process.env.NODE_ENV === 'production') {
@@ -127,20 +116,21 @@ async function getEmployeePhone(employeeId) {
     'SELECT contact_number FROM employees WHERE Employee_ID = ? OR id = ? LIMIT 1',
     [employeeId, employeeId]
   );
-  return normalizePhilippinePhone(rows[0]?.contact_number);
+  return normalizePhilippineMobileNumber(rows[0]?.contact_number);
 }
 
 async function sendVerification(phoneNumber, config) {
   if (config.mockMode) {
     console.warn('[MFA] Mock mode is active; no SMS was sent.');
-    return { providerRequestId: `mock-${crypto.randomUUID()}`, mock: true };
+    return { mock: true };
   }
-  return requestSmsVerification(phoneNumber);
+  await sendOtp(phoneNumber);
+  return { mock: false };
 }
 
 async function findChallenge(challengeId) {
   const [rows] = await pool.execute(
-    `SELECT Challenge_ID, Employee_ID, Provider, Provider_Request_ID, Challenge_Token_Hash,
+    `SELECT Challenge_ID, Employee_ID, Provider, Phone_Number, Challenge_Token_Hash,
             Status, Attempt_Count, Resend_Count, Last_Sent_At, Expires_At
        FROM MFA_CHALLENGE
       WHERE Challenge_ID = ?
@@ -181,7 +171,7 @@ async function createMfaChallenge({ employeeId, req }) {
   const phoneNumber = await getEmployeePhone(employeeId);
   if (!phoneNumber) {
     await auditMfa(employeeId, 'MFA_PHONE_UNAVAILABLE', 'MFA challenge was not created because no valid mobile number is registered.', req);
-    throw new MfaServiceError('No valid mobile number is registered for this account.', 'MFA_PHONE_UNAVAILABLE', 400);
+    throw new MfaServiceError('No valid phone number is registered for this account. Please contact the System Administrator.', 'MFA_PHONE_UNAVAILABLE', 400);
   }
 
   const challengeToken = crypto.randomBytes(32).toString('base64url');
@@ -194,9 +184,9 @@ async function createMfaChallenge({ employeeId, req }) {
   );
   const [created] = await pool.execute(
     `INSERT INTO MFA_CHALLENGE
-      (Employee_ID, Provider, Challenge_Token_Hash, Status, Expires_At)
-     VALUES (?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL ? SECOND))`,
-    [employeeId, configProvider, sha256(challengeToken), config.pinValidity]
+      (Employee_ID, Provider, Phone_Number, Challenge_Token_Hash, Status, Expires_At)
+     VALUES (?, ?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL ? SECOND))`,
+    [employeeId, configProvider, phoneNumber, sha256(challengeToken), config.pinValidity]
   );
   const challengeId = created.insertId;
   await auditMfa(employeeId, 'MFA_CHALLENGE_CREATED', `MFA challenge ${challengeId} created.`, req);
@@ -205,19 +195,19 @@ async function createMfaChallenge({ employeeId, req }) {
     const delivery = await sendVerification(phoneNumber, config);
     await pool.execute(
       `UPDATE MFA_CHALLENGE
-          SET Provider_Request_ID = ?, Last_Sent_At = NOW()
+          SET Last_Sent_At = NOW()
         WHERE Challenge_ID = ? AND Status = 'PENDING'`,
-      [delivery.providerRequestId, challengeId]
+      [challengeId]
     );
     await auditMfa(
       employeeId,
-      delivery.mock ? 'MFA_MOCK_MODE_USED' : 'MFA_SMS_SENT',
-      delivery.mock ? 'MFA mock challenge created; no SMS was sent.' : 'MFA verification SMS sent.',
+      delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
+      delivery.mock ? 'MFA mock challenge created; no SMS was sent.' : 'IPROG OTP request accepted.',
       req
     );
   } catch (error) {
     await pool.execute("UPDATE MFA_CHALLENGE SET Status = 'FAILED' WHERE Challenge_ID = ?", [challengeId]);
-    await auditMfa(employeeId, 'MFA_SMS_FAILED', 'MFA verification SMS could not be sent.', req);
+    await auditMfa(employeeId, 'IPROG_OTP_FAILED', 'IPROG OTP could not be requested.', req);
     if (error instanceof MfaServiceError) throw error;
     throw new MfaServiceError('Failed to send MFA code. Please try again.', 'MFA_SMS_FAILED', 503);
   }
@@ -241,12 +231,17 @@ async function verifyMfaChallenge({ challengeId: rawChallengeId, mfaToken, code,
 
   const challenge = await findChallenge(challengeId);
   await assertPendingChallenge(challenge, mfaToken, req);
+  const challengePhoneNumber = normalizePhilippineMobileNumber(challenge.Phone_Number);
+  if (!challengePhoneNumber) {
+    await auditMfa(challenge.Employee_ID, 'MFA_PHONE_UNAVAILABLE', 'MFA verification was blocked because the challenge has no valid mobile number.', req);
+    throw new MfaServiceError('No valid phone number is registered for this account. Please contact the System Administrator.', 'MFA_PHONE_UNAVAILABLE', 400);
+  }
 
   let providerVerified;
   try {
     providerVerified = config.mockMode
       ? matchesSecret(code, config.mockCode)
-      : await checkSmsVerification(challenge.Provider_Request_ID, code);
+      : await verifyOtp(challengePhoneNumber, code);
   } catch (error) {
     await auditMfa(challenge.Employee_ID, 'MFA_VERIFICATION_PROVIDER_FAILED', 'MFA provider verification could not be completed.', req);
     throw new MfaServiceError('Failed to verify MFA code. Please try again.', 'MFA_PROVIDER_VERIFY_FAILED', 503);
@@ -325,37 +320,36 @@ async function resendMfaChallenge({ challengeId: rawChallengeId, mfaToken, req }
     throw new MfaServiceError('Please wait before requesting another MFA code.', 'MFA_RESEND_COOLDOWN', 429);
   }
 
-  const phoneNumber = await getEmployeePhone(challenge.Employee_ID);
+  const phoneNumber = normalizePhilippineMobileNumber(challenge.Phone_Number);
   if (!phoneNumber) {
-    await auditMfa(challenge.Employee_ID, 'MFA_PHONE_UNAVAILABLE', 'MFA resend was blocked because no valid mobile number is registered.', req);
-    throw new MfaServiceError('No valid mobile number is registered for this account.', 'MFA_PHONE_UNAVAILABLE', 400);
+    await auditMfa(challenge.Employee_ID, 'MFA_PHONE_UNAVAILABLE', 'MFA resend was blocked because the challenge has no valid mobile number.', req);
+    throw new MfaServiceError('No valid phone number is registered for this account. Please contact the System Administrator.', 'MFA_PHONE_UNAVAILABLE', 400);
   }
 
   let delivery;
   try {
     delivery = await sendVerification(phoneNumber, config);
   } catch (error) {
-    await auditMfa(challenge.Employee_ID, 'MFA_SMS_FAILED', 'MFA resend could not be sent.', req);
+    await auditMfa(challenge.Employee_ID, 'IPROG_OTP_FAILED', 'IPROG OTP resend could not be requested.', req);
     throw new MfaServiceError('Failed to send MFA code. Please try again.', 'MFA_SMS_FAILED', 503);
   }
 
   const [result] = await pool.execute(
     `UPDATE MFA_CHALLENGE
-        SET Provider_Request_ID = ?,
-            Last_Sent_At = NOW(),
+        SET Last_Sent_At = NOW(),
             Resend_Count = Resend_Count + 1,
             Expires_At = DATE_ADD(NOW(), INTERVAL ? SECOND)
       WHERE Challenge_ID = ?
         AND Status = 'PENDING'`,
-    [delivery.providerRequestId, config.pinValidity, challengeId]
+    [config.pinValidity, challengeId]
   );
   if (!result.affectedRows) {
     throw new MfaServiceError('MFA challenge is no longer available.', 'MFA_CHALLENGE_UNAVAILABLE', 409);
   }
   await auditMfa(
     challenge.Employee_ID,
-    delivery.mock ? 'MFA_MOCK_MODE_USED' : 'MFA_SMS_SENT',
-    delivery.mock ? 'MFA mock challenge resent; no SMS was sent.' : 'MFA verification SMS resent.',
+    delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
+    delivery.mock ? 'MFA mock challenge resent; no SMS was sent.' : 'IPROG OTP resend request accepted.',
     req
   );
 

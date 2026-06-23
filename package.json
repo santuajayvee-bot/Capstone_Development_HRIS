@@ -16,7 +16,7 @@
     "migrate:weekly-payroll": "node database/migrate-multi-pay-type-weekly-payroll.js up",
     "test:attendance-biometric": "node test-biometric-attendance.js",
     "test:onboarding": "node test-onboarding.js",
-    "test:mfa": "node tests/mocean-service.test.js"
+    "test:mfa": "node tests/iprog-sms-service.test.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",

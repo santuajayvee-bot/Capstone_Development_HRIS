@@ -1,0 +1,49 @@
+-- UP migration: move LGSV HR MFA challenges from the retired Mocean adapter to IPROG SMS.
+-- Existing pending challenges cannot be verified by the new provider and are safely invalidated.
+
+UPDATE MFA_CHALLENGE
+   SET Status = 'SUPERSEDED'
+ WHERE Status = 'PENDING';
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'MFA_CHALLENGE' AND COLUMN_NAME = 'Phone_Number') = 0,
+  'ALTER TABLE MFA_CHALLENGE ADD COLUMN Phone_Number VARCHAR(20) NULL AFTER Provider',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+ALTER TABLE MFA_CHALLENGE
+  MODIFY COLUMN Provider VARCHAR(50) NOT NULL DEFAULT 'iprog';
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'MFA_CHALLENGE' AND INDEX_NAME = 'idx_mfa_challenge_provider_request') > 0,
+  'DROP INDEX idx_mfa_challenge_provider_request ON MFA_CHALLENGE',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'MFA_CHALLENGE' AND COLUMN_NAME = 'Provider_Request_ID') > 0,
+  'ALTER TABLE MFA_CHALLENGE DROP COLUMN Provider_Request_ID',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'MFA_CHALLENGE' AND INDEX_NAME = 'idx_mfa_challenge_phone_number') = 0,
+  'CREATE INDEX idx_mfa_challenge_phone_number ON MFA_CHALLENGE (Phone_Number)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

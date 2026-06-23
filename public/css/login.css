@@ -115,6 +115,12 @@
   font-weight: 600;
   text-align: center;
 }
+.login-mfa-message {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.45;
+  margin-bottom: 4px;
+}
 .login-mfa-phone {
   min-height: 20px;
   margin-bottom: 18px;
