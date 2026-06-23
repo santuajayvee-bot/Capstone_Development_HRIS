@@ -28,6 +28,7 @@ const {
   timingSafeEqualText,
 } = require('./attendance-service');
 const { emitAttendanceCreated } = require('./realtime');
+const { auditSecurityEvent } = require('./security-controls');
 const {
   ensureAttendancePolicySettings,
   getActiveAttendancePolicy,
@@ -44,9 +45,44 @@ const PAYROLL_MANAGER_ROLES = ['payroll_manager'];
 const BIOMETRIC_ADMIN_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
 const SUMMARY_ROLES = [...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES];
 const AUDIT_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
+const BIOMETRIC_DEVICE_ALLOWED_FIELDS = new Set([
+  'device_reference', 'device_name', 'vendor', 'api_base_url', 'logs_endpoint',
+  'auth_type', 'auth_header_name', 'auth_secret', 'is_active',
+]);
+const BIOMETRIC_MAPPING_ALLOWED_FIELDS = new Set(['device_id', 'employee_id', 'biometric_user_id']);
+const ATTENDANCE_POLICY_ALLOWED_FIELDS = new Set([
+  'work_schedule', 'work_start_time', 'work_end_time', 'grace_period_minutes',
+  'duplicate_scan_window_seconds', 'hr_validation_required', 'require_hr_validation',
+  'overtime_threshold_hours', 'overtime_threshold_minutes', 'missing_timeout_handling',
+  'payroll_attendance_source', 'payroll_ready_rules', 'late_deduction_method',
+  'late_fixed_deduction_amount', 'undertime_deduction_method',
+  'undertime_fixed_deduction_amount', 'allow_manual_attendance',
+  'allow_hr_correction', 'enable_overtime', 'minimum_overtime_minutes',
+  'multiple_scan_handling', 'overtime_handling',
+]);
+const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_in', 'time_out', 'reason']);
+const ATTENDANCE_OVERRIDE_ALLOWED_FIELDS = new Set(['time_in', 'time_out', 'reason']);
+const ATTENDANCE_VERIFY_ALLOWED_FIELDS = new Set(['verification_status', 'reason']);
+const ATTENDANCE_OVERTIME_ALLOWED_FIELDS = new Set(['overtime_hours', 'reason']);
+const GEOFENCE_ALLOWED_FIELDS = new Set(['site_name', 'latitude', 'longitude', 'radius_meters', 'is_active']);
 
 function includesRole(roles, req) {
   return roles.includes(req.user?.role);
+}
+
+function rejectUnsupportedFields(req, res, allowedFields, module = 'ATTENDANCE_SECURITY') {
+  const unknownFields = Object.keys(req.body || {}).filter(field => !allowedFields.has(field));
+  if (!unknownFields.length) return false;
+  auditSecurityEvent(req, {
+    action: 'blocked_unsupported_attendance_fields',
+    module,
+    targetTable: req.originalUrl || null,
+    targetRecord: req.params?.id || req.body?.employee_id || null,
+    newValue: { fields: unknownFields, path: req.originalUrl },
+    result: 'blocked',
+  }).catch(() => {});
+  res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
+  return true;
 }
 
 function clientIp(req) {
@@ -87,6 +123,20 @@ function requireReason(value) {
   const reason = cleanText(value, 500);
   if (reason.length < 8) throw new Error('A correction reason of at least 8 characters is required.');
   return reason;
+}
+
+function safeClientError(err, fallback = 'Unable to process request.') {
+  const message = String(err?.message || '').trim();
+  const code = String(err?.code || '');
+  if (
+    err?.sqlMessage ||
+    err?.sqlState ||
+    code.startsWith('ER_') ||
+    /\b(sql|mysql|database|table|column|constraint|syntax|foreign key|select|insert|update|delete)\b/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message || fallback;
 }
 
 function safeJson(value) {
@@ -266,7 +316,7 @@ router.post('/biometric/webhook/:deviceReference', authenticateBiometricWebhook,
     console.error('[attendance/biometric-webhook]', err.message);
     const summary = { received: 0, accepted: 0, duplicates: 0, rejected: 0 };
     await finishSyncLog(syncLogId, device.device_id, summary, err);
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to process biometric events.') });
   }
 });
 
@@ -293,7 +343,7 @@ router.post('/biometric/sync/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN_R
       const deviceId = Number(req.params.deviceId);
       await finishSyncLog(syncLogId, deviceId, { received: 0, accepted: 0, duplicates: 0, rejected: 0 }, err);
     }
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: safeClientError(err, 'Failed to synchronize biometric device.') });
   }
 });
 
@@ -314,6 +364,7 @@ router.get('/biometric/devices', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES)
 
 router.post('/biometric/devices', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
   try {
+    if (rejectUnsupportedFields(req, res, BIOMETRIC_DEVICE_ALLOWED_FIELDS, 'BIOMETRIC_SECURITY')) return;
     const reference = cleanText(req.body.device_reference, 120);
     const name = cleanText(req.body.device_name, 160);
     const vendor = cleanText(req.body.vendor, 120) || null;
@@ -345,12 +396,13 @@ router.post('/biometric/devices', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), 
     res.status(201).json({ message: 'Biometric device created.', device_id: result.insertId });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Device reference already exists.' });
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to create biometric device.') });
   }
 });
 
 router.put('/biometric/devices/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), async (req, res) => {
   try {
+    if (rejectUnsupportedFields(req, res, BIOMETRIC_DEVICE_ALLOWED_FIELDS, 'BIOMETRIC_SECURITY')) return;
     const deviceId = positiveInteger(req.params.deviceId, 'deviceId');
     const [rows] = await pool.execute('SELECT * FROM biometric_device WHERE device_id = ?', [deviceId]);
     if (!rows.length) return res.status(404).json({ error: 'Biometric device not found.' });
@@ -382,7 +434,7 @@ router.put('/biometric/devices/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN
     await writeAuditLog(req.user.id, null, `BIOMETRIC DEVICE UPDATED [ID:${deviceId}]`, safeJson({ name: oldDevice.device_name, active: oldDevice.is_active }), safeJson({ name, active: isActive }), req);
     res.json({ message: 'Biometric device updated.' });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to update biometric device.') });
   }
 });
 
@@ -406,12 +458,13 @@ router.get('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES
       biometric_user_reference: 'Encrypted reference',
     })));
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to save biometric mapping.') });
   }
 });
 
 router.post('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
   try {
+    if (rejectUnsupportedFields(req, res, BIOMETRIC_MAPPING_ALLOWED_FIELDS, 'BIOMETRIC_SECURITY')) return;
     const deviceId = positiveInteger(req.body.device_id, 'device_id');
     const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
     const biometricUserId = cleanText(req.body.biometric_user_id, 190);
@@ -443,7 +496,7 @@ router.post('/biometric/mappings', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLE
     await writeAuditLog(req.user.id, employeeId, `BIOMETRIC MAPPING SAVED [DEVICE:${deviceId}]`, null, safeJson({ biometric_reference: maskReference(biometricUserId) }), req);
     res.status(result.insertId ? 201 : 200).json({ message: 'Encrypted biometric mapping saved.' });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to save biometric mapping.') });
   }
 });
 
@@ -456,7 +509,7 @@ router.delete('/biometric/mappings/:mappingId', requireAuth, requireRole(BIOMETR
     await writeAuditLog(req.user.id, rows[0].employee_id, `BIOMETRIC MAPPING DISABLED [ID:${mappingId}]`, null, null, req);
     res.json({ message: 'Biometric mapping disabled.' });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to disable biometric mapping.') });
   }
 });
 
@@ -699,6 +752,7 @@ router.get('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
 
 router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_ROLES]), async (req, res) => {
   try {
+    if (rejectUnsupportedFields(req, res, ATTENDANCE_POLICY_ALLOWED_FIELDS)) return;
     await ensureAttendancePolicySettings(pool);
     const body = req.body || {};
     const allowedDeductionMethods = new Set(['auto_compute', 'fixed_per_minute', 'fixed_per_hour', 'none']);
@@ -838,6 +892,7 @@ router.get('/overview', requireAuth, requireRole(ROLES.any), async (req, res) =>
 router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    if (rejectUnsupportedFields(req, res, MANUAL_ATTENDANCE_ALLOWED_FIELDS)) return;
     const policy = await getActiveAttendancePolicy(pool, req.body.date || null);
     if (!policy.allow_manual_attendance) {
       return res.status(403).json({ error: 'Manual attendance is disabled by the active attendance policy.' });
@@ -885,7 +940,7 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
     res.status(201).json({ message: 'Manual attendance created and audited.', attendance_id: result.insertId });
   } catch (err) {
     await conn.rollback();
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to create manual attendance.') });
   } finally {
     conn.release();
   }
@@ -894,6 +949,7 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
 router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    if (rejectUnsupportedFields(req, res, ATTENDANCE_OVERRIDE_ALLOWED_FIELDS)) return;
     const policy = await getActiveAttendancePolicy(pool);
     if (!policy.allow_hr_correction) {
       return res.status(403).json({ error: 'HR attendance correction is disabled by the active attendance policy.' });
@@ -942,7 +998,7 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
     res.json({ message: 'Attendance correction saved and audited.' });
   } catch (err) {
     await conn.rollback();
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to save attendance correction.') });
   } finally {
     conn.release();
   }
@@ -951,6 +1007,7 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
 router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    if (rejectUnsupportedFields(req, res, ATTENDANCE_VERIFY_ALLOWED_FIELDS)) return;
     const attendanceId = positiveInteger(req.params.id, 'id');
     const requestedStatus = cleanText(req.body.verification_status, 30).toUpperCase();
     if (!['VALIDATED', 'PAYROLL_READY', 'REJECTED', 'NEEDS_REVIEW'].includes(requestedStatus)) {
@@ -991,7 +1048,7 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     res.json({ message: `Attendance marked ${verificationStatus}.` });
   } catch (err) {
     await conn.rollback();
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to update attendance verification.') });
   } finally {
     conn.release();
   }
@@ -1000,6 +1057,7 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
 router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    if (rejectUnsupportedFields(req, res, ATTENDANCE_OVERTIME_ALLOWED_FIELDS)) return;
     const policy = await getActiveAttendancePolicy(pool);
     if (!policy.enable_overtime) {
       return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
@@ -1034,7 +1092,7 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
     res.json({ message: `Overtime updated to ${hours} hours with audit trail.` });
   } catch (err) {
     await conn.rollback();
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to update overtime.') });
   } finally {
     conn.release();
   }
@@ -1090,7 +1148,7 @@ router.get('/integrity/:attendanceId', requireAuth, requireRole([...ROLES.any]),
       versions: chain.length,
     });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to verify attendance integrity.') });
   }
 });
 
@@ -1131,7 +1189,7 @@ router.post('/integrity/anchor-pending', requireAuth, requireRole(SYSTEM_ADMIN_R
     await writeAuditLog(req.user.id, null, 'ATTENDANCE INTEGRITY ANCHOR RUN', null, safeJson({ queued: entries.length, anchored, failed }), req);
     res.json({ message: 'Integrity anchor run completed.', queued: entries.length, anchored, failed });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: safeClientError(err, 'Failed to anchor attendance integrity entries.') });
   }
 });
 
@@ -1150,6 +1208,7 @@ router.get('/geofence', requireAuth, requireRole(HR_ROLES), async (_req, res) =>
 
 router.put('/geofence/:id', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   try {
+    if (rejectUnsupportedFields(req, res, GEOFENCE_ALLOWED_FIELDS)) return;
     const id = positiveInteger(req.params.id, 'id');
     const siteName = cleanText(req.body.site_name, 100);
     const latitude = Number(req.body.latitude);
@@ -1165,7 +1224,7 @@ router.put('/geofence/:id', requireAuth, requireRole(HR_ROLES), async (req, res)
     await writeAuditLog(req.user.id, null, `GEOFENCE UPDATED [ID:${id}]`, null, safeJson({ siteName, latitude, longitude, radiusMeters }), req);
     res.json({ message: 'Geofence configuration updated.' });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: safeClientError(err, 'Failed to update geofence configuration.') });
   }
 });
 

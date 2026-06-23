@@ -40,6 +40,20 @@ function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
+function safeBiometricIngestionError(err, fallback = 'Biometric attendance event could not be processed.') {
+  const message = String(err?.message || '').trim();
+  const code = String(err?.code || '');
+  if (
+    err?.sqlMessage ||
+    err?.sqlState ||
+    code.startsWith('ER_') ||
+    /\b(sql|mysql|database|table|column|constraint|syntax|foreign key|select|insert|update|delete)\b/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message || fallback;
+}
+
 async function ensureAttendanceSummaryPolicyColumns(conn) {
   const [columns] = await conn.execute(
     `SELECT COLUMN_NAME
@@ -598,7 +612,8 @@ async function ingestBiometricEvents(device, events) {
     try {
       results.push(await ingestBiometricEvent(device, event));
     } catch (err) {
-      results.push({ status: 'rejected', error: err.message });
+      console.error('[attendance/biometric-event]', err.message, err.code || '');
+      results.push({ status: 'rejected', error: safeBiometricIngestionError(err) });
     }
   }
   return { ...summarizeResults(results), results };

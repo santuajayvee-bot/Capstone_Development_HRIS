@@ -188,7 +188,7 @@ router.get('/list', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
 });
 
 // GET /api/201-files/:employeeId → Retrieve complete 201-file for an employee
-router.get('/:employeeId', async (req, res) => {
+router.get('/:employeeId', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
@@ -299,7 +299,7 @@ router.get('/:employeeId', async (req, res) => {
 });
 
 // GET /api/201-files/:employeeId/sensitive-data → Retrieve sensitive employee data
-router.get('/:employeeId/sensitive-data', async (req, res) => {
+router.get('/:employeeId/sensitive-data', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;

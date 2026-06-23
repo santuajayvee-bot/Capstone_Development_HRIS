@@ -683,9 +683,9 @@ async function recordBiometricAttendance(req, res, options = {}) {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Duplicate biometric scan event.' });
     }
-    console.error('[biometric/attendance]', err.message, err);
-    biometricStep(5, 'Backend attendance failure', { error: err.message, code: err.code || null });
-    res.status(400).json({ error: err.message || 'Biometric attendance failed.' });
+    console.error('[biometric/attendance]', err.message, err.code || '');
+    biometricStep(5, 'Backend attendance failure', { code: err.code || null });
+    res.status(400).json({ error: 'Biometric attendance failed.' });
   } finally {
     conn.release();
   }

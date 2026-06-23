@@ -34,6 +34,7 @@ const { hashTemporaryPassword }              = require('./services/passwordServi
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
 const {
   auditSecurityEvent,
+  createRateLimiter,
   multerFileFilter,
   randomSafeFilename,
   rejectForbiddenFields,
@@ -43,6 +44,17 @@ const {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const API_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.API_RATE_LIMIT_MAX || 300),
+  auditAction: 'blocked_api_rate_limit_exceeded',
+});
+const AUTH_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 20),
+  keyGenerator: req => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.body?.username || req.body?.email || '').toLowerCase()}`,
+  auditAction: 'blocked_auth_rate_limit_exceeded',
+});
 const EMPLOYEE_ID_ADMIN_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
 const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'role',
@@ -169,6 +181,24 @@ const EMPLOYEE_TRAINING_ALLOWED_FIELDS = new Set(TRAINING_PII_FIELDS);
 const EMPLOYEE_SKILL_ALLOWED_FIELDS = new Set(['skill_name', 'proficiency', 'remarks']);
 const EMPLOYEE_DOCUMENT_ALLOWED_FIELDS = new Set(['docType', 'document_type']);
 const EMPLOYEE_STATUS_ALLOWED_FIELDS = new Set(['status', 'employment_status', 'separation_date', 'separation_reason', 'offboarding_remarks']);
+const FORM_DRAFT_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status', 'expiry_days', 'draft_data']);
+const FORM_DRAFT_STATUS_ALLOWED_FIELDS = new Set(['module_name', 'form_name', 'record_id', 'status']);
+const EMPLOYEE_ID_CONFIG_ALLOWED_FIELDS = new Set(['prefix', 'starting_number', 'number_padding', 'current_sequence', 'auto_generate_enabled']);
+const DEPARTMENT_SETUP_ALLOWED_FIELDS = new Set(['name']);
+const POSITION_SETUP_ALLOWED_FIELDS = new Set(['department_id', 'name']);
+const LEAVE_TYPE_ALLOWED_FIELDS = new Set([
+  'id', 'name', 'code', 'category', 'description', 'max_allowed_days', 'is_paid',
+  'is_active', 'requires_attachment', 'allow_unpaid_extension', 'max_extension_days',
+  'female_only', 'male_only', 'married_only', 'solo_parent_required',
+  'medical_certificate_required', 'legal_document_required', 'minimum_service_months',
+]);
+const LEAVE_BALANCE_ALLOWED_FIELDS = new Set(['employee_id', 'leave_type_id', 'leave_type', 'year', 'total_days', 'balance', 'used_days', 'used']);
+const LEAVE_REQUEST_ALLOWED_FIELDS = new Set(['type', 'leave_type_id', 'date_from', 'date_to', 'days', 'reason', 'employee_id', 'filing_source', 'remarks']);
+const LEAVE_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks', 'review_note', 'reason']);
+const GENERAL_REQUEST_ALLOWED_FIELDS = new Set(['type', 'request_type', 'purpose', 'details', 'reason', 'remarks']);
+const GENERAL_REQUEST_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks']);
+const PAYROLL_RUN_ALLOWED_FIELDS = new Set(['period_start', 'period_end']);
+const PAYROLL_RUN_APPROVE_ALLOWED_FIELDS = new Set(['remarks']);
 const EMPLOYEE_STRICT_PII_COLUMNS = [
   'first_name', 'middle_name', 'last_name', 'suffix',
   'email', 'contact_number', 'work_email', 'mailing_address',
@@ -353,11 +383,13 @@ app.use(express.json({
     req.rawBody = Buffer.from(buffer);
   }
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(encryptedCommunicationMiddleware);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
+app.use('/api/auth/login', AUTH_RATE_LIMIT);
+app.use('/api', API_RATE_LIMIT);
 app.use((req, res, next) => {
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -365,12 +397,18 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (req.originalUrl.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
   );
   next();
 });
+app.use('/uploads', (_req, res) => res.status(404).send('Not found'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/attendance/station', (_req, res) => {
@@ -622,6 +660,7 @@ app.get('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res
 app.post('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, FORM_DRAFT_ALLOWED_FIELDS, { module: 'FORM_DRAFT_SECURITY' })) return;
     const moduleName = String(req.body.module_name || '').trim();
     const formName = String(req.body.form_name || '').trim();
     const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
@@ -657,6 +696,7 @@ app.post('/api/form-drafts', requireAuth, requireRole(ROLES.any), async (req, re
 app.patch('/api/form-drafts/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, FORM_DRAFT_STATUS_ALLOWED_FIELDS, { module: 'FORM_DRAFT_SECURITY' })) return;
     const moduleName = String(req.body.module_name || '').trim();
     const formName = String(req.body.form_name || '').trim();
     const recordId = req.body.record_id === undefined || req.body.record_id === null || req.body.record_id === ''
@@ -1036,6 +1076,21 @@ async function rejectEmployeeUnsupportedSubresourceFields(req, res, allowedField
     targetTable: 'employees',
     targetRecord: req.params?.id || null,
     newValue: { resource, fields: unknownFields, path: req.originalUrl },
+    result: 'blocked',
+  });
+  res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
+  return true;
+}
+
+async function rejectUnsupportedRouteFields(req, res, allowedFields, { module = 'API_FIELD_VALIDATION', action = 'blocked_unsupported_route_fields' } = {}) {
+  const unknownFields = Object.keys(req.body || {}).filter(field => !allowedFields.has(field));
+  if (!unknownFields.length) return false;
+  await auditSecurityEvent(req, {
+    action,
+    module,
+    targetTable: req.originalUrl || null,
+    targetRecord: req.params?.id || req.body?.id || null,
+    newValue: { fields: unknownFields, path: req.originalUrl },
     result: 'blocked',
   });
   res.status(400).json({ error: 'Request contains unsupported field(s).', fields: unknownFields });
@@ -1658,6 +1713,7 @@ app.put('/api/employees/id-config', requireAuth, requireRole(EMPLOYEE_ID_ADMIN_R
   try {
     const pool = require('./config/db');
     await ensureEmployeeIdConfigSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, EMPLOYEE_ID_CONFIG_ALLOWED_FIELDS, { module: 'EMPLOYEE_ID_SECURITY' })) return;
 
     const prefix = sanitizeEmployeeCode(req.body.prefix || 'EMP');
     const startingNumber = Number(req.body.starting_number || 1);
@@ -1970,6 +2026,7 @@ app.get('/api/employee-setup/lookups', requireAuth, requireRole(ROLES.any), asyn
 app.post('/api/employee-setup/departments', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, DEPARTMENT_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const name = String(req.body.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Department name is required.' });
     if (name.length > 100) return res.status(400).json({ error: 'Department name is too long.' });
@@ -1993,6 +2050,7 @@ app.put('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLE
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, DEPARTMENT_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const id = Number(req.params.id);
     const name = String(req.body.name || '').trim();
     if (!id) return res.status(400).json({ error: 'Department is required.' });
@@ -2029,6 +2087,7 @@ app.post('/api/employee-setup/positions', requireAuth, requireRole([...ROLES.sta
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, POSITION_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const departmentId = Number(req.body.department_id);
     const name = String(req.body.name || '').trim();
     if (!departmentId) return res.status(400).json({ error: 'Department is required.' });
@@ -2063,6 +2122,7 @@ app.put('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
+    if (await rejectUnsupportedRouteFields(req, res, POSITION_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
     const id = Number(req.params.id);
     const departmentId = Number(req.body.department_id);
     const name = String(req.body.name || '').trim();
@@ -3823,6 +3883,7 @@ app.get('/api/leave/types', requireAuth, requireRole(ROLES.any), async (req, res
 app.post('/api/leave/types', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_TYPE_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const body = req.body || {};
     const name = String(body.name || '').trim();
     const category = body.category === 'Statutory' ? 'Statutory' : 'Company';
@@ -3961,6 +4022,7 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
 app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balance.manage'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_BALANCE_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const employeeId = parseInt(req.body.employee_id, 10);
     const leaveType = await getLeaveType(pool, { id: req.body.leave_type_id, name: req.body.leave_type, includeInactive: true });
     const year = parseInt(req.body.year, 10) || new Date().getFullYear();
@@ -4007,6 +4069,10 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
 app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attachment'), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_REQUEST_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
     const { type, leave_type_id, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
     const source = filing_source === 'Manual' ? 'Manual' : 'Portal';
 
@@ -4130,6 +4196,7 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
   const pool = require('./config/db');
   const connection = await pool.getConnection();
   try {
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_STATUS_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     await connection.beginTransaction();
     const status = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
     const remarks = req.body.remarks || null;
@@ -4292,6 +4359,7 @@ app.get('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res
 app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
     const { type, reason } = req.body;
     const empId = req.user.employeeId;
     if (!empId) return res.status(400).json({ error: 'Your account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
@@ -4307,9 +4375,14 @@ app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, re
 app.patch('/api/requests/:id/status', requireAuth, requireRole(ROLES.hr_final_approval), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_STATUS_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
+    const status = String(req.body.status || '').trim();
+    if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid request status.' });
+    }
     await pool.execute(
       `UPDATE general_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
-      [req.body.status, req.user.id, req.params.id]
+      [status, req.user.id, req.params.id]
     );
     res.json({ message: 'Request status updated.' });
   } catch (err) { res.status(500).json({ error: 'Failed to update request.' }); }
@@ -4327,6 +4400,7 @@ app.get('/api/payroll/runs', requireAuth, requireRole(ROLES.payroll_any), async 
 app.post('/api/payroll/runs', requireAuth, requireRole(['payroll_officer']), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, PAYROLL_RUN_ALLOWED_FIELDS, { module: 'PAYROLL_SECURITY' })) return;
     const { period_start, period_end } = req.body;
     const [result] = await pool.execute(
       `INSERT INTO payroll_runs (period_start,period_end,run_date,status,created_by) VALUES (?,?,CURDATE(),'Draft',?)`,
@@ -4339,9 +4413,10 @@ app.post('/api/payroll/runs', requireAuth, requireRole(['payroll_officer']), asy
 app.patch('/api/payroll/runs/:id/approve', requireAuth, requireRole(['payroll_manager']), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, PAYROLL_RUN_APPROVE_ALLOWED_FIELDS, { module: 'PAYROLL_SECURITY' })) return;
     await pool.execute(
       `UPDATE payroll_runs SET status=?, approved_by=?, approved_at=NOW() WHERE id=?`,
-      [req.body.status, req.user.id, req.params.id]
+      ['Approved', req.user.id, req.params.id]
     );
     res.json({ message: 'Payroll run updated.' });
   } catch (err) { res.status(500).json({ error: 'Failed to update payroll run.' }); }
