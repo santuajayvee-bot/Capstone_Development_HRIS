@@ -12,6 +12,13 @@ process.env.IPROG_OTP_MESSAGE = 'Your LGSV HR verification code is :otp. It is v
 
 global.fetch = async (url, options) => {
   calls.push({ url, options });
+  if (String(url).includes('/sms_messages')) {
+    const body = JSON.parse(options.body);
+    assert.strictEqual(body.phone_number, '09913845895');
+    assert.strictEqual(body.message, 'Your LGSV HR verification code is 367821.');
+    return new Response(JSON.stringify({ status: 200, message: 'SMS queued' }), { status: 200 });
+  }
+
   if (String(url).includes('/otp/send_otp')) {
     return new Response(JSON.stringify({ success: true, message: 'OTP sent' }), { status: 200 });
   }
@@ -25,7 +32,7 @@ global.fetch = async (url, options) => {
   return new Response(JSON.stringify({ success: true, message: 'OTP verified' }), { status: 200 });
 };
 
-const { sendOtp, verifyOtp } = require('../services/iprogSmsService');
+const { sendSms, sendOtp, verifyOtp } = require('../services/iprogSmsService');
 const { maskPhoneNumber, normalizePhilippineMobileNumber } = require('../utils/phoneNumberUtil');
 
 (async () => {
@@ -42,6 +49,9 @@ const { maskPhoneNumber, normalizePhilippineMobileNumber } = require('../utils/p
   assert.strictEqual(requestBody.phone_number, '09913845895');
   assert.strictEqual(requestBody.expires_in_minutes, 5);
   assert.ok(requestBody.message.includes(':otp'));
+
+  await sendSms('09913845895', 'Your LGSV HR verification code is 367821.');
+  assert.ok(String(calls[1].url).includes('/sms_messages'));
 
   const valid = await verifyOtp('09913845895', '000000');
   assert.strictEqual(valid, false);

@@ -1,5 +1,6 @@
 const SEND_OTP_URL = 'https://www.iprogsms.com/api/v1/otp/send_otp';
 const VERIFY_OTP_URL = 'https://www.iprogsms.com/api/v1/otp/verify_otp';
+const SEND_SMS_URL = 'https://www.iprogsms.com/api/v1/sms_messages';
 const REQUEST_TIMEOUT_MS = 10000;
 
 class IprogSmsError extends Error {
@@ -73,6 +74,10 @@ function assertIprogConfiguration(config) {
   if (!config.token) {
     throw new IprogSmsError('IPROG MFA is not configured.', 'IPROG_NOT_CONFIGURED');
   }
+}
+
+function assertIprogOtpConfiguration(config) {
+  assertIprogConfiguration(config);
   if (!config.message.includes(':otp')) {
     throw new IprogSmsError('IPROG OTP message is not configured.', 'IPROG_MESSAGE_INVALID');
   }
@@ -81,7 +86,7 @@ function assertIprogConfiguration(config) {
 // IPROG generates and validates the OTP. LGSV HR never logs the code or API token.
 async function sendOtp(phoneNumber) {
   const config = getIprogConfig();
-  assertIprogConfiguration(config);
+  assertIprogOtpConfiguration(config);
   await postIprog(SEND_OTP_URL, {
     api_token: config.token,
     phone_number: phoneNumber,
@@ -91,9 +96,24 @@ async function sendOtp(phoneNumber) {
   return true;
 }
 
-async function verifyOtp(phoneNumber, otp) {
+async function sendSms(phoneNumber, message) {
   const config = getIprogConfig();
   assertIprogConfiguration(config);
+  const text = String(message || '').trim();
+  if (!text) {
+    throw new IprogSmsError('IPROG SMS message is not configured.', 'IPROG_MESSAGE_INVALID');
+  }
+  await postIprog(SEND_SMS_URL, {
+    api_token: config.token,
+    phone_number: phoneNumber,
+    message: text,
+  });
+  return true;
+}
+
+async function verifyOtp(phoneNumber, otp) {
+  const config = getIprogConfig();
+  assertIprogOtpConfiguration(config);
 
   try {
     await postIprog(VERIFY_OTP_URL, {
@@ -111,6 +131,7 @@ async function verifyOtp(phoneNumber, otp) {
 module.exports = {
   IprogSmsError,
   getIprogConfig,
+  sendSms,
   sendOtp,
   verifyOtp,
 };

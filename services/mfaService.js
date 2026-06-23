@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const { createAuditLog } = require('../db/authQueries');
 const {
   getIprogConfig,
+  sendSms,
   sendOtp,
   verifyOtp,
 } = require('./iprogSmsService');
@@ -38,8 +39,10 @@ function mfaConfig() {
     provider,
     mockMode,
     mockCode: String(process.env.MFA_MOCK_CODE || '').trim(),
+    showMockCode: booleanEnv('MFA_SHOW_MOCK_CODE', false),
     codeLength: 6,
     pinValidity: iprog.expiresInMinutes * 60,
+    messageTemplate: iprog.message,
   };
 }
 
@@ -121,7 +124,11 @@ async function getEmployeePhone(employeeId) {
 
 async function sendVerification(phoneNumber, config) {
   if (config.mockMode) {
-    console.warn('[MFA] Mock mode is active; fake OTP was issued.');
+    const message = config.messageTemplate.includes(':otp')
+      ? config.messageTemplate.replace(/:otp/g, config.mockCode)
+      : `${config.messageTemplate} ${config.mockCode}`.trim();
+    await sendSms(phoneNumber, message);
+    console.warn('[MFA] Mock mode is active; fake OTP was sent by SMS.');
     return { mock: true, mockCode: config.mockCode };
   }
   await sendOtp(phoneNumber);
@@ -203,7 +210,7 @@ async function createMfaChallenge({ employeeId, req }) {
     await auditMfa(
       employeeId,
       delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-      delivery.mock ? 'MFA mock challenge created; fake OTP issued for development.' : 'IPROG OTP request accepted.',
+      delivery.mock ? 'MFA mock challenge created; fake OTP SMS request accepted.' : 'IPROG OTP request accepted.',
       req
     );
   } catch (error) {
@@ -219,7 +226,7 @@ async function createMfaChallenge({ employeeId, req }) {
     maskedPhoneNumber: maskPhoneNumber(phoneNumber),
     codeLength: config.codeLength,
     expiresIn: config.pinValidity,
-    mockCode: delivery?.mock ? delivery.mockCode : null,
+    mockCode: delivery?.mock && config.showMockCode ? delivery.mockCode : null,
   };
 }
 
@@ -351,7 +358,7 @@ async function resendMfaChallenge({ challengeId: rawChallengeId, mfaToken, req }
   await auditMfa(
     challenge.Employee_ID,
     delivery.mock ? 'MFA_MOCK_MODE_USED' : 'IPROG_OTP_SENT',
-    delivery.mock ? 'MFA mock challenge resent; fake OTP issued for development.' : 'IPROG OTP resend request accepted.',
+    delivery.mock ? 'MFA mock challenge resent; fake OTP SMS request accepted.' : 'IPROG OTP resend request accepted.',
     req
   );
 
@@ -360,7 +367,7 @@ async function resendMfaChallenge({ challengeId: rawChallengeId, mfaToken, req }
     codeLength: config.codeLength,
     expiresIn: config.pinValidity,
     resendCooldown: RESEND_COOLDOWN_SECONDS,
-    mockCode: delivery?.mock ? delivery.mockCode : null,
+    mockCode: delivery?.mock && config.showMockCode ? delivery.mockCode : null,
   };
 }
 
