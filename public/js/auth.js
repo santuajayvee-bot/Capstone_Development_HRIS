@@ -29,7 +29,7 @@ const ROLE_PERMISSIONS = {
     'dashboard', 'attendance', 'leave', 'reports', 'self-service',
   ],
   employee: [
-    'dashboard', 'requests', 'attendance', 'leave', 'payroll', 'employee-profile', 'self-service',
+    'employee-dashboard', 'requests', 'attendance', 'leave', 'employee-profile', 'self-service',
   ],
 };
 
@@ -92,7 +92,8 @@ const NAV_CONFIG = {
     { page: 'reports', icon: 'RP', label: 'Reports' },
   ],
   employee: [
-    { page: 'dashboard', icon: 'DB', label: 'My Dashboard' },
+    { page: 'employee-dashboard', tab: 'overview', icon: 'DB', label: 'My Dashboard' },
+    { page: 'employee-dashboard', tab: 'payslips', icon: 'PS', label: 'My Payslips' },
     { page: 'requests', icon: 'RQ', label: 'My Requests' },
     { page: 'attendance', icon: 'AT', label: 'My Attendance' },
   ],
@@ -169,7 +170,8 @@ function buildSidebar(user) {
   navItems.innerHTML = config.map((item, index) => `
     <div class="nav-item ${index === 0 ? 'active' : ''}"
          data-page="${item.page}"
-         onclick="navigate('${item.page}', this)">
+         data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
+         onclick="navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
       <span class="nav-icon">${item.icon}</span> ${item.label}
     </div>
   `).join('');
@@ -200,7 +202,8 @@ function buildEmployeeBottomNav(user) {
   }
 
   const items = [
-    { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
+    { page: 'employee-dashboard', tab: 'overview', icon: 'DB', label: 'Dashboard' },
+    { page: 'employee-dashboard', tab: 'payslips', icon: 'PS', label: 'Payslips' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'leave', icon: 'LV', label: 'Leave' },
     { page: 'self-service', icon: 'PF', label: 'Profile' },
@@ -210,7 +213,8 @@ function buildEmployeeBottomNav(user) {
     <button type="button"
             class="employee-bottom-nav-item ${index === 0 ? 'active' : ''}"
             data-page="${item.page}"
-            onclick="navigate('${item.page}', this)">
+            data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
+            onclick="navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
       <span>${item.icon}</span>
       <small>${item.label}</small>
     </button>
@@ -226,7 +230,9 @@ function canAccess(pageId) {
     return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(user.role);
   }
   if (pageId === 'self-service') return true;
+  if (user.role === 'employee' && pageId === 'employee-dashboard') return true;
   if (user.role === 'employee' && pageId === 'employee-profile') return true;
+  if (user.role === 'employee' && pageId === 'payroll') return false;
   if (pageId === 'requests') return user.role === 'employee';
   if (pageId === '201file') return false;
   const permissionPageMap = {
@@ -278,7 +284,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     buildSidebar(user);
-    if (typeof loadDashboard === 'function') {
+    if (user?.role === 'employee' && typeof navigate === 'function') {
+      navigate('employee-dashboard', null, { employeeTab: 'overview' });
+    } else if (typeof loadDashboard === 'function') {
       loadDashboard();
     }
     if (typeof initAttendanceRealtime === 'function') {

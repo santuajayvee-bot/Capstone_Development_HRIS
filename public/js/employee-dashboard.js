@@ -7,7 +7,8 @@
 function switchEmpTab(tabId, el) {
   document.querySelectorAll('.emp-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.emp-panel').forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
+  const tabButton = el || document.querySelector(`.emp-tab[data-tab="${tabId}"]`);
+  if (tabButton) tabButton.classList.add('active');
   const panel = document.getElementById('emp-panel-' + tabId);
   if (panel) panel.classList.add('active');
 
@@ -19,8 +20,14 @@ function switchEmpTab(tabId, el) {
 
 // ── Initialize ───────────────────────────────────────────────
 function initEmployeeDashboard() {
-  loadEmpDashboard();
+  const tab = window.ROUTE_PARAMS?.employeeTab || 'overview';
+  switchEmpTab(tab, document.querySelector(`.emp-tab[data-tab="${tab}"]`));
 }
+
+document.addEventListener('partialsLoaded', () => {
+  const page = document.getElementById('page-employee-dashboard');
+  if (page?.classList.contains('active')) initEmployeeDashboard();
+});
 
 // ── Toast ────────────────────────────────────────────────────
 function showEmpToast(message, type = 'info') {

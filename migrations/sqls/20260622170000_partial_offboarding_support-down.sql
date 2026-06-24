@@ -1,9 +1,9 @@
-ALTER TABLE employees DROP INDEX idx_employees_status_department;
+ALTER TABLE employees DROP INDEX IF EXISTS idx_employees_status_department;
 
 ALTER TABLE employees
-  DROP COLUMN offboarding_remarks,
-  DROP COLUMN separation_reason,
-  DROP COLUMN separation_date;
+  DROP COLUMN IF EXISTS offboarding_remarks,
+  DROP COLUMN IF EXISTS separation_reason,
+  DROP COLUMN IF EXISTS separation_date;
 
 UPDATE employees
    SET status = 'Inactive'

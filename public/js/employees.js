@@ -928,8 +928,8 @@ function ensureLifecycleDrawer() {
   if (drawer) return drawer;
   drawer = document.createElement('div');
   drawer.id = 'employee-lifecycle-drawer';
-  drawer.style.cssText = 'position:fixed;inset:0;display:none;z-index:12000;background:rgba(15,23,42,.62);align-items:center;justify-content:center;padding:24px;';
-  drawer.innerHTML = '<div id="employee-lifecycle-panel" style="width:min(980px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:hidden;background:#fff;color:#1b2430;border-radius:10px;box-shadow:0 24px 70px rgba(15,23,42,.34);display:flex;flex-direction:column;"></div>';
+  drawer.className = 'employee-lifecycle-drawer';
+  drawer.innerHTML = '<div id="employee-lifecycle-panel" class="employee-lifecycle-panel"></div>';
   drawer.addEventListener('click', event => {
     if (event.target === drawer) closeLifecycleDrawer();
   });
@@ -941,23 +941,23 @@ function lifecycleFormShell(title, body, submitHandler) {
   const drawer = ensureLifecycleDrawer();
   const panel = document.getElementById('employee-lifecycle-panel');
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:20px 22px 14px;border-bottom:1px solid #e2e8f0;">
+    <div class="employee-lifecycle-header">
       <div>
-        <h2 style="margin:0;font-size:20px;">${employeeSetupEscape(title)}</h2>
-        <div id="employee-lifecycle-step-label" style="margin-top:4px;color:#64748b;font-size:12px;font-weight:700;"></div>
+        <h2>${employeeSetupEscape(title)}</h2>
+        <div id="employee-lifecycle-step-label" class="employee-lifecycle-subtitle"></div>
       </div>
-      <button type="button" onclick="closeLifecycleDrawer()" style="border:0;background:#eef1f5;border-radius:6px;padding:9px 12px;cursor:pointer;">Close</button>
+      <button type="button" onclick="closeLifecycleDrawer()" class="employee-lifecycle-close">Close</button>
     </div>
-    <div id="employee-lifecycle-steps" style="display:flex;gap:8px;overflow:auto;padding:14px 22px 0;"></div>
-    <form id="employee-lifecycle-form" style="display:block;padding:14px 22px 18px;overflow:hidden;">
-      <div id="employee-lifecycle-pages" style="min-height:420px;max-height:calc(100vh - 250px);overflow:auto;">
+    <div id="employee-lifecycle-steps" class="employee-lifecycle-steps"></div>
+    <form id="employee-lifecycle-form" class="employee-lifecycle-form">
+      <div id="employee-lifecycle-pages" class="employee-lifecycle-pages">
         ${body}
       </div>
-      <div style="display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:16px;border-top:1px solid #e2e8f0;padding-top:14px;">
+      <div class="employee-lifecycle-footer">
         <button type="button" id="employee-lifecycle-prev" class="btn btn-outline">Previous</button>
-        <div id="employee-lifecycle-progress" style="color:#64748b;font-size:12px;font-weight:700;"></div>
-        <div style="display:flex;gap:10px;">
-        <button type="button" onclick="closeLifecycleDrawer()" class="btn btn-outline">Cancel</button>
+        <div id="employee-lifecycle-progress" class="employee-lifecycle-progress"></div>
+        <div class="employee-lifecycle-actions">
+          <button type="button" onclick="closeLifecycleDrawer()" class="btn btn-outline">Cancel</button>
           <button type="button" id="employee-lifecycle-next" class="btn btn-primary">Next</button>
           <button type="submit" id="employee-lifecycle-submit" class="btn btn-primary">Submit</button>
         </div>
@@ -965,16 +965,15 @@ function lifecycleFormShell(title, body, submitHandler) {
     </form>
   `;
   panel.querySelectorAll('label').forEach(label => {
-    label.style.cssText = 'display:grid;gap:5px;font-size:12px;font-weight:700;color:#566070;';
+    label.classList.add('employee-lifecycle-field');
     const control = label.querySelector('input,select,textarea');
-    if (control) control.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #cfd6e0;border-radius:6px;padding:9px;font-size:13px;color:#1b2430;background:#fff;';
-    if (control?.disabled) control.style.background = '#f3f6fa';
+    if (control?.disabled) control.classList.add('employee-lifecycle-disabled-control');
   });
   panel.querySelectorAll('fieldset').forEach(fieldset => {
-    fieldset.style.cssText = 'display:none;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px;border:1px solid #d8dee8;border-radius:8px;padding:18px;margin:0;';
+    fieldset.classList.add('employee-lifecycle-page');
   });
   panel.querySelectorAll('legend').forEach(legend => {
-    legend.style.cssText = 'padding:0 6px;font-size:12px;font-weight:800;color:#334155;text-transform:uppercase;letter-spacing:.05em;';
+    legend.classList.add('employee-lifecycle-legend');
   });
   const form = document.getElementById('employee-lifecycle-form');
   form.addEventListener('submit', submitHandler);
@@ -994,15 +993,13 @@ function setupLifecycleWizard() {
   if (!pages.length) return;
   let current = 0;
   const pageTitle = page => page.querySelector('legend')?.textContent?.trim() || 'Details';
-  steps.innerHTML = pages.map((page, index) => `<button type="button" class="employee-lifecycle-step" data-step="${index}" style="border:1px solid #d8dee8;background:#fff;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:800;color:#475569;white-space:nowrap;cursor:pointer;">${index + 1}. ${employeeSetupEscape(pageTitle(page))}</button>`).join('');
+  steps.innerHTML = pages.map((page, index) => `<button type="button" class="employee-lifecycle-step" data-step="${index}">${index + 1}. ${employeeSetupEscape(pageTitle(page))}</button>`).join('');
   const render = () => {
     pages.forEach((page, index) => {
-      page.style.display = index === current ? 'grid' : 'none';
+      page.classList.toggle('active', index === current);
     });
     steps.querySelectorAll('.employee-lifecycle-step').forEach((button, index) => {
-      button.style.background = index === current ? '#1d4ed8' : '#fff';
-      button.style.color = index === current ? '#fff' : '#475569';
-      button.style.borderColor = index === current ? '#1d4ed8' : '#d8dee8';
+      button.classList.toggle('active', index === current);
     });
     label.textContent = pageTitle(pages[current]);
     progress.textContent = `Step ${current + 1} of ${pages.length}`;
@@ -1109,24 +1106,39 @@ function openReonboardingDrawer(employeeId) {
   const departments = typeof getEmployeeDepartments === 'function' ? getEmployeeDepartments() : [];
   const departmentOptions = ['<option value="">Select department</option>'].concat(departments.map(dept => `<option value="${dept.id}" ${String(employee.department_id) === String(dept.id) ? 'selected' : ''}>${employeeSetupEscape(dept.name)}</option>`)).join('');
   lifecycleFormShell('Re-onboard Employee', `
-    ${lifecycleReadonly('Previous Employee ID', employee.employee_code)}
-    ${lifecycleReadonly('Name', fullEmployeeName(employee))}
-    ${lifecycleReadonly('Previous Position', employee.position)}
-    ${lifecycleReadonly('Previous Department', employee.department)}
-    ${lifecycleReadonly('Previous Offboarding Date', employee.separation_date)}
-    ${lifecycleReadonly('Previous Offboarding Reason', employee.separation_reason)}
-    <label><span>Rehire Date</span><input name="rehire_date" type="date" required value="${employeeTodayIsoDate()}"></label>
-    <label><span>New Position</span><input name="new_position" required value="${employeeSetupEscape(employee.position || '')}"></label>
-    <label><span>Department</span><select name="department_id">${departmentOptions}</select></label>
-    <label><span>Work Location</span><input name="work_location" value="${employeeSetupEscape(employee.work_location || '')}"></label>
-    <label><span>Employment Type</span><select name="employment_type" required><option>Full-time</option><option>Part-time</option><option>Contractual</option><option>Regular</option></select></label>
-    <label><span>Hiring Type</span><select name="hiring_type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
-    <label><span>New Supervisor</span><input name="new_supervisor" value="${employeeSetupEscape(employee.supervisor || '')}"></label>
-    <label><span>Employee Level</span><select name="employee_level"><option>Rank and File</option><option>Supervisor</option><option>Manager</option><option>Executive</option></select></label>
-    <label><span>Payroll Setup Status</span><select name="payroll_setup_status" required><option>Pending</option><option>Ready</option></select></label>
-    <label><span>Assigned System Role</span><select name="assigned_system_role" required><option value="employee">Regular Employee</option><option value="hr_manager">HR Manager</option><option value="payroll_officer">Payroll Officer</option><option value="payroll_manager">Payroll Manager</option></select></label>
-    <label><span>Force Password Reset</span><select name="force_password_reset"><option value="true">Yes</option><option value="false">No</option></select></label>
-    <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
+    <fieldset>
+      <legend>Previous Employee Information</legend>
+      ${lifecycleReadonly('Previous Employee ID', employee.employee_code)}
+      ${lifecycleReadonly('Name', fullEmployeeName(employee))}
+      ${lifecycleReadonly('Previous Position', employee.position)}
+      ${lifecycleReadonly('Previous Department', employee.department)}
+      ${lifecycleReadonly('Previous Offboarding Date', employee.separation_date)}
+      ${lifecycleReadonly('Previous Offboarding Reason', employee.separation_reason)}
+    </fieldset>
+    <fieldset>
+      <legend>Rehire Details</legend>
+      <label><span>Rehire Date</span><input name="rehire_date" type="date" required value="${employeeTodayIsoDate()}"></label>
+      <label><span>New Position</span><input name="new_position" required value="${employeeSetupEscape(employee.position || '')}"></label>
+      <label><span>Department</span><select name="department_id">${departmentOptions}</select></label>
+      <label><span>Work Location</span><input name="work_location" value="${employeeSetupEscape(employee.work_location || '')}"></label>
+      <label><span>Employment Type</span><select name="employment_type" required><option>Full-time</option><option>Part-time</option><option>Contractual</option><option>Regular</option></select></label>
+      <label><span>Hiring Type</span><select name="hiring_type"><option>Direct Hire</option><option>Agency-Hired</option></select></label>
+      <label><span>New Supervisor</span><input name="new_supervisor" value="${employeeSetupEscape(employee.supervisor || '')}"></label>
+      <label><span>Employee Level</span><select name="employee_level"><option>Rank and File</option><option>Supervisor</option><option>Manager</option><option>Executive</option></select></label>
+    </fieldset>
+    <fieldset>
+      <legend>Payroll and System Access</legend>
+      <label><span>Payroll Setup Status</span><select name="payroll_setup_status" required><option>Pending</option><option>Ready</option></select></label>
+      <label><span>Assigned System Role</span><select name="assigned_system_role" required><option value="employee">Regular Employee</option><option value="hr_manager">HR Manager</option><option value="payroll_officer">Payroll Officer</option><option value="payroll_manager">Payroll Manager</option></select></label>
+      <label><span>Force Password Reset</span><select name="force_password_reset"><option value="true">Yes</option><option value="false">No</option></select></label>
+      <label><span>Account Reactivation</span><input value="Reactivated after approval" readonly></label>
+    </fieldset>
+    <fieldset>
+      <legend>Process Tracking</legend>
+      <label><span>Processed By</span><input name="processed_by_display" value="Logged-in HR user" readonly></label>
+      <label><span>Re-onboarding Status</span><input value="Pending" readonly></label>
+      <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
+    </fieldset>
   `, async event => submitLifecycleForm(event, `/api/employees/${employeeId}/reonboard`, 'Employee re-onboarding request submitted.'));
 }
 

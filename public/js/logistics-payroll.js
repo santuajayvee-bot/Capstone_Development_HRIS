@@ -1,17 +1,12 @@
-/* Trip-based logistics payroll UI. All financial values are calculated server-side. */
+/* Trip-based logistics payroll setup UI. Delivery trip encoding/queue/summary
+   blocks are intentionally removed from the Payroll screen. */
 (function logisticsPayrollModule() {
-  const state = { truckTypes: [], locations: [], rates: [], ratesPage: 1, ratesPageSize: 10, employees: [], trips: [] };
+  const state = { truckTypes: [], locations: [], rates: [], ratesPage: 1, ratesPageSize: 10 };
 
   const money = value => `PHP ${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const today = () => new Date().toISOString().slice(0, 10);
   const currentMonth = () => new Date().toISOString().slice(0, 7);
-
-  function periodRange(month) {
-    const safeMonth = /^\d{4}-\d{2}$/.test(month || '') ? month : currentMonth();
-    const [year, monthNumber] = safeMonth.split('-').map(Number);
-    return { start: `${safeMonth}-01`, end: new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10) };
-  }
 
   async function request(url, options) {
     const response = await apiFetch(url, options);
@@ -31,21 +26,22 @@
     return window.confirm(message);
   }
 
+  function removeElementSection(id) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    const section = element.closest('details, .table-wrap, .payroll-settings-section, .logistics-trip-section');
+    (section || element).remove();
+  }
+
+  function removeDeliveryTripSections() {
+    ['delivery-trip-form', 'delivery-trips-grid', 'logistics-payroll-summary-grid'].forEach(removeElementSection);
+  }
+
   function setDefaultDates() {
-    const tripDate = document.getElementById('delivery-trip-date');
-    if (tripDate && !tripDate.value) tripDate.value = today();
-    const tripQuantity = document.getElementById('delivery-trip-output-quantity');
-    if (tripQuantity && !tripQuantity.value) tripQuantity.value = '1';
     const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');
     if (rateDate && !rateDate.value) rateDate.value = today();
     const registryPeriod = document.getElementById('swr-fxr-period');
     if (registryPeriod && !registryPeriod.value) registryPeriod.value = document.getElementById('payroll-filter-month')?.value || currentMonth();
-    const month = document.getElementById('payroll-filter-month')?.value || currentMonth();
-    const range = periodRange(month);
-    const summaryStart = document.getElementById('logistics-summary-start');
-    const summaryEnd = document.getElementById('logistics-summary-end');
-    if (summaryStart && !summaryStart.value) summaryStart.value = range.start;
-    if (summaryEnd && !summaryEnd.value) summaryEnd.value = range.end;
   }
 
   function fillSelect(id, rows, valueKey, textBuilder, placeholder) {
@@ -60,10 +56,7 @@
     const activeTrucks = state.truckTypes.filter(row => Number(row.is_active) === 1);
     const activeLocations = state.locations.filter(row => Number(row.is_active) === 1);
     fillSelect('logistics-rate-truck-type', activeTrucks, 'id', row => row.name, 'Select truck type');
-    fillSelect('delivery-trip-truck-type', activeTrucks, 'id', row => row.name, 'Select truck type');
-    fillSelect('logistics-rate-location', activeLocations, 'id', row => `${row.location_category} — ${row.name}`, 'Select location');
-    fillSelect('delivery-trip-location', activeLocations, 'id', row => `${row.location_category} — ${row.name}`, 'Select location');
-    fillSelect('delivery-trip-employee', state.employees, 'id', row => `${row.employee_code || '—'} — ${row.last_name}, ${row.first_name} (${row.position || 'No position'})`, 'Select employee');
+    fillSelect('logistics-rate-location', activeLocations, 'id', row => `${row.location_category} - ${row.name}`, 'Select location');
   }
 
   function actionButton(label, fn, id, kind = 'outline') {
@@ -84,14 +77,6 @@
     target.innerHTML = `<table><thead><tr><th>Category</th><th>Specific Location</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.locations.map(row => `
       <tr><td>${escapeHtml(row.location_category)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsLocation', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateLogisticsLocation', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="5">No logistics locations configured.</td></tr>'}</tbody></table>`;
-  }
-
-  function renderRatesLegacy() {
-    const target = document.getElementById('logistics-rates-grid');
-    if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Trip Rate</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.rates.map(row => `
-      <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} — ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}×</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateLogisticsRate', row.id) : ''}</td></tr>
-    `).join('') || '<tr><td colspan="11">No logistics rates configured.</td></tr>'}</tbody></table>`;
   }
 
   function renderRates() {
@@ -132,44 +117,24 @@
     renderRates();
   }
 
-  function tripActions(trip) {
-    if (trip.status === 'Draft') return `${actionButton('Edit', 'editDeliveryTrip', trip.id)} ${actionButton('Submit', 'submitDeliveryTrip', trip.id, 'primary')} ${actionButton('Delete', 'deleteDeliveryTrip', trip.id)}`;
-    if (trip.status === 'Submitted') return `${actionButton('Approve', 'approveDeliveryTrip', trip.id, 'primary')} ${actionButton('Reject', 'rejectDeliveryTrip', trip.id)}`;
-    return '—';
-  }
-
-  function renderTrips() {
-    const target = document.getElementById('delivery-trips-grid');
-    if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Date</th><th>Employee</th><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Qty</th><th>Plate</th><th>Computation</th><th>Trip Pay</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.trips.map(row => `
-      <tr><td>${escapeHtml(String(row.trip_date || '').slice(0, 10))}</td><td>${escapeHtml(row.employee_code || '')}<br>${escapeHtml(row.employee_name || '')}</td><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${Number(row.output_quantity || 1)}</td><td>${escapeHtml(row.plate_number || '-')}</td><td>(${money(row.base_rate)} × ${Number(row.multiplier).toFixed(2)}) + ${money(row.additional_rate)} × ${Number(row.output_quantity || 1)}</td><td>${money(row.total_trip_pay)}</td><td><span class="status-badge ${escapeHtml(String(row.status).toLowerCase().replace(/\s+/g, '-'))}">${escapeHtml(row.status)}</span></td><td class="button-row">${tripActions(row)}</td></tr>
-    `).join('') || '<tr><td colspan="12">No delivery trips found.</td></tr>'}</tbody></table>`;
-  }
-
   async function loadLogisticsPayrollModule() {
+    removeDeliveryTripSections();
     setDefaultDates();
     try {
-      const [truckTypes, locations, rates, employees, trips] = await Promise.all([
+      const [truckTypes, locations, rates] = await Promise.all([
         request('/api/payroll/logistics/truck-types?include_inactive=1'),
         request('/api/payroll/logistics/locations?include_inactive=1'),
-        request('/api/payroll/logistics/rates?include_inactive=1'),
-        request('/api/payroll/logistics/employees'),
-        request('/api/payroll/logistics/trips')
+        request('/api/payroll/logistics/rates?include_inactive=1')
       ]);
       state.truckTypes = truckTypes;
       state.locations = locations;
       state.rates = rates;
-      state.employees = employees;
-      state.trips = trips;
       populateSelectors();
       renderTruckTypes();
       renderLocations();
       renderRates();
-      renderTrips();
-      await refreshTripPreview();
-      await loadLogisticsPayrollSummary();
     } catch (error) {
-      const target = document.getElementById('delivery-trips-grid');
+      const target = document.getElementById('logistics-rates-grid') || document.getElementById('logistics-truck-types-grid');
       if (target) target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
     }
   }
@@ -211,70 +176,24 @@
         method: data.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
       form.reset();
-      document.querySelector('#logistics-rate-form [name="effective_date"]').value = today();
-      document.querySelector('#logistics-rate-form [name="additional_rate"]').value = '0';
-      document.querySelector('#logistics-rate-form [name="multiplier"]').value = '1';
+      const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');
+      const additionalRate = document.querySelector('#logistics-rate-form [name="additional_rate"]');
+      const multiplier = document.querySelector('#logistics-rate-form [name="multiplier"]');
+      if (rateDate) rateDate.value = today();
+      if (additionalRate) additionalRate.value = '0';
+      if (multiplier) multiplier.value = '1';
       await loadLogisticsPayrollModule();
       await showMessage('Logistics rate saved.');
     } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  function getTripFormPayload(status) {
-    const form = document.getElementById('delivery-trip-form');
-    const data = Object.fromEntries(new FormData(form).entries());
-    data.status = status;
-    return { form, data };
-  }
-
-  async function saveDeliveryTrip(event, status = 'Draft') {
-    if (event) event.preventDefault();
-    const { form, data } = getTripFormPayload(status);
-    try {
-      const existingTripId = Number(data.id || 0);
-      await request(existingTripId ? `/api/payroll/logistics/trips/${existingTripId}` : '/api/payroll/logistics/trips', {
-        method: existingTripId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
-      });
-      if (existingTripId && status === 'Submitted') {
-        await request(`/api/payroll/logistics/trips/${existingTripId}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      }
-      form.reset();
-      document.getElementById('delivery-trip-date').value = today();
-      const quantity = document.getElementById('delivery-trip-output-quantity');
-      if (quantity) quantity.value = '1';
-      await loadLogisticsPayrollModule();
-      await showMessage(status === 'Submitted' ? 'Delivery trip submitted for approval.' : 'Delivery trip saved as draft.');
-    } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  async function submitDeliveryTripForm() { await saveDeliveryTrip(null, 'Submitted'); }
-
-  async function refreshTripPreview() {
-    const truck = document.getElementById('delivery-trip-truck-type')?.value;
-    const location = document.getElementById('delivery-trip-location')?.value;
-    const tripType = document.getElementById('delivery-trip-type')?.value;
-    const role = document.getElementById('delivery-trip-role')?.value;
-    const tripDate = document.getElementById('delivery-trip-date')?.value;
-    const quantity = Math.max(1, Number(document.getElementById('delivery-trip-output-quantity')?.value || 1));
-    const rateLabel = document.getElementById('delivery-trip-rate-preview');
-    const payLabel = document.getElementById('delivery-trip-pay-preview');
-    if (!truck || !location || !tripType || !role || !tripDate) return;
-    try {
-      const params = new URLSearchParams({ truck_type_id: truck, location_id: location, trip_type: tripType, role, trip_date: tripDate });
-      const rate = await request(`/api/payroll/logistics/rates/preview?${params}`);
-      const unitPay = Number(rate.total_trip_pay || 0);
-      if (rateLabel) rateLabel.textContent = `(${money(rate.base_rate)} × ${Number(rate.multiplier).toFixed(2)}) + ${money(rate.additional_rate)} × ${quantity}${rate.special_rule_description ? ` — ${rate.special_rule_description}` : ''}`;
-      if (payLabel) payLabel.textContent = money(unitPay * quantity);
-    } catch (error) {
-      if (rateLabel) rateLabel.textContent = error.message;
-      if (payLabel) payLabel.textContent = money(0);
-    }
   }
 
   function editLogisticsTruckType(id) {
     const row = state.truckTypes.find(item => Number(item.id) === Number(id));
     const form = document.getElementById('logistics-truck-type-form');
     if (!row || !form) return;
-    form.elements.id.value = row.id; form.elements.name.value = row.name; form.elements.description.value = row.description || '';
+    form.elements.id.value = row.id;
+    form.elements.name.value = row.name;
+    form.elements.description.value = row.description || '';
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -282,7 +201,10 @@
     const row = state.locations.find(item => Number(item.id) === Number(id));
     const form = document.getElementById('logistics-location-form');
     if (!row || !form) return;
-    form.elements.id.value = row.id; form.elements.location_category.value = row.location_category; form.elements.name.value = row.name; form.elements.description.value = row.description || '';
+    form.elements.id.value = row.id;
+    form.elements.location_category.value = row.location_category;
+    form.elements.name.value = row.name;
+    form.elements.description.value = row.description || '';
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -290,22 +212,17 @@
     const row = state.rates.find(item => Number(item.id) === Number(id));
     const form = document.getElementById('logistics-rate-form');
     if (!row || !form) return;
-    form.elements.id.value = row.id; form.elements.truck_type_id.value = row.truck_type_id; form.elements.location_id.value = row.location_id;
-    form.elements.trip_type.value = row.trip_type; form.elements.role.value = row.role; form.elements.base_rate.value = row.base_rate;
-    form.elements.additional_rate.value = row.additional_rate; form.elements.multiplier.value = row.multiplier; form.elements.effective_date.value = String(row.effective_date).slice(0, 10);
-    form.elements.status.value = row.status; form.elements.special_rule_description.value = row.special_rule_description || '';
-    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
-  function editDeliveryTrip(id) {
-    const row = state.trips.find(item => Number(item.id) === Number(id));
-    const form = document.getElementById('delivery-trip-form');
-    if (!row || !form) return;
-    form.elements.id.value = row.id; form.elements.employee_id.value = row.employee_id; form.elements.truck_type_id.value = row.truck_type_id;
-    form.elements.location_id.value = row.location_id; form.elements.trip_date.value = String(row.trip_date).slice(0, 10); form.elements.trip_type.value = row.trip_type;
-    form.elements.role.value = row.role; form.elements.plate_number.value = row.plate_number || '';
-    if (form.elements.output_quantity) form.elements.output_quantity.value = row.output_quantity || 1;
-    refreshTripPreview();
+    form.elements.id.value = row.id;
+    form.elements.truck_type_id.value = row.truck_type_id;
+    form.elements.location_id.value = row.location_id;
+    form.elements.trip_type.value = row.trip_type;
+    form.elements.role.value = row.role;
+    form.elements.base_rate.value = row.base_rate;
+    form.elements.additional_rate.value = row.additional_rate;
+    form.elements.multiplier.value = row.multiplier;
+    form.elements.effective_date.value = String(row.effective_date).slice(0, 10);
+    form.elements.status.value = row.status;
+    form.elements.special_rule_description.value = row.special_rule_description || '';
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -313,46 +230,18 @@
     if (!(await confirmAction('Deactivate this truck type? Existing trip history remains unchanged.', 'Deactivate Truck Type'))) return;
     try { await request(`/api/payroll/logistics/truck-types/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
   }
+
   async function deactivateLogisticsLocation(id) {
     if (!(await confirmAction('Deactivate this location? Existing trip history remains unchanged.', 'Deactivate Location'))) return;
     try { await request(`/api/payroll/logistics/locations/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
   }
+
   async function deactivateLogisticsRate(id) {
     if (!(await confirmAction('Deactivate this rate? Existing trip history remains unchanged.', 'Deactivate Logistics Rate'))) return;
     try { await request(`/api/payroll/logistics/rates/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
   }
-  async function submitDeliveryTrip(id) {
-    try { await request(`/api/payroll/logistics/trips/${Number(id)}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await loadLogisticsPayrollModule(); await showMessage('Delivery trip submitted for approval.'); } catch (error) { await showMessage(error.message, 'error'); }
-  }
-  async function approveDeliveryTrip(id) {
-    if (!(await confirmAction('Approve this delivery trip for payroll?', 'Approve Delivery Trip'))) return;
-    try { await request(`/api/payroll/logistics/trips/${Number(id)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await loadLogisticsPayrollModule(); await showMessage('Delivery trip approved.'); } catch (error) { await showMessage(error.message, 'error'); }
-  }
-  async function rejectDeliveryTrip(id) {
-    const reason = window.prompt('Provide the rejection reason:');
-    if (!reason) return;
-    try { await request(`/api/payroll/logistics/trips/${Number(id)}/reject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) }); await loadLogisticsPayrollModule(); await showMessage('Delivery trip rejected.'); } catch (error) { await showMessage(error.message, 'error'); }
-  }
-  async function deleteDeliveryTrip(id) {
-    if (!(await confirmAction('Delete this Draft delivery trip?', 'Delete Delivery Trip'))) return;
-    try { await request(`/api/payroll/logistics/trips/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); await showMessage('Draft delivery trip deleted.'); } catch (error) { await showMessage(error.message, 'error'); }
-  }
 
-  async function loadLogisticsPayrollSummary() {
-    const target = document.getElementById('logistics-payroll-summary-grid');
-    if (!target) return;
-    try {
-      const startDate = document.getElementById('logistics-summary-start')?.value;
-      const endDate = document.getElementById('logistics-summary-end')?.value;
-      const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
-      const result = await request(`/api/payroll/logistics/payroll-summary?${params}`);
-      target.innerHTML = `<table><thead><tr><th>Employee</th><th>Position</th><th>Approved Trips</th><th>Total Logistics Pay</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${escapeHtml(row.employee_code || '')} — ${escapeHtml(row.employee_name)}</td><td>${escapeHtml(row.position || '-')}</td><td>${Number(row.approved_trip_count)}</td><td>${money(row.total_logistics_pay)}</td></tr>`).join('') || '<tr><td colspan="4">No approved delivery trips in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="3">Total Logistics Pay</th><th>${money(result.total_logistics_pay)}</th></tr></tfoot></table>`;
-    } catch (error) {
-      target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
-    }
-  }
-
-  function registryCell(record, role) {
+  function registryCell(record) {
     if (!record) return '<td></td><td></td><td></td><td></td>';
     return `<td>${escapeHtml(record.agency || 'Direct')}</td><td>${Number(record.no_of_days || 0)}</td><td>${escapeHtml(record.employee)}</td><td>${money(record.payroll_amount)}</td>`;
   }
@@ -362,15 +251,14 @@
     if (!target) return;
     target.innerHTML = `<div class="swr-fxr-sheet">
       <div class="swr-fxr-heading"><strong>MARULAS INDUSTRIAL CORPORATION</strong><span>SWR-FXR-SUM PAYROLL REGISTRY</span><span>PAYROLL PERIOD: ${escapeHtml(result.payroll_period || '')}</span></div>
-      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th><th rowspan="2">PARTNER INFORMATION</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer, 'Sewer')}${registryCell(row.fixer, 'Fixer')}<td>${money(row.combined_amount)}</td><td>${escapeHtml(row.partner_information || 'Sewer + Fixer (55% / 45%)')}</td></tr>`).join('') || '<tr><td colspan="11">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="3">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>GRAND TOTAL<br>${money(result.totals?.combined_payroll)}</th><th></th></tr></tfoot></table></div>
+      <div class="table-wrap"><table class="swr-fxr-table"><thead><tr><th rowspan="2">#</th><th colspan="4">SEWER</th><th colspan="4">FIXER</th><th rowspan="2">TOTAL</th><th rowspan="2">PARTNER INFORMATION</th></tr><tr><th>Agency</th><th>No. of Days</th><th>Sewer</th><th>Amount</th><th>Agency</th><th>No. of Days</th><th>Fixer</th><th>Amount</th></tr></thead><tbody>${result.rows.map(row => `<tr><td>${row.line_number}</td>${registryCell(row.sewer)}${registryCell(row.fixer)}<td>${money(row.combined_amount)}</td><td>${escapeHtml(row.partner_information || 'Sewer + Fixer (55% / 45%)')}</td></tr>`).join('') || '<tr><td colspan="11">No Sewer/Fixer production payroll entries in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="4">SEWER TOTAL</th><th>${money(result.totals?.sewer_share)}</th><th colspan="3">FIXER TOTAL</th><th>${money(result.totals?.fixer_share)}</th><th>GRAND TOTAL<br>${money(result.totals?.combined_payroll)}</th><th></th></tr></tfoot></table></div>
       <div class="swr-fxr-agency-totals"><h3>Agency Totals</h3><table><thead><tr><th>Agency</th><th>Sewer</th><th>Fixer</th><th>Total</th></tr></thead><tbody>${result.agency_totals.map(row => `<tr><td>${escapeHtml(row.agency)}</td><td>${money(row.sewer_amount)}</td><td>${money(row.fixer_amount)}</td><td>${money(row.total_amount)}</td></tr>`).join('') || '<tr><td colspan="4">No agency totals.</td></tr>'}</tbody></table></div>
     </div>`;
   }
 
   function renderSwrFxrRegistryEmpty(message) {
     const target = document.getElementById('swr-fxr-registry');
-    if (!target) return;
-    target.innerHTML = `<div class="payroll-empty-state">${escapeHtml(message)}</div>`;
+    if (target) target.innerHTML = `<div class="payroll-empty-state">${escapeHtml(message)}</div>`;
   }
 
   async function prepareSwrFxrRegistry() {
@@ -439,8 +327,6 @@
   function printSwrFxrRegistry() {
     const sheet = document.querySelector('#swr-fxr-registry .swr-fxr-sheet');
     if (!sheet) return showMessage('Generate the registry first.', 'error');
-    // Open synchronously from the user click. `noopener,noreferrer` makes some
-    // browsers return null even when the popup opened, which looked like a block.
     const printWindow = window.open('', '_blank');
     if (!printWindow) return showMessage('Your browser blocked the print window.', 'error');
     try {
@@ -458,19 +344,9 @@
     }
   }
 
-  function bindTripPreview() {
-    ['delivery-trip-truck-type', 'delivery-trip-location', 'delivery-trip-date', 'delivery-trip-type', 'delivery-trip-role', 'delivery-trip-output-quantity'].forEach(id => {
-      const element = document.getElementById(id);
-      if (element && !element.dataset.logisticsBound) {
-        element.addEventListener(id === 'delivery-trip-output-quantity' ? 'input' : 'change', refreshTripPreview);
-        element.dataset.logisticsBound = '1';
-      }
-    });
-  }
-
   function initialize() {
+    removeDeliveryTripSections();
     setDefaultDates();
-    bindTripPreview();
   }
 
   document.addEventListener('partialsLoaded', initialize);
@@ -478,10 +354,8 @@
 
   Object.assign(window, {
     loadLogisticsPayrollModule, saveLogisticsTruckType, saveLogisticsLocation, saveLogisticsRate,
-    saveDeliveryTrip, submitDeliveryTripForm, refreshTripPreview, editLogisticsTruckType, editLogisticsLocation,
-    editLogisticsRate, editDeliveryTrip, deactivateLogisticsTruckType, deactivateLogisticsLocation,
-    deactivateLogisticsRate, submitDeliveryTrip, approveDeliveryTrip, rejectDeliveryTrip, deleteDeliveryTrip,
-    loadLogisticsPayrollSummary, prepareSwrFxrRegistry, generateSwrFxrRegistry, changeLogisticsRatesPage,
-    loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
+    editLogisticsTruckType, editLogisticsLocation, editLogisticsRate, deactivateLogisticsTruckType,
+    deactivateLogisticsLocation, deactivateLogisticsRate, prepareSwrFxrRegistry, generateSwrFxrRegistry,
+    changeLogisticsRatesPage, loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
   });
 })();

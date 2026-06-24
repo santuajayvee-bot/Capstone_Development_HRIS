@@ -98,6 +98,71 @@
 #page-attendance .table-wrap table th { color:#b9c7ee; }
 #att-records .table-wrap { overflow:visible; }
 #att-records table { position:relative; }
+#att-records .att-records-table-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+#att-records-table {
+  table-layout: fixed;
+  min-width: 1180px;
+}
+#att-records-table th,
+#att-records-table td {
+  vertical-align: middle;
+}
+#att-records-table th:nth-child(1),
+#att-records-table td:nth-child(1) { width: 44px; }
+#att-records-table th:nth-child(2),
+#att-records-table td:nth-child(2) { width: 170px; }
+#att-records-table th:nth-child(3),
+#att-records-table td:nth-child(3) { width: 150px; }
+#att-records-table th:nth-child(4),
+#att-records-table td:nth-child(4) { width: 118px; }
+#att-records-table th:nth-child(5),
+#att-records-table td:nth-child(5) { width: 150px; }
+#att-records-table th:nth-child(6),
+#att-records-table td:nth-child(6) { width: 90px; }
+#att-records-table th:nth-child(7),
+#att-records-table td:nth-child(7) { width: 280px; }
+#att-records-table th:nth-child(8),
+#att-records-table td:nth-child(8) { width: 140px; }
+#att-records-table th:nth-child(9),
+#att-records-table td:nth-child(9) { width: 110px; }
+#att-records-table th:nth-child(10),
+#att-records-table td:nth-child(10) { width: 100px; }
+#att-records .att-records-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+}
+#att-records .att-records-pagination-summary,
+#att-records .att-records-pagination-page {
+  min-width: max-content;
+  color: var(--muted);
+}
+#att-records .att-records-pagination-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+#att-records .att-records-pagination-actions .btn {
+  min-width: 72px;
+  white-space: nowrap;
+}
 #att-records .att-summary-cell {
   min-width: 230px;
   white-space: normal;
@@ -320,6 +385,28 @@
   .att-overview-row { padding:14px; }
   #att-records .att-summary-cell {
     min-width: 240px;
+  }
+  #att-records .att-records-pagination {
+    align-items: stretch;
+    padding: 10px;
+  }
+  #att-records .att-records-pagination-summary {
+    width: 100%;
+    text-align: center;
+  }
+  #att-records .att-records-pagination-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  #att-records .att-records-pagination-page {
+    grid-column: 1 / -1;
+    order: -1;
+    text-align: center;
+  }
+  #att-records .att-records-pagination-actions .btn {
+    min-width: 0;
+    width: 100%;
   }
   .att-detail-grid, .att-metric-grid { grid-template-columns:1fr; }
   .att-detail-grid > div, .att-metric, .att-detail-grid > div:nth-child(2n), .att-metric:nth-child(2n) { border-right:0; border-bottom:1px solid var(--border); }

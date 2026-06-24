@@ -164,6 +164,194 @@
   opacity: 1;
 }
 
+.employee-lifecycle-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .62);
+}
+
+.employee-lifecycle-panel {
+  width: min(980px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  color: #1b2430;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, .34);
+}
+
+.employee-lifecycle-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.employee-lifecycle-header h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.employee-lifecycle-subtitle,
+.employee-lifecycle-progress {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.employee-lifecycle-subtitle {
+  margin-top: 4px;
+}
+
+.employee-lifecycle-close {
+  border: 0;
+  background: #eef1f5;
+  border-radius: 6px;
+  padding: 9px 12px;
+  color: #111827;
+  cursor: pointer;
+}
+
+.employee-lifecycle-close:hover {
+  background: #e2e8f0;
+}
+
+.employee-lifecycle-steps {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 14px 22px 0;
+}
+
+.employee-lifecycle-step {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  border-radius: 2px;
+  padding: 8px 12px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.employee-lifecycle-step:hover {
+  border-color: #0f766e;
+  color: #0f766e;
+}
+
+.employee-lifecycle-step.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+
+.employee-lifecycle-form {
+  display: block;
+  padding: 14px 22px 18px;
+  overflow: hidden;
+}
+
+.employee-lifecycle-pages {
+  min-height: 420px;
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.employee-lifecycle-page {
+  display: none;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+}
+
+.employee-lifecycle-page.active {
+  display: grid;
+}
+
+.employee-lifecycle-legend {
+  padding: 0 6px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.employee-lifecycle-field {
+  display: grid;
+  gap: 5px;
+  color: #566070;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.employee-lifecycle-field input,
+.employee-lifecycle-field select,
+.employee-lifecycle-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cfd6e0;
+  border-radius: 2px;
+  padding: 9px;
+  background: #fff;
+  color: #1b2430;
+  font-size: 13px;
+}
+
+.employee-lifecycle-field input:focus,
+.employee-lifecycle-field select:focus,
+.employee-lifecycle-field textarea:focus {
+  outline: 2px solid rgba(15, 118, 110, .18);
+  border-color: #0f766e;
+}
+
+.employee-lifecycle-field input[readonly],
+.employee-lifecycle-disabled-control {
+  background: #f8fafc;
+}
+
+.employee-lifecycle-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.employee-lifecycle-actions {
+  display: flex;
+  gap: 10px;
+}
+
+#employee-lifecycle-panel .btn-primary {
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+#employee-lifecycle-panel .btn-primary:hover {
+  background: #115e59;
+  border-color: #115e59;
+}
+
 @media (max-width: 760px) {
   #employee-lifecycle-drawer {
     padding: 10px !important;
@@ -176,6 +364,21 @@
 
   #employee-lifecycle-form fieldset {
     grid-template-columns: 1fr !important;
+  }
+
+  .employee-lifecycle-header,
+  .employee-lifecycle-footer {
+    align-items: stretch;
+  }
+
+  .employee-lifecycle-header,
+  .employee-lifecycle-footer,
+  .employee-lifecycle-actions {
+    flex-direction: column;
+  }
+
+  .employee-lifecycle-progress {
+    text-align: center;
   }
 }
 

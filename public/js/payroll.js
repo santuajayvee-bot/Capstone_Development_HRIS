@@ -8,12 +8,16 @@ let payrollRecordsPage = 1;
 const PAYROLL_RECORDS_PAGE_SIZE = 10;
 let currentSalaryCalculationRecords = [];
 let salaryCalculationPage = 1;
+let payrollRecordWorkflowFilter = 'all';
 const SALARY_CALCULATION_PAGE_SIZE = 10;
 let payrollReportPage = 1;
 let selectedPayrollReport = null;
 let offboardingClearanceRows = [];
 let finalPayApprovalRows = [];
 let weeklyPayrollEmployees = [];
+let weeklyPayrollRegistryPayload = null;
+let weeklyPayrollRegistryPage = 1;
+const WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE = 10;
 let pieceRateConfig = {
   sew_types: [],
   size_ranges: [],
@@ -43,6 +47,49 @@ function payrollEscape(value) {
     "'": '&#39;'
   }[char]));
 }
+
+function payrollActionDotsIcon() {
+  if (typeof window.renderActionDotsIcon === 'function') return window.renderActionDotsIcon();
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="action-dots-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+  </svg>`;
+}
+
+function closePayrollActionMenus() {
+  document.querySelectorAll('.payroll-action-dropdown.open').forEach(menu => {
+    menu.classList.remove('open');
+    menu.style.top = '';
+    menu.style.left = '';
+    menu.style.right = '';
+  });
+  document.querySelectorAll('.payroll-action-trigger.active').forEach(button => {
+    button.classList.remove('active');
+  });
+}
+
+function togglePayrollActionMenu(event, recordId) {
+  event.stopPropagation();
+  const menu = document.getElementById(`payroll-action-menu-${recordId}`);
+  const trigger = event.currentTarget;
+  const isOpen = menu?.classList.contains('open');
+  closePayrollActionMenus();
+  if (!menu || isOpen) return;
+
+  const rect = trigger.getBoundingClientRect();
+  menu.classList.add('open');
+  const menuHeight = menu.offsetHeight;
+  const menuWidth = menu.offsetWidth;
+  const preferredTop = rect.bottom + 8;
+  const top = preferredTop + menuHeight > window.innerHeight
+    ? Math.max(12, rect.top - menuHeight - 8)
+    : preferredTop;
+  menu.style.top = `${top}px`;
+  menu.style.left = `${Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12))}px`;
+  menu.style.right = 'auto';
+  trigger.classList.add('active');
+}
+
+document.addEventListener('click', closePayrollActionMenus);
 
 async function viewPayslipDetails(employeeId, employeeName, monthYear) {
   try {
@@ -581,6 +628,7 @@ function renderWeeklyPayrollRegistry(payload = {}) {
   const target = document.getElementById('weekly-payroll-registry');
   if (!target) return;
   const rows = payload.rows || payload.registry || [];
+  weeklyPayrollRegistryPayload = { ...payload, rows };
   if (!rows.length) {
     const skipped = Array.isArray(payload.skipped) ? payload.skipped : [];
     target.innerHTML = skipped.length
@@ -621,9 +669,14 @@ function renderWeeklyPayrollRegistry(payload = {}) {
     deductions: rows.reduce((sum, row) => sum + Number(row.deductions || 0), 0),
     net_pay: rows.reduce((sum, row) => sum + Number(row.net_pay || 0), 0)
   };
+  const totalPages = Math.max(1, Math.ceil(rows.length / WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE));
+  weeklyPayrollRegistryPage = Math.min(Math.max(weeklyPayrollRegistryPage, 1), totalPages);
+  const startIndex = (weeklyPayrollRegistryPage - 1) * WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE;
+  const endIndex = Math.min(startIndex + WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE, rows.length);
+  const visibleRows = rows.slice(startIndex, endIndex);
   target.innerHTML = `
     <div class="table-wrap">
-      <table class="payroll-erp-table weekly-payroll-table">
+      <table class="payroll-erp-table weekly-payroll-table" data-no-pagination="1">
         <thead>
           <tr>
             <th>Employee</th>
@@ -639,10 +692,11 @@ function renderWeeklyPayrollRegistry(payload = {}) {
             <th class="text-right">Net Pay</th>
             <th>Status</th>
             <th>Processed By</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
-          ${rows.map(row => `
+          ${visibleRows.map(row => `
             <tr>
               <td>${payrollEscape(row.employee_name || '-')}<br><span class="muted-small">${payrollEscape(row.employee_code || '')}</span></td>
               <td>${payrollEscape(row.pay_type || '-')}</td>
@@ -653,10 +707,15 @@ function renderWeeklyPayrollRegistry(payload = {}) {
               <td>${Number(row.approved_logistics_trips || 0).toLocaleString()}</td>
               <td class="text-right">${money(row.gross_pay)}</td>
               <td class="text-right">${money(row.allowances)}</td>
-              <td class="text-right">${money(row.deductions)}</td>
+              <td class="text-right">
+                <span>${money(row.deductions)}</span>
+                <span class="payroll-deduction-detail">Government: ${money(row.statutory_deductions || 0)}</span>
+                ${Number(row.attendance_deductions || 0) > 0 ? `<span class="payroll-deduction-detail">Late / UT: ${money(row.attendance_deductions)}</span>` : ''}
+              </td>
               <td class="text-right payroll-net">${money(row.net_pay)}</td>
               <td>${payrollBadge(row.payroll_status || 'Pending')}</td>
               <td>${payrollEscape(row.processed_by || '-')}<br><span class="muted-small">${row.date_processed ? new Date(row.date_processed).toLocaleString() : ''}</span></td>
+              <td>${row.salary_calculation_id ? `<button class="btn btn-outline btn-sm" type="button" onclick="reviewPayrollCalculation(${Number(row.salary_calculation_id)})">Review</button>` : '-'}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -667,12 +726,31 @@ function renderWeeklyPayrollRegistry(payload = {}) {
             <th class="text-right">${money(totals.allowances)}</th>
             <th class="text-right">${money(totals.deductions)}</th>
             <th class="text-right">${money(totals.net_pay)}</th>
-            <th colspan="2"></th>
+            <th colspan="3"></th>
           </tr>
         </tfoot>
       </table>
     </div>
+    <div class="table-pagination weekly-payroll-pagination">
+      <span>Showing ${startIndex + 1}-${endIndex} of ${rows.length}</span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" onclick="changeWeeklyPayrollRegistryPage(-1)" ${weeklyPayrollRegistryPage <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${weeklyPayrollRegistryPage} of ${totalPages}</span>
+        <button class="btn btn-outline btn-sm" type="button" onclick="changeWeeklyPayrollRegistryPage(1)" ${weeklyPayrollRegistryPage >= totalPages ? 'disabled' : ''}>Next</button>
+      </div>
+    </div>
   `;
+}
+
+function changeWeeklyPayrollRegistryPage(direction) {
+  if (!weeklyPayrollRegistryPayload) return;
+  const rows = weeklyPayrollRegistryPayload.rows || [];
+  const totalPages = Math.max(1, Math.ceil(rows.length / WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE));
+  weeklyPayrollRegistryPage = Math.min(
+    Math.max(weeklyPayrollRegistryPage + Number(direction || 0), 1),
+    totalPages
+  );
+  renderWeeklyPayrollRegistry(weeklyPayrollRegistryPayload);
 }
 
 async function loadWeeklyPayrollRegistry() {
@@ -690,6 +768,7 @@ async function loadWeeklyPayrollRegistry() {
   if (payType) params.set('pay_type', payType);
   if (employeeId) params.set('employee_id', employeeId);
   try {
+    weeklyPayrollRegistryPage = 1;
     const response = await apiFetch(`/api/payroll/registry?${params.toString()}`);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to load weekly payroll registry.');
@@ -700,15 +779,108 @@ async function loadWeeklyPayrollRegistry() {
   }
 }
 
-async function generateWeeklyPayroll(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const status = document.getElementById('weekly-payroll-result');
+function weeklyPayrollFormPayload(form) {
   const data = Object.fromEntries(new FormData(form).entries());
   if (!data.employee_id) delete data.employee_id;
   data.weekly = true;
   data.month_year = payrollWeekKeyFromDates(data.start_date, data.end_date);
-  if (status) status.textContent = 'Generating weekly payroll...';
+  return data;
+}
+
+function closePayrollGeneratePreviewModal() {
+  document.getElementById('payroll-generate-preview-modal')?.remove();
+}
+
+function showPayrollGeneratePreviewModal(preview, payload) {
+  closePayrollGeneratePreviewModal();
+  const rows = preview.rows || [];
+  const skipped = preview.skipped || [];
+  const modal = document.createElement('div');
+  modal.id = 'payroll-generate-preview-modal';
+  modal.className = 'modal-overlay';
+  modal.style.display = 'flex';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.innerHTML = `
+    <div class="modal-content payroll-preview-modal" style="width:min(1040px,94vw);max-height:86vh;overflow:auto;padding:0;border-radius:8px;">
+      <div class="modal-header" style="padding:18px 22px;border-bottom:1px solid var(--border);">
+        <div>
+          <h2 style="margin:0;font-size:18px;font-weight:500;">Preview Payroll Generation</h2>
+          <p class="muted-small" style="margin:4px 0 0;">Review this batch before creating payroll records.</p>
+        </div>
+        <button class="modal-close btn btn-outline" type="button" onclick="closePayrollGeneratePreviewModal()">×</button>
+      </div>
+      <div style="padding:18px 22px;">
+        <div class="payroll-preview-summary">
+          <div><span>Total Employees</span><strong>${Number(preview.totalEmployees || 0)}</strong></div>
+          <div><span>Will Generate</span><strong>${Number(preview.employeesProcessable || rows.length)}</strong></div>
+          <div><span>Skipped</span><strong>${Number(preview.skippedCount || skipped.length)}</strong></div>
+          <div><span>Net Payroll</span><strong>${money(preview.totals?.net_pay || 0)}</strong></div>
+        </div>
+        <div class="payroll-preview-warning">
+          Confirming will create payroll records, apply configured deductions, and mark included source records as consumed for this payroll period.
+        </div>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table class="payroll-erp-table" data-no-pagination="1">
+            <thead>
+              <tr><th>Employee</th><th>Type</th><th class="text-right">Gross</th><th class="text-right">Government</th><th class="text-right">Late / UT</th><th class="text-right">Net</th></tr>
+            </thead>
+            <tbody>
+              ${rows.slice(0, 8).map(row => `
+                <tr>
+                  <td>${payrollEscape(row.employee_name || '-')}<br><span class="muted-small">${payrollEscape(row.employee_code || '')}</span></td>
+                  <td>${payrollEscape(row.pay_type || '-')}</td>
+                  <td class="text-right">${money(row.gross_pay)}</td>
+                  <td class="text-right">${money(row.statutory_deductions || 0)}</td>
+                  <td class="text-right">${money(row.attendance_deductions || 0)}</td>
+                  <td class="text-right">${money(row.net_pay)}</td>
+                </tr>
+              `).join('') || '<tr><td colspan="6" class="text-center">No processable employees.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        ${rows.length > 8 ? `<p class="muted-small" style="margin-top:10px;">Showing first 8 of ${rows.length} processable employee(s). The full preview is shown in the register below.</p>` : ''}
+        ${skipped.length ? `
+          <details class="payroll-preview-skipped">
+            <summary>${skipped.length} skipped employee(s)</summary>
+            <ul>
+              ${skipped.slice(0, 10).map(row => `<li><strong>${payrollEscape(row.employee_name || row.employee_code || '-')}</strong>: ${payrollEscape(row.reason || 'Skipped')}</li>`).join('')}
+            </ul>
+          </details>
+        ` : ''}
+      </div>
+      <div class="modal-footer" style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;">
+        <button class="btn btn-outline" type="button" onclick="closePayrollGeneratePreviewModal()">Cancel</button>
+        <button class="btn btn-primary" id="payroll-preview-confirm-btn" type="button" ${rows.length ? '' : 'disabled'} onclick='confirmWeeklyPayrollGeneration(${JSON.stringify(payload).replace(/'/g, '&#39;')})'>Confirm Generate Payroll</button>
+      </div>
+    </div>
+  `;
+  modal.addEventListener('click', event => {
+    if (event.target === modal) closePayrollGeneratePreviewModal();
+  });
+  document.body.appendChild(modal);
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(modal);
+}
+
+async function performWeeklyPayrollGeneration(data) {
+  const status = document.getElementById('weekly-payroll-result');
+  const form = document.getElementById('weekly-payroll-form');
+  const submitButton = form?.querySelector('button[type="submit"]');
+  const confirmButton = document.getElementById('payroll-preview-confirm-btn');
+  if (submitButton?.disabled) return;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Generating...';
+  }
+  if (confirmButton) {
+    confirmButton.disabled = true;
+    confirmButton.textContent = 'Generating...';
+  }
+  if (status) {
+    status.textContent = data.department_id
+      ? 'Processing employees in the selected department...'
+      : 'Processing all active employees. This may take longer...';
+  }
   try {
     const response = await apiFetch('/api/payroll/generate', {
       method: 'POST',
@@ -718,12 +890,62 @@ async function generateWeeklyPayroll(event) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || result.message || 'Failed to generate weekly payroll.');
     if (status) status.textContent = result.message || 'Weekly payroll generated.';
+    closePayrollGeneratePreviewModal();
+    weeklyPayrollRegistryPage = 1;
     renderWeeklyPayrollRegistry(result);
     await loadPayrollDashboard(document.getElementById('payroll-filter-month')?.value || null);
     await loadSalaryCalculations();
   } catch (error) {
     if (status) status.textContent = error.message;
     if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Preview Payroll';
+    }
+    if (confirmButton) {
+      confirmButton.disabled = false;
+      confirmButton.textContent = 'Confirm Generate Payroll';
+    }
+  }
+}
+
+async function confirmWeeklyPayrollGeneration(data) {
+  return performWeeklyPayrollGeneration(data);
+}
+
+async function generateWeeklyPayroll(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('weekly-payroll-result');
+  const submitButton = form.querySelector('button[type="submit"]');
+  const data = weeklyPayrollFormPayload(form);
+  if (submitButton?.disabled) return;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Preparing Preview...';
+  }
+  if (status) status.textContent = 'Checking source records and calculating a preview...';
+  try {
+    const response = await apiFetch('/api/payroll/generate/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const preview = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(preview.error || preview.message || 'Failed to preview payroll.');
+    weeklyPayrollRegistryPage = 1;
+    renderWeeklyPayrollRegistry(preview);
+    if (status) status.textContent = preview.message || 'Preview ready. Confirm to generate payroll records.';
+    showPayrollGeneratePreviewModal(preview, data);
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Preview Error', 'error');
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Preview Payroll';
+    }
   }
 }
 
@@ -767,16 +989,31 @@ function renderSalaryCalculations(records) {
   const grid = document.getElementById('salary-calculations-grid');
   if (!grid) return;
 
-  const totalPages = Math.max(1, Math.ceil(records.length / SALARY_CALCULATION_PAGE_SIZE));
+  const classifiedRecords = records.map(record => ({
+    record,
+    workflow: payrollRecordWorkflowGroup(record)
+  }));
+  const workflowCounts = classifiedRecords.reduce((counts, item) => {
+    counts[item.workflow] = (counts[item.workflow] || 0) + 1;
+    return counts;
+  }, { source: 0, review: 0, finalized: 0 });
+  updatePayrollRecordWorkflowOptions(records.length, workflowCounts);
+  const filteredRecords = payrollRecordWorkflowFilter === 'all'
+    ? records
+    : classifiedRecords
+      .filter(item => item.workflow === payrollRecordWorkflowFilter)
+      .map(item => item.record);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / SALARY_CALCULATION_PAGE_SIZE));
   salaryCalculationPage = Math.min(Math.max(salaryCalculationPage, 1), totalPages);
   const startIndex = (salaryCalculationPage - 1) * SALARY_CALCULATION_PAGE_SIZE;
-  const pageRecords = records.slice(startIndex, startIndex + SALARY_CALCULATION_PAGE_SIZE);
+  const pageRecords = filteredRecords.slice(startIndex, startIndex + SALARY_CALCULATION_PAGE_SIZE);
 
-  if (records.length === 0) {
+  if (filteredRecords.length === 0) {
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
         <div style="font-size: 14px; color: var(--muted);">
-          No salary calculation records found.
+          No records found for this status.
         </div>
       </div>
     `;
@@ -802,7 +1039,14 @@ function renderSalaryCalculations(records) {
       </thead>
       <tbody>
         ${pageRecords.map(r => {
-          const calcDate = r.payroll_period || new Date(r.calculation_date).toLocaleDateString('en-US', {
+          const sourceDateLabel = r.source_date_from
+            ? r.source_date_from === r.source_date_to
+              ? new Date(`${r.source_date_from}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+              : `${new Date(`${r.source_date_from}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(`${r.source_date_to}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+            : '';
+          const calcDate = Number(r.payroll_run_id || 0) > 0
+            ? r.payroll_period
+            : sourceDateLabel || new Date(r.calculation_date).toLocaleDateString('en-US', {
             year: 'numeric', month: 'short', day: 'numeric' 
           });
           
@@ -812,10 +1056,10 @@ function renderSalaryCalculations(records) {
             calcDetails = `${r.hours_worked} hrs`;
           } else if (r.wage_type === 'Daily' && r.days_worked > 0) {
             calcDetails = `${r.days_worked} days`;
-          } else if (r.wage_type === 'Per-Piece' && r.quantity > 0) {
-            calcDetails = `${r.quantity} pieces`;
-          } else if (r.wage_type === 'Per-Trip' && r.quantity > 0) {
-            calcDetails = `${r.quantity} trips`;
+          } else if (r.wage_type === 'Per-Piece' && (Number(r.quantity) > 0 || Number(r.source_output_quantity) > 0)) {
+            calcDetails = `${Number(r.quantity || r.source_output_quantity).toLocaleString('en-US')} pieces`;
+          } else if (r.wage_type === 'Per-Trip' && (Number(r.quantity) > 0 || Number(r.source_output_quantity) > 0)) {
+            calcDetails = `${Number(r.quantity || r.source_output_quantity).toLocaleString('en-US')} trips`;
           } else {
             calcDetails = 'Fixed amount';
           }
@@ -832,15 +1076,55 @@ function renderSalaryCalculations(records) {
           const recordJson = JSON.stringify(r).replace(/"/g, '&quot;');
           const normalizedStatus = String(r.status || 'Draft').trim();
           const normalizedStatusKey = normalizedStatus.toLowerCase();
-          const draftAction = normalizedStatusKey === 'draft'
-            ? `<button class="btn btn-primary btn-sm" onclick="continueSalaryDraft(${recordJson})">Continue</button>`
+          const isGeneratedPayroll = Number(r.payroll_run_id || 0) > 0;
+          const isFinalizedRecord = ['approved', 'finalized', 'released', 'locked', 'paid'].includes(normalizedStatusKey);
+          const hasPayrollAmounts = isGeneratedPayroll || isFinalizedRecord;
+          const displayDeductions = hasPayrollAmounts ? Number(r.total_deductions || 0) : 0;
+          const displayNetPay = hasPayrollAmounts ? Number(r.net_pay || 0) : Number(r.gross_pay || 0);
+          const displayStatus = hasPayrollAmounts
+            ? normalizedStatus
+            : r.source_workflow_status
+              ? r.source_workflow_status
+            : normalizedStatusKey === 'for approval'
+              ? 'Source Ready'
+              : normalizedStatusKey === 'for review'
+                ? 'Source Review'
+                : normalizedStatus;
+          const canReviewRecalculate = isGeneratedPayroll && ['draft', 'calculated', 'for review'].includes(normalizedStatusKey);
+          const draftAction = !isGeneratedPayroll && normalizedStatusKey === 'draft'
+            ? `<button class="payroll-menu-item" type="button" onclick="continueSalaryDraft(${recordJson})">Continue Draft</button>`
             : '';
-          const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
-            ? `<button class="btn btn-primary btn-sm" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
+          const recalcAction = canReviewRecalculate
+            ? `<button class="payroll-menu-item" type="button" onclick="recalculateSalaryCalculation(${Number(r.id)})">Recalculate</button>`
             : '';
-          const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
-            ? `<button class="btn btn-primary btn-sm" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Record on Blockchain</button>`
+          const submitAction = canReviewRecalculate && canSubmitSalaryCalculations()
+            ? `<button class="payroll-menu-item primary" type="button" onclick="submitSalaryCalculationForApproval(${Number(r.id)})">Submit Payroll to Manager</button>`
             : '';
+          const approvalAction = isGeneratedPayroll && ['submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+            ? `<button class="payroll-menu-item primary" type="button" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
+            : '';
+          const blockchainRecordAction = ['approved', 'finalized'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+            ? `<button class="payroll-menu-item primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Load to Blockchain</button>`
+            : '';
+          const releaseAction = hasPayrollAmounts && normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
+            ? `<button class="payroll-menu-item" type="button" onclick="releaseSalaryCalculation(${Number(r.id)})">Release Payslip</button>`
+            : '';
+          const lockAction = hasPayrollAmounts && ['approved', 'released'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+            ? `<button class="payroll-menu-item" type="button" onclick="lockSalaryCalculation(${Number(r.id)})">Lock Record</button>`
+            : '';
+          const actionItems = [
+            draftAction,
+            recalcAction,
+            submitAction,
+            approvalAction,
+            releaseAction,
+            lockAction,
+            blockchainRecordAction,
+            `<button class="payroll-menu-item" type="button" onclick="showCalculationBreakdown(${recordJson})">View Details</button>`
+          ].filter(Boolean).join('');
+          const generationNote = hasPayrollAmounts
+            ? ''
+            : '<span class="muted-small">Generate payroll to apply deductions.</span>';
           return `
             <tr>
               <td>CALC-${String(r.id).padStart(5, '0')}</td>
@@ -849,27 +1133,58 @@ function renderSalaryCalculations(records) {
               <td>${r.department || '-'}</td>
               <td>${r.wage_type || '-'}</td>
               <td>${calcDetails}</td>
-              <td class="text-right">${money(r.gross_pay)}</td>
-              <td class="text-right">${money(r.total_deductions)}</td>
-              <td class="text-right payroll-net">${money(r.net_pay)}</td>
-              <td>${payrollBadge(normalizedStatus)}</td>
-              <td>
-                ${draftAction}
-                ${approvalAction}
-                ${blockchainRecordAction}
-                <button class="btn btn-outline btn-sm" onclick="showCalculationBreakdown(${recordJson})">View</button>
+              <td class="text-right">${money(hasPayrollAmounts ? r.gross_pay : (Number(r.gross_pay) || Number(r.source_output_amount)))}</td>
+              <td class="text-right">${hasPayrollAmounts ? money(displayDeductions) : 'Deferred'}</td>
+              <td class="text-right payroll-net">${money(hasPayrollAmounts ? displayNetPay : (displayNetPay || Number(r.source_output_amount)))}</td>
+              <td>${payrollBadge(displayStatus)}${generationNote}</td>
+              <td class="payroll-record-action-cell" onclick="event.stopPropagation();">
+                <div class="payroll-action-menu">
+                  <button class="payroll-action-trigger action-dots-button" type="button" title="Payroll actions" aria-label="Payroll actions" onclick="togglePayrollActionMenu(event, ${Number(r.id)})">${payrollActionDotsIcon()}</button>
+                  <div class="payroll-action-dropdown" id="payroll-action-menu-${Number(r.id)}">
+                    ${actionItems}
+                  </div>
+                </div>
               </td>
             </tr>
           `;
         }).join('')}
       </tbody>
     </table>
-    ${renderSalaryCalculationPagination(records.length, startIndex, totalPages)}
+    ${renderSalaryCalculationPagination(filteredRecords.length, startIndex, totalPages)}
   `;
 
   grid.innerHTML = table;
   bindSalaryCalculationPagination(grid);
   if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(grid);
+}
+
+function payrollRecordWorkflowGroup(record = {}) {
+  const status = String(record.status || 'Draft').trim().toLowerCase();
+  if (['approved', 'finalized', 'released', 'locked', 'paid'].includes(status)) return 'finalized';
+  if (Number(record.payroll_run_id || 0) > 0) return 'review';
+  return 'source';
+}
+
+function updatePayrollRecordWorkflowOptions(total, counts) {
+  const select = document.getElementById('payroll-record-workflow-filter');
+  if (!select) return;
+  const labels = {
+    all: `All Records (${total})`,
+    source: `Source Ready (${counts.source || 0})`,
+    review: `For Review / Approval (${counts.review || 0})`,
+    finalized: `Finalized / Released (${counts.finalized || 0})`
+  };
+  [...select.options].forEach(option => {
+    option.textContent = labels[option.value] || option.textContent;
+  });
+  select.value = payrollRecordWorkflowFilter;
+}
+
+function setPayrollRecordWorkflowFilter(value) {
+  payrollRecordWorkflowFilter = ['source', 'review', 'finalized'].includes(value) ? value : 'all';
+  salaryCalculationPage = 1;
+  closePayrollActionMenus();
+  renderSalaryCalculations(currentSalaryCalculationRecords);
 }
 
 function renderSalaryCalculationPagination(totalRecords, startIndex, totalPages) {
@@ -893,7 +1208,10 @@ function bindSalaryCalculationPagination(root) {
 }
 
 function changeSalaryCalculationPage(direction) {
-  const totalPages = Math.max(1, Math.ceil(currentSalaryCalculationRecords.length / SALARY_CALCULATION_PAGE_SIZE));
+  const filteredCount = payrollRecordWorkflowFilter === 'all'
+    ? currentSalaryCalculationRecords.length
+    : currentSalaryCalculationRecords.filter(record => payrollRecordWorkflowGroup(record) === payrollRecordWorkflowFilter).length;
+  const totalPages = Math.max(1, Math.ceil(filteredCount / SALARY_CALCULATION_PAGE_SIZE));
   salaryCalculationPage = Math.min(Math.max(salaryCalculationPage + direction, 1), totalPages);
   renderSalaryCalculations(currentSalaryCalculationRecords);
 }
@@ -914,23 +1232,76 @@ function canApproveSalaryCalculations() {
     || (Array.isArray(user?.permissions) && user.permissions.includes('payroll.approve'));
 }
 
-async function approveSalaryCalculation(calculationId) {
+function canSubmitSalaryCalculations() {
+  if (typeof getUser !== 'function') return false;
+  const user = getUser();
+  return ['payroll_officer', 'payroll_manager'].includes(user?.role)
+    || (Array.isArray(user?.permissions) && user.permissions.includes('payroll.process'));
+}
+
+function findSalaryCalculationRecord(calculationId) {
+  return (currentSalaryCalculationRecords || []).find(row => Number(row.id) === Number(calculationId));
+}
+
+async function reviewPayrollCalculation(calculationId) {
+  const record = findSalaryCalculationRecord(calculationId);
+  if (record) {
+    showCalculationBreakdown(record);
+    return;
+  }
+  await loadSalaryCalculations();
+  const refreshed = findSalaryCalculationRecord(calculationId);
+  if (refreshed) showCalculationBreakdown(refreshed);
+}
+
+async function updateSalaryCalculationStatus(calculationId, status, confirmText) {
   if (!Number.isInteger(Number(calculationId))) return;
-  if (!window.confirm('Approve and finalize this payroll calculation?')) return;
+  if (confirmText && !window.confirm(confirmText)) return;
 
   try {
     const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'Approved' }),
+      body: JSON.stringify({ status }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Payroll approval failed.');
+    if (!response.ok) throw new Error(data.error || 'Payroll status update failed.');
 
     document.getElementById('calc-breakdown-modal')?.remove();
-    alert(data.blockchain_snapshot
-      ? 'Payroll approved. It is now ready for blockchain anchoring.'
-      : 'Payroll approved.');
+    alert(data.blockchain_snapshot ? 'Payroll status updated and integrity snapshot refreshed.' : 'Payroll status updated.');
     await loadSalaryCalculations();
+    await loadWeeklyPayrollRegistry();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function submitSalaryCalculationForApproval(calculationId) {
+  return updateSalaryCalculationStatus(calculationId, 'For Approval', 'Submit this payroll calculation for manager approval?');
+}
+
+async function approveSalaryCalculation(calculationId) {
+  return updateSalaryCalculationStatus(calculationId, 'Approved', 'Approve and finalize this payroll calculation?');
+}
+
+async function releaseSalaryCalculation(calculationId) {
+  return updateSalaryCalculationStatus(calculationId, 'Released', 'Release this payslip to the employee?');
+}
+
+async function lockSalaryCalculation(calculationId) {
+  return updateSalaryCalculationStatus(calculationId, 'Locked', 'Lock this payroll record as read-only?');
+}
+
+async function recalculateSalaryCalculation(calculationId) {
+  if (!Number.isInteger(Number(calculationId))) return;
+  if (!window.confirm('Recalculate this employee only from approved source records?')) return;
+  try {
+    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/recalculate`, { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Payroll recalculation failed.');
+    document.getElementById('calc-breakdown-modal')?.remove();
+    alert('Payroll recalculated.');
+    await loadSalaryCalculations();
+    await loadWeeklyPayrollRegistry();
   } catch (error) {
     alert(error.message);
   }
@@ -1234,11 +1605,11 @@ function showCalculationBreakdown(record) {
 
 function payrollBadge(status) {
   const normalized = status || 'Draft';
-  const color = normalized === 'Paid' || normalized === 'Released' || normalized === 'Approved'
+  const color = ['Paid', 'Released', 'Approved', 'Payroll Ready'].includes(normalized)
     ? 'green'
-    : normalized === 'Rejected'
+    : ['Rejected', 'Cancelled'].includes(normalized)
       ? 'red'
-      : normalized === 'Submitted'
+      : ['Submitted', 'For Approval', 'For Validation'].includes(normalized)
         ? 'yellow'
         : 'blue';
   return `<span class="badge badge-${color}">${normalized}</span>`;
@@ -1399,14 +1770,30 @@ function showCalculationBreakdown(record) {
   const modalId = 'calc-breakdown-modal';
   document.getElementById(modalId)?.remove();
 
-  const calculationDate = record.calculation_date
-    ? new Date(record.calculation_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    : '-';
+  const sourceDateLabel = record.source_date_from
+    ? record.source_date_from === record.source_date_to
+      ? new Date(`${record.source_date_from}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      : `${new Date(`${record.source_date_from}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(`${record.source_date_to}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+    : '';
+  const calculationDate = Number(record.payroll_run_id || 0) === 0 && sourceDateLabel
+    ? sourceDateLabel
+    : record.calculation_date
+      ? new Date(record.calculation_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      : '-';
   const calcNo = `CALC-${String(record.id || '').padStart(5, '0')}`;
   const totalAllowances = number(record.total_allowances)
     || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
-  const totalDeductions = number(record.total_deductions);
-  const basePay = Math.max(0, number(record.gross_pay) - totalAllowances);
+  const deductionsApplied = Number(record.payroll_run_id || 0) > 0;
+  const sourceEntries = Array.isArray(record.source_entries) ? record.source_entries : [];
+  const sourceOutputEntries = sourceEntries.filter(entry => entry.kind !== 'attendance');
+  const sourceOutputQuantity = number(record.source_output_quantity)
+    || sourceOutputEntries.reduce((sum, entry) => sum + number(entry.quantity), 0);
+  const sourceOutputAmount = number(record.source_output_amount)
+    || sourceOutputEntries.reduce((sum, entry) => sum + number(entry.amount), 0);
+  const displayGrossPay = deductionsApplied ? number(record.gross_pay) : (number(record.gross_pay) || sourceOutputAmount);
+  const totalDeductions = deductionsApplied ? number(record.total_deductions) : 0;
+  const displayNetPay = deductionsApplied ? number(record.net_pay) : displayGrossPay;
+  const basePay = Math.max(0, displayGrossPay - totalAllowances);
   const isPieceRate = /piece/i.test(String(record.wage_type || ''));
   const baseRateField = isPieceRate
     ? ''
@@ -1417,17 +1804,131 @@ function showCalculationBreakdown(record) {
     : record.wage_type === 'Daily'
       ? `${number(record.days_worked).toLocaleString('en-US')} days`
       : record.wage_type === 'Per-Trip'
-        ? `${number(record.quantity).toLocaleString('en-US')} trips`
+        ? `${(number(record.quantity) || sourceOutputQuantity).toLocaleString('en-US')} trips`
         : record.wage_type === 'Per-Piece'
-          ? `${number(record.quantity).toLocaleString('en-US')} pieces`
+          ? `${(number(record.quantity) || sourceOutputQuantity).toLocaleString('en-US')} pieces`
           : '-';
+  const formatSourceDate = value => {
+    if (!value) return '-';
+    const text = String(value);
+    const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const date = dateOnly
+      ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+      : new Date(text);
+    return Number.isNaN(date.getTime())
+      ? payrollEscape(text)
+      : date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+  const formatSourceDateTime = value => {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return payrollEscape(value);
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  };
+  const formatSourceTime = value => {
+    if (!value) return '-';
+    const text = String(value);
+    const timeOnly = text.match(/(?:T|\s)?(\d{1,2}):(\d{2})(?::\d{2})?/);
+    if (timeOnly && !text.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const hour = Number(timeOnly[1]);
+      const minute = timeOnly[2];
+      const suffix = hour >= 12 ? 'PM' : 'AM';
+      const displayHour = hour % 12 || 12;
+      return `${displayHour}:${minute} ${suffix}`;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return payrollEscape(value);
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  };
+  const hasAttendanceEntries = sourceEntries.some(entry => entry.kind === 'attendance');
+  const attendanceEntryRows = sourceEntries.filter(entry => entry.kind === 'attendance').map(entry => `
+    <tr>
+      <td>${formatSourceDate(entry.activity_date)}</td>
+      <td>${formatSourceTime(entry.time_in)}</td>
+      <td>${formatSourceTime(entry.time_out)}</td>
+      <td>${payrollEscape(entry.type || '-')}<br><span class="muted-small">${payrollEscape(entry.details || '')}</span></td>
+      <td class="text-right">${number(entry.regular_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="text-right">${number(entry.overtime_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="text-right">${number(entry.late_minutes).toLocaleString('en-US')} / ${number(entry.undertime_minutes).toLocaleString('en-US')}</td>
+      <td>${payrollEscape(entry.status || '-')}</td>
+    </tr>
+  `).join('');
+  const outputEntryRows = sourceEntries.filter(entry => entry.kind !== 'attendance').map(entry => {
+    const quantityUnit = entry.quantity_unit || (entry.kind === 'trip' ? 'trip' : 'pieces');
+    const quantity = number(entry.quantity);
+    const quantityLabel = quantity
+      ? `${quantity.toLocaleString('en-US')} ${payrollEscape(quantityUnit)}`
+      : '-';
+    const details = [
+      entry.details,
+      entry.role && !String(entry.details || '').includes(entry.role) ? entry.role : '',
+      number(entry.share_percentage) ? `${number(entry.share_percentage).toLocaleString('en-US')}% share` : '',
+      entry.status ? `Status: ${entry.status}` : ''
+    ].filter(Boolean).join(' · ');
+    return `
+      <tr>
+        <td>${formatSourceDate(entry.activity_date)}</td>
+        <td>${formatSourceDateTime(entry.entered_at)}</td>
+        <td>${payrollEscape(entry.source || entry.type || '-')}<br><span class="muted-small">${payrollEscape(entry.type || '')}</span></td>
+        <td>${payrollEscape(details || '-')}</td>
+        <td class="text-right">${quantityLabel}</td>
+        <td class="text-right">${fmt(entry.amount)}</td>
+      </tr>
+    `;
+  }).join('');
+  const sourceEntriesSection = `
+    <div class="payroll-breakdown-section">
+      <h3>${hasAttendanceEntries ? 'Attendance Logs' : 'Encoded Outputs / Trips'}</h3>
+      ${hasAttendanceEntries ? `
+        <div class="payroll-source-table-wrap">
+          <table class="payroll-breakdown-table payroll-source-table">
+            <thead>
+              <tr>
+                <th>Work Date</th>
+                <th>Time In</th>
+                <th>Time Out</th>
+                <th>Status</th>
+                <th class="text-right">Regular Hrs</th>
+                <th class="text-right">OT Hrs</th>
+                <th class="text-right">Late / UT Min</th>
+                <th>Payroll State</th>
+              </tr>
+            </thead>
+            <tbody>${attendanceEntryRows}</tbody>
+          </table>
+        </div>
+      ` : sourceEntries.length ? `
+        <div class="payroll-source-table-wrap">
+          <table class="payroll-breakdown-table payroll-source-table">
+            <thead>
+              <tr>
+                <th>Output / Trip Date</th>
+                <th>Encoded At</th>
+                <th>Source</th>
+                <th>Details</th>
+                <th class="text-right">Qty / Trips</th>
+                <th class="text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${outputEntryRows}</tbody>
+          </table>
+        </div>
+      ` : '<div class="empty-state">No source details found for this calculation.</div>'}
+    </div>
+  `;
 
   const deductionRows = [
     ['SSS', number(record.sss_deduction)],
     ['Pag-IBIG', number(record.pagibig_deduction)],
     ['PhilHealth', number(record.philhealth_deduction)]
-  ].filter(([, amount]) => amount > 0);
-  if (!deductionRows.length && totalDeductions > 0) {
+  ].filter(([, amount]) => deductionsApplied && amount > 0);
+  if (deductionsApplied && !deductionRows.length && totalDeductions > 0) {
     deductionRows.push(['Configured Deductions', totalDeductions]);
   }
 
@@ -1439,11 +1940,38 @@ function showCalculationBreakdown(record) {
   `;
   const normalizedStatus = String(record.status || '').trim();
   const normalizedStatusKey = normalizedStatus.toLowerCase();
-  const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
+  const displayWorkflowStatus = deductionsApplied
+    ? normalizedStatus
+    : record.source_workflow_status || (normalizedStatusKey === 'for approval' ? 'Source Submitted' : normalizedStatus);
+  const canReviewRecalculate = deductionsApplied && ['draft', 'calculated', 'for review'].includes(normalizedStatusKey);
+  const recalcAction = canReviewRecalculate
+    ? `<button class="btn btn-outline" type="button" onclick="recalculateSalaryCalculation(${Number(record.id)})">Recalculate This Employee</button>`
+    : '';
+  const submitAction = canReviewRecalculate && canSubmitSalaryCalculations()
+    ? `<button class="btn btn-primary" type="button" onclick="submitSalaryCalculationForApproval(${Number(record.id)})">Submit Payroll to Manager</button>`
+    : '';
+  const approvalAction = ['submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+    && deductionsApplied
     ? `<button class="btn btn-primary" type="button" onclick="approveSalaryCalculation(${Number(record.id)})">Approve & Finalize</button>`
     : '';
   const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
-    ? `<button class="btn btn-primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(record.id)})">Record on Blockchain</button>`
+    && deductionsApplied
+    ? `<button class="btn btn-primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(record.id)})">Load to Blockchain</button>`
+    : '';
+  const releaseAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
+    && deductionsApplied
+    ? `<button class="btn btn-outline" type="button" onclick="releaseSalaryCalculation(${Number(record.id)})">Release Payslip</button>`
+    : '';
+  const lockAction = ['approved', 'released'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+    && deductionsApplied
+    ? `<button class="btn btn-outline" type="button" onclick="lockSalaryCalculation(${Number(record.id)})">Lock</button>`
+    : '';
+  const payslipActions = deductionsApplied
+    ? `
+        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, true)">Print Payslip</button>
+        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, false)">Export Payslip PDF</button>
+        <button class="btn btn-primary" type="button" onclick="generatePayslipPreview(${Number(record.id)})">Generate Payslip</button>
+      `
     : '';
 
   const modal = document.createElement('div');
@@ -1460,15 +1988,17 @@ function showCalculationBreakdown(record) {
       </div>
 
       <div class="payroll-breakdown-grid">
-        <label>Employee<input value="${record.employee_name || '-'}" readonly /></label>
-        <label>Employee ID<input value="${record.employee_code || '-'}" readonly /></label>
-        <label>Department<input value="${record.department || '-'}" readonly /></label>
-        <label>Status<input value="${record.status || 'Draft'}" readonly /></label>
-        <label>Wage Type<input value="${record.wage_type || '-'}" readonly /></label>
+        <label>Employee<input value="${payrollEscape(record.employee_name || '-')}" readonly /></label>
+        <label>Employee ID<input value="${payrollEscape(record.employee_code || '-')}" readonly /></label>
+        <label>Department<input value="${payrollEscape(record.department || '-')}" readonly /></label>
+        <label>Status<input value="${payrollEscape(displayWorkflowStatus || 'Encoding Draft')}" readonly /></label>
+        <label>Wage Type<input value="${payrollEscape(record.wage_type || '-')}" readonly /></label>
         ${baseRateField}
-        <label>Work Output<input value="${workOutput}" readonly /></label>
-        <label>Payroll Date<input value="${calculationDate}" readonly /></label>
+        <label>Work Output<input value="${payrollEscape(workOutput)}" readonly /></label>
+        <label>${deductionsApplied ? 'Payroll Calculation Date' : 'Work / Output Date(s)'}<input value="${payrollEscape(calculationDate)}" readonly /></label>
       </div>
+
+      ${sourceEntriesSection}
 
       <div class="payroll-breakdown-section">
         <h3>Calculation Summary</h3>
@@ -1476,21 +2006,28 @@ function showCalculationBreakdown(record) {
           <tbody>
             ${row(basePayLabel, fmt(basePay))}
             ${row('Allowances', fmt(totalAllowances))}
-            ${row('Gross Pay', fmt(record.gross_pay), 'is-positive')}
-            ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
-            ${row('Total Deductions', `- ${fmt(totalDeductions)}`, 'is-deduction')}
-            ${row('Net Pay', fmt(record.net_pay), 'is-net')}
+            ${row(deductionsApplied ? 'Gross Pay' : 'Encoded Source Total', fmt(displayGrossPay), 'is-positive')}
+            ${deductionsApplied ? `
+              ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
+              ${row('Total Deductions', `- ${fmt(totalDeductions)}`, 'is-deduction')}
+              ${row('Net Pay', fmt(displayNetPay), 'is-net')}
+            ` : `
+              ${row('Deduction Status', 'Deferred until Generate Payroll')}
+              ${row('Encoded Total Before Deductions', fmt(displayNetPay), 'is-net')}
+            `}
           </tbody>
         </table>
       </div>
 
       <div class="payroll-breakdown-actions">
         <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
-        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, true)">Print Payslip</button>
-        <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, false)">Export Payslip PDF</button>
+        ${recalcAction}
+        ${submitAction}
         ${approvalAction}
+        ${releaseAction}
+        ${lockAction}
         ${blockchainRecordAction}
-        <button class="btn btn-primary" type="button" onclick="generatePayslipPreview(${Number(record.id)})">Generate Payslip</button>
+        ${payslipActions}
       </div>
     </div>
   `;
@@ -1510,12 +2047,18 @@ function switchPayrollTab(tab) {
   });
 
   if (targetTab === 'dashboard') loadPayrollDashboard();
+  if (targetTab === 'run') {
+    loadWeeklyPayrollFilterOptions();
+    loadWeeklyPayrollRegistry();
+  }
   if (targetTab === 'salary' && typeof loadSalaryCalculationPage === 'function') loadSalaryCalculationPage();
   if (targetTab === 'piece-config') loadPieceRateConfig();
   if (targetTab === 'logistics' && typeof loadLogisticsPayrollModule === 'function') loadLogisticsPayrollModule();
-  if (targetTab === 'deductions') loadPayrollSettings('deduction');
-  if (targetTab === 'cash-advances') loadEmployeeDeductionAccounts('cash_advance');
-  if (targetTab === 'employee-loans') loadEmployeeDeductionAccounts('loan');
+  if (targetTab === 'deductions') {
+    loadPayrollSettings('deduction');
+    refreshSssContributionTableVisibility({ loadWhenVisible: true });
+  }
+  if (targetTab === 'employee-deductions') loadEmployeeDeductionAccounts('all');
   if (targetTab === 'allowances') loadPayrollSettings('allowance');
   if (targetTab === 'policies') loadPayrollPolicySettings();
   if (targetTab === 'reports') {
@@ -1798,10 +2341,8 @@ function populatePieceRateDropdowns() {
 function renderPieceRateConfig(config) {
   const views = [
     ['rates', 'Piece Rates'],
-    ['splits', 'Production Splits'],
     ['sew', 'Type of Sew'],
     ['sizes', 'Size Ranges'],
-    ['rules', 'Sharing Rules'],
     ['incentives', 'Incentive Rules'],
     ['production', 'Production Encodings'],
     ['register', 'SWR-FXR-SUM Register'],
@@ -2479,18 +3020,24 @@ async function loadPayrollSettings(type) {
 function renderDeductionSettings(rows) {
   return `
     <table>
-      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Rate/Amount</th><th>Schedule</th><th>Status</th><th>Effective</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Employee Share</th><th>Employer Share</th><th>Priority</th><th>Schedule</th><th>Proration</th><th>Status</th><th>Effective</th><th>Actions</th></tr></thead>
       <tbody>
         ${rows.map(row => `
           <tr>
             <td>${payrollEscape(row.name)}</td>
             <td>${payrollEscape(row.category)}</td>
             <td>${payrollEscape(row.computation_type)}</td>
-            <td>${payrollEscape(row.rate_or_amount)}</td>
+            <td>${payrollEscape(row.employee_share_rate || row.rate_or_amount || 0)}</td>
+            <td>${payrollEscape(row.employer_share_rate || 0)}</td>
+            <td>${payrollEscape(row.priority_order || 5)}</td>
             <td>${payrollEscape(row.apply_schedule)}</td>
+            <td>${payrollEscape(row.proration_mode || 'Fixed Divisor')}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}</td>
             <td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td>
             <td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td>
-            <td><button class="btn btn-outline btn-sm" type="button" onclick="deleteDeductionSetting(${Number(row.id)})">Delete</button></td>
+            <td>
+              ${row.computation_type === 'Table Lookup / Matrix Bracket' && /^sss(?:\b|\s|$)/i.test(String(row.name || '').trim()) ? `<button class="btn btn-outline btn-sm" type="button" onclick="openDeductionBracketManager()">SSS Brackets</button>` : ''}
+              <button class="btn btn-outline btn-sm" type="button" onclick="deleteDeductionSetting(${Number(row.id)})">Delete</button>
+            </td>
           </tr>
         `).join('')}
       </tbody>
@@ -2538,6 +3085,7 @@ function renderAllowanceSettings(rows) {
 }
 
 let payrollDeductionEmployees = [];
+let payrollDeductionPickerListenersAttached = false;
 
 async function ensureEmployeeDeductionDropdowns() {
   if (!payrollDeductionEmployees.length) {
@@ -2545,24 +3093,121 @@ async function ensureEmployeeDeductionDropdowns() {
     if (!res.ok) throw new Error('Failed to load employees');
     payrollDeductionEmployees = await res.json();
   }
-  const options = '<option value="">Select employee</option>' + payrollDeductionEmployees.map(emp => {
-    const name = emp.name || [emp.first_name, emp.middle_name, emp.last_name].filter(Boolean).join(' ') || emp.employee_name || `Employee ${emp.id}`;
-    const code = emp.employee_code || emp.empCode || emp.code || '';
-    return `<option value="${emp.id}">${code ? `${code} - ` : ''}${name}</option>`;
-  }).join('');
-  document.querySelectorAll('.employee-deduction-employee').forEach(select => {
-    const current = select.value;
-    select.innerHTML = options;
-    if (current) select.value = current;
+  setupEmployeeDeductionPickers();
+}
+
+function employeeDeductionName(emp) {
+  return emp.name || [emp.first_name, emp.middle_name, emp.last_name].filter(Boolean).join(' ') || emp.employee_name || `Employee ${emp.id}`;
+}
+
+function employeeDeductionCode(emp) {
+  return emp.employee_code || emp.empCode || emp.code || '';
+}
+
+function employeeDeductionLabel(emp) {
+  const code = employeeDeductionCode(emp);
+  return `${code ? `${code} - ` : ''}${employeeDeductionName(emp)}`;
+}
+
+function employeeDeductionSearchText(emp) {
+  return [
+    employeeDeductionCode(emp),
+    employeeDeductionName(emp),
+    emp.department,
+    emp.position,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function getPickerEmployeeById(employeeId) {
+  return payrollDeductionEmployees.find(emp => String(emp.id) === String(employeeId));
+}
+
+function closeEmployeeDeductionPickers(exceptPicker = null) {
+  document.querySelectorAll('.employee-deduction-picker').forEach(picker => {
+    if (picker !== exceptPicker) {
+      const results = picker.querySelector('.employee-deduction-results');
+      if (results) results.hidden = true;
+    }
   });
 }
 
-async function loadEmployeeDeductionAccounts(type) {
-  const grid = document.getElementById(type === 'cash_advance' ? 'cash-advance-grid' : 'employee-loan-grid');
+function selectEmployeeDeductionPicker(picker, employee) {
+  const hidden = picker.querySelector('.employee-deduction-employee');
+  const search = picker.querySelector('.employee-deduction-search');
+  const results = picker.querySelector('.employee-deduction-results');
+  if (hidden) hidden.value = employee?.id || '';
+  if (search) search.value = employee ? employeeDeductionLabel(employee) : '';
+  if (results) results.hidden = true;
+}
+
+function renderEmployeeDeductionPickerResults(picker, term = '') {
+  const results = picker.querySelector('.employee-deduction-results');
+  if (!results) return;
+  const normalizedTerm = String(term || '').trim().toLowerCase();
+  const matches = payrollDeductionEmployees
+    .filter(emp => !normalizedTerm || employeeDeductionSearchText(emp).includes(normalizedTerm))
+    .slice(0, 30);
+
+  if (!matches.length) {
+    results.innerHTML = '<div class="employee-deduction-empty">No employees found.</div>';
+    results.hidden = false;
+    return;
+  }
+
+  results.innerHTML = matches.map(emp => `
+    <button type="button" class="employee-deduction-option" data-employee-id="${Number(emp.id)}">
+      <span>${payrollEscape(employeeDeductionLabel(emp))}</span>
+      <small>${payrollEscape([emp.department, emp.position].filter(Boolean).join(' · ') || 'No department details')}</small>
+    </button>
+  `).join('') + (payrollDeductionEmployees.length > matches.length
+    ? '<div class="employee-deduction-empty">Keep typing to narrow the list.</div>'
+    : '');
+  results.hidden = false;
+}
+
+function setupEmployeeDeductionPickers() {
+  document.querySelectorAll('.employee-deduction-picker').forEach(picker => {
+    if (picker.dataset.ready === '1') return;
+    picker.dataset.ready = '1';
+    const hidden = picker.querySelector('.employee-deduction-employee');
+    const search = picker.querySelector('.employee-deduction-search');
+    const results = picker.querySelector('.employee-deduction-results');
+    if (!hidden || !search || !results) return;
+
+    search.addEventListener('focus', () => {
+      closeEmployeeDeductionPickers(picker);
+      renderEmployeeDeductionPickerResults(picker, search.value);
+    });
+    search.addEventListener('input', () => {
+      hidden.value = '';
+      renderEmployeeDeductionPickerResults(picker, search.value);
+    });
+    results.addEventListener('click', event => {
+      const option = event.target.closest('.employee-deduction-option');
+      if (!option) return;
+      const employee = getPickerEmployeeById(option.dataset.employeeId);
+      if (employee) selectEmployeeDeductionPicker(picker, employee);
+    });
+    picker.closest('form')?.addEventListener('reset', () => {
+      window.setTimeout(() => selectEmployeeDeductionPicker(picker, null), 0);
+    });
+  });
+
+  if (!payrollDeductionPickerListenersAttached) {
+    payrollDeductionPickerListenersAttached = true;
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.employee-deduction-picker')) closeEmployeeDeductionPickers();
+    });
+  }
+}
+
+async function loadEmployeeDeductionAccounts(type = 'all') {
+  const grid = document.getElementById(type === 'cash_advance' ? 'cash-advance-grid' : type === 'loan' ? 'employee-loan-grid' : 'employee-deductions-grid');
   if (!grid) return;
   try {
     await ensureEmployeeDeductionDropdowns();
-    const res = await apiFetch(`/api/payroll/employee-deductions?type=${encodeURIComponent(type)}`);
+    const query = type && type !== 'all' ? `?type=${encodeURIComponent(type)}` : '';
+    const res = await apiFetch(`/api/payroll/employee-deductions${query}`);
     if (!res.ok) throw new Error('Failed to load employee deductions');
     const rows = await res.json();
     grid.innerHTML = renderEmployeeDeductionAccounts(rows, type);
@@ -2573,12 +3218,25 @@ async function loadEmployeeDeductionAccounts(type) {
 
 function renderEmployeeDeductionAccounts(rows, type) {
   if (!rows.length) {
-    return `<div style="padding:30px; color:var(--muted); text-align:center;">No ${type === 'cash_advance' ? 'cash advances' : 'employee loans'} assigned.</div>`;
+    return `<div style="padding:30px; color:var(--muted); text-align:center;">No employee cash advances or loans assigned.</div>`;
   }
+  const totalOriginal = rows.reduce((sum, row) => sum + Number(row.original_amount || 0), 0);
+  const totalRemaining = rows.reduce((sum, row) => sum + Number(row.remaining_balance || 0), 0);
+  const totalInstallment = rows
+    .filter(row => row.status === 'Active')
+    .reduce((sum, row) => sum + Number(row.installment_amount || 0), 0);
+  const activeAccounts = rows.filter(row => row.status === 'Active').length;
   return `
+    <div class="employee-deduction-summary">
+      <div><span>Total Accounts</span><strong>${activeAccounts} active / ${rows.length}</strong></div>
+      <div><span>Total Original</span><strong>${money(totalOriginal)}</strong></div>
+      <div><span>Cash Advance + Loan Balance</span><strong>${money(totalRemaining)}</strong></div>
+      <div><span>Active Installments</span><strong>${money(totalInstallment)}</strong></div>
+    </div>
     <table>
       <thead>
         <tr>
+          <th>Type</th>
           <th>Employee</th>
           <th>Name</th>
           <th>Original Amount</th>
@@ -2592,18 +3250,19 @@ function renderEmployeeDeductionAccounts(rows, type) {
       <tbody>
         ${rows.map(row => `
           <tr>
-            <td>${row.employee_code || '-'}</td>
-            <td>${row.employee_name || '-'}</td>
+            <td>${payrollEscape(row.module_type || '-')}</td>
+            <td>${payrollEscape(row.employee_code || '-')}</td>
+            <td>${payrollEscape(row.employee_name || '-')}</td>
             <td>${money(row.original_amount)}</td>
             <td>${money(row.remaining_balance)}</td>
             <td>${money(row.installment_amount)}</td>
             <td>${(row.start_date || '').slice(0, 10)} - ${row.end_date ? String(row.end_date).slice(0, 10) : 'Open'}</td>
             <td>${payrollBadge(row.status)}</td>
             <td>
-              <button class="btn btn-outline btn-sm" type="button" onclick='editEmployeeDeductionAccount(${JSON.stringify(row).replace(/'/g, '&#39;')}, "${type}")'>Edit</button>
+              <button class="btn btn-outline btn-sm" type="button" onclick='editEmployeeDeductionAccount(${JSON.stringify(row).replace(/'/g, '&#39;')}, "${row.module_type === 'Cash Advance' ? 'cash_advance' : 'loan'}")'>Edit</button>
               ${row.status === 'Active'
-                ? `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, '${type}', 'Paused')">Pause</button>`
-                : `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, '${type}', 'Active')">Activate</button>`}
+                ? `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, 'all', 'Paused')">Pause</button>`
+                : `<button class="btn btn-outline btn-sm" type="button" onclick="updateEmployeeDeductionStatus(${row.id}, 'all', 'Active')">Activate</button>`}
             </td>
           </tr>
         `).join('')}
@@ -2617,6 +3276,13 @@ function editEmployeeDeductionAccount(row, type) {
   if (!form) return;
   form.elements.id.value = row.id || '';
   form.elements.employee_id.value = row.employee_id || '';
+  const picker = form.querySelector('.employee-deduction-picker');
+  const employee = getPickerEmployeeById(row.employee_id) || {
+    id: row.employee_id,
+    employee_code: row.employee_code,
+    employee_name: row.employee_name,
+  };
+  if (picker) selectEmployeeDeductionPicker(picker, employee);
   form.elements.deduction_name.value = row.deduction_name || '';
   if (form.elements.loan_type) form.elements.loan_type.value = row.loan_type || 'Employee Loan';
   form.elements.amount.value = row.original_amount || '';
@@ -2640,6 +3306,9 @@ async function saveEmployeeDeductionAccount(event, type) {
     statusEl.textContent = 'Saving...';
   }
   try {
+    if (!data.employee_id) {
+      throw new Error('Please search and select an employee.');
+    }
     const endpoint = type === 'cash_advance' ? '/api/payroll/employee-cash-advances' : '/api/payroll/employee-loans';
     const res = await apiFetch(endpoint, {
       method: 'POST',
@@ -2657,7 +3326,7 @@ async function saveEmployeeDeductionAccount(event, type) {
       statusEl.className = 'payroll-form-status success';
       statusEl.textContent = 'Saved successfully.';
     }
-    await loadEmployeeDeductionAccounts(type);
+    await loadEmployeeDeductionAccounts('all');
     if (typeof showAlert === 'function') await showAlert('Employee deduction saved.', 'Saved', 'success');
   } catch (err) {
     if (statusEl) {
@@ -2680,7 +3349,7 @@ async function updateEmployeeDeductionStatus(id, type, status) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to update status');
     }
-    await loadEmployeeDeductionAccounts(type);
+    await loadEmployeeDeductionAccounts(type || 'all');
   } catch (err) {
     if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
     else alert(err.message);
@@ -2702,9 +3371,32 @@ async function savePayrollSetting(event, type) {
       : data.category === 'Company'
         ? data.company_name
       : data.custom_name;
+    if (data.category === 'Government' && String(data.name || '').trim().toUpperCase() === 'SSS') {
+      data.computation_type = 'Table Lookup / Matrix Bracket';
+      data.rate_or_amount = 0;
+      data.employee_share_rate = 0;
+      data.employer_share_rate = 0;
+      data.total_contribution_rate = 0;
+      if (!data.priority_order || Number(data.priority_order) > 1) data.priority_order = 1;
+    }
+    if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
+      data.fixed_divisor = data.apply_schedule === 'Monthly' ? 1
+        : ['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(data.apply_schedule) ? 2
+        : 4;
+    }
+    if (data.percentage_rate && !data.rate_or_amount) data.rate_or_amount = data.percentage_rate;
+    if (data.employee_share_percentage && !data.employee_share_rate) data.employee_share_rate = data.employee_share_percentage;
+    if (data.employer_share_percentage && !data.employer_share_rate) data.employer_share_rate = data.employer_share_percentage;
+    if (data.salary_floor && !data.minimum_salary_base) data.minimum_salary_base = data.salary_floor;
+    if (data.salary_ceiling && !data.maximum_salary_ceiling) data.maximum_salary_ceiling = data.salary_ceiling;
     delete data.government_name;
     delete data.company_name;
     delete data.custom_name;
+    delete data.percentage_rate;
+    delete data.employee_share_percentage;
+    delete data.employer_share_percentage;
+    delete data.salary_floor;
+    delete data.salary_ceiling;
   } else if (type === 'allowance' && !data.amount_or_rate) {
     data.amount_or_rate = 0;
   }
@@ -2757,6 +3449,7 @@ function toggleDeductionNameField() {
   if (governmentName) governmentName.required = isGovernment;
   if (companyName) companyName.required = isCompany;
   if (customName) customName.required = !isGovernment && !isCompany;
+  refreshSssContributionTableVisibility({ loadWhenVisible: true });
 }
 
 async function loadPayrollPolicySettings() {
@@ -2787,6 +3480,354 @@ async function loadPayrollPolicySettings() {
       status.textContent = err.message;
     }
   }
+}
+
+function toggleDeductionFormSections() {
+  const category = document.getElementById('deduction-category')?.value || 'Government';
+  const computationSelect = document.getElementById('deduction-computation-type');
+  const rateInput = document.querySelector('#deduction-setting-form [name="rate_or_amount"]');
+  const rateGroup = rateInput?.closest('.form-group');
+  const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Fixed Divisor';
+  const fixedDivisorGroup = document.getElementById('deduction-fixed-divisor-group');
+  if (fixedDivisorGroup) fixedDivisorGroup.style.display = prorationMode === 'Fixed Divisor' ? '' : 'none';
+  const sssSelected = isSssDeductionSelected();
+  if (sssSelected && computationSelect) {
+    computationSelect.value = 'Table Lookup / Matrix Bracket';
+    computationSelect.title = 'SSS uses the active SSS contribution matrix.';
+  } else if (computationSelect) {
+    computationSelect.title = '';
+  }
+  if (rateGroup) rateGroup.style.display = sssSelected ? 'none' : '';
+  if (rateInput && sssSelected) {
+    rateInput.value = '0';
+    rateInput.required = false;
+  }
+  const computationType = computationSelect?.value || '';
+  const showBracket = computationType === 'Table Lookup / Matrix Bracket' && sssSelected;
+  document.querySelectorAll('.deduction-bracket-section').forEach(el => { el.style.display = showBracket ? '' : 'none'; });
+  refreshSssContributionTableVisibility({ loadWhenVisible: true });
+}
+
+let sssImportPreview = null;
+let sssTableSummaryLoaded = false;
+
+function getSelectedDeductionName() {
+  const category = document.getElementById('deduction-category')?.value || 'Government';
+  if (category === 'Government') return document.getElementById('deduction-government-name')?.value || '';
+  if (category === 'Company') return document.getElementById('deduction-company-name')?.value || '';
+  return document.getElementById('deduction-custom-name')?.value || '';
+}
+
+function isSssDeductionSelected() {
+  const category = document.getElementById('deduction-category')?.value || 'Government';
+  return category === 'Government' && String(getSelectedDeductionName()).trim().toUpperCase() === 'SSS';
+}
+
+function refreshSssContributionTableVisibility(options = {}) {
+  const card = document.getElementById('sss-contribution-table-card');
+  const summary = document.getElementById('sss-table-summary');
+  if (!card) return false;
+
+  const show = isSssDeductionSelected();
+  card.style.display = show ? '' : 'none';
+
+  if (!show) {
+    sssTableSummaryLoaded = false;
+    if (summary) summary.textContent = 'Select SSS as the deduction name to manage the SSS contribution table.';
+    return false;
+  }
+
+  if (options.loadWhenVisible && !sssTableSummaryLoaded) {
+    loadSssTableSummary();
+  }
+  return true;
+}
+
+function renderSssTableVersionSummary(rows) {
+  const active = rows.find(row => row.status === 'Active');
+  const drafts = rows.filter(row => row.status === 'Draft').length;
+  const latest = active || rows[0];
+
+  if (!rows.length) {
+    return `
+      <div class="payroll-empty-state">
+        No SSS table versions have been imported yet.
+        <div style="margin-top:10px;">
+          <button class="btn btn-primary btn-sm" type="button" onclick="openDeductionBracketManager()">Import SSS Table</button>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <table>
+      <thead><tr><th>Active Version</th><th>Effective Date</th><th>Rows</th><th>Drafts</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>${active ? payrollEscape(active.version_name) : '<span class="muted-small">No active version</span>'}</td>
+          <td>${active ? payrollEscape(String(active.effective_date || '').slice(0, 10)) : '-'}</td>
+          <td>${active ? payrollEscape(active.row_count) : payrollEscape(latest?.row_count || 0)}</td>
+          <td>${payrollEscape(drafts)}</td>
+          <td><button class="btn btn-outline btn-sm" type="button" onclick="openDeductionBracketManager()">Review Versions</button></td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
+async function loadSssTableSummary() {
+  const target = document.getElementById('sss-table-summary');
+  if (!target) return;
+  if (!isSssDeductionSelected()) {
+    refreshSssContributionTableVisibility();
+    return;
+  }
+  target.textContent = 'Loading SSS table versions...';
+  try {
+    const res = await apiFetch('/api/payroll/sss-tables');
+    const rows = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(rows.error || 'Failed to load SSS table versions.');
+    target.innerHTML = renderSssTableVersionSummary(rows);
+    sssTableSummaryLoaded = true;
+  } catch (err) {
+    target.innerHTML = `
+      <div class="payroll-empty-state">
+        SSS table versions are not ready yet. Run the SSS table migration, then import the contribution table.
+      </div>`;
+    sssTableSummaryLoaded = false;
+  }
+}
+
+function renderSssImportPreview(preview) {
+  const columns = [
+    'row_number', 'compensation_from', 'compensation_to', 'regular_ss_msc', 'ec_msc', 'mpf_msc',
+    'total_msc', 'employer_regular_ss', 'employer_mpf', 'employer_ec', 'employer_total',
+    'employee_regular_ss', 'employee_mpf', 'employee_total', 'grand_total_contribution'
+  ];
+  const labels = {
+    row_number: 'Row', compensation_from: 'From', compensation_to: 'To', regular_ss_msc: 'Regular MSC',
+    ec_msc: 'EC MSC', mpf_msc: 'MPF MSC', total_msc: 'Total MSC', employer_regular_ss: 'Employer SS',
+    employer_mpf: 'Employer MPF', employer_ec: 'Employer EC', employer_total: 'Employer Total',
+    employee_regular_ss: 'Employee SS', employee_mpf: 'Employee MPF', employee_total: 'Employee Total',
+    grand_total_contribution: 'Grand Total'
+  };
+  return `
+    <div class="table-wrap" style="max-height:300px; overflow:auto; margin-top:12px;">
+      <table>
+        <thead><tr>${columns.map(column => `<th>${labels[column]}</th>`).join('')}<th>Validation</th></tr></thead>
+        <tbody>${preview.rows.map(row => `
+          <tr>
+            ${columns.map(column => `<td>${payrollEscape(row[column] ?? '')}</td>`).join('')}
+            <td>${row.valid
+              ? `<span class="status-badge approved">Valid</span>${row.warnings.length ? `<div class="muted-small">${payrollEscape(row.warnings.join('; '))}</div>` : ''}`
+              : `<span class="status-badge rejected">Invalid</span><div class="muted-small">${payrollEscape(row.errors.join('; '))}</div>`}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function loadSssTableVersions() {
+  const target = document.getElementById('sss-table-versions');
+  if (!target) return;
+  target.textContent = 'Loading SSS table versions...';
+  try {
+    const res = await apiFetch('/api/payroll/sss-tables');
+    const rows = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(rows.error || 'Failed to load SSS table versions.');
+    target.innerHTML = rows.length
+      ? `<div class="table-wrap"><table><thead><tr><th>Version</th><th>Effective</th><th>Status</th><th>Rows</th><th>Actions</th></tr></thead><tbody>
+          ${rows.map(row => `<tr>
+            <td>${payrollEscape(row.version_name)}</td>
+            <td>${payrollEscape(String(row.effective_date || '').slice(0, 10))}</td>
+            <td>${payrollBadge(row.status)}</td>
+            <td>${payrollEscape(row.row_count)}</td>
+            <td>${renderSssTableVersionActions(row)}</td>
+          </tr>`).join('')}
+        </tbody></table></div>`
+      : '<div class="payroll-empty-state">No SSS table versions have been imported yet.</div>';
+  } catch (err) {
+    target.innerHTML = `<div class="payroll-form-status error">${payrollEscape(err.message)}</div>`;
+  }
+}
+
+function canManageSssTables() {
+  if (typeof getUser !== 'function') return false;
+  const role = getUser()?.role;
+  return ['payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'].includes(role);
+}
+
+function renderSssTableVersionActions(row) {
+  const status = String(row.status || '');
+  const viewButton = `<button class="btn btn-outline btn-sm" type="button" onclick="viewSssTableRows(${Number(row.id)})">View Rows</button>`;
+  if (status === 'Active') return `${viewButton} <span class="muted-small">Current active table</span>`;
+  if (status !== 'Draft') return viewButton;
+  if (!canManageSssTables()) return `${viewButton} <span class="muted-small">Manager/Admin only</span>`;
+  return `${viewButton} <button class="btn btn-primary btn-sm" type="button" onclick="activateSssTableVersion(${Number(row.id)})">Activate Version</button>`;
+}
+
+async function downloadSssImportTemplate() {
+  try {
+    const res = await apiFetch('/api/payroll/sss-tables/template');
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to download the SSS import template.');
+    }
+    const blob = await res.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'sss-table-import-template.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+  } catch (err) {
+    if (typeof showAlert === 'function') showAlert(err.message, 'SSS Table', 'error');
+    else alert(err.message);
+  }
+}
+
+async function previewSssTableImport() {
+  const fileInput = document.getElementById('sss-table-import-file');
+  const status = document.getElementById('sss-import-status');
+  const previewTarget = document.getElementById('sss-import-preview');
+  const file = fileInput?.files?.[0];
+  if (!file) {
+    status.textContent = 'Choose a CSV or XLSX file first.';
+    status.className = 'payroll-form-status error';
+    return;
+  }
+  status.textContent = 'Validating import file...';
+  status.className = 'payroll-form-status';
+  previewTarget.innerHTML = '';
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await apiFetch('/api/payroll/sss-tables/preview', { method: 'POST', body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to validate SSS import file.');
+    sssImportPreview = data;
+    status.textContent = data.has_invalid_rows
+      ? `${data.invalid_row_count} invalid row(s). Fix the file before saving a draft.`
+      : `${data.rows.length} row(s) validated${data.warning_count ? ` with ${data.warning_count} warning(s)` : ''}.`;
+    status.className = `payroll-form-status ${data.has_invalid_rows ? 'error' : 'success'}`;
+    previewTarget.innerHTML = renderSssImportPreview(data);
+  } catch (err) {
+    sssImportPreview = null;
+    status.textContent = err.message;
+    status.className = 'payroll-form-status error';
+  }
+}
+
+async function ensureSssImportPreview() {
+  if (sssImportPreview && !sssImportPreview.has_invalid_rows) return sssImportPreview;
+  await previewSssTableImport();
+  if (!sssImportPreview || sssImportPreview.has_invalid_rows) return null;
+  return sssImportPreview;
+}
+
+async function saveSssTableDraft() {
+  const status = document.getElementById('sss-import-status');
+  const versionName = document.getElementById('sss-table-version-name')?.value.trim();
+  const effectiveDate = document.getElementById('sss-table-effective-date')?.value;
+  if (!versionName || !effectiveDate) {
+    status.textContent = 'Version name and effective date are required.';
+    status.className = 'payroll-form-status error';
+    return;
+  }
+  try {
+    const preview = await ensureSssImportPreview();
+    if (!preview) {
+      status.textContent = 'The selected SSS table could not be validated. Check the preview errors before saving.';
+      status.className = 'payroll-form-status error';
+      return;
+    }
+    status.textContent = 'Saving draft...';
+    status.className = 'payroll-form-status';
+    const res = await apiFetch('/api/payroll/sss-tables', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version_name: versionName,
+        effective_date: effectiveDate,
+        source_filename: preview.filename,
+        rows: preview.rows
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to save SSS table draft.');
+    status.textContent = `Draft saved with ${data.row_count} row(s). Activate it when ready.`;
+    status.className = 'payroll-form-status success';
+    sssImportPreview = null;
+    document.getElementById('sss-import-preview').innerHTML = '';
+    document.getElementById('sss-table-import-file').value = '';
+    await loadSssTableVersions();
+    await loadSssTableSummary();
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'payroll-form-status error';
+  }
+}
+
+async function activateSssTableVersion(versionId) {
+  const confirmed = window.confirm('Activating this SSS table will archive the current active version. Future payroll runs will use the new table. Continue?');
+  if (!confirmed) return;
+  try {
+    const res = await apiFetch(`/api/payroll/sss-tables/${Number(versionId)}/activate`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to activate SSS table version.');
+    await loadSssTableVersions();
+    await loadSssTableSummary();
+    if (typeof showAlert === 'function') await showAlert('SSS table version activated.', 'SSS Table', 'success');
+  } catch (err) {
+    if (typeof showAlert === 'function') showAlert(err.message, 'SSS Table', 'error');
+    else alert(err.message);
+  }
+}
+
+async function viewSssTableRows(versionId) {
+  try {
+    const res = await apiFetch(`/api/payroll/sss-tables/${Number(versionId)}/rows`);
+    const rows = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(rows.error || 'Failed to load SSS table rows.');
+    const previewTarget = document.getElementById('sss-import-preview');
+    previewTarget.innerHTML = renderSssImportPreview({ rows: rows.map((row, index) => ({ ...row, row_number: index + 1, valid: true, errors: [], warnings: [] })) });
+  } catch (err) {
+    if (typeof showAlert === 'function') showAlert(err.message, 'SSS Table', 'error');
+    else alert(err.message);
+  }
+}
+
+function openDeductionBracketManager() {
+  document.getElementById('sss-table-manager-modal')?.remove();
+  const today = new Date().toISOString().slice(0, 10);
+  const versionLabel = `SSS Table ${today.slice(0, 4)}`;
+  const modal = document.createElement('div');
+  modal.id = 'sss-table-manager-modal';
+  modal.className = 'erp-modal-backdrop';
+  modal.innerHTML = `
+    <section class="erp-modal sss-table-modal" role="dialog" aria-modal="true" aria-labelledby="sss-table-manager-title">
+      <div class="erp-modal-head">
+        <div>
+          <h2 id="sss-table-manager-title">SSS Bracket Table Management</h2>
+          <p>Import an official contribution table, validate it, save a draft, then activate it.</p>
+        </div>
+        <button class="erp-modal-close" type="button" aria-label="Close" onclick="document.getElementById('sss-table-manager-modal')?.remove()">×</button>
+      </div>
+      <div class="sss-table-modal-body">
+        <div class="form-grid">
+          <div class="form-group"><label>Version Name</label><input id="sss-table-version-name" value="${versionLabel}" placeholder="SSS Table 2026" /></div>
+          <div class="form-group"><label>Effective Date</label><input id="sss-table-effective-date" type="date" value="${today}" /></div>
+          <div class="form-group span-2"><label>SSS Table File</label><input id="sss-table-import-file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></div>
+        </div>
+        <div class="form-actions"><span id="sss-import-status" class="payroll-form-status" aria-live="polite"></span><button class="btn btn-outline" type="button" onclick="downloadSssImportTemplate()">Download Template</button><button class="btn btn-outline" type="button" onclick="previewSssTableImport()">Preview Imported Rows</button><button class="btn btn-primary" type="button" onclick="saveSssTableDraft()">Save as Draft</button></div>
+        <div id="sss-import-preview"></div>
+        <div class="sss-table-versions-panel"><h3>SSS Table Versions</h3><div id="sss-table-versions"></div></div>
+      </div>
+    </section>`;
+  modal.addEventListener('click', event => {
+    if (event.target === modal) modal.remove();
+  });
+  document.body.appendChild(modal);
+  loadSssTableVersions();
 }
 
 async function savePayrollPolicySettings(event) {
@@ -3109,6 +4150,13 @@ function initializePayrollModule() {
     loadPieceRateConfig();
   }
   toggleDeductionNameField();
+  toggleDeductionFormSections();
+  document.getElementById('deduction-setting-form')?.addEventListener('reset', () => {
+    window.setTimeout(() => {
+      toggleDeductionNameField();
+      toggleDeductionFormSections();
+    }, 0);
+  });
 }
 
 // Export functions to global scope FIRST
@@ -3120,7 +4168,10 @@ window.updatePayrollStats = updatePayrollStats;
 window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.changeSalaryCalculationPage = changeSalaryCalculationPage;
+window.setPayrollRecordWorkflowFilter = setPayrollRecordWorkflowFilter;
 window.showCalculationBreakdown = showCalculationBreakdown;
+window.togglePayrollActionMenu = togglePayrollActionMenu;
+window.closePayrollActionMenus = closePayrollActionMenus;
 window.continueSalaryDraft = continueSalaryDraft;
 window.generatePayslipsFromRecords = generatePayslipsFromRecords;
 window.approveSalaryCalculation = approveSalaryCalculation;
@@ -3139,6 +4190,14 @@ window.loadPayrollSettings = loadPayrollSettings;
 window.savePayrollSetting = savePayrollSetting;
 window.deleteDeductionSetting = deleteDeductionSetting;
 window.toggleDeductionNameField = toggleDeductionNameField;
+window.toggleDeductionFormSections = toggleDeductionFormSections;
+window.openDeductionBracketManager = openDeductionBracketManager;
+window.loadSssTableSummary = loadSssTableSummary;
+window.downloadSssImportTemplate = downloadSssImportTemplate;
+window.previewSssTableImport = previewSssTableImport;
+window.saveSssTableDraft = saveSssTableDraft;
+window.activateSssTableVersion = activateSssTableVersion;
+window.viewSssTableRows = viewSssTableRows;
 window.loadEmployeeDeductionAccounts = loadEmployeeDeductionAccounts;
 window.saveEmployeeDeductionAccount = saveEmployeeDeductionAccount;
 window.editEmployeeDeductionAccount = editEmployeeDeductionAccount;
@@ -3162,6 +4221,7 @@ window.generatePiecePayrollRegister = generatePiecePayrollRegister;
 window.generateWeeklyPayroll = generateWeeklyPayroll;
 window.loadWeeklyPayrollRegistry = loadWeeklyPayrollRegistry;
 window.renderWeeklyPayrollRegistry = renderWeeklyPayrollRegistry;
+window.changeWeeklyPayrollRegistryPage = changeWeeklyPayrollRegistryPage;
 window.renderWeeklyPayrollEmployeeOptions = renderWeeklyPayrollEmployeeOptions;
 window.generateSewingRegistry = generateSewingRegistry;
 window.printSewingRegistry = printSewingRegistry;

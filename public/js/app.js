@@ -178,16 +178,18 @@ function navigate(pageId, navEl, params = null) {
   const titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.textContent = PAGE_TITLES[pageId] || pageId;
 
+  const navKey = params?.employeeTab ? `${pageId}:${params.employeeTab}` : pageId;
+
   if (navEl) {
     document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => n.classList.remove('active'));
     navEl.classList.add('active');
   } else {
     document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => {
-      n.classList.toggle('active', n.dataset.page === pageId);
+      n.classList.toggle('active', (n.dataset.navKey || n.dataset.page) === navKey);
     });
   }
   document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => {
-    if (n !== navEl) n.classList.toggle('active', n.dataset.page === pageId);
+    if (n !== navEl) n.classList.toggle('active', (n.dataset.navKey || n.dataset.page) === navKey);
   });
   if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
 

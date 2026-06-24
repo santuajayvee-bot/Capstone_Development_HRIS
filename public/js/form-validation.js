@@ -40,6 +40,7 @@
     const key = normalizeKey(element.name || element.id);
     const explicit = normalizeKey(element.dataset.validation);
     if (explicit) return explicit;
+    if (element.tagName === 'SELECT') return '';
     if (NAME_FIELDS.has(key) || /^(?:emerg|emergency)_name$/.test(key)) return 'name';
     if (PHONE_FIELDS.has(key) || /(?:^|_)(?:contact|phone|mobile)$/.test(key)) return 'phone';
     if (INTEGER_FIELDS.has(key)) return 'integer';

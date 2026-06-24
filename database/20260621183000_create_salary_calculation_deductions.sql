@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS salary_calculation_deductions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 ALTER TABLE salary_calculations
-  MODIFY COLUMN status ENUM('Draft','Calculated','Submitted','Approved','Finalized','Paid','Released','Superseded','Cancelled') DEFAULT 'Submitted';
+  MODIFY COLUMN status ENUM('Draft','Calculated','For Review','For Approval','Submitted','Approved','Finalized','Paid','Released','Locked','Superseded','Cancelled') DEFAULT 'For Review';
 
 -- down
 
@@ -27,7 +27,7 @@ DROP TABLE IF EXISTS salary_calculation_deductions;
 
 UPDATE salary_calculations
    SET status = 'Draft'
- WHERE status = 'Calculated';
+ WHERE status IN ('Calculated','For Review','For Approval','Locked');
 
 ALTER TABLE salary_calculations
   MODIFY COLUMN status ENUM('Draft','Submitted','Approved','Finalized','Paid','Released','Superseded','Cancelled') DEFAULT 'Submitted';

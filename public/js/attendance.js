@@ -10,6 +10,11 @@ let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
 let ATT_SELECTED_DETAIL_ID = null;
 let ATT_ACTIVE_DATE_PICKER = null;
+let ATT_RECORDS_PAGE = 1;
+let ATT_RECORDS_FILTER_SIGNATURE = '';
+let ATT_RECORDS_LOAD_SEQUENCE = 0;
+let ATT_RECORDS_SEARCH_TIMER = null;
+const ATT_RECORDS_PAGE_SIZE = 10;
 const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 
@@ -539,13 +544,27 @@ async function loadMySummary() {
 async function loadAttRecords() {
   try {
     const params = new URLSearchParams();
-    const search = document.getElementById('att-search')?.value;
-    const department = document.getElementById('att-department-filter')?.value;
-    const dateFrom = document.getElementById('att-date-from-filter')?.value;
-    const dateTo = document.getElementById('att-date-to-filter')?.value;
-    const status = document.getElementById('att-status-filter')?.value;
-    const validation = document.getElementById('att-validation-filter')?.value;
-    const payrollReady = document.getElementById('att-payroll-ready-filter')?.value;
+    const filterState = {
+      search: document.getElementById('att-search')?.value || '',
+      department: document.getElementById('att-department-filter')?.value || '',
+      dateFrom: document.getElementById('att-date-from-filter')?.value || '',
+      dateTo: document.getElementById('att-date-to-filter')?.value || '',
+      status: document.getElementById('att-status-filter')?.value || '',
+      validation: document.getElementById('att-validation-filter')?.value || '',
+      payrollReady: document.getElementById('att-payroll-ready-filter')?.value || '',
+    };
+    const nextSignature = JSON.stringify(filterState);
+    if (nextSignature !== ATT_RECORDS_FILTER_SIGNATURE) {
+      ATT_RECORDS_PAGE = 1;
+      ATT_RECORDS_FILTER_SIGNATURE = nextSignature;
+    }
+    const search = filterState.search;
+    const department = filterState.department;
+    const dateFrom = filterState.dateFrom;
+    const dateTo = filterState.dateTo;
+    const status = filterState.status;
+    const validation = filterState.validation;
+    const payrollReady = filterState.payrollReady;
     if (search) params.set('search', search);
     if (department) params.set('department', department);
     if (dateFrom) params.set('date_from', dateFrom);
@@ -557,12 +576,16 @@ async function loadAttRecords() {
     const endpoint = isEmployee()
       ? '/api/attendance/my-records'
       : '/api/attendance/all';
+    const loadSequence = ++ATT_RECORDS_LOAD_SEQUENCE;
     const res = await apiFetch(`${endpoint}${params.toString() ? `?${params}` : ''}`);
+    if (loadSequence !== ATT_RECORDS_LOAD_SEQUENCE) return;
     if (!res?.ok) {
       const data = await res.json();
       throw new Error(data.error || 'Failed to load attendance records.');
     }
-    ATT_RECORDS = await res.json();
+    const records = await res.json();
+    if (loadSequence !== ATT_RECORDS_LOAD_SEQUENCE) return;
+    ATT_RECORDS = Array.isArray(records) ? records : [];
     console.log('[ATTENDANCE_REALTIME] Attendance API returned records', {
       endpoint,
       count: ATT_RECORDS.length,
@@ -574,7 +597,16 @@ async function loadAttRecords() {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
     if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
+    renderAttendancePagination(0, 0, 0, 0);
   }
+}
+
+function scheduleAttRecordsLoad() {
+  if (ATT_RECORDS_SEARCH_TIMER) clearTimeout(ATT_RECORDS_SEARCH_TIMER);
+  ATT_RECORDS_SEARCH_TIMER = setTimeout(() => {
+    ATT_RECORDS_SEARCH_TIMER = null;
+    loadAttRecords();
+  }, 250);
 }
 
 function normalizeValidationStatus(value) {
@@ -620,10 +652,18 @@ function renderAttRecords() {
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
     tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
+    renderAttendancePagination(0, 0, 0, 0);
     return;
   }
 
-  tbody.innerHTML = ATT_RECORDS.map(record => {
+  const totalRows = ATT_RECORDS.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / ATT_RECORDS_PAGE_SIZE));
+  ATT_RECORDS_PAGE = Math.min(Math.max(Number(ATT_RECORDS_PAGE || 1), 1), totalPages);
+  const start = (ATT_RECORDS_PAGE - 1) * ATT_RECORDS_PAGE_SIZE;
+  const end = Math.min(start + ATT_RECORDS_PAGE_SIZE, totalRows);
+  const visibleRecords = ATT_RECORDS.slice(start, end);
+
+  tbody.innerHTML = visibleRecords.map(record => {
     const isSummary = Object.prototype.hasOwnProperty.call(record, 'regular_minutes');
     const attendanceId = record.attendance_id || '';
     const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out);
@@ -660,6 +700,37 @@ function renderAttRecords() {
       <td>${actions}</td>
     </tr>`;
   }).join('');
+  renderAttendancePagination(totalRows, start + 1, end, totalPages);
+  const selectAll = document.getElementById('att-select-all');
+  if (selectAll) selectAll.checked = false;
+}
+
+function renderAttendancePagination(totalRows, start, end, totalPages) {
+  const container = document.getElementById('att-records-pagination');
+  if (!container) return;
+  if (!totalRows) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+  const currentPage = Math.min(Math.max(Number(ATT_RECORDS_PAGE || 1), 1), Math.max(1, totalPages));
+  container.innerHTML = `
+    <span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
+    <div class="att-records-pagination-actions">
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(1)" ${currentPage <= 1 ? 'disabled' : ''}>First</button>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="att-records-pagination-page">Page ${currentPage} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(${totalPages})" ${currentPage >= totalPages ? 'disabled' : ''}>Last</button>
+    </div>
+  `;
+}
+
+function setAttendanceRecordsPage(page) {
+  const totalPages = Math.max(1, Math.ceil(ATT_RECORDS.length / ATT_RECORDS_PAGE_SIZE));
+  ATT_RECORDS_PAGE = Math.min(Math.max(Number(page || 1), 1), totalPages);
+  renderAttRecords();
 }
 
 function closeAttendanceActionMenus() {
@@ -1583,6 +1654,8 @@ window.loadClockStatus = loadClockStatus;
 window.loadOverviewStats = loadOverviewStats;
 window.loadMySummary = loadMySummary;
 window.loadAttRecords = loadAttRecords;
+window.scheduleAttRecordsLoad = scheduleAttRecordsLoad;
+window.setAttendanceRecordsPage = setAttendanceRecordsPage;
 window.clearAttFilters = clearAttFilters;
 window.toggleAllAttendanceRows = toggleAllAttendanceRows;
 window.bulkValidateAttendance = bulkValidateAttendance;

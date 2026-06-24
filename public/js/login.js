@@ -148,7 +148,11 @@ function completeAuthenticatedLogin(data) {
     return;
   }
 
-  navigate('dashboard', null);
+  if (data.user?.role === 'employee') {
+    navigate('employee-dashboard', null, { employeeTab: 'overview' });
+  } else {
+    navigate('dashboard', null);
+  }
 }
 
 function setLoginStep(mfaRequired) {
