@@ -1100,6 +1100,55 @@ function populateManualAttendanceEmployees() {
   }
 }
 
+async function loadManualAttendanceDropdown() {
+  const select = document.getElementById('manual-employee');
+  const departmentSelect = document.getElementById('manual-department');
+  const status = document.getElementById('manual-employee-status');
+  if (select) select.innerHTML = '<option value="">Loading employees...</option>';
+  if (departmentSelect) departmentSelect.innerHTML = '<option value="">Loading departments...</option>';
+  if (status) status.textContent = 'Loading employee list...';
+
+  try {
+    const response = await apiFetch('/api/attendance/employees');
+    const payload = await response.json().catch(() => []);
+    if (!response.ok) throw new Error(payload.error || 'Unable to load attendance employees.');
+    const rows = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.employees)
+        ? payload.employees
+        : Array.isArray(payload?.rows)
+          ? payload.rows
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : [];
+
+    ATT_EMPLOYEES = rows
+      .map(employee => ({
+        ...employee,
+        id: employee.id || employee.employee_id,
+        employee_name: employee.employee_name
+          || [employee.first_name, employee.middle_name, employee.last_name].filter(Boolean).join(' ')
+          || employee.name
+          || employee.employee_code
+          || `Employee ${employee.id || employee.employee_id}`,
+        department: employee.department || employee.department_name || 'Unassigned'
+      }))
+      .filter(employee => Number(employee.id) > 0);
+
+    ATT_DEPARTMENTS = [...new Set(ATT_EMPLOYEES.map(employee => employee.department || 'Unassigned'))]
+      .sort((a, b) => a.localeCompare(b))
+      .map((name, index) => ({ id: `manual-${index}`, name }));
+
+    populateManualAttendanceDepartments();
+    populateManualAttendanceEmployees();
+  } catch (err) {
+    console.error('Manual attendance employee dropdown error:', err);
+    if (select) select.innerHTML = '<option value="">Unable to load employees</option>';
+    if (departmentSelect) departmentSelect.innerHTML = '<option value="">Unable to load departments</option>';
+    if (status) status.textContent = err.message || 'Unable to load employee list.';
+  }
+}
+
 async function encodeOvertime() {
   const employeeId = document.getElementById('ot-employee').value;
   const date = document.getElementById('ot-date').value;
@@ -1129,7 +1178,7 @@ async function encodeOvertime() {
 
 async function openManualModal() {
   document.getElementById('manual-modal').style.display = 'flex';
-  await loadEmployees(true);
+  await loadManualAttendanceDropdown();
 }
 
 function closeManualModal() {
