@@ -386,6 +386,7 @@
     <h3>Add Manual Attendance</h3>
     <p>Use for verified biometric downtime or incomplete punches only.</p>
     <div class="att-form-grid">
+      <div><label>Department</label><select id="manual-department" onchange="populateManualAttendanceEmployees()"><option value="">All Departments</option></select></div>
       <div><label>Employee</label><select id="manual-employee"><option value="">Select employee</option></select></div>
       <div><label>Date</label><input type="date" id="manual-date" /></div>
       <div><label>Time In</label><input type="time" id="manual-time-in" /></div>

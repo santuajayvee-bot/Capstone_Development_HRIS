@@ -5,6 +5,7 @@
 let ATT_USER = null;
 let ATT_RECORDS = [];
 let ATT_EMPLOYEES = [];
+let ATT_DEPARTMENTS = [];
 let ATT_DEVICES = [];
 let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
@@ -983,21 +984,37 @@ async function verifyIntegrity(attendanceId) {
 async function loadEmployees(force = false) {
   if (ATT_EMPLOYEES.length && !force) {
     populateEmployeeSelects();
+    populateManualAttendanceDepartments();
     return;
   }
+  const manualEmployee = document.getElementById('manual-employee');
+  const manualDepartment = document.getElementById('manual-department');
+  if (manualEmployee) manualEmployee.innerHTML = '<option value="">Loading employees...</option>';
+  if (manualDepartment) manualDepartment.innerHTML = '<option value="">Loading departments...</option>';
   try {
-    const res = await apiFetch('/api/attendance/employees');
-    if (!res?.ok) {
-      const select = document.getElementById('manual-employee');
-      if (select) select.innerHTML = '<option value="">Unable to load employees</option>';
-      return;
+    const [employeeResponse, lookupResponse] = await Promise.all([
+      apiFetch('/api/attendance/employees'),
+      apiFetch('/api/employee-setup/lookups')
+    ]);
+    if (!employeeResponse?.ok) throw new Error('Unable to load active employees.');
+    ATT_EMPLOYEES = await employeeResponse.json();
+    if (lookupResponse?.ok) {
+      const lookups = await lookupResponse.json();
+      ATT_DEPARTMENTS = Array.isArray(lookups.departments) ? lookups.departments : [];
+    } else {
+      ATT_DEPARTMENTS = [];
     }
-    ATT_EMPLOYEES = await res.json();
+    if (!ATT_DEPARTMENTS.length) {
+      ATT_DEPARTMENTS = [...new Set(ATT_EMPLOYEES.map(employee => employee.department).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b))
+        .map((name, index) => ({ id: `name-${index}`, name }));
+    }
     populateEmployeeSelects();
+    populateManualAttendanceDepartments();
   } catch (err) {
     console.error('Employee list error:', err);
-    const select = document.getElementById('manual-employee');
-    if (select) select.innerHTML = '<option value="">Unable to load employees</option>';
+    if (manualEmployee) manualEmployee.innerHTML = '<option value="">Unable to load employees</option>';
+    if (manualDepartment) manualDepartment.innerHTML = '<option value="">Unable to load departments</option>';
   }
 }
 
@@ -1008,10 +1025,36 @@ function populateEmployeeSelects() {
       return `<option value="${Number(employee.id)}">${esc(name)} (${esc(employee.employee_code || employee.empCode || employee.id)})</option>`;
     })
     .join('');
-  ['ot-employee', 'manual-employee', 'bio-map-employee'].forEach(id => {
+  ['ot-employee', 'bio-map-employee'].forEach(id => {
     const select = document.getElementById(id);
     if (select) select.innerHTML = options;
   });
+  populateManualAttendanceEmployees();
+}
+
+function populateManualAttendanceDepartments() {
+  const select = document.getElementById('manual-department');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">All Departments</option>' + ATT_DEPARTMENTS
+    .map(department => `<option value="${esc(department.name)}">${esc(department.name)}</option>`)
+    .join('');
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function populateManualAttendanceEmployees() {
+  const select = document.getElementById('manual-employee');
+  if (!select) return;
+  const department = document.getElementById('manual-department')?.value || '';
+  const current = select.value;
+  const employees = ATT_EMPLOYEES.filter(employee => !department || employee.department === department);
+  select.innerHTML = `<option value="">${employees.length ? 'Select employee' : 'No active employees in this department'}</option>` + employees
+    .map(employee => {
+      const name = employee.employee_name || [employee.first_name, employee.middle_name, employee.last_name].filter(Boolean).join(' ') || employee.name || 'Employee';
+      return `<option value="${Number(employee.id)}">${esc(name)} (${esc(employee.employee_code || employee.empCode || employee.id)})</option>`;
+    })
+    .join('');
+  if ([...select.options].some(option => option.value === current)) select.value = current;
 }
 
 async function encodeOvertime() {
@@ -1042,8 +1085,8 @@ async function encodeOvertime() {
 }
 
 async function openManualModal() {
-  await loadEmployees(true);
   document.getElementById('manual-modal').style.display = 'flex';
+  await loadEmployees(true);
 }
 
 function closeManualModal() {
@@ -1675,6 +1718,7 @@ window.verifyAttendance = verifyAttendance;
 window.verifyIntegrity = verifyIntegrity;
 window.encodeOvertime = encodeOvertime;
 window.openManualModal = openManualModal;
+window.populateManualAttendanceEmployees = populateManualAttendanceEmployees;
 window.closeManualModal = closeManualModal;
 window.submitManualAttendance = submitManualAttendance;
 window.loadBiometricExceptions = loadBiometricExceptions;
