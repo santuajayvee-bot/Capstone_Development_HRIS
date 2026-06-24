@@ -25,6 +25,10 @@ const ATT_DATE_PICKER_MONTHS = [
 ];
 const ATT_DATE_PICKER_DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
+function manualAttendanceEl(id) {
+  return document.querySelector(`#manual-modal #${id}`);
+}
+
 function padDatePart(value) {
   return String(value).padStart(2, '0');
 }
@@ -987,9 +991,9 @@ async function loadEmployees(force = false) {
     populateManualAttendanceDepartments();
     return;
   }
-  const manualEmployee = document.getElementById('manual-employee');
-  const manualDepartment = document.getElementById('manual-department');
-  const manualEmployeeStatus = document.getElementById('manual-employee-status');
+  const manualEmployee = manualAttendanceEl('manual-employee');
+  const manualDepartment = manualAttendanceEl('manual-department');
+  const manualEmployeeStatus = manualAttendanceEl('manual-employee-status');
   if (manualEmployee) manualEmployee.innerHTML = '<option value="">Loading employees...</option>';
   if (manualDepartment) manualDepartment.innerHTML = '<option value="">Loading departments...</option>';
   if (manualEmployeeStatus) manualEmployeeStatus.textContent = 'Loading active employees...';
@@ -1070,19 +1074,19 @@ function populateEmployeeSelects() {
 }
 
 function populateManualAttendanceDepartments() {
-  const select = document.getElementById('manual-department');
+  const select = manualAttendanceEl('manual-department');
   if (!select) return;
   const current = select.value;
   select.innerHTML = '<option value="">All Departments</option>' + ATT_DEPARTMENTS
     .map(department => `<option value="${esc(department.name)}">${esc(department.name)}</option>`)
     .join('');
-  if ([...select.options].some(option => option.value === current)) select.value = current;
+  if (Array.from(select.options).some(option => option.value === current)) select.value = current;
 }
 
 function populateManualAttendanceEmployees() {
-  const select = document.getElementById('manual-employee');
+  const select = manualAttendanceEl('manual-employee');
   if (!select) return;
-  const department = document.getElementById('manual-department')?.value || '';
+  const department = manualAttendanceEl('manual-department')?.value || '';
   const current = select.value;
   const employees = ATT_EMPLOYEES.filter(employee => !department || employee.department === department);
   select.innerHTML = `<option value="">${employees.length ? 'Select employee' : 'No active employees in this department'}</option>` + employees
@@ -1091,8 +1095,8 @@ function populateManualAttendanceEmployees() {
       return `<option value="${Number(employee.id)}">${esc(name)} (${esc(employee.employee_code || employee.empCode || employee.id)})</option>`;
     })
     .join('');
-  if ([...select.options].some(option => option.value === current)) select.value = current;
-  const status = document.getElementById('manual-employee-status');
+  if (Array.from(select.options).some(option => option.value === current)) select.value = current;
+  const status = manualAttendanceEl('manual-employee-status');
   if (status) {
     status.textContent = department
       ? `${employees.length} active employee${employees.length === 1 ? '' : 's'} in ${department}.`
@@ -1101,9 +1105,9 @@ function populateManualAttendanceEmployees() {
 }
 
 async function loadManualAttendanceDropdown() {
-  const select = document.getElementById('manual-employee');
-  const departmentSelect = document.getElementById('manual-department');
-  const status = document.getElementById('manual-employee-status');
+  const select = manualAttendanceEl('manual-employee');
+  const departmentSelect = manualAttendanceEl('manual-department');
+  const status = manualAttendanceEl('manual-employee-status');
   if (select) select.innerHTML = '<option value="">Loading employees...</option>';
   if (departmentSelect) departmentSelect.innerHTML = '<option value="">Loading departments...</option>';
   if (status) status.textContent = 'Loading employee list...';
@@ -1187,11 +1191,11 @@ function closeManualModal() {
 
 async function submitManualAttendance() {
   const body = {
-    employee_id: document.getElementById('manual-employee').value,
-    date: document.getElementById('manual-date').value,
-    time_in: document.getElementById('manual-time-in').value,
-    time_out: document.getElementById('manual-time-out').value,
-    reason: document.getElementById('manual-reason').value,
+    employee_id: manualAttendanceEl('manual-employee').value,
+    date: manualAttendanceEl('manual-date').value,
+    time_in: manualAttendanceEl('manual-time-in').value,
+    time_out: manualAttendanceEl('manual-time-out').value,
+    reason: manualAttendanceEl('manual-reason').value,
   };
   if (!body.employee_id || !body.date || body.reason.trim().length < 8) {
     return alert('Select an employee, date, and clear reason.');
