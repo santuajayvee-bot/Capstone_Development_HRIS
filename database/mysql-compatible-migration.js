@@ -113,7 +113,7 @@ function runAlterStatement(db, statement) {
 }
 
 function runSqlFile(db, filename) {
-  const sql = fs.readFileSync(path.join(__dirname, 'sqls', filename), 'utf8');
+  const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', 'sqls', filename), 'utf8');
   return splitStatements(sql).reduce(
     (chain, statement) => chain.then(() => runAlterStatement(db, statement)),
     Promise.resolve()
