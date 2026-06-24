@@ -678,7 +678,7 @@ router.get('/employees', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFIC
               e.position, d.name AS department
          FROM employees e
          LEFT JOIN departments d ON d.id = e.department_id
-        WHERE LOWER(COALESCE(e.status, 'Active')) = 'active'
+        WHERE LOWER(COALESCE(e.status, 'Active')) NOT IN ('inactive', 'resigned', 'terminated', 'separated', 'offboarded')
         ORDER BY e.employee_code, e.last_name, e.first_name
         LIMIT 1000`
     );

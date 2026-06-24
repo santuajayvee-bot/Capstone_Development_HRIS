@@ -1021,7 +1021,7 @@ async function loadEmployees(force = false) {
       .filter(employee => {
         if (!employee || Number(employee.id) <= 0) return false;
         const status = String(employee.status || employee.employment_status || 'Active').toLowerCase();
-        return status === 'active';
+        return !['inactive', 'resigned', 'terminated', 'separated', 'offboarded'].includes(status);
       })
       .map(employee => ({
         ...employee,
