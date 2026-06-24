@@ -1163,7 +1163,7 @@ async function auditEmployeeSensitiveField(req, field, targetEmployeeId, oldValu
 
 async function rejectEmployeeFieldTampering(req, res, field, oldValue = null, newValue = null) {
   await auditEmployeeSensitiveField(req, field, req.params?.id || req.body?.id || null, oldValue, newValue, 'blocked');
-  return res.status(403).json({ error: 'You are not allowed to modify this field.' });
+  return res.status(403).json({ error: 'You are not allowed to modify this field.', field });
 }
 
 async function rejectEmployeeUnknownFields(req, res, fields) {
@@ -1284,7 +1284,9 @@ function applyEmployeeUpdateDefaults(body, existingEmployee) {
       !Object.prototype.hasOwnProperty.call(body, field) &&
       Object.prototype.hasOwnProperty.call(existingEmployee, field)
     ) {
-      body[field] = existingEmployee[field];
+      body[field] = EMPLOYEE_STRICT_PII_COLUMNS.includes(field)
+        ? decryptColumnValue(existingEmployee[field])
+        : existingEmployee[field];
     }
   }
   if (!Object.prototype.hasOwnProperty.call(body, 'employment_status') && existingEmployee.status !== undefined) {

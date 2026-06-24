@@ -3373,6 +3373,35 @@ function updateProfileBaseSalaryVisibility() {
   if (!shouldShow && input) input.value = '';
 }
 
+const PROFILE_PAYROLL_ONLY_FIELDS = [
+  'wage_type', 'base_rate', 'allowances', 'payroll_schedule',
+  'tax_status', 'bank_name', 'bank_account'
+];
+
+function canManageProfilePayrollFields() {
+  return ['payroll_officer', 'payroll_manager', 'admin', 'system_admin'].includes(getUser()?.role);
+}
+
+function applyProfilePayrollFieldAccess() {
+  const canManage = canManageProfilePayrollFields();
+  [
+    'profile-edit-wage-type', 'profile-edit-basic-salary', 'profile-edit-allowances',
+    'profile-edit-payroll-schedule', 'profile-edit-bank-name', 'profile-edit-bank-account',
+    'profile-edit-tax-status'
+  ].forEach(id => {
+    const field = document.getElementById(id);
+    if (!field) return;
+    field.disabled = !canManage;
+    field.title = canManage ? '' : 'Managed by Payroll or System Administration.';
+  });
+}
+
+function removeUnauthorizedProfilePayrollFields(payload) {
+  if (canManageProfilePayrollFields()) return payload;
+  PROFILE_PAYROLL_ONLY_FIELDS.forEach(field => delete payload[field]);
+  return payload;
+}
+
 function toggleProfileAgencyFields() {
   const hiringType = document.getElementById('profile-edit-hiring-type')?.value || 'Direct Hire';
   const employmentType = document.getElementById('profile-edit-type')?.value || '';
@@ -3416,6 +3445,7 @@ function toggleProfileEditMode(forceState = null, skipTabSync = false) {
   if (view) view.classList.toggle('hidden', nextState);
   if (edit) edit.classList.toggle('active', nextState);
   if (page) page.classList.toggle('profile-editing', nextState);
+  if (nextState) applyProfilePayrollFieldAccess();
   if (!skipTabSync) switchProfileTab(currentProfileTab);
 }
 
@@ -3567,6 +3597,7 @@ async function saveProfilePageChanges() {
     bank_name: document.getElementById('profile-edit-bank-name')?.value || null,
     bank_account: document.getElementById('profile-edit-bank-account')?.value || null
   };
+  removeUnauthorizedProfilePayrollFields(payload);
 
   try {
     const response = await apiFetch(`/api/employees/${currentProfileEmployee.id}`, {

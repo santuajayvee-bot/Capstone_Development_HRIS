@@ -710,6 +710,21 @@ async function initializeWageConfig() {
   }
 }
 
+const REGISTER_PAYROLL_ONLY_FIELDS = [
+  'wage_type_id', 'wage_type', 'base_rate', 'allowances',
+  'payroll_schedule', 'tax_status', 'bank_name', 'bank_account'
+];
+
+function canManageRegisteredEmployeePayroll() {
+  return ['payroll_officer', 'payroll_manager', 'admin', 'system_admin'].includes(getUser()?.role);
+}
+
+function removeUnauthorizedRegisterPayrollFields(payload) {
+  if (canManageRegisteredEmployeePayroll()) return payload;
+  REGISTER_PAYROLL_ONLY_FIELDS.forEach(field => delete payload[field]);
+  return payload;
+}
+
 // Check user role and disable form fields for payroll officers
 function applyRoleBasedAccess() {
   const userStr = sessionStorage.getItem('vp_user');
@@ -739,6 +754,16 @@ function applyRoleBasedAccess() {
       msg.textContent = '👁 View-Only Mode (Payroll Officer)';
       header.appendChild(msg);
     }
+  } else if (!canManageRegisteredEmployeePayroll()) {
+    [
+      'emp-wage-type', 'emp-salary', 'emp-hourly-rate', 'emp-prod-base-rate',
+      'emp-allowances', 'emp-pay-freq', 'emp-tax-status', 'emp-bank', 'emp-bank-account'
+    ].forEach(id => {
+      const field = document.getElementById(id);
+      if (!field) return;
+      field.disabled = true;
+      field.title = 'Managed by Payroll or System Administration.';
+    });
   }
 }
 
@@ -1600,6 +1625,7 @@ async function saveEmployee() {
     bank_name: document.getElementById('emp-bank')?.value || null,
     bank_account: document.getElementById('emp-bank-account')?.value || null
   };
+  removeUnauthorizedRegisterPayrollFields(formData);
 
   if (!formData.first_name || !formData.last_name || !formData.email) {
     IS_SAVING = false;  // Reset double-submit flag
@@ -1678,7 +1704,7 @@ async function saveEmployee() {
 
     // Save wage configuration if set
     const wageTypeId = getWageTypeId(document.getElementById('emp-wage-type')?.value);
-    if (wageTypeId) {
+    if (canManageRegisteredEmployeePayroll() && wageTypeId) {
       // Use numeric ID for API calls, fall back to employee code for new employees
       const apiEmployeeId = savedEmployeeNumericId || empId;
       return saveWageConfiguration(apiEmployeeId, wageTypeId);

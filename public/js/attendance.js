@@ -989,15 +989,35 @@ async function loadEmployees(force = false) {
   }
   const manualEmployee = document.getElementById('manual-employee');
   const manualDepartment = document.getElementById('manual-department');
+  const manualEmployeeStatus = document.getElementById('manual-employee-status');
   if (manualEmployee) manualEmployee.innerHTML = '<option value="">Loading employees...</option>';
   if (manualDepartment) manualDepartment.innerHTML = '<option value="">Loading departments...</option>';
+  if (manualEmployeeStatus) manualEmployeeStatus.textContent = 'Loading active employees...';
   try {
     const [employeeResponse, lookupResponse] = await Promise.all([
       apiFetch('/api/attendance/employees'),
       apiFetch('/api/employee-setup/lookups')
     ]);
-    if (!employeeResponse?.ok) throw new Error('Unable to load active employees.');
-    ATT_EMPLOYEES = await employeeResponse.json();
+    let employeeRows = employeeResponse?.ok ? await employeeResponse.json() : [];
+    if (!Array.isArray(employeeRows) || !employeeRows.length) {
+      const fallbackResponse = await apiFetch('/api/employees?status=active');
+      if (fallbackResponse?.ok) {
+        const fallbackRows = await fallbackResponse.json();
+        employeeRows = Array.isArray(fallbackRows) ? fallbackRows : [];
+      }
+    }
+    ATT_EMPLOYEES = (Array.isArray(employeeRows) ? employeeRows : [])
+      .filter(employee => employee && Number(employee.id) > 0)
+      .map(employee => ({
+        ...employee,
+        employee_name: employee.employee_name
+          || [employee.first_name, employee.middle_name, employee.last_name].filter(Boolean).join(' ')
+          || employee.name
+          || employee.employee_code
+          || `Employee ${employee.id}`,
+        department: employee.department || 'Unassigned'
+      }));
+    if (!ATT_EMPLOYEES.length) throw new Error('No active employees were returned by the server.');
     if (lookupResponse?.ok) {
       const lookups = await lookupResponse.json();
       ATT_DEPARTMENTS = Array.isArray(lookups.departments) ? lookups.departments : [];
@@ -1011,10 +1031,12 @@ async function loadEmployees(force = false) {
     }
     populateEmployeeSelects();
     populateManualAttendanceDepartments();
+    if (manualEmployeeStatus) manualEmployeeStatus.textContent = `${ATT_EMPLOYEES.length} active employee${ATT_EMPLOYEES.length === 1 ? '' : 's'} loaded.`;
   } catch (err) {
     console.error('Employee list error:', err);
     if (manualEmployee) manualEmployee.innerHTML = '<option value="">Unable to load employees</option>';
     if (manualDepartment) manualDepartment.innerHTML = '<option value="">Unable to load departments</option>';
+    if (manualEmployeeStatus) manualEmployeeStatus.textContent = err.message || 'Unable to load active employees.';
   }
 }
 
@@ -1055,6 +1077,12 @@ function populateManualAttendanceEmployees() {
     })
     .join('');
   if ([...select.options].some(option => option.value === current)) select.value = current;
+  const status = document.getElementById('manual-employee-status');
+  if (status) {
+    status.textContent = department
+      ? `${employees.length} active employee${employees.length === 1 ? '' : 's'} in ${department}.`
+      : `${employees.length} active employee${employees.length === 1 ? '' : 's'} loaded.`;
+  }
 }
 
 async function encodeOvertime() {
