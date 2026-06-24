@@ -678,7 +678,7 @@ router.get('/employees', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFIC
               e.position, d.name AS department
          FROM employees e
          LEFT JOIN departments d ON d.id = e.department_id
-        WHERE COALESCE(e.status, 'Active') = 'Active'
+        WHERE LOWER(COALESCE(e.status, 'Active')) = 'active'
         ORDER BY e.employee_code, e.last_name, e.first_name
         LIMIT 1000`
     );

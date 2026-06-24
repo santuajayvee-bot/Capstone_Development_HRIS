@@ -1007,14 +1007,22 @@ async function loadEmployees(force = false) {
     };
     let employeeRows = employeeResponse?.ok ? normalizeRows(await employeeResponse.json()) : [];
     if (!employeeRows.length) {
-      const fallbackResponse = await apiFetch('/api/employees?status=active');
+      const fallbackResponse = await apiFetch('/api/employees?status=all');
       if (fallbackResponse?.ok) {
         const fallbackRows = await fallbackResponse.json();
         employeeRows = normalizeRows(fallbackRows);
       }
     }
     ATT_EMPLOYEES = (Array.isArray(employeeRows) ? employeeRows : [])
-      .filter(employee => employee && Number(employee.id) > 0)
+      .map(employee => ({
+        ...employee,
+        id: employee.id || employee.employee_id,
+      }))
+      .filter(employee => {
+        if (!employee || Number(employee.id) <= 0) return false;
+        const status = String(employee.status || employee.employment_status || 'Active').toLowerCase();
+        return status === 'active';
+      })
       .map(employee => ({
         ...employee,
         employee_name: employee.employee_name
