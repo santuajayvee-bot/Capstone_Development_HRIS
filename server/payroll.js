@@ -4375,7 +4375,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
 });
 
 // Set employee wage type and rates (ADMIN only)
-router.post('/employees/:id/wage-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings), PAYROLL_SETTINGS_GUARD, async (req, res) => {
+router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_PERMISSIONS.settings, ...ROLES.hr_manager]), PAYROLL_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     const empId = req.params.id;

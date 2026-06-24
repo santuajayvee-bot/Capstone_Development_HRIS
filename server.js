@@ -88,7 +88,7 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
 const EMPLOYEE_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s.-]+$/;
-const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#/-]+$/;
+const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()/-]+$/;
 const EMPLOYEE_SAFE_TEXT_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+:/-]+$/;
 const EMPLOYEE_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
 const EMPLOYEE_ENUMS = {
@@ -403,8 +403,13 @@ function encryptEmployeeStrictPiiPayload(payload) {
   return payload;
 }
 
+function dbNullable(value) {
+  return value === undefined ? null : value;
+}
+
 function employeeDbValue(field, value) {
-  return EMPLOYEE_STRICT_PII_COLUMNS.includes(field) ? encryptColumnValue(value) : value;
+  const safeValue = value === undefined ? null : value;
+  return EMPLOYEE_STRICT_PII_COLUMNS.includes(field) ? encryptColumnValue(safeValue) : safeValue;
 }
 
 app.use(express.json({
@@ -439,7 +444,15 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/uploads', (_req, res) => res.status(404).send('Not found'));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(?:html|js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 app.get('/attendance/station', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'attendance-station.html'));
@@ -1366,6 +1379,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
 
   const isHrOrAdmin = employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any]);
   const isPayrollOrAdmin = employeeHasRole(req, [...ROLES.payroll_any, ...ROLES.admin_any]);
+  const canManagePayrollSetup = isPayrollOrAdmin || (mode === 'create' && isHrOrAdmin);
   let existingForUpdate = null;
   if (mode === 'update') {
     const [existingRows] = await pool.execute('SELECT * FROM employees WHERE id = ? OR employee_code = ? LIMIT 1', [req.params.id, req.params.id]);
@@ -1376,7 +1390,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     if (EMPLOYEE_HR_PROTECTED_FIELDS.has(field) && !isHrOrAdmin) {
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
-    if (EMPLOYEE_WAGE_CONFIG_FIELDS.has(field) && !isPayrollOrAdmin) {
+    if (EMPLOYEE_WAGE_CONFIG_FIELDS.has(field) && !canManagePayrollSetup) {
       if (!hasMeaningfulSubmittedValue(body[field]) || mode === 'update') {
         stripUnauthorizedEmployeeField(body, field);
         continue;
@@ -1386,7 +1400,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     if (EMPLOYEE_GOVERNMENT_ID_FIELDS.has(field) && !isPayrollOrAdmin && !isHrOrAdmin) {
       return rejectEmployeeFieldTampering(req, res, field, null, body[field]);
     }
-    if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !isPayrollOrAdmin) {
+    if (EMPLOYEE_PAYROLL_ONLY_FIELDS.has(field) && !canManagePayrollSetup) {
       if (!hasMeaningfulSubmittedValue(body[field]) || employeeFieldUnchanged(existingForUpdate, field, body[field])) {
         stripUnauthorizedEmployeeField(body, field);
         continue;
@@ -2769,13 +2783,13 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
          mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
        WHERE id = ?`,
       [
-        addresses.home.lat, addresses.home.lng,
+        dbNullable(addresses.home.lat), dbNullable(addresses.home.lng),
         employeeDbValue('residential_address_region', addresses.home.region), employeeDbValue('residential_address_province', addresses.home.province), employeeDbValue('residential_address_city_municipality', addresses.home.city_municipality),
         employeeDbValue('residential_address_barangay', addresses.home.barangay), employeeDbValue('residential_address_street_address', addresses.home.street_address), employeeDbValue('residential_address_full_address', addresses.home.full_address || addresses.home.address), employeeDbValue('residential_address_place_id', addresses.home.place_id || null),
-        addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        dbNullable(addresses.current.lat), dbNullable(addresses.current.lng), addresses.sameCurrent ? 1 : 0,
         employeeDbValue('current_address_region', addresses.current.region), employeeDbValue('current_address_province', addresses.current.province), employeeDbValue('current_address_city_municipality', addresses.current.city_municipality),
         employeeDbValue('current_address_barangay', addresses.current.barangay), employeeDbValue('current_address_street_address', addresses.current.street_address), employeeDbValue('current_address_full_address', addresses.current.full_address || addresses.current.address), employeeDbValue('current_address_place_id', addresses.current.place_id || null),
-        addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        dbNullable(addresses.mailing.lat), dbNullable(addresses.mailing.lng), addresses.sameMailing ? 1 : 0,
         employeeDbValue('mailing_address_region', addresses.mailing.region), employeeDbValue('mailing_address_province', addresses.mailing.province), employeeDbValue('mailing_address_city_municipality', addresses.mailing.city_municipality),
         employeeDbValue('mailing_address_barangay', addresses.mailing.barangay), employeeDbValue('mailing_address_street_address', addresses.mailing.street_address), employeeDbValue('mailing_address_full_address', addresses.mailing.full_address || addresses.mailing.address), employeeDbValue('mailing_address_place_id', addresses.mailing.place_id || null),
         employee_id
@@ -3077,13 +3091,13 @@ app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_managemen
          mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
        WHERE id = ? OR employee_code = ?`,
       [
-        addresses.home.lat, addresses.home.lng,
+        dbNullable(addresses.home.lat), dbNullable(addresses.home.lng),
         employeeDbValue('residential_address_region', addresses.home.region), employeeDbValue('residential_address_province', addresses.home.province), employeeDbValue('residential_address_city_municipality', addresses.home.city_municipality),
         employeeDbValue('residential_address_barangay', addresses.home.barangay), employeeDbValue('residential_address_street_address', addresses.home.street_address), employeeDbValue('residential_address_full_address', addresses.home.full_address || addresses.home.address), employeeDbValue('residential_address_place_id', addresses.home.place_id || null),
-        addresses.current.lat, addresses.current.lng, addresses.sameCurrent ? 1 : 0,
+        dbNullable(addresses.current.lat), dbNullable(addresses.current.lng), addresses.sameCurrent ? 1 : 0,
         employeeDbValue('current_address_region', addresses.current.region), employeeDbValue('current_address_province', addresses.current.province), employeeDbValue('current_address_city_municipality', addresses.current.city_municipality),
         employeeDbValue('current_address_barangay', addresses.current.barangay), employeeDbValue('current_address_street_address', addresses.current.street_address), employeeDbValue('current_address_full_address', addresses.current.full_address || addresses.current.address), employeeDbValue('current_address_place_id', addresses.current.place_id || null),
-        addresses.mailing.lat, addresses.mailing.lng, addresses.sameMailing ? 1 : 0,
+        dbNullable(addresses.mailing.lat), dbNullable(addresses.mailing.lng), addresses.sameMailing ? 1 : 0,
         employeeDbValue('mailing_address_region', addresses.mailing.region), employeeDbValue('mailing_address_province', addresses.mailing.province), employeeDbValue('mailing_address_city_municipality', addresses.mailing.city_municipality),
         employeeDbValue('mailing_address_barangay', addresses.mailing.barangay), employeeDbValue('mailing_address_street_address', addresses.mailing.street_address), employeeDbValue('mailing_address_full_address', addresses.mailing.full_address || addresses.mailing.address), employeeDbValue('mailing_address_place_id', addresses.mailing.place_id || null),
         id, id

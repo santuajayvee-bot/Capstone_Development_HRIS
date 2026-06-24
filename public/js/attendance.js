@@ -998,12 +998,19 @@ async function loadEmployees(force = false) {
       apiFetch('/api/attendance/employees'),
       apiFetch('/api/employee-setup/lookups')
     ]);
-    let employeeRows = employeeResponse?.ok ? await employeeResponse.json() : [];
-    if (!Array.isArray(employeeRows) || !employeeRows.length) {
+    const normalizeRows = payload => {
+      if (Array.isArray(payload)) return payload;
+      if (Array.isArray(payload?.employees)) return payload.employees;
+      if (Array.isArray(payload?.data)) return payload.data;
+      if (Array.isArray(payload?.rows)) return payload.rows;
+      return [];
+    };
+    let employeeRows = employeeResponse?.ok ? normalizeRows(await employeeResponse.json()) : [];
+    if (!employeeRows.length) {
       const fallbackResponse = await apiFetch('/api/employees?status=active');
       if (fallbackResponse?.ok) {
         const fallbackRows = await fallbackResponse.json();
-        employeeRows = Array.isArray(fallbackRows) ? fallbackRows : [];
+        employeeRows = normalizeRows(fallbackRows);
       }
     }
     ATT_EMPLOYEES = (Array.isArray(employeeRows) ? employeeRows : [])
@@ -1015,7 +1022,7 @@ async function loadEmployees(force = false) {
           || employee.name
           || employee.employee_code
           || `Employee ${employee.id}`,
-        department: employee.department || 'Unassigned'
+        department: employee.department || employee.department_name || 'Unassigned'
       }));
     if (!ATT_EMPLOYEES.length) throw new Error('No active employees were returned by the server.');
     if (lookupResponse?.ok) {

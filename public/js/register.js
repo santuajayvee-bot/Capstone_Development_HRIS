@@ -716,7 +716,7 @@ const REGISTER_PAYROLL_ONLY_FIELDS = [
 ];
 
 function canManageRegisteredEmployeePayroll() {
-  return ['payroll_officer', 'payroll_manager', 'admin', 'system_admin'].includes(getUser()?.role);
+  return ['hr_manager', 'hr_admin', 'payroll_officer', 'payroll_manager', 'admin', 'system_admin'].includes(getUser()?.role);
 }
 
 function removeUnauthorizedRegisterPayrollFields(payload) {
@@ -754,16 +754,6 @@ function applyRoleBasedAccess() {
       msg.textContent = '👁 View-Only Mode (Payroll Officer)';
       header.appendChild(msg);
     }
-  } else if (!canManageRegisteredEmployeePayroll()) {
-    [
-      'emp-wage-type', 'emp-salary', 'emp-hourly-rate', 'emp-prod-base-rate',
-      'emp-allowances', 'emp-pay-freq', 'emp-tax-status', 'emp-bank', 'emp-bank-account'
-    ].forEach(id => {
-      const field = document.getElementById(id);
-      if (!field) return;
-      field.disabled = true;
-      field.title = 'Managed by Payroll or System Administration.';
-    });
   }
 }
 
