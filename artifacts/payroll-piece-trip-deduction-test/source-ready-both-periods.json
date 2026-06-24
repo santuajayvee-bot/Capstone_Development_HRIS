@@ -1,0 +1,186 @@
+{
+  "message": "Source-ready piece/trip fixtures are now available for both visible test periods.",
+  "department": "TEST Piece Trip Deduction QA",
+  "periods": [
+    {
+      "start": "2026-06-22",
+      "end": "2026-06-26",
+      "label": "2026-06-W4",
+      "tripType": "W4 Test Trip"
+    },
+    {
+      "start": "2026-06-29",
+      "end": "2026-06-30",
+      "label": "2026-06-W5",
+      "tripType": "W5 Test Trip"
+    }
+  ],
+  "employees": 15,
+  "pairsReady": [
+    {
+      "payroll_period": "2026-06",
+      "c": 10,
+      "ready": "10"
+    }
+  ],
+  "tripsReady": [
+    {
+      "trip_date": "2026-06-21T16:00:00.000Z",
+      "c": 5,
+      "ready": "5"
+    },
+    {
+      "trip_date": "2026-06-28T16:00:00.000Z",
+      "c": 5,
+      "ready": "5"
+    }
+  ],
+  "salary_calculations": 0,
+  "payslips": 0,
+  "created": {
+    "pairs": [
+      {
+        "id": 23,
+        "period": "2026-06-W4",
+        "sewerCode": "EMP-PP01",
+        "fixerCode": "EMP-PF01",
+        "sewerGross": 1500,
+        "fixerGross": 1227.27
+      },
+      {
+        "id": 24,
+        "period": "2026-06-W4",
+        "sewerCode": "EMP-PP02",
+        "fixerCode": "EMP-PF02",
+        "sewerGross": 3125,
+        "fixerGross": 2556.82
+      },
+      {
+        "id": 25,
+        "period": "2026-06-W4",
+        "sewerCode": "EMP-PP03",
+        "fixerCode": "EMP-PF03",
+        "sewerGross": 5000,
+        "fixerGross": 4090.91
+      },
+      {
+        "id": 26,
+        "period": "2026-06-W4",
+        "sewerCode": "EMP-PP04",
+        "fixerCode": "EMP-PF04",
+        "sewerGross": 17000,
+        "fixerGross": 13909.09
+      },
+      {
+        "id": 27,
+        "period": "2026-06-W4",
+        "sewerCode": "EMP-PP05",
+        "fixerCode": "EMP-PF05",
+        "sewerGross": 25000,
+        "fixerGross": 20454.55
+      },
+      {
+        "id": 28,
+        "period": "2026-06-W5",
+        "sewerCode": "EMP-PP01",
+        "fixerCode": "EMP-PF01",
+        "sewerGross": 1500,
+        "fixerGross": 1227.27
+      },
+      {
+        "id": 29,
+        "period": "2026-06-W5",
+        "sewerCode": "EMP-PP02",
+        "fixerCode": "EMP-PF02",
+        "sewerGross": 3125,
+        "fixerGross": 2556.82
+      },
+      {
+        "id": 30,
+        "period": "2026-06-W5",
+        "sewerCode": "EMP-PP03",
+        "fixerCode": "EMP-PF03",
+        "sewerGross": 5000,
+        "fixerGross": 4090.91
+      },
+      {
+        "id": 31,
+        "period": "2026-06-W5",
+        "sewerCode": "EMP-PP04",
+        "fixerCode": "EMP-PF04",
+        "sewerGross": 17000,
+        "fixerGross": 13909.09
+      },
+      {
+        "id": 32,
+        "period": "2026-06-W5",
+        "sewerCode": "EMP-PP05",
+        "fixerCode": "EMP-PF05",
+        "sewerGross": 25000,
+        "fixerGross": 20454.55
+      }
+    ],
+    "trips": [
+      {
+        "id": 15,
+        "period": "2026-06-W4",
+        "code": "EMP-PT01",
+        "grossPay": 1500
+      },
+      {
+        "id": 16,
+        "period": "2026-06-W4",
+        "code": "EMP-PT02",
+        "grossPay": 3125
+      },
+      {
+        "id": 17,
+        "period": "2026-06-W4",
+        "code": "EMP-PT03",
+        "grossPay": 5000
+      },
+      {
+        "id": 18,
+        "period": "2026-06-W4",
+        "code": "EMP-PT04",
+        "grossPay": 17000
+      },
+      {
+        "id": 19,
+        "period": "2026-06-W4",
+        "code": "EMP-PT05",
+        "grossPay": 25000
+      },
+      {
+        "id": 20,
+        "period": "2026-06-W5",
+        "code": "EMP-PT01",
+        "grossPay": 1500
+      },
+      {
+        "id": 21,
+        "period": "2026-06-W5",
+        "code": "EMP-PT02",
+        "grossPay": 3125
+      },
+      {
+        "id": 22,
+        "period": "2026-06-W5",
+        "code": "EMP-PT03",
+        "grossPay": 5000
+      },
+      {
+        "id": 23,
+        "period": "2026-06-W5",
+        "code": "EMP-PT04",
+        "grossPay": 17000
+      },
+      {
+        "id": 24,
+        "period": "2026-06-W5",
+        "code": "EMP-PT05",
+        "grossPay": 25000
+      }
+    ]
+  }
+}

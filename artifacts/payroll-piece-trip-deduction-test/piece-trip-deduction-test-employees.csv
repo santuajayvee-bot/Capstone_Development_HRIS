@@ -1,0 +1,16 @@
+Employee Code,Pay Type,Role,Segment,Partner Employee Code,Source Table,Source Record ID,Source Status,Split,Weekly Gross Before Deductions,Projected Monthly Base Divisor 2,Projected Monthly Base Divisor 3,Projected Monthly Base Divisor 5
+EMP-PP01,Per-Piece,Sewer,Below floor,EMP-PF01,payroll_production_pairs,18,Payroll Ready,55/45,1500,3000,4500,7500
+EMP-PF01,Per-Piece,Fixer,Below floor partner,EMP-PP01,payroll_production_pairs,18,Payroll Ready,45/55,1227.27,2454.54,3681.81,6136.35
+EMP-PP02,Per-Piece,Sewer,Above floor,EMP-PF02,payroll_production_pairs,19,Payroll Ready,55/45,3125,6250,9375,15625
+EMP-PF02,Per-Piece,Fixer,Above floor partner,EMP-PP02,payroll_production_pairs,19,Payroll Ready,45/55,2556.82,5113.64,7670.46,12784.1
+EMP-PP03,Per-Piece,Sewer,Above floor high,EMP-PF03,payroll_production_pairs,20,Payroll Ready,55/45,5000,10000,15000,25000
+EMP-PF03,Per-Piece,Fixer,Above floor high partner,EMP-PP03,payroll_production_pairs,20,Payroll Ready,45/55,4090.91,8181.82,12272.73,20454.55
+EMP-PP04,Per-Piece,Sewer,Near ceiling,EMP-PF04,payroll_production_pairs,21,Payroll Ready,55/45,17000,34000,51000,85000
+EMP-PF04,Per-Piece,Fixer,Near ceiling partner,EMP-PP04,payroll_production_pairs,21,Payroll Ready,45/55,13909.09,27818.18,41727.27,69545.45
+EMP-PP05,Per-Piece,Sewer,Above ceiling,EMP-PF05,payroll_production_pairs,22,Payroll Ready,55/45,25000,50000,75000,125000
+EMP-PF05,Per-Piece,Fixer,Above ceiling partner,EMP-PP05,payroll_production_pairs,22,Payroll Ready,45/55,20454.55,40909.1,61363.65,102272.75
+EMP-PT01,Per-Trip,Driver,Below floor,,delivery_trips,10,Payroll Ready,,1500,3000,4500,7500
+EMP-PT02,Per-Trip,Driver,Above floor,,delivery_trips,11,Payroll Ready,,3125,6250,9375,15625
+EMP-PT03,Per-Trip,Driver,Above floor high,,delivery_trips,12,Payroll Ready,,5000,10000,15000,25000
+EMP-PT04,Per-Trip,Driver,Near ceiling,,delivery_trips,13,Payroll Ready,,17000,34000,51000,85000
+EMP-PT05,Per-Trip,Driver,Above ceiling,,delivery_trips,14,Payroll Ready,,25000,50000,75000,125000

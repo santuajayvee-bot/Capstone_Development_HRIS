@@ -1,0 +1,11 @@
+Employee Code,Segment,Attendance Case,Daily Rate,Weekly Gross Before Deductions,Projected Monthly Base,Late Minutes,Undertime Minutes,Expected Attendance Deduction Preview,Status Before Processing
+EMP-DB01,Below floor,Present,300,1500,6000,0,0,0,Source Ready
+EMP-DB02,Above floor,Present,625,3125,12500,0,0,0,Source Ready
+EMP-DB03,Above floor,Present,1000,5000,20000,0,0,0,Source Ready
+EMP-DB04,Near ceiling,Present,3400,17000,68000,0,0,0,Source Ready
+EMP-DB05,Above ceiling,Present,5000,25000,100000,0,0,0,Source Ready
+EMP-DU01,Below floor,Late only,300,1500,6000,30,0,9.38,Source Ready
+EMP-DU02,Above floor,Late + UT,625,3125,12500,45,30,78.13,Source Ready
+EMP-DU03,Above floor,Late + UT,1000,5000,20000,60,60,218.75,Source Ready
+EMP-DU04,Near ceiling,Late + UT,3400,17000,68000,90,45,850,Source Ready
+EMP-DU05,Above ceiling,Late + UT,5000,25000,100000,120,60,1718.75,Source Ready
