@@ -99,9 +99,27 @@ const NAV_CONFIG = {
   ],
 };
 
+const EMPLOYEE_ALLOWED_PAGES = new Set([
+  'employee-dashboard',
+  'requests',
+  'attendance',
+  'leave',
+  'self-service',
+]);
+
+function applyUserRoleToDocument(user = null) {
+  const role = String(user?.role || '').trim().toLowerCase();
+  document.body.dataset.userRole = role || '';
+  document.body.classList.forEach(className => {
+    if (className.startsWith('role-')) document.body.classList.remove(className);
+  });
+  if (role) document.body.classList.add(`role-${role}`);
+}
+
 function saveAuth(token, user) {
   sessionStorage.setItem('vp_token', token);
   sessionStorage.setItem('vp_user', JSON.stringify(user));
+  applyUserRoleToDocument(user);
 }
 
 function getToken() {
@@ -116,6 +134,8 @@ function getUser() {
 function clearAuth() {
   sessionStorage.removeItem('vp_token');
   sessionStorage.removeItem('vp_user');
+  applyUserRoleToDocument(null);
+  document.body.classList.remove('has-employee-bottom-nav');
 }
 
 function isLoggedIn() {
@@ -164,6 +184,7 @@ async function apiFetch(url, options = {}) {
 }
 
 function buildSidebar(user) {
+  applyUserRoleToDocument(user);
   const navItems = document.getElementById('nav-items');
   if (!navItems) return;
   const config = NAV_CONFIG[user.role] || NAV_CONFIG.employee;
@@ -226,13 +247,13 @@ function buildEmployeeBottomNav(user) {
 function canAccess(pageId) {
   const user = getUser();
   if (!user) return false;
+  if (user.role === 'employee') {
+    return EMPLOYEE_ALLOWED_PAGES.has(pageId);
+  }
   if (pageId === 'blockchain') {
     return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(user.role);
   }
   if (pageId === 'self-service') return true;
-  if (user.role === 'employee' && pageId === 'employee-dashboard') return true;
-  if (user.role === 'employee' && pageId === 'employee-profile') return true;
-  if (user.role === 'employee' && pageId === 'payroll') return false;
   if (pageId === 'requests') return user.role === 'employee';
   if (pageId === '201file') return false;
   const permissionPageMap = {
@@ -310,3 +331,4 @@ window.canAccess = canAccess;
 window.logout = logout;
 window.closeMobileSidebar = closeMobileSidebar;
 window.toggleMobileSidebar = toggleMobileSidebar;
+window.applyUserRoleToDocument = applyUserRoleToDocument;

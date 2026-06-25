@@ -1010,6 +1010,12 @@ function isLeaveManager() {
   return CURRENT_USER && CURRENT_USER.role !== 'employee';
 }
 
+function isLeaveEmployee() {
+  return CURRENT_USER?.role === 'employee';
+}
+
+const EMPLOYEE_LEAVE_TABS = new Set(['overview', 'requests']);
+
 async function loadLeaveRequests() {
   try {
     await fetchCurrentUser();
@@ -1049,6 +1055,21 @@ async function loadLeaveRequests() {
 }
 
 function setupLeaveUi() {
+  document.getElementById('page-leave')?.classList.toggle('leave-employee-mode', isLeaveEmployee());
+
+  document.querySelectorAll('#page-leave .page-header-right .btn').forEach(button => {
+    button.style.display = isLeaveManager() ? '' : 'none';
+  });
+
+  document.querySelectorAll('[data-leave-tab]').forEach(tab => {
+    const visible = isLeaveManager() || EMPLOYEE_LEAVE_TABS.has(tab.dataset.leaveTab);
+    tab.style.display = visible ? '' : 'none';
+  });
+  const activeTab = document.querySelector('[data-leave-tab].active')?.dataset.leaveTab;
+  if (isLeaveEmployee() && !EMPLOYEE_LEAVE_TABS.has(activeTab)) {
+    switchLeaveModuleTab('overview');
+  }
+
   const manualCard = document.getElementById('manual-encoding-card');
   if (manualCard) manualCard.style.display = isLeaveManager() ? 'block' : 'none';
 
@@ -1661,6 +1682,9 @@ function exportLeaveReport(reportType, format) {
 }
 
 function switchLeaveModuleTab(tabName) {
+  if (isLeaveEmployee() && !EMPLOYEE_LEAVE_TABS.has(tabName)) {
+    tabName = 'overview';
+  }
   document.querySelectorAll('.leave-tab').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.leaveTab === tabName);
   });

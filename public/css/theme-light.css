@@ -1445,3 +1445,221 @@ button,
     border-color: transparent !important;
   }
 }
+
+@media (max-width: 480px) {
+  :root {
+    --mobile-topbar-height: calc(132px + env(safe-area-inset-top));
+    --mobile-bottom-nav-height: calc(70px + env(safe-area-inset-bottom));
+  }
+
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: hidden !important;
+  }
+
+  .topbar {
+    min-height: var(--mobile-topbar-height) !important;
+    height: var(--mobile-topbar-height) !important;
+    align-items: flex-end !important;
+    padding: calc(34px + env(safe-area-inset-top)) 18px 26px 72px !important;
+  }
+
+  .topbar-title {
+    max-width: calc(100vw - 98px) !important;
+    font-size: 18px !important;
+    line-height: 1.2 !important;
+    white-space: normal !important;
+  }
+
+  .mobile-menu-toggle {
+    top: calc(72px + env(safe-area-inset-top)) !important;
+    left: 18px !important;
+  }
+
+  .page-body {
+    height: auto !important;
+    min-height: 100svh !important;
+    padding: var(--mobile-topbar-height) 0 var(--mobile-bottom-nav-height) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  body.has-employee-bottom-nav .page-body {
+    padding-bottom: var(--mobile-bottom-nav-height) !important;
+  }
+
+  .page.active {
+    display: block !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  .page-header,
+  .erp-page-header {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .page-header > div:first-child,
+  .erp-page-header {
+    display: none !important;
+  }
+
+  .page-header-right {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .attendance-tabs,
+  .leave-tabs,
+  .self-service-tabs,
+  .erp-tabs,
+  .tabs {
+    min-height: 50px !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  .attendance-tabs .tab,
+  .leave-tab,
+  .self-service-tabs .tab-btn,
+  .erp-tabs .tab-btn,
+  .tabs .tab {
+    width: auto !important;
+    min-width: max-content !important;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    padding: 0 18px !important;
+    white-space: nowrap !important;
+  }
+
+  .self-service-tabs .tab-btn {
+    display: inline-flex !important;
+    grid-template-columns: none !important;
+    justify-content: center !important;
+    gap: 0 !important;
+  }
+
+  .self-service-tabs .tab-btn::before,
+  .self-service-tabs .tab-btn::after,
+  .erp-tabs .tab-btn::before,
+  .erp-tabs .tab-btn::after {
+    content: none !important;
+    display: none !important;
+  }
+
+  .self-service-page,
+  .erp-module,
+  #page-attendance,
+  #page-leave {
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  .erp-panel,
+  .card,
+  .leave-card,
+  .att-overview-panel {
+    margin: 0 !important;
+    padding: 18px 16px !important;
+    border-radius: 0 !important;
+  }
+
+  .erp-form-grid,
+  .leave-form-grid,
+  .att-form-grid,
+  .att-toolbar {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  .erp-form-grid label,
+  .leave-field,
+  .att-toolbar > div {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  .erp-form-grid input,
+  .erp-form-grid select,
+  .erp-form-grid textarea,
+  .leave-field input,
+  .leave-field select,
+  .leave-field textarea,
+  .att-toolbar input,
+  .att-toolbar select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  #leave-balances-list {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 0 !important;
+    margin-top: 12px !important;
+  }
+
+  #leave-balances-list > div {
+    min-height: 64px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 12px !important;
+    padding: 14px 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
+  }
+
+  #leave-balances-list .leave-card-label,
+  #leave-balances-list .leave-card-value {
+    margin: 0 !important;
+  }
+
+  #page-leave.leave-employee-mode [data-leave-tab="manual"],
+  #page-leave.leave-employee-mode [data-leave-tab="policies"],
+  #page-leave.leave-employee-mode [data-leave-tab="calendar"],
+  #page-leave.leave-employee-mode [data-leave-tab="audit"],
+  body.role-employee #page-leave .page-header-right,
+  body.role-employee #manual-encoding-card,
+  body.role-employee #leave-balance-config-card {
+    display: none !important;
+  }
+
+  body.role-employee #page-attendance .att-toolbar,
+  body.role-employee #page-attendance .att-records-actionbar .att-actions,
+  body.role-employee #att-tab-overtime,
+  body.role-employee #att-tab-exceptions,
+  body.role-employee #att-tab-biometric,
+  body.role-employee #att-tab-policies,
+  body.role-employee #att-tab-audit,
+  body.role-employee #att-records-table th:first-child,
+  body.role-employee #att-records-table td:first-child {
+    display: none !important;
+  }
+
+  body.role-employee #att-action-col {
+    width: 1% !important;
+  }
+
+  .sidebar {
+    width: min(86vw, 340px) !important;
+    max-width: 86vw !important;
+  }
+
+  body.mobile-sidebar-open {
+    overflow: hidden !important;
+  }
+
+  .employee-bottom-nav {
+    min-height: var(--mobile-bottom-nav-height) !important;
+    height: var(--mobile-bottom-nav-height) !important;
+  }
+}

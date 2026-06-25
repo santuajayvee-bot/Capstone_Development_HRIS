@@ -426,6 +426,7 @@ function switchAttTab(tab, element) {
 async function initAttendance() {
   ATT_USER = getUser();
   if (!ATT_USER) return;
+  document.getElementById('page-attendance')?.classList.toggle('attendance-employee-mode', isEmployee());
   initAttendanceDatePickers();
 
   setVisible('biometric-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
@@ -447,12 +448,16 @@ async function initAttendance() {
     setText('att-page-subtitle', 'Use fingerprint time in/out and monitor your attendance hours.');
     setText('att-banner-title', 'Fingerprint attendance');
     setText('att-banner-copy', 'Use the registered fingerprint scanner to record your time in and time out.');
+    const recordsTab = document.querySelector('[data-att-tab="records"]');
+    if (recordsTab) recordsTab.textContent = 'My Records';
     switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
   } else {
     setText('att-page-title', 'Attendance Management');
     setText('att-page-subtitle', '');
     setText('att-banner-title', 'Attendance Overview');
     setText('att-banner-copy', 'Summary metrics only. Validate and correct attendance from Attendance Records.');
+    const recordsTab = document.querySelector('[data-att-tab="records"]');
+    if (recordsTab) recordsTab.textContent = 'Attendance Records';
   }
 
   if (isSystemAdmin() && !isHr()) {

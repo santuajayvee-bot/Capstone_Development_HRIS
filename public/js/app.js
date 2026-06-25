@@ -158,6 +158,7 @@ function enhanceTablePagination(table) {
 
 function navigate(pageId, navEl, params = null) {
   const user = typeof getUser === 'function' ? getUser() : null;
+  if (typeof applyUserRoleToDocument === 'function') applyUserRoleToDocument(user);
   if ((user?.mustChangePassword || user?.forcePasswordChange) && pageId !== 'self-service') {
     pageId = 'self-service';
     navEl = null;
@@ -174,6 +175,7 @@ function navigate(pageId, navEl, params = null) {
 
   const target = document.getElementById('page-' + pageId);
   if (target) target.classList.add('active');
+  document.body.dataset.activePage = pageId;
 
   const titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.textContent = PAGE_TITLES[pageId] || pageId;
