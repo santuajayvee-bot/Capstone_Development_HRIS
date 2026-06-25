@@ -4,6 +4,32 @@
 
 let CURRENT_USER = null;
 let LEAVE_TYPES = [];
+const LEAVE_MANAGER_ROLES = new Set(['hr_admin', 'hr_manager', 'admin', 'system_admin']);
+const LEAVE_APPROVER_ROLES = new Set(['hr_admin', 'hr_manager']);
+
+function normalizeLeaveRole(role) {
+  if (typeof normalizeClientRole === 'function') return normalizeClientRole(role);
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_') || 'employee';
+}
+
+function currentLeaveRole() {
+  return normalizeLeaveRole(CURRENT_USER?.role || CURRENT_USER?.roleName || CURRENT_USER?.role_label || CURRENT_USER?.roleLabel);
+}
+
+function isLeaveManager() {
+  return LEAVE_MANAGER_ROLES.has(currentLeaveRole());
+}
+
+function isLeaveApprover() {
+  return LEAVE_APPROVER_ROLES.has(currentLeaveRole());
+}
+
+function isLeaveEmployee() {
+  return !isLeaveManager();
+}
 
 // ── Load current user (works on both leave and requests pages) ──
 async function fetchCurrentUser(callback) {
@@ -12,7 +38,7 @@ async function fetchCurrentUser(callback) {
     const response = await apiFetch('/api/auth/me');
     if (response && response.ok) {
       const data = await response.json();
-      CURRENT_USER = data.user;
+      CURRENT_USER = data.user ? { ...data.user, role: normalizeLeaveRole(data.user.role || data.user.roleName || data.user.role_label || data.user.roleLabel) } : null;
       console.log('Current user loaded:', CURRENT_USER);
       
       // Check wage type eligibility for leave requests
@@ -56,10 +82,6 @@ function populateLeaveTypeSelects() {
     filter.innerHTML = '<option value="">All Leave Types</option>' + activeTypes.map(type => `<option>${type.name}</option>`).join('');
     filter.value = current;
   }
-}
-
-function isLeaveApprover() {
-  return CURRENT_USER && ['hr_manager', 'hr_admin'].includes(CURRENT_USER.role);
 }
 
 // Check if employee is eligible to file leave requests based on wage type
@@ -192,7 +214,7 @@ window.nextLeavePage = function() {
 };
 
 function renderLeaveRequests(leaves) {
-  const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+  const isAdmin = isLeaveManager();
 
   const manualCard = document.getElementById('manual-encoding-card');
   if (manualCard) {
@@ -226,7 +248,7 @@ window.renderLeaveTable = function() {
   const actionColHead = document.getElementById('leave-dynamic-col-head');
   if (!tbody) return;
 
-  const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+  const isAdmin = isLeaveManager();
   const canApprove = isLeaveApprover();
 
   let filtered = ALL_LEAVES_DATA;
@@ -678,7 +700,7 @@ async function submitManualLeave(event) {
     if (!CURRENT_USER) { alert('Error: Not authenticated.'); return; }
   }
 
-  if (!['hr_admin', 'hr_manager'].includes(CURRENT_USER.role)) {
+  if (!isLeaveManager()) {
     alert('Error: You do not have permission to manually encode leaves.');
     return;
   }
@@ -815,7 +837,7 @@ async function loadGeneralRequests() {
     })).sort((a, b) => b.parsedDate - a.parsedDate);
 
     // Show the card for admin users
-    const isAdmin = CURRENT_USER && CURRENT_USER.role !== 'employee';
+    const isAdmin = isLeaveManager();
     const card = document.getElementById('general-requests-card');
     if (card) card.style.display = isAdmin ? 'block' : 'none';
 
@@ -1004,14 +1026,6 @@ function leaveEmployeeOptions(employees, placeholder = 'Select employee') {
   return `<option value="">${placeholder}</option>` + employees
     .map(emp => `<option value="${emp.id}">${leaveEmployeeLabel(emp)}</option>`)
     .join('');
-}
-
-function isLeaveManager() {
-  return CURRENT_USER && CURRENT_USER.role !== 'employee';
-}
-
-function isLeaveEmployee() {
-  return CURRENT_USER?.role === 'employee';
 }
 
 const EMPLOYEE_LEAVE_TABS = new Set(['overview', 'requests']);
@@ -1705,7 +1719,7 @@ function watchPageActivation() {
       leavePage.dataset.loaded = '1';
       fetchCurrentUser(() => {
         loadLeaveRequests();
-        if (CURRENT_USER?.role === 'employee' && document.getElementById('general-requests-card')) {
+        if (isLeaveEmployee() && document.getElementById('general-requests-card')) {
           loadGeneralRequests();
         }
       });

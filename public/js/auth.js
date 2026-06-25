@@ -107,8 +107,45 @@ const EMPLOYEE_ALLOWED_PAGES = new Set([
   'self-service',
 ]);
 
+const ROLE_ALIASES = {
+  administrator: 'system_admin',
+  admin: 'admin',
+  employee: 'employee',
+  regular_employee: 'employee',
+  regular: 'employee',
+  worker: 'employee',
+  hr: 'hr_admin',
+  hradmin: 'hr_admin',
+  hr_admin: 'hr_admin',
+  hr_manager: 'hr_manager',
+  manager: 'manager',
+  payroll: 'payroll_officer',
+  payroll_officer: 'payroll_officer',
+  payroll_manager: 'payroll_manager',
+  system_admin: 'system_admin',
+  sys_admin: 'system_admin',
+  it_staff: 'it_staff',
+};
+
+function normalizeClientRole(role) {
+  const key = String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  return ROLE_ALIASES[key] || key || 'employee';
+}
+
+function normalizeClientUser(user = null) {
+  if (!user) return null;
+  return { ...user, role: normalizeClientRole(user.role || user.roleName || user.role_label || user.roleLabel) };
+}
+
+function isEmployeeRole(role) {
+  return normalizeClientRole(role) === 'employee';
+}
+
 function applyUserRoleToDocument(user = null) {
-  const role = String(user?.role || '').trim().toLowerCase();
+  const role = user ? normalizeClientRole(user.role || user.roleName || user.role_label || user.roleLabel) : '';
   document.body.dataset.userRole = role || '';
   document.body.classList.forEach(className => {
     if (className.startsWith('role-')) document.body.classList.remove(className);
@@ -117,9 +154,10 @@ function applyUserRoleToDocument(user = null) {
 }
 
 function saveAuth(token, user) {
+  const normalizedUser = normalizeClientUser(user);
   sessionStorage.setItem('vp_token', token);
-  sessionStorage.setItem('vp_user', JSON.stringify(user));
-  applyUserRoleToDocument(user);
+  sessionStorage.setItem('vp_user', JSON.stringify(normalizedUser));
+  applyUserRoleToDocument(normalizedUser);
 }
 
 function getToken() {
@@ -128,7 +166,12 @@ function getToken() {
 
 function getUser() {
   const raw = sessionStorage.getItem('vp_user');
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  const user = normalizeClientUser(JSON.parse(raw));
+  if (user && raw !== JSON.stringify(user)) {
+    sessionStorage.setItem('vp_user', JSON.stringify(user));
+  }
+  return user;
 }
 
 function clearAuth() {
@@ -184,6 +227,7 @@ async function apiFetch(url, options = {}) {
 }
 
 function buildSidebar(user) {
+  user = normalizeClientUser(user);
   applyUserRoleToDocument(user);
   const navItems = document.getElementById('nav-items');
   if (!navItems) return;
@@ -213,9 +257,10 @@ function buildSidebar(user) {
 }
 
 function buildEmployeeBottomNav(user) {
+  user = normalizeClientUser(user);
   const bottomNav = document.getElementById('employee-bottom-nav');
   if (!bottomNav) return;
-  if (user.role !== 'employee') {
+  if (!isEmployeeRole(user?.role)) {
     bottomNav.innerHTML = '';
     bottomNav.style.display = 'none';
     document.body.classList.remove('has-employee-bottom-nav');
@@ -245,16 +290,16 @@ function buildEmployeeBottomNav(user) {
 }
 
 function canAccess(pageId) {
-  const user = getUser();
+  const user = normalizeClientUser(getUser());
   if (!user) return false;
-  if (user.role === 'employee') {
+  if (isEmployeeRole(user.role)) {
     return EMPLOYEE_ALLOWED_PAGES.has(pageId);
   }
   if (pageId === 'blockchain') {
     return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(user.role);
   }
   if (pageId === 'self-service') return true;
-  if (pageId === 'requests') return user.role === 'employee';
+  if (pageId === 'requests') return isEmployeeRole(user.role);
   if (pageId === '201file') return false;
   const permissionPageMap = {
     employees: ['employee.view', 'employee.manage'],
@@ -332,3 +377,5 @@ window.logout = logout;
 window.closeMobileSidebar = closeMobileSidebar;
 window.toggleMobileSidebar = toggleMobileSidebar;
 window.applyUserRoleToDocument = applyUserRoleToDocument;
+window.normalizeClientRole = normalizeClientRole;
+window.isEmployeeRole = isEmployeeRole;

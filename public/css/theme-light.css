@@ -1448,7 +1448,7 @@ button,
 
 @media (max-width: 480px) {
   :root {
-    --mobile-topbar-height: calc(132px + env(safe-area-inset-top));
+    --mobile-topbar-height: calc(96px + env(safe-area-inset-top));
     --mobile-bottom-nav-height: calc(70px + env(safe-area-inset-bottom));
   }
 
@@ -1462,7 +1462,7 @@ button,
     min-height: var(--mobile-topbar-height) !important;
     height: var(--mobile-topbar-height) !important;
     align-items: flex-end !important;
-    padding: calc(34px + env(safe-area-inset-top)) 18px 26px 72px !important;
+    padding: calc(18px + env(safe-area-inset-top)) 16px 18px 64px !important;
   }
 
   .topbar-title {
@@ -1473,8 +1473,8 @@ button,
   }
 
   .mobile-menu-toggle {
-    top: calc(72px + env(safe-area-inset-top)) !important;
-    left: 18px !important;
+    top: calc(48px + env(safe-area-inset-top)) !important;
+    left: 16px !important;
   }
 
   .page-body {
@@ -1608,13 +1608,29 @@ button,
     margin-top: 12px !important;
   }
 
+  #leave-balances-card > div:first-child {
+    display: block !important;
+  }
+
+  #leave-balances-card .leave-section-title {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 0 8px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    color: #111827 !important;
+    font-size: 13px !important;
+    line-height: 1.25 !important;
+    letter-spacing: .06em !important;
+  }
+
   #leave-balances-list > div {
-    min-height: 64px !important;
+    min-height: 58px !important;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) auto !important;
     align-items: center !important;
-    gap: 12px !important;
-    padding: 14px 0 !important;
+    gap: 8px 12px !important;
+    padding: 12px 0 !important;
     border-bottom: 1px solid #eef2f7 !important;
   }
 
@@ -1623,13 +1639,40 @@ button,
     margin: 0 !important;
   }
 
+  #leave-balances-list .leave-card-label {
+    grid-column: 1 !important;
+    color: #475467 !important;
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    letter-spacing: .04em !important;
+  }
+
+  #leave-balances-list .leave-card-value {
+    grid-column: 2 !important;
+    color: #111827 !important;
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+    font-weight: 800 !important;
+    text-align: right !important;
+    white-space: nowrap !important;
+  }
+
+  #leave-balances-list > div > div:not(.leave-card-label):not(.leave-card-value) {
+    grid-column: 1 / -1 !important;
+    color: #667085 !important;
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+  }
+
   #page-leave.leave-employee-mode [data-leave-tab="manual"],
   #page-leave.leave-employee-mode [data-leave-tab="policies"],
   #page-leave.leave-employee-mode [data-leave-tab="calendar"],
   #page-leave.leave-employee-mode [data-leave-tab="audit"],
+  #page-leave.leave-employee-mode #leave-summary-cards,
   body.role-employee #page-leave .page-header-right,
   body.role-employee #manual-encoding-card,
-  body.role-employee #leave-balance-config-card {
+  body.role-employee #leave-balance-config-card,
+  body.role-employee #leave-summary-cards {
     display: none !important;
   }
 
