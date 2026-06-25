@@ -613,7 +613,7 @@ router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) 
          FROM attendance_log al
          LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
         WHERE al.employee_id = ?
-        ORDER BY al.date DESC
+        ORDER BY al.updated_at DESC, al.date DESC
         LIMIT 200`,
       [req.user.employeeId]
     );
@@ -775,7 +775,7 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
          LEFT JOIN departments d ON d.id = e.department_id
          LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
         ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
-        ORDER BY al.date DESC, al.time_in ASC
+        ORDER BY al.updated_at DESC, al.date DESC, al.time_in DESC
         LIMIT 500`,
       values
     );
