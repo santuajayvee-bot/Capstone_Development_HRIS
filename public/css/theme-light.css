@@ -1348,3 +1348,100 @@ button,
   margin: 0 !important;
   line-height: 1;
 }
+
+@media (max-width: 480px) {
+  .topbar {
+    border-color: #e82127 !important;
+    background: #e82127 !important;
+    color: #ffffff !important;
+  }
+
+  .topbar-title {
+    color: #ffffff !important;
+    font-weight: 700 !important;
+  }
+
+  .page-body,
+  .dashboard-shell,
+  .self-service-page,
+  .erp-module {
+    background: #f3f4f6 !important;
+  }
+
+  .emp-tabs,
+  .leave-tabs,
+  .attendance-tabs,
+  .tabs,
+  .erp-tabs,
+  .self-service-tabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    overflow-x: auto !important;
+  }
+
+  .emp-tab,
+  .leave-tab,
+  .tab,
+  .tab-btn {
+    width: auto !important;
+    flex: 1 0 auto !important;
+    min-height: 44px !important;
+    border: 0 !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    color: #6b7280 !important;
+    box-shadow: none !important;
+    white-space: nowrap !important;
+  }
+
+  .emp-tab.active,
+  .leave-tab.active,
+  .tab.active,
+  .tab-btn.active {
+    border-bottom-color: #dc2626 !important;
+    background: #ffffff !important;
+    color: #dc2626 !important;
+  }
+
+  .emp-welcome,
+  .emp-card,
+  .emp-stat-card,
+  .leave-card,
+  .dashboard-panel,
+  .card,
+  .erp-panel {
+    border-width: 0 0 1px !important;
+    border-color: #e5e7eb !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  .emp-welcome {
+    display: block !important;
+    padding: 18px 16px !important;
+  }
+
+  .emp-welcome-badge {
+    margin-top: 12px !important;
+  }
+
+  .employee-bottom-nav {
+    background: #ffffff !important;
+  }
+
+  .employee-bottom-nav-item.active {
+    background: #ffffff !important;
+    color: #dc2626 !important;
+    border-color: transparent !important;
+  }
+}

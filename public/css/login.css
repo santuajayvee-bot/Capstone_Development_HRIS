@@ -209,6 +209,10 @@
   line-height: 1.5;
 }
 
+.mobile-password-toggle {
+  display: none;
+}
+
 @media (max-width: 760px) {
   #login-screen {
     justify-content: center;
@@ -221,5 +225,155 @@
   .login-card {
     padding: 34px 26px 30px;
     background: rgba(255, 255, 255, 0.84);
+  }
+}
+
+@media (max-width: 480px) {
+  #login-screen {
+    min-height: 100svh;
+    align-items: flex-start;
+    padding: 380px 24px 24px;
+    background: linear-gradient(160deg, #c97b7b 0%, #9b2c2c 100%);
+  }
+
+  #login-screen::before {
+    display: none;
+  }
+
+  .login-card {
+    box-sizing: border-box;
+    width: calc(100vw - 48px);
+    max-width: 342px;
+    margin: 0 auto;
+    padding: 26px 24px 24px;
+    border: 0;
+    border-radius: 0;
+    background: #ffffff;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .login-logo {
+    position: fixed;
+    top: 160px;
+    left: 24px;
+    right: 24px;
+    margin: 0;
+    color: #ffffff;
+    text-align: center;
+  }
+
+  .login-logo .app-logo-login {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 28px;
+    filter: brightness(0) invert(1);
+  }
+
+  .login-brand {
+    color: rgba(255,255,255,.84);
+    font-size: 11px;
+    letter-spacing: .22em;
+  }
+
+  .login-welcome,
+  .login-subtitle {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    color: #ffffff;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .login-welcome {
+    top: 270px;
+    display: block;
+    font-size: 24px;
+    font-weight: 700;
+  }
+
+  .login-subtitle {
+    top: 308px;
+    display: block;
+    max-width: 300px;
+    margin: 0 auto;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .login-field {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .login-field::before {
+    color: #667085;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .login-username-field::before,
+  .login-field:has(#username)::before {
+    content: "Username";
+  }
+
+  .login-password-field::before,
+  .login-field:has(#password)::before {
+    content: "Password";
+  }
+
+  .login-password-field {
+    position: relative;
+  }
+
+  .login-field input {
+    min-height: 46px;
+    padding: 0 16px;
+    border-color: #d9dee7;
+    border-radius: 0;
+    background: #f9fafb;
+    font-size: 14px !important;
+  }
+
+  .login-password-field input {
+    padding-right: 48px;
+  }
+
+  .mobile-password-toggle {
+    position: absolute;
+    right: 10px;
+    bottom: 6px;
+    width: 36px;
+    min-height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 18px;
+  }
+
+  .btn-login {
+    min-height: 52px;
+    margin-top: 2px;
+    border-radius: 0;
+    background: #e82127;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .login-err {
+    margin-top: 14px;
+    text-align: left;
+  }
+
+  .login-mfa-actions {
+    display: grid;
   }
 }

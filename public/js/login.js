@@ -321,10 +321,19 @@ async function doLogin() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('password')
-    .addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  const passwordInput = document.getElementById('password');
+  const passwordToggle = document.getElementById('mobile-password-toggle');
+  passwordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  passwordToggle?.addEventListener('click', () => {
+    const isHidden = passwordInput?.type === 'password';
+    if (!passwordInput) return;
+    passwordInput.type = isHidden ? 'text' : 'password';
+    passwordToggle.setAttribute('aria-pressed', String(isHidden));
+    passwordToggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+    passwordToggle.textContent = isHidden ? '⊘' : '⌾';
+  });
   document.getElementById('mfa-code')
-    .addEventListener('keydown', e => { if (e.key === 'Enter') verifyMfaCode(); });
+    ?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyMfaCode(); });
 });
 
 window.doLogin = doLogin;
