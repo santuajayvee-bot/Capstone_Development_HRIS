@@ -2473,7 +2473,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
         employeeWhere.push("COALESCE(e.status, 'Active') = 'Active'");
       }
     }
-    const [rows] = await pool.execute(
+    const employeeListSql =
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
               e.work_email, e.mailing_address, e.mailing_address_lat, e.mailing_address_lng, e.mailing_address_same_as_home,
               e.mailing_address_region, e.mailing_address_province, e.mailing_address_city_municipality, e.mailing_address_barangay,
@@ -2532,9 +2532,11 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
        ${employeeWhere.length ? `WHERE ${employeeWhere.join(' AND ')}` : ''}
-       ORDER BY e.employee_code`
-      , employeeParams
-    );
+       ORDER BY e.employee_code`;
+    // mysql2's prepared-statement path is unstable on this local MariaDB setup
+    // for this large directory query. `query(sql, params)` still keeps dynamic
+    // values parameterized while avoiding the prepared-statement crash.
+    const [rows] = await pool.query(employeeListSql, employeeParams);
     const employees = rows.map(row => decryptEmployeeStrictPii(row));
     
     console.log('\n=== GET /api/employees ===');

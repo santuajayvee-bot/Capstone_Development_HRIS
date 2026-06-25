@@ -9,18 +9,10 @@ const {
 const {
   findUserById,
   findUserByEmail,
-<<<<<<< Updated upstream
   recordFailedLoginFailureForUser,
   getUserLoginLockState,
   resetFailedLoginAttempts,
   resetFailedLoginAttemptsForUser,
-=======
-  findUserById,
-  getUserLoginLockState,
-  resetFailedLoginAttempts,
-  resetFailedLoginAttemptsForUser,
-  recordFailedLoginFailureForUser,
->>>>>>> Stashed changes
   updateLastLogin,
   createUserSession,
   createAuditLog,
@@ -141,7 +133,6 @@ function invalidLoginResponse(res) {
   });
 }
 
-<<<<<<< Updated upstream
 function buildLockoutPayload(state = {}) {
   const remainingAttempts = Math.max(MAX_FAILED_ATTEMPTS - Number(state.attempts || 0), 0);
   return {
@@ -169,81 +160,22 @@ function invalidLoginAttemptResponse(res, failure = {}) {
     locked: Boolean(failure?.locked),
     locked_until: failure?.lockedUntil || null,
     lock_seconds_remaining: Number(failure?.lockSecondsRemaining || 0),
-=======
-function secondsUntil(value) {
-  const target = new Date(value).getTime();
-  if (Number.isNaN(target)) return 0;
-  return Math.max(Math.ceil((target - Date.now()) / 1000), 0);
-}
-
-function lockedAccountResponse(res, state = {}) {
-  const remaining = Number(state.lockSecondsRemaining ?? state.lock_seconds_remaining ?? secondsUntil(state.lockedUntil));
-  return res.status(423).json({
-    success: false,
-    message: LOCKED_ACCOUNT_MESSAGE,
-    locked: true,
-    locked_until: state.lockedUntil || null,
-    lock_seconds_remaining: Number.isFinite(remaining) ? Math.max(remaining, 0) : 0,
-    remaining_attempts: 0,
-  });
-}
-
-function invalidLoginAttemptResponse(res, state = {}) {
-  const attempts = Number(state.attempts || 0);
-  return res.status(401).json({
-    success: false,
-    message: INVALID_LOGIN_MESSAGE,
-    remaining_attempts: Math.max(MAX_FAILED_ATTEMPTS - attempts, 0),
->>>>>>> Stashed changes
   });
 }
 
 function mfaErrorResponse(res, error) {
-<<<<<<< Updated upstream
   const knownMfaError = error instanceof MfaServiceError;
   const status = knownMfaError
     ? error.statusCode
     : Number(error?.statusCode || 503);
   return res.status(status || 400).json({
     success: false,
+    mfaRequired: true,
     message: knownMfaError ? error.message : 'Unable to process MFA request.',
     code: knownMfaError ? error.code : 'MFA_FAILED',
   });
 }
 
-=======
-  const statusCode = error instanceof MfaServiceError ? error.statusCode : 500;
-  const message = error instanceof MfaServiceError
-    ? error.message
-    : 'Unable to complete MFA verification. Please try again.';
-  return res.status(statusCode).json({
-    success: false,
-    mfaRequired: true,
-    code: error instanceof MfaServiceError ? error.code : 'MFA_FAILED',
-    message,
-  });
-}
-
-async function lockoutStatus(req, res) {
-  const identifier = String(req.query?.username || req.query?.email || '').trim().toLowerCase();
-  if (!identifier) return res.status(400).json({ error: 'Username is required.' });
-
-  try {
-    const user = await findUserByEmail(identifier);
-    if (!user) return res.json({ locked: false, lock_seconds_remaining: 0 });
-    const state = await getUserLoginLockState(user.id);
-    return res.json({
-      locked: Boolean(state?.locked),
-      locked_until: state?.lockedUntil || null,
-      lock_seconds_remaining: Number(state?.lockSecondsRemaining || 0),
-    });
-  } catch (error) {
-    console.error('[authController] lockout status failed:', error.message);
-    return res.status(500).json({ error: 'Unable to check account lockout status.' });
-  }
-}
-
->>>>>>> Stashed changes
 async function issueAuthenticatedSession(req, res, user) {
   const employeeId = getAuthEmployeeId(user);
   const ipAddress = getRequestIp(req);
