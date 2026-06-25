@@ -181,10 +181,17 @@ body *:not(code):not(pre) {
   background: rgba(231, 55, 55, 0.08);
 }
 .user-avatar {
-  width: 34px; height: 34px; border-radius: 0;
+  width: 34px; height: 34px; border-radius: 50%;
   background: linear-gradient(135deg, #4f7cff, #22d3a5);
   display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 600; flex-shrink: 0;
+  overflow: hidden;
+}
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 /* ---- MAIN CONTENT ---- */
@@ -1112,6 +1119,9 @@ input.lgsv-date-native[type="date"] {
   color: var(--muted);
   font-size: 12px;
 }
+.report-library-table .button-row {
+  margin-top: 0;
+}
 .report-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1161,6 +1171,35 @@ input.lgsv-date-native[type="date"] {
 }
 .report-format-list { display: grid; gap: 10px; margin-top: 10px; }
 .report-format-list label { display: flex; align-items: center; gap: 10px; }
+.report-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.report-options-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.report-options-grid .span-2 {
+  grid-column: 1 / -1;
+}
+.report-choice-block {
+  border: 1px solid var(--border);
+  padding: 12px;
+  background: var(--bg);
+}
+.report-choice-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
 .report-modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -1176,6 +1215,7 @@ input.lgsv-date-native[type="date"] {
 }
 @media (max-width: 640px) {
   .report-filter-grid { grid-template-columns: 1fr; }
+  .report-options-grid { grid-template-columns: 1fr; }
   .report-filter-actions,
   .report-modal-footer { flex-direction: column; align-items: stretch; }
   .report-filter-actions .btn,
@@ -4229,6 +4269,39 @@ tr:hover td,
 }
 
 .self-picture-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.self-mobile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.employee-directory-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.employee-directory-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.employee-directory-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;

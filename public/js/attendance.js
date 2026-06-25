@@ -414,6 +414,11 @@ function switchAttTab(tab, element) {
   });
   document.querySelectorAll('#page-attendance .attendance-tabs .tab').forEach(item => item.classList.remove('active'));
   if (element) element.classList.add('active');
+  const pageBody = document.querySelector('.page-body');
+  if (pageBody) {
+    pageBody.scrollTop = 0;
+    requestAnimationFrame(() => { pageBody.scrollTop = 0; });
+  }
 
   if (tab === 'records') loadAttRecords();
   if (tab === 'overtime') loadEmployees();
@@ -606,7 +611,9 @@ async function loadAttRecords() {
   } catch (err) {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
+    const mobileList = document.getElementById('att-mobile-records-list');
     if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (mobileList) mobileList.innerHTML = `<div class="att-mobile-empty">${esc(err.message)}</div>`;
     renderAttendancePagination(0, 0, 0, 0);
   }
 }
@@ -659,9 +666,13 @@ function populateAttendanceDepartmentFilter() {
 
 function renderAttRecords() {
   const tbody = document.getElementById('att-records-tbody');
+  const mobileList = document.getElementById('att-mobile-records-list');
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
     tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
+    if (mobileList) {
+      mobileList.innerHTML = '<div class="att-mobile-empty">No attendance records found.</div>';
+    }
     renderAttendancePagination(0, 0, 0, 0);
     return;
   }
@@ -710,6 +721,34 @@ function renderAttRecords() {
       <td>${actions}</td>
     </tr>`;
   }).join('');
+  if (mobileList) {
+    mobileList.innerHTML = visibleRecords.map(record => {
+      const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
+        ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
+        : calculateHours(record.time_in, record.time_out);
+      const status = primaryAttendanceStatus(record);
+      const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
+      const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
+      const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+      return `
+        <article class="att-mobile-record">
+          <div class="att-mobile-record-head">
+            <time>${esc(formatDate(record.attendance_date || record.date))}</time>
+            ${attendanceBadge(status)}
+          </div>
+          <div class="att-mobile-record-times">
+            <div><span>Time In</span><strong>${esc(record.time_in || '-')}</strong></div>
+            <div><span>Time Out</span><strong>${esc(record.time_out || '-')}</strong></div>
+            <div><span>Hours</span><strong>${esc(hours)}</strong></div>
+          </div>
+          <div class="att-mobile-record-meta">
+            <span>Late ${esc(formatMinutes(lateMinutes))}</span>
+            <span>Undertime ${esc(formatMinutes(undertimeMinutes))}</span>
+            <span>Overtime ${esc(formatMinutes(overtimeMinutes))}</span>
+          </div>
+        </article>`;
+    }).join('');
+  }
   renderAttendancePagination(totalRows, start + 1, end, totalPages);
   const selectAll = document.getElementById('att-select-all');
   if (selectAll) selectAll.checked = false;
@@ -725,6 +764,19 @@ function renderAttendancePagination(totalRows, start, end, totalPages) {
   }
   container.style.display = 'flex';
   const currentPage = Math.min(Math.max(Number(ATT_RECORDS_PAGE || 1), 1), Math.max(1, totalPages));
+  if (isEmployee() && totalPages <= 1) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  if (isEmployee()) {
+    container.innerHTML = `
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="att-records-pagination-page">Page ${currentPage} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceRecordsPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+    `;
+    return;
+  }
   container.innerHTML = `
     <span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
     <div class="att-records-pagination-actions">

@@ -188,19 +188,22 @@ async function loadEmp201File() {
 
 async function loadEmpPayslips() {
   const tbody = document.getElementById('emp-payslips-tbody');
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Loading payslips...</strong></div></td></tr>';
+  }
   try {
     const res = await apiFetch('/api/employee/payslips');
     if (!res) return;
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${err.error || 'Failed to load.'}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>${empEscape(err.error || 'Please try again.')}</span></div></td></tr>`;
       return;
     }
     const payslips = await res.json();
 
     if (!tbody) return;
     if (payslips.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><div class="emp-mobile-empty-icon">□</div><strong>No payslips found</strong><span>Your payslips will appear here once available.</span></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><div class="emp-mobile-empty-icon">PS</div><strong>No finalized payslips found</strong><span>Your payslips will appear here after final payroll approval.</span></div></td></tr>';
       return;
     }
 
@@ -231,7 +234,7 @@ async function loadEmpPayslips() {
     }).join('');
   } catch (err) {
     console.error('[EmpPayslips] Load error:', err);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty">Failed to load payslips.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>Please try again.</span></div></td></tr>';
   }
 }
 

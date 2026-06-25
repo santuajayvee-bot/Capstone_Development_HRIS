@@ -15,6 +15,7 @@ const ORG_SETUP_PAGINATION = {
   departments: 1,
   positions: 1
 };
+const EMPLOYEE_PHOTO_URLS = new Map();
 
 function normalizeWageTypeName(value) {
   const name = String(value || '').trim();
@@ -582,7 +583,12 @@ function renderEmployees(list) {
     return `
     <tr onclick="openEmployeeProfile('${employeeId}', 'personal')" style="cursor:pointer;" data-emp-id="${employeeId}">
       <td class="emp-id">${escapeHtml(e.empCode)}</td>
-      <td class="emp-name">${escapeHtml(e.name)}</td>
+      <td class="emp-name">
+        <div class="employee-directory-person">
+          <span class="employee-directory-avatar" data-employee-photo="${employeeId}" data-initials="${escapeHtml(e.initials)}">${escapeHtml(e.initials)}</span>
+          <span>${escapeHtml(e.name)}</span>
+        </div>
+      </td>
       <td class="emp-email">${escapeHtml(e.email)}</td>
       <td>${escapeHtml(e.phone)}</td>
       <td>${escapeHtml(e.city)}</td>
@@ -606,6 +612,7 @@ function renderEmployees(list) {
   }).join('');
   
   tbody.innerHTML = renderedRows || '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;">No employees found.</td></tr>';
+  hydrateEmployeeDirectoryPhotos(tbody);
   
   console.log('✅ Rendered', list.length, 'employees in table');
   if (list.length > 0) {
@@ -623,6 +630,47 @@ function renderEmployees(list) {
     ? `Showing ${startIndex + 1}-${endIndex} of ${totalEmployees} employees`
     : 'Showing 0 employees';
   updateEmployeeDirectoryPagination(totalEmployees, startIndex, endIndex, totalPages);
+}
+
+function applyEmployeeDirectoryPhoto(element, url) {
+  if (!element || !url) return;
+  const image = document.createElement('img');
+  image.src = url;
+  image.alt = 'Employee profile picture';
+  element.replaceChildren(image);
+}
+
+async function hydrateEmployeeDirectoryPhoto(element) {
+  const employeeId = Number(element?.dataset.employeePhoto || 0);
+  if (!employeeId) return;
+  if (EMPLOYEE_PHOTO_URLS.has(employeeId)) {
+    applyEmployeeDirectoryPhoto(element, EMPLOYEE_PHOTO_URLS.get(employeeId));
+    return;
+  }
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}/photo`);
+    if (!response?.ok) return;
+    const url = URL.createObjectURL(await response.blob());
+    EMPLOYEE_PHOTO_URLS.set(employeeId, url);
+    applyEmployeeDirectoryPhoto(element, url);
+  } catch (_error) {
+    element.textContent = element.dataset.initials || '--';
+  }
+}
+
+function hydrateEmployeeDirectoryPhotos(root = document) {
+  root.querySelectorAll('[data-employee-photo]').forEach(hydrateEmployeeDirectoryPhoto);
+}
+
+function invalidateEmployeePhoto(employeeId) {
+  const id = Number(employeeId || 0);
+  const oldUrl = EMPLOYEE_PHOTO_URLS.get(id);
+  if (oldUrl) URL.revokeObjectURL(oldUrl);
+  EMPLOYEE_PHOTO_URLS.delete(id);
+  document.querySelectorAll(`[data-employee-photo="${id}"]`).forEach(element => {
+    element.textContent = element.dataset.initials || '--';
+    hydrateEmployeeDirectoryPhoto(element);
+  });
 }
 
 function updateEmployeeDirectoryPagination(totalEmployees, startIndex, endIndex, totalPages) {
@@ -2260,6 +2308,9 @@ async function uploadEmployeePhoto() {
     
     // Reload photo preview
     await loadEmployeePhotoPreview(currentEditingEmployeeId);
+    window.dispatchEvent(new CustomEvent('profilePhotoUpdated', {
+      detail: { employeeId: Number(currentEditingEmployeeId) }
+    }));
     
     // Clear file input
     fileInput.value = '';
@@ -2293,6 +2344,9 @@ async function deleteEmployeePhoto() {
     // Reset preview
     document.getElementById('edit-emp-photo-preview').style.display = 'none';
     document.getElementById('edit-emp-no-photo').style.display = 'flex';
+    window.dispatchEvent(new CustomEvent('profilePhotoUpdated', {
+      detail: { employeeId: Number(currentEditingEmployeeId) }
+    }));
     
     // Clear file input
     document.getElementById('edit-emp-photo-input').value = '';
@@ -3665,6 +3719,9 @@ async function uploadProfilePhoto(event) {
       throw new Error(error.error || 'Failed to upload photo');
     }
     await loadProfilePhoto(currentProfileEmployee.id);
+    window.dispatchEvent(new CustomEvent('profilePhotoUpdated', {
+      detail: { employeeId: Number(currentProfileEmployee.id) }
+    }));
   } catch (error) {
     await showAlert(error.message, 'Upload Failed', 'error');
   } finally {
@@ -3830,6 +3887,16 @@ window.offboardEmployee = offboardEmployee;
 window.reonboardEmployee = reonboardEmployee;
 window.openOffboardingDrawer = openOffboardingDrawer;
 window.openReonboardingDrawer = openReonboardingDrawer;
+window.addEventListener('profilePhotoUpdated', event => {
+  const employeeId = Number(event.detail?.employeeId || 0);
+  if (!employeeId) return;
+  invalidateEmployeePhoto(employeeId);
+  if (Number(currentProfileEmployee?.id || 0) === employeeId) loadProfilePhoto(employeeId);
+  if (Number(getUser()?.employeeId || 0) === employeeId && typeof refreshSidebarAvatar === 'function') {
+    refreshSidebarAvatar();
+  }
+});
+
 window.closeLifecycleDrawer = closeLifecycleDrawer;
 window.viewLifecycleRequest = viewLifecycleRequest;
 window.deleteEmployeeFromManage = deleteEmployeeFromManage;

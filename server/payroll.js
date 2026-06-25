@@ -1803,7 +1803,7 @@ function canAccessPayslip(req, record) {
   return role === 'employee'
     && employeeId
     && employeeId === Number(record.employee_id)
-    && ['Released', 'Locked', 'Paid'].includes(String(record.status || ''));
+    && ['Finalized', 'Released', 'Locked', 'Paid'].includes(String(record.status || ''));
 }
 
 function buildPayslipPayload(record) {
@@ -6556,6 +6556,108 @@ async function buildWeeklyPayrollRegistry(pool, query = {}) {
   };
 }
 
+async function listPayrollRunPeriods(pool) {
+  const periods = new Map();
+  const addPeriod = row => {
+    const monthYear = String(row.month_year || '').trim();
+    if (!/^\d{4}-\d{2}(?:-W[1-5])?$/.test(monthYear)) return;
+    const existing = periods.get(monthYear) || {};
+    periods.set(monthYear, {
+      id: existing.id || row.id || null,
+      month_year: monthYear,
+      period_label: existing.period_label || row.period_label || null,
+      start_date: existing.start_date || row.start_date || null,
+      end_date: existing.end_date || row.end_date || null,
+      status: existing.status || row.status || null,
+      payroll_type: existing.payroll_type || row.payroll_type || null,
+      source: existing.source || row.source || 'payroll',
+      record_count: numeric(existing.record_count) + numeric(row.record_count)
+    });
+  };
+
+  if (await payrollTableExists(pool, 'payroll_runs')) {
+    const columns = await payrollTableColumns(pool, 'payroll_runs');
+    if (columns.has('month_year')) {
+      const select = [
+        columns.has('id') ? 'id' : 'NULL AS id',
+        'month_year',
+        columns.has('period_label') ? 'period_label' : 'NULL AS period_label',
+        columns.has('start_date') ? "DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date" : 'NULL AS start_date',
+        columns.has('end_date') ? "DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date" : 'NULL AS end_date',
+        columns.has('status') ? 'status' : 'NULL AS status',
+        columns.has('payroll_type') ? 'payroll_type' : 'NULL AS payroll_type',
+        '0 AS record_count',
+        "'payroll_run' AS source"
+      ];
+      const orderParts = [];
+      if (columns.has('start_date')) orderParts.push('start_date DESC');
+      if (columns.has('id')) orderParts.push('id DESC');
+      const order = orderParts.length ? orderParts.join(', ') : 'month_year DESC';
+      const [rows] = await pool.execute(`
+        SELECT ${select.join(', ')}
+          FROM payroll_runs
+         WHERE month_year IS NOT NULL AND month_year <> ''
+         ORDER BY ${order}
+         LIMIT 80
+      `);
+      rows.forEach(addPeriod);
+    }
+  }
+
+  if (await payrollTableExists(pool, 'piece_rate_outputs')) {
+    const [rows] = await pool.execute(`
+      SELECT payroll_period_id AS month_year,
+             NULL AS id,
+             NULL AS period_label,
+             DATE_FORMAT(MIN(output_date), '%Y-%m-%d') AS start_date,
+             DATE_FORMAT(MAX(output_date), '%Y-%m-%d') AS end_date,
+             NULL AS status,
+             'Production' AS payroll_type,
+             COUNT(*) AS record_count,
+             'piece_rate_outputs' AS source
+        FROM piece_rate_outputs
+       WHERE payroll_period_id REGEXP '^[0-9]{4}-[0-9]{2}$'
+       GROUP BY payroll_period_id
+       ORDER BY payroll_period_id DESC
+       LIMIT 80
+    `);
+    rows.forEach(addPeriod);
+  }
+
+  if (await payrollTableExists(pool, 'payroll_production_pairs')) {
+    const [rows] = await pool.execute(`
+      SELECT payroll_period AS month_year,
+             NULL AS id,
+             NULL AS period_label,
+             DATE_FORMAT(MIN(production_date), '%Y-%m-%d') AS start_date,
+             DATE_FORMAT(MAX(production_date), '%Y-%m-%d') AS end_date,
+             NULL AS status,
+             'Production' AS payroll_type,
+             COUNT(*) AS record_count,
+             'payroll_production_pairs' AS source
+        FROM payroll_production_pairs
+       WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}$'
+       GROUP BY payroll_period
+       ORDER BY payroll_period DESC
+       LIMIT 80
+    `);
+    rows.forEach(addPeriod);
+  }
+
+  const rows = [...periods.values()].sort((a, b) => String(b.month_year).localeCompare(String(a.month_year)));
+  return { runs: rows, rows };
+}
+
+router.get('/runs', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (_req, res) => {
+  try {
+    const pool = require('../config/db');
+    res.json(await listPayrollRunPeriods(pool));
+  } catch (err) {
+    console.error('Error loading payroll runs:', err);
+    res.status(500).json({ error: 'Failed to load payroll periods.' });
+  }
+});
+
 router.get('/registry', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const pool = require('../config/db');
@@ -8215,9 +8317,46 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     for (const key of allowedFields) {
       if (payload[key] === undefined && body[key] !== undefined && body[key] !== '') payload[key] = body[key];
     }
+    const normalizedDeductionName = String(payload.name || '').trim().toLowerCase().replace('-', '');
+    const isPercentageStatutory = payload.category === 'Government'
+      && ['philhealth', 'pagibig'].includes(normalizedDeductionName);
+    if (isPercentageStatutory) {
+      payload.computation_type = 'Percentage';
+      payload.rate_or_amount = payload.employee_share_rate ?? payload.rate_or_amount ?? 0;
+    }
     if (payload.applicability_scope && !DEDUCTION_APPLICABILITY_SCOPES.has(payload.applicability_scope)) return res.status(400).json({ error: 'Invalid applicability scope.' });
     if (payload.deduction_base_rate && !DEDUCTION_BASE_RATES.has(payload.deduction_base_rate)) return res.status(400).json({ error: 'Invalid deduction base rate.' });
     if (payload.proration_mode && !DEDUCTION_PRORATION_MODES.has(payload.proration_mode)) return res.status(400).json({ error: 'Invalid deduction proration mode.' });
+    const contributionNumericFields = [
+      ['rate_or_amount', 'Rate or amount'],
+      ['employee_share_rate', 'Employee share rate'],
+      ['employer_share_rate', 'Employer share rate'],
+      ['total_contribution_rate', 'Total contribution rate'],
+      ['minimum_salary_base', 'Monthly salary floor'],
+      ['maximum_salary_ceiling', 'Monthly salary ceiling'],
+      ['maximum_contribution_cap', 'Maximum contribution']
+    ];
+    for (const [key, label] of contributionNumericFields) {
+      if (payload[key] === undefined) continue;
+      const value = Number(payload[key]);
+      if (!Number.isFinite(value) || value < 0) {
+        return res.status(400).json({ error: `${label} must be a non-negative number.` });
+      }
+      payload[key] = value;
+    }
+    for (const key of ['employee_share_rate', 'employer_share_rate', 'total_contribution_rate']) {
+      if (payload[key] !== undefined && payload[key] > 100) {
+        return res.status(400).json({ error: 'Contribution percentage rates cannot exceed 100%.' });
+      }
+    }
+    const salaryFloor = numeric(payload.minimum_salary_base);
+    const salaryCeiling = numeric(payload.maximum_salary_ceiling);
+    if (salaryFloor > 0 && salaryCeiling > 0 && salaryCeiling < salaryFloor) {
+      return res.status(400).json({ error: 'Monthly salary ceiling must be greater than or equal to the salary floor.' });
+    }
+    if (isPercentageStatutory && numeric(payload.employee_share_rate || payload.rate_or_amount) <= 0) {
+      return res.status(400).json({ error: `${payload.name} employee share rate must be greater than zero.` });
+    }
 
     const fields = [];
     const values = [];
@@ -9311,18 +9450,7 @@ router.get('/reports/:report.:format', requireAuth, requireRole(PAYROLL_PERMISSI
     } else if (['sewing-registry', 'sewing-55-registry', 'sewing-45-registry'].includes(report)) {
       const kind = report === 'sewing-55-registry' ? '55' : report === 'sewing-45-registry' ? '45' : 'main';
       const registry = await buildSewingRegistry(pool, month_year, kind);
-      rows = registry.employees.flatMap(employee => employee.rows.map(row => ({
-        employee: employee.employee_name,
-        agency: employee.agency,
-        operation_type: row.operation_type,
-        size_range: row.size_range,
-        rate_per_piece: row.rate_per_piece,
-        total_output: row.total_output,
-        amount: row.amount,
-        partner_role: row.partner_roles,
-        ...Object.fromEntries(registry.dates.map(date => [date, row.daily[date] || 0]))
-      })));
-      rows.push({ employee: 'TOTAL', total_output: registry.totals.total_output, amount: registry.totals.total_amount });
+      rows = sewingRegistryReportRows(registry);
     } else if ([
       'piece-production-register',
       'piece-sewer-register',
@@ -9527,6 +9655,74 @@ function toCsv(rows) {
     headers.map(escape).join(','),
     ...rows.map(row => headers.map(header => escape(row[header])).join(','))
   ].join('\n');
+}
+
+function payrollRegistryDateHeader(date) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return `${date} Daily Output`;
+  return `${parsed.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'UTC' })} Daily Output`;
+}
+
+function sewingRegistryNumber(value) {
+  const number = numeric(value);
+  const hasDecimals = Math.abs(number - Math.round(number)) > 0.001;
+  return number.toLocaleString('en-PH', {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: 2
+  });
+}
+
+function sewingRegistryReportRows(registry) {
+  const dateHeaders = registry.dates.map(date => [date, payrollRegistryDateHeader(date)]);
+  const emptyDateValues = Object.fromEntries(dateHeaders.map(([, header]) => [header, '']));
+  const baseRow = () => ({
+    'Sew Type': '',
+    Size: '',
+    'Rate/Piece': '',
+    ...emptyDateValues,
+    'Total Output': '',
+    Amount: '',
+    'Partner Role': ''
+  });
+  const rows = [];
+
+  for (const employee of registry.employees || []) {
+    rows.push({
+      ...baseRow(),
+      'Sew Type': `${employee.employee_name} - ${employee.agency || 'Direct'}`
+    });
+
+    for (const row of employee.rows || []) {
+      rows.push({
+        ...baseRow(),
+        'Sew Type': row.operation_type || '',
+        Size: row.size_range || '',
+        'Rate/Piece': peso(row.rate_per_piece),
+        ...Object.fromEntries(dateHeaders.map(([date, header]) => [header, sewingRegistryNumber(row.daily?.[date] || 0)])),
+        'Total Output': sewingRegistryNumber(row.total_output),
+        Amount: peso(row.amount),
+        'Partner Role': row.partner_roles || ''
+      });
+    }
+
+    rows.push({
+      ...baseRow(),
+      'Sew Type': 'Employee Daily Total',
+      ...Object.fromEntries(dateHeaders.map(([date, header]) => [header, sewingRegistryNumber(employee.daily_totals?.[date] || 0)])),
+      'Total Output': sewingRegistryNumber(employee.total_output),
+      Amount: peso(employee.total_amount)
+    });
+  }
+
+  rows.push({
+    ...baseRow(),
+    'Sew Type': 'Grand Daily Total',
+    ...Object.fromEntries(dateHeaders.map(([date, header]) => [header, sewingRegistryNumber(registry.totals?.daily_totals?.[date] || 0)])),
+    'Total Output': sewingRegistryNumber(registry.totals?.total_output),
+    Amount: peso(registry.totals?.total_amount)
+  });
+
+  return rows;
 }
 
 module.exports = router;

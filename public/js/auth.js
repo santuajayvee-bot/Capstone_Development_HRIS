@@ -180,7 +180,50 @@ function getUser() {
   return user;
 }
 
+let sidebarAvatarObjectUrl = null;
+
+function userAvatarInitials(user = null) {
+  const normalized = normalizeClientUser(user || getUser());
+  const profile = normalized?.employeeProfile || {};
+  const source = [profile.first_name, profile.last_name].filter(Boolean).join(' ')
+    || normalized?.username
+    || 'User';
+  return source
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part.charAt(0).toUpperCase())
+    .join('') || 'U';
+}
+
+async function refreshSidebarAvatar(user = null) {
+  const normalized = normalizeClientUser(user || getUser());
+  const avatar = document.getElementById('sidebar-user-avatar');
+  if (!avatar) return;
+  avatar.textContent = userAvatarInitials(normalized);
+  const employeeId = Number(normalized?.employeeId || normalized?.Employee_ID || 0);
+  if (!employeeId || typeof apiFetch !== 'function') return;
+
+  try {
+    const response = await apiFetch(`/api/employees/${employeeId}/photo`);
+    if (!response?.ok) return;
+    const blob = await response.blob();
+    if (sidebarAvatarObjectUrl) URL.revokeObjectURL(sidebarAvatarObjectUrl);
+    sidebarAvatarObjectUrl = URL.createObjectURL(blob);
+    const image = document.createElement('img');
+    image.src = sidebarAvatarObjectUrl;
+    image.alt = `${normalized?.username || 'User'} profile picture`;
+    avatar.replaceChildren(image);
+  } catch (_error) {
+    avatar.textContent = userAvatarInitials(normalized);
+  }
+}
+
 function clearAuth() {
+  if (sidebarAvatarObjectUrl) {
+    URL.revokeObjectURL(sidebarAvatarObjectUrl);
+    sidebarAvatarObjectUrl = null;
+  }
   sessionStorage.removeItem('vp_token');
   sessionStorage.removeItem('vp_user');
   applyUserRoleToDocument(null);
@@ -259,6 +302,7 @@ function buildSidebar(user) {
   if (profileBtn) {
     profileBtn.style.display = canAccess('self-service') ? 'inline-flex' : 'none';
   }
+  refreshSidebarAvatar(user);
   buildEmployeeBottomNav(user);
 }
 
@@ -276,9 +320,9 @@ function buildEmployeeBottomNav(user) {
   const items = [
     { page: 'employee-dashboard', tab: 'overview', icon: 'DB', label: 'Dashboard' },
     { page: 'employee-dashboard', tab: 'payslips', icon: 'PS', label: 'Payslips' },
+    { page: 'requests', icon: 'RQ', label: 'Request' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'leave', icon: 'LV', label: 'Leave' },
-    { page: 'self-service', icon: 'PF', label: 'Profile' },
   ].filter(item => canAccess(item.page));
 
   bottomNav.innerHTML = items.map((item, index) => `
@@ -381,6 +425,7 @@ window.isLoggedIn = isLoggedIn;
 window.markPasswordChangeRequired = markPasswordChangeRequired;
 window.apiFetch = apiFetch;
 window.buildSidebar = buildSidebar;
+window.refreshSidebarAvatar = refreshSidebarAvatar;
 window.canAccess = canAccess;
 window.logout = logout;
 window.closeMobileSidebar = closeMobileSidebar;

@@ -5,7 +5,7 @@ const argon2 = require('argon2');
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const accountController = require('../controllers/accountController');
-const { auditSecurityEvent } = require('./security-controls');
+const { ALLOWED_UPLOAD_TYPES, auditSecurityEvent } = require('./security-controls');
 const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 
 const router = express.Router();
@@ -541,6 +541,24 @@ router.post('/self-service/profile-picture', (req, res, next) => {
     if (!req.file) return res.status(400).json({ error: 'Profile picture is required.' });
     const employeeId = currentEmployeeId(req);
     if (!employeeId) return res.status(403).json({ error: 'No linked employee profile found for this account.' });
+    const contentRule = req.file.mimetype === 'image/png'
+      ? ALLOWED_UPLOAD_TYPES['.png']
+      : ALLOWED_UPLOAD_TYPES['.jpg'];
+    if (!contentRule?.matches(req.file.buffer)) {
+      await auditSecurityEvent(req, {
+        action: 'blocked_profile_photo_tampering_attempt',
+        module: 'SELF_SERVICE_PROFILE',
+        targetTable: 'employee_photos',
+        targetRecord: employeeId,
+        newValue: {
+          originalname: req.file.originalname,
+          mimetype: req.file.mimetype,
+          size: req.file.size
+        },
+        result: 'blocked'
+      });
+      return res.status(400).json({ error: 'Profile picture content must be a valid JPG or PNG image.' });
+    }
 
     await connection.beginTransaction();
     await connection.execute(
@@ -580,6 +598,7 @@ router.get('/self-service/profile-picture', async (req, res) => {
       [requestedEmployeeId]
     );
     if (!rows.length) return res.status(404).end();
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Type', rows[0].photo_mime_type || 'image/jpeg');
     res.send(rows[0].photo_data);
   } catch (error) {

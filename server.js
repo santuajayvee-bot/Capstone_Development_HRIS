@@ -877,7 +877,14 @@ function employeeHasRole(req, roles) {
 function normalizeBlank(value) {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  const text = String(value).trim();
+  // Philippine address lookups can contain typographic dashes and apostrophes.
+  // Normalize them before allow-list validation, while still rejecting unsafe input.
+  const text = String(value)
+    .normalize('NFKC')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/\u00A0/g, ' ')
+    .trim();
   return text === '' ? null : text;
 }
 
@@ -1426,7 +1433,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
   try {
     [
       'first_name', 'middle_name', 'last_name', 'suffix', 'nationality', 'marital_status',
-      'place_of_birth', 'religion', 'supervisor', 'work_location',
+      'place_of_birth', 'religion', 'supervisor',
       'emergency_contact_name', 'emergency_contact_relationship',
       'education_school', 'education_attainment', 'education_jhs_school',
       'education_jhs_attainment', 'education_shs_school', 'education_shs_attainment',
@@ -1440,6 +1447,9 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     ['position', 'shift_schedule', 'salary_grade', 'bank_name', 'agency_name'].forEach(field => {
       validateEmployeeTextField(body, field, { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
     });
+
+    // Work locations use the same normal punctuation and numbering as addresses.
+    validateEmployeeTextField(body, 'work_location', { max: 160, pattern: EMPLOYEE_ADDRESS_PATTERN });
 
     [
       'residential_address', 'current_address', 'mailing_address', 'emergency_contact_address',
@@ -4486,8 +4496,10 @@ app.delete('/api/employees/:id/skills/:skillId', requireAuth, requireRole(ROLES.
 
 // Upload employee photo (store as base64 in database)
 app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('photo'), async (req, res) => {
+  let connection;
   try {
     const pool = require('./config/db');
+    connection = await pool.getConnection();
     const { id } = req.params; // numeric employee ID
     
     if (!req.file) {
@@ -4501,9 +4513,10 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
 
     // Read file and convert to base64
     const fileData = fs.readFileSync(req.file.path);
+    await connection.beginTransaction();
     
     // Insert or replace photo record
-    const [result] = await pool.execute(
+    await connection.execute(
       `INSERT INTO employee_photos (employee_id, photo_data, photo_mime_type, photo_size)
        VALUES (?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE 
@@ -4513,6 +4526,19 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
        updated_at = NOW()`,
       [id, fileData, req.file.mimetype, req.file.size]
     );
+    const [photoRows] = await connection.execute(
+      'SELECT id FROM employee_photos WHERE employee_id = ? LIMIT 1',
+      [id]
+    );
+    if (photoRows[0]?.id) {
+      await connection.execute('UPDATE employees SET photo_id = ? WHERE id = ?', [photoRows[0].id, id]);
+    }
+    await writeEmployeeLifecycleAudit(connection, req, 'EMPLOYEE_PHOTO_UPDATED', Number(id), null, {
+      photo_id: photoRows[0]?.id || null,
+      file_size: req.file.size,
+      mime_type: req.file.mimetype
+    });
+    await connection.commit();
 
     // Delete temporary file
     fs.unlinkSync(req.file.path);
@@ -4525,11 +4551,14 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
     });
     
   } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
     console.error('Error uploading photo:', err.message);
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
     return res.status(500).json({ error: 'Failed to upload photo.' });
+  } finally {
+    connection?.release();
   }
 });
 
@@ -4555,6 +4584,7 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
     const { photo_data, photo_mime_type } = photos[0];
     
     // Send binary photo data
+    res.set('Cache-Control', 'private, no-store');
     res.set('Content-Type', photo_mime_type);
     res.send(photo_data);
     
@@ -4566,25 +4596,35 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
 
 // Delete employee photo
 app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  let connection;
   try {
     const pool = require('./config/db');
+    connection = await pool.getConnection();
     const { id } = req.params; // numeric employee ID
-    
-    const [result] = await pool.execute(
+    await connection.beginTransaction();
+
+    const [result] = await connection.execute(
       `DELETE FROM employee_photos WHERE employee_id = ?`,
       [id]
     );
 
     if (result.affectedRows === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: 'No photo found for this employee.' });
     }
+    await connection.execute('UPDATE employees SET photo_id = NULL WHERE id = ?', [id]);
+    await writeEmployeeLifecycleAudit(connection, req, 'EMPLOYEE_PHOTO_DELETED', Number(id));
+    await connection.commit();
 
     console.log('✅ Employee photo deleted successfully');
     return res.status(200).json({ message: 'Photo deleted successfully.' });
     
   } catch (err) {
+    if (connection) await connection.rollback().catch(() => {});
     console.error('Error deleting photo:', err.message);
     return res.status(500).json({ error: 'Failed to delete photo.' });
+  } finally {
+    connection?.release();
   }
 });
 

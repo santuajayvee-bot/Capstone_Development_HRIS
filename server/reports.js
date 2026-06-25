@@ -7,21 +7,18 @@ const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 const pool = require('../config/db');
 const { requireAuth, requireRole } = require('./middleware');
+const { decryptColumnValue } = require('./data-protection');
 
 const router = express.Router();
 
 const REPORT_ROLES = [
-  'system_admin',
-  'admin',
-  'hr_admin',
-  'hr_manager',
   'payroll_officer',
-  'payroll_manager',
-  'manager'
+  'payroll_manager'
 ];
 
 const BASE_FORMATS = ['csv', 'excel', 'pdf'];
 const EXCEL_ONLY = ['excel'];
+const ALLOWED_REPORT_IDS = new Set(['daily-attendance', 'payroll-register', 'employee-payslip']);
 
 const REPORTS = [
   ['employee-master-list', 'Employee Master List', 'HR Reports', 'Complete employee list with department, position, employment type, and status.', BASE_FORMATS],
@@ -113,7 +110,25 @@ const REPORTS = [
   ['attendance-summary-sheet', 'Attendance Summary Sheet', 'Documents', 'Printable attendance summary sheet.', BASE_FORMATS],
   ['employment-certificate', 'Employment Certificate', 'Documents', 'Employment certificate template generated from employee data.', ['pdf']],
   ['attendance-certification', 'Attendance Certification', 'Documents', 'Attendance certification document.', ['pdf']]
-].map(([id, name, category, description, formats]) => ({ id, name, category, description, formats }));
+].map(([id, name, category, description, formats]) => ({ id, name, category, description, formats }))
+  .filter(report => ALLOWED_REPORT_IDS.has(report.id))
+  .map(report => {
+    if (report.id === 'daily-attendance') {
+      return {
+        ...report,
+        name: 'Attendance DTR',
+        description: 'Daily time record with time in, time out, hours, late, undertime, and payroll-ready status.'
+      };
+    }
+    if (report.id === 'payroll-register') {
+      return {
+        ...report,
+        name: 'Payroll Registry',
+        description: 'Payroll calculation register with gross pay, statutory deductions, allowances, and net pay.'
+      };
+    }
+    return report;
+  });
 
 const REPORT_BY_ID = new Map(REPORTS.map(report => [report.id, report]));
 
@@ -131,6 +146,41 @@ function addCondition(where, params, sql, value) {
     where.push(sql);
     params.push(value);
   }
+}
+
+function numeric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function peso(value) {
+  return `PHP ${numeric(value).toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+}
+
+function decryptReportValue(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function reportEmployeeName(row, prefix = '') {
+  const first = decryptReportValue(row?.[`${prefix}first_name`]);
+  const middle = decryptReportValue(row?.[`${prefix}middle_name`]);
+  const last = decryptReportValue(row?.[`${prefix}last_name`]);
+  return [first, middle, last].filter(Boolean).join(' ') || row?.['Employee ID'] || row?.employee_code || '-';
+}
+
+function applyEmployeeDisplay(row, prefix = '') {
+  row.Employee = reportEmployeeName(row, prefix);
+  delete row[`${prefix}first_name`];
+  delete row[`${prefix}middle_name`];
+  delete row[`${prefix}last_name`];
+  return row;
 }
 
 async function tableExists(tableName) {
@@ -152,6 +202,7 @@ function filtersFromRequest(query) {
     dateFrom: sqlDate(query.date_from),
     dateTo: sqlDate(query.date_to),
     payrollPeriod: cleanFilter(query.payroll_period),
+    registryType: cleanFilter(query.registry_type) || 'main',
     employeeId: cleanFilter(query.employee_id),
     department: cleanFilter(query.department),
     wageType: cleanFilter(query.wage_type),
@@ -275,7 +326,9 @@ async function attendanceReport(filters, mode) {
   return safeQuery('attendance_summary', `
     SELECT
       e.employee_code AS "Employee ID",
-      ${employeeNameSql()} AS "Employee",
+      e.first_name,
+      e.middle_name,
+      e.last_name,
       COALESCE(d.name, '-') AS "Department",
       DATE_FORMAT(ats.attendance_date, '%Y-%m-%d') AS "Date",
       TIME_FORMAT(al.time_in, '%H:%i:%s') AS "Time In",
@@ -293,7 +346,116 @@ async function attendanceReport(filters, mode) {
     LEFT JOIN departments d ON d.id = e.department_id
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY ats.attendance_date DESC, e.last_name
-  `, params);
+  `, params).then(rows => rows.map(row => applyEmployeeDisplay(row)));
+}
+
+function dtrDateRange(filters) {
+  const today = new Date();
+  const fallbackStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+  const fallbackEnd = new Date(Date.UTC(today.getFullYear(), today.getMonth() + 1, 0)).toISOString().slice(0, 10);
+  return {
+    start: filters.dateFrom || fallbackStart,
+    end: filters.dateTo || fallbackEnd
+  };
+}
+
+function dtrTime(value) {
+  const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return `${displayHour}:${match[2]}`;
+}
+
+function dtrHour(value) {
+  const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  return Number.isFinite(hour) ? hour : null;
+}
+
+function dtrDateLabel(start, end) {
+  const startDate = new Date(`${start}T00:00:00Z`);
+  const endDate = new Date(`${end}T00:00:00Z`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return `${start} - ${end}`;
+  const sameMonth = startDate.getUTCFullYear() === endDate.getUTCFullYear()
+    && startDate.getUTCMonth() === endDate.getUTCMonth();
+  if (sameMonth) {
+    const month = startDate.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+    return `${month} ${startDate.getUTCDate()}-${endDate.getUTCDate()}, ${startDate.getUTCFullYear()}`;
+  }
+  return `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`;
+}
+
+function enumerateDtrDates(start, end) {
+  const dates = [];
+  const current = new Date(`${start}T00:00:00Z`);
+  const last = new Date(`${end}T00:00:00Z`);
+  if (Number.isNaN(current.getTime()) || Number.isNaN(last.getTime())) return dates;
+  while (current <= last && dates.length < 31) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function dtrFormDates(record) {
+  const startDate = new Date(`${record.start}T00:00:00Z`);
+  const endDate = new Date(`${record.end}T00:00:00Z`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return record.dates.length ? record.dates : enumerateDtrDates(record.start, record.end);
+  }
+
+  const sameMonth = startDate.getUTCFullYear() === endDate.getUTCFullYear()
+    && startDate.getUTCMonth() === endDate.getUTCMonth();
+  if (!sameMonth) return record.dates.length ? record.dates : enumerateDtrDates(record.start, record.end);
+
+  const dates = [];
+  const current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
+  const last = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0));
+  while (current <= last && dates.length < 31) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+async function dtrRecord(filters) {
+  const { start, end } = dtrDateRange(filters);
+  const [employeeRows] = await pool.execute(`
+    SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
+           COALESCE(d.name, '-') AS department
+      FROM employees e
+      LEFT JOIN departments d ON d.id = e.department_id
+     WHERE e.id = ?
+     LIMIT 1
+  `, [filters.employeeId]);
+  if (!employeeRows.length) {
+    const err = new Error('Selected employee was not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  const [attendanceRows] = await pool.execute(`
+    SELECT DATE_FORMAT(ats.attendance_date, '%Y-%m-%d') AS attendance_date,
+           TIME_FORMAT(al.time_in, '%H:%i') AS time_in,
+           TIME_FORMAT(al.time_out, '%H:%i') AS time_out
+      FROM attendance_summary ats
+      LEFT JOIN attendance_log al ON al.attendance_id = ats.attendance_id
+     WHERE ats.employee_id = ?
+       AND ats.attendance_date BETWEEN ? AND ?
+     ORDER BY ats.attendance_date
+  `, [filters.employeeId, start, end]);
+  const attendanceByDate = new Map(attendanceRows.map(row => [row.attendance_date, row]));
+  return {
+    employee: employeeRows[0],
+    employeeName: reportEmployeeName(employeeRows[0]),
+    department: employeeRows[0].department || '-',
+    start,
+    end,
+    dates: enumerateDtrDates(start, end),
+    attendanceByDate
+  };
 }
 
 async function biometricReport(filters) {
@@ -397,7 +559,9 @@ async function payrollReport(filters, mode) {
     SELECT
       sc.id AS "Payroll ID",
       e.employee_code AS "Employee ID",
-      ${employeeNameSql()} AS "Employee",
+      e.first_name,
+      e.middle_name,
+      e.last_name,
       COALESCE(d.name, '-') AS "Department",
       COALESCE(wt.name, '-') AS "Wage Type",
       COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) AS "Payroll Period",
@@ -421,7 +585,71 @@ async function payrollReport(filters, mode) {
     LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY sc.calculation_date DESC, e.last_name
+  `, params).then(rows => rows.map(row => applyEmployeeDisplay(row)));
+}
+
+async function payslipRecords(filters) {
+  const where = [];
+  const params = [];
+  addCondition(where, params, 'sc.calculation_date >= ?', filters.dateFrom);
+  addCondition(where, params, 'sc.calculation_date <= ?', filters.dateTo);
+  addCondition(where, params, 'sc.payroll_period = ?', filters.payrollPeriod);
+  employeeFilters(where, params, filters);
+  // Payslips are released only after payroll is finalized. Draft calculations
+  // remain available in Payroll Records, but must not be issued as payslips.
+  where.push("sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')");
+
+  const rows = await safeQuery('salary_calculations', `
+    SELECT
+      sc.id,
+      sc.employee_id,
+      sc.payroll_run_id,
+      e.employee_code,
+      e.first_name,
+      e.middle_name,
+      e.last_name,
+      e.position,
+      COALESCE(d.name, '-') AS department,
+      COALESCE(wt.name, '-') AS wage_type,
+      COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) AS payroll_period,
+      DATE_FORMAT(sc.calculation_date, '%Y-%m-%d') AS calculation_date,
+      sc.days_worked,
+      sc.hours_worked,
+      sc.quantity,
+      sc.base_rate,
+      sc.daily_rate,
+      sc.hourly_rate,
+      sc.gross_pay,
+      sc.total_allowances,
+      sc.overtime_amount,
+      sc.sss_deduction,
+      sc.philhealth_deduction,
+      sc.pagibig_deduction,
+      sc.employee_deduction_total,
+      sc.total_deductions,
+      sc.net_pay,
+      sc.status,
+      u.username AS prepared_by
+    FROM salary_calculations sc
+    LEFT JOIN employees e ON e.id = sc.employee_id
+    LEFT JOIN departments d ON d.id = e.department_id
+    LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
+    LEFT JOIN users u ON u.id = sc.calculated_by
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY sc.calculation_date DESC, e.employee_code
+    LIMIT 2
   `, params);
+
+  return rows.map(row => {
+    const record = {
+      ...row,
+      employee_name: reportEmployeeName(row)
+    };
+    delete record.first_name;
+    delete record.middle_name;
+    delete record.last_name;
+    return record;
+  });
 }
 
 async function productionReport(filters, mode) {
@@ -588,6 +816,199 @@ async function reportRows(report, filters) {
   return [];
 }
 
+function registryPeriod(filters) {
+  const match = String(filters.payrollPeriod || '').match(/^(\d{4}-\d{2})/);
+  if (match) return match[1];
+
+  const fromMonth = String(filters.dateFrom || '').match(/^(\d{4}-\d{2})-\d{2}$/)?.[1];
+  const toMonth = String(filters.dateTo || '').match(/^(\d{4}-\d{2})-\d{2}$/)?.[1];
+  if (fromMonth && toMonth && fromMonth === toMonth) return fromMonth;
+  if (fromMonth && !toMonth) return fromMonth;
+  if (!fromMonth && toMonth) return toMonth;
+
+  const err = new Error('Select a monthly payroll period before generating a payroll registry.');
+  err.status = 400;
+  throw err;
+}
+
+function registryEmployeeName(row) {
+  return [
+    decryptReportValue(row.first_name),
+    decryptReportValue(row.middle_name),
+    decryptReportValue(row.last_name)
+  ].filter(Boolean).join(' ') || row.employee_code || '-';
+}
+
+function registryEmployeeHeader(row) {
+  const first = decryptReportValue(row.first_name);
+  const middle = decryptReportValue(row.middle_name);
+  const last = decryptReportValue(row.last_name);
+  const name = [last, [first, middle].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return name || row.employee_code || '-';
+}
+
+function registryDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}
+
+async function sewingRegistryData(payrollPeriod, kind) {
+  const shareFilter = kind === '55'
+    ? 'AND s.share_percentage = 55.00'
+    : kind === '45'
+      ? 'AND s.share_percentage = 45.00'
+      : '';
+  const [sourceRows] = await pool.execute(`
+    SELECT o.output_date, o.operation_type, o.size_range, o.quantity_produced,
+           o.rate_per_piece, o.full_amount, s.share_amount, s.partner_role,
+           e.employee_code, e.first_name, e.middle_name, e.last_name,
+           COALESCE(NULLIF(e.agency_name, ''), 'Direct') AS agency
+      FROM piece_rate_outputs o
+      JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+      JOIN employees e ON e.id = s.employee_id
+     WHERE o.payroll_period_id = ? AND o.status <> 'Voided' ${shareFilter}
+     ORDER BY e.last_name, e.first_name, o.operation_type, o.size_range, o.output_date, o.id
+  `, [payrollPeriod]);
+
+  const dates = [...new Set(sourceRows
+    .map(row => registryDate(row.output_date))
+    .filter(Boolean))].sort();
+  const grouped = new Map();
+  for (const source of sourceRows) {
+    const date = registryDate(source.output_date);
+    const role = source.partner_role || 'Solo';
+    const key = [source.employee_code, role, source.operation_type, source.size_range || '', source.rate_per_piece].join('|');
+    const row = grouped.get(key) || {
+      employee: registryEmployeeHeader(source),
+      employee_code: source.employee_code,
+      employee_key: source.employee_code || registryEmployeeHeader(source),
+      agency: source.agency,
+      operation_type: source.operation_type || '-',
+      size_range: source.size_range || '-',
+      rate_per_piece: numeric(source.rate_per_piece),
+      partner_role: role,
+      daily: {},
+      total_output: 0,
+      amount: 0
+    };
+    const amount = kind === 'main' ? numeric(source.full_amount) : numeric(source.share_amount);
+    const dayValue = kind === 'main' ? numeric(source.quantity_produced) : numeric(source.share_amount);
+    row.daily[date] = numeric(row.daily[date]) + dayValue;
+    row.total_output += numeric(source.quantity_produced);
+    row.amount += amount;
+    grouped.set(key, row);
+  }
+
+  const rows = [...grouped.values()].map(row => ({
+    ...row,
+    amount: Number(row.amount.toFixed(2)),
+    total_output: Number(row.total_output.toFixed(2)),
+    daily: Object.fromEntries(Object.entries(row.daily).map(([date, quantity]) => [date, Number(quantity.toFixed(2))]))
+  }));
+  const employees = new Map();
+  for (const row of rows) {
+    const key = row.employee_key;
+    const employee = employees.get(key) || {
+      employee: row.employee,
+      employee_code: row.employee_code,
+      agency: row.agency,
+      rows: [],
+      dailyTotals: {},
+      totalOutput: 0,
+      totalAmount: 0
+    };
+    employee.rows.push(row);
+    dates.forEach(date => {
+      employee.dailyTotals[date] = Number((numeric(employee.dailyTotals[date]) + numeric(row.daily[date])).toFixed(2));
+    });
+    employee.totalOutput = Number((numeric(employee.totalOutput) + numeric(row.total_output)).toFixed(2));
+    employee.totalAmount = Number((numeric(employee.totalAmount) + numeric(row.amount)).toFixed(2));
+    employees.set(key, employee);
+  }
+  const employeeRows = [...employees.values()].sort((a, b) => a.employee.localeCompare(b.employee));
+  const dailyTotals = Object.fromEntries(dates.map(date => [
+    date,
+    Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.dailyTotals[date]), 0).toFixed(2))
+  ]));
+  return {
+    payrollPeriod,
+    kind,
+    dates,
+    rows,
+    employees: employeeRows,
+    dailyTotals,
+    totalOutput: Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.totalOutput), 0).toFixed(2)),
+    totalAmount: Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.totalAmount), 0).toFixed(2))
+  };
+}
+
+async function swrFxrRegistryData(payrollPeriod) {
+  const [sourceRows] = await pool.execute(`
+    SELECT o.output_date,
+           sewer.share_amount AS sewer_amount,
+           fixer.share_amount AS fixer_amount,
+           es.employee_code AS sewer_code, es.first_name AS sewer_first_name,
+           es.middle_name AS sewer_middle_name, es.last_name AS sewer_last_name,
+           ef.employee_code AS fixer_code, ef.first_name AS fixer_first_name,
+           ef.middle_name AS fixer_middle_name, ef.last_name AS fixer_last_name,
+           COALESCE(NULLIF(es.agency_name, ''), 'Direct') AS agency
+      FROM piece_rate_outputs o
+      JOIN piece_rate_output_shares sewer
+        ON sewer.piece_rate_output_id = o.id AND sewer.partner_role = 'Sewer'
+      JOIN piece_rate_output_shares fixer
+        ON fixer.piece_rate_output_id = o.id AND fixer.partner_role = 'Fixer'
+      JOIN employees es ON es.id = sewer.employee_id
+      JOIN employees ef ON ef.id = fixer.employee_id
+     WHERE o.payroll_period_id = ? AND o.output_mode = 'partner'
+       AND o.split_rule = 'Standard Sewer-Fixer' AND o.status <> 'Voided'
+     ORDER BY agency, es.last_name, es.first_name, ef.last_name, ef.first_name, o.output_date
+  `, [payrollPeriod]);
+
+  const grouped = new Map();
+  for (const source of sourceRows) {
+    const key = [source.sewer_code, source.fixer_code, source.agency].join('|');
+    const row = grouped.get(key) || {
+      agency: source.agency,
+      sewer: registryEmployeeName({
+        employee_code: source.sewer_code,
+        first_name: source.sewer_first_name,
+        middle_name: source.sewer_middle_name,
+        last_name: source.sewer_last_name
+      }),
+      fixer: registryEmployeeName({
+        employee_code: source.fixer_code,
+        first_name: source.fixer_first_name,
+        middle_name: source.fixer_middle_name,
+        last_name: source.fixer_last_name
+      }),
+      workDates: new Set(),
+      sewerAmount: 0,
+      fixerAmount: 0
+    };
+    row.workDates.add(registryDate(source.output_date));
+    row.sewerAmount += numeric(source.sewer_amount);
+    row.fixerAmount += numeric(source.fixer_amount);
+    grouped.set(key, row);
+  }
+  const rows = [...grouped.values()].map(row => ({
+    agency: row.agency,
+    sewer: row.sewer,
+    fixer: row.fixer,
+    days: row.workDates.size,
+    sewerAmount: Number(row.sewerAmount.toFixed(2)),
+    fixerAmount: Number(row.fixerAmount.toFixed(2)),
+    total: Number((row.sewerAmount + row.fixerAmount).toFixed(2))
+  }));
+  return {
+    payrollPeriod,
+    rows,
+    sewerTotal: Number(rows.reduce((sum, row) => sum + row.sewerAmount, 0).toFixed(2)),
+    fixerTotal: Number(rows.reduce((sum, row) => sum + row.fixerAmount, 0).toFixed(2)),
+    total: Number(rows.reduce((sum, row) => sum + row.total, 0).toFixed(2))
+  };
+}
+
 function csvEscape(value) {
   const text = String(value ?? '');
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -619,6 +1040,460 @@ function sendExcel(res, report, rows) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${report.id}.xlsx"`);
   res.send(buffer);
+}
+
+function payslipLineItems(record) {
+  const grossPay = numeric(record.gross_pay);
+  const allowances = numeric(record.total_allowances);
+  const overtime = numeric(record.overtime_amount);
+  const basePay = Math.max(0, grossPay - allowances - overtime);
+  const otherDeductions = Math.max(0, numeric(record.total_deductions)
+    - numeric(record.sss_deduction)
+    - numeric(record.philhealth_deduction)
+    - numeric(record.pagibig_deduction)
+    - numeric(record.employee_deduction_total));
+
+  const earnings = [
+    ['Basic Pay', basePay],
+    ['Overtime / Premium', overtime],
+    ['Allowances', allowances],
+    ['Gross Pay', grossPay]
+  ];
+
+  const deductions = [
+    ['SSS', numeric(record.sss_deduction)],
+    ['PhilHealth', numeric(record.philhealth_deduction)],
+    ['Pag-IBIG', numeric(record.pagibig_deduction)],
+    ['Cash Advance / Loans', numeric(record.employee_deduction_total)],
+    ['Other Deductions', otherDeductions],
+    ['Total Deductions', numeric(record.total_deductions)]
+  ].filter(([label, amount]) => amount > 0 || label === 'Total Deductions');
+
+  return { earnings, deductions };
+}
+
+function drawStandardPayslip(doc, record, req) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const ink = '#111827';
+  const muted = '#667085';
+  const red = '#e73236';
+  const border = '#d0d5dd';
+  const soft = '#f8fafc';
+  const generated = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' });
+  const { earnings, deductions } = payslipLineItems(record);
+
+  const hLine = y => doc.moveTo(left, y).lineTo(right, y).strokeColor(border).lineWidth(0.6).stroke();
+  const labelValue = (label, value, x, y, w) => {
+    doc.font('Helvetica').fontSize(7).fillColor(muted).text(label, x, y, { width: w });
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(ink).text(String(value || '-'), x, y + 10, { width: w, ellipsis: true });
+  };
+  const moneyRow = (label, amount, x, y, w, bold = false) => {
+    const labelWidth = w - 96;
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(ink)
+      .text(label, x + 8, y, { width: labelWidth - 12, ellipsis: true });
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(ink)
+      .text(peso(amount), x + labelWidth, y, { width: 88, align: 'right' });
+    doc.moveTo(x, y + 14).lineTo(x + w, y + 14).strokeColor('#eaecf0').lineWidth(0.4).stroke();
+  };
+
+  doc.rect(left, 26, width, 356).strokeColor(border).lineWidth(0.8).stroke();
+  doc.rect(left, 26, 6, 54).fill(red);
+  doc.font('Helvetica-Bold').fontSize(15).fillColor(ink).text('MARULAS INDUSTRIAL CORP', left + 18, 38);
+  doc.font('Helvetica').fontSize(8).fillColor(muted).text('Employee Payslip', left + 18, 58);
+  doc.font('Helvetica-Bold').fontSize(13).fillColor(ink).text('PAYSLIP', right - 150, 38, { width: 140, align: 'right' });
+  doc.font('Helvetica').fontSize(8).fillColor(muted).text(`Reference: CALC-${String(record.id).padStart(5, '0')}`, right - 180, 58, { width: 170, align: 'right' });
+  hLine(80);
+
+  doc.rect(left, 81, width, 52).fill(soft);
+  const col = (width - 32) / 4;
+  labelValue('Employee Name', record.employee_name, left + 14, 94, col);
+  labelValue('Employee ID', record.employee_code, left + 14 + col, 94, col);
+  labelValue('Department', record.department, left + 14 + col * 2, 94, col);
+  labelValue('Position', record.position || '-', left + 14 + col * 3, 94, col - 10);
+  hLine(133);
+
+  const detailY = 145;
+  labelValue('Payroll Period', record.payroll_period, left + 14, detailY, col);
+  labelValue('Calculation Date', record.calculation_date, left + 14 + col, detailY, col);
+  labelValue('Wage Type', record.wage_type, left + 14 + col * 2, detailY, col);
+  labelValue('Status', record.status, left + 14 + col * 3, detailY, col - 10);
+
+  const metricY = 181;
+  labelValue('Days Worked', numeric(record.days_worked), left + 14, metricY, col);
+  labelValue('Hours Worked', numeric(record.hours_worked), left + 14 + col, metricY, col);
+  labelValue(record.wage_type === 'Per-Trip' ? 'Trips' : 'Output / Quantity', numeric(record.quantity), left + 14 + col * 2, metricY, col);
+  labelValue('Base Rate', peso(record.base_rate || record.daily_rate || record.hourly_rate), left + 14 + col * 3, metricY, col - 10);
+
+  const sectionY = 224;
+  const gap = 18;
+  const sectionW = (width - 28 - gap) / 2;
+  const earnX = left + 14;
+  const deductX = earnX + sectionW + gap;
+  doc.rect(earnX, sectionY, sectionW, 22).fill('#ffffff').strokeColor(border).stroke();
+  doc.rect(deductX, sectionY, sectionW, 22).fill('#ffffff').strokeColor(border).stroke();
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(ink).text('Earnings', earnX + 8, sectionY + 7);
+  doc.text('Deductions', deductX + 8, sectionY + 7);
+
+  let rowY = sectionY + 31;
+  const rows = Math.max(earnings.length, deductions.length);
+  for (let i = 0; i < rows; i += 1) {
+    if (earnings[i]) moneyRow(earnings[i][0], earnings[i][1], earnX, rowY, sectionW, earnings[i][0] === 'Gross Pay');
+    if (deductions[i]) moneyRow(deductions[i][0], deductions[i][1], deductX, rowY, sectionW, deductions[i][0] === 'Total Deductions');
+    rowY += 17;
+  }
+
+  const netY = 318;
+  doc.rect(left + 14, netY, width - 28, 28).fill('#fff1f1').strokeColor('#fda29b').lineWidth(0.6).stroke();
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(red).text('NET PAY', left + 24, netY + 9);
+  doc.text(peso(record.net_pay), right - 190, netY + 9, { width: 170, align: 'right' });
+
+  const signY = 364;
+  doc.font('Helvetica').fontSize(7.5).fillColor(muted)
+    .text(`Generated: ${generated}`, left + 14, signY - 12)
+    .text(`Generated by: ${req.user?.username || 'System'}`, left + 14, signY);
+  doc.moveTo(right - 260, signY + 1).lineTo(right - 150, signY + 1).strokeColor(border).stroke();
+  doc.moveTo(right - 120, signY + 1).lineTo(right - 10, signY + 1).strokeColor(border).stroke();
+  doc.font('Helvetica').fontSize(7).fillColor(muted)
+    .text('Prepared By', right - 260, signY + 6, { width: 110, align: 'center' })
+    .text('Received By', right - 120, signY + 6, { width: 110, align: 'center' });
+}
+
+function sendPayslipPdf(res, record, req) {
+  const doc = new PDFDocument({ size: 'A5', layout: 'landscape', margin: 24 });
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+  doc.on('end', () => {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="payslip-${record.id}.pdf"`);
+    res.send(Buffer.concat(chunks));
+  });
+
+  drawStandardPayslip(doc, record, req);
+  doc.end();
+}
+
+function registryDateLabel(date) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleDateString('en-PH', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+}
+
+function registryNumber(value) {
+  const number = numeric(value);
+  const hasDecimals = Math.abs(number - Math.round(number)) > 0.001;
+  return number.toLocaleString('en-PH', {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: 2
+  });
+}
+
+function sendSewingRegistryPdf(res, registry, req) {
+  const title = registry.kind === '55'
+    ? '55% Sewing Payroll Registry'
+    : registry.kind === '45'
+      ? '45% Sewing Payroll Registry'
+      : 'Main Sewing Payroll Registry';
+  const doc = new PDFDocument({ size: 'A3', layout: 'landscape', margin: 28 });
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+  doc.on('end', () => {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="sewing-payroll-registry-${registry.kind}-${registry.payrollPeriod}.pdf"`);
+    res.send(Buffer.concat(chunks));
+  });
+
+  const left = doc.page.margins.left;
+  const width = doc.page.width - left - doc.page.margins.right;
+  const fixedColumns = [92, 58, 76, 92, 100, 86];
+  const dateWidth = Math.max(12, Math.floor((width - fixedColumns.reduce((sum, column) => sum + column, 0)) / Math.max(registry.dates.length, 1)));
+  const headers = ['Sew Type', 'Size', 'Rate/Piece', ...registry.dates.map(registryDateLabel), 'Total Output', 'Amount', 'Partner Role'];
+  const widths = [92, 58, 76, ...registry.dates.map(() => dateWidth), 92, 100, 86];
+  let y = 0;
+
+  const heading = () => {
+    doc.font('Helvetica-Bold').fontSize(16).fillColor('#000000').text(title, left, 28, { width, align: 'left' });
+    doc.font('Helvetica').fontSize(11).fillColor('#000000').text(`PAYROLL PERIOD: ${registry.payrollPeriod}`, left, 56, { width, align: 'left' });
+    y = 88;
+  };
+  const drawCell = (text, x, rowY, columnWidth, height, options = {}) => {
+    doc.rect(x, rowY, columnWidth, height)
+      .fillAndStroke(options.fill || '#ffffff', options.border || '#222222');
+    doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(options.fontSize || 6.8)
+      .fillColor('#000000')
+      .text(String(text ?? ''), x + 3, rowY + (options.subtext ? 4 : 6), {
+        width: columnWidth - 6,
+        height: height - 5,
+        align: options.align || 'left',
+        ellipsis: true
+      });
+    if (options.subtext) {
+      doc.font('Helvetica').fontSize(5.6).fillColor('#000000')
+        .text(options.subtext, x + 3, rowY + 12, {
+          width: columnWidth - 6,
+          height: height - 13,
+          align: options.align || 'left',
+          ellipsis: true
+        });
+    }
+  };
+  const ensureSpace = height => {
+    if (y + height > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage();
+      heading();
+      drawHeader();
+    }
+  };
+  const drawHeader = () => {
+    const height = 24;
+    ensureSpace(height);
+    let x = left;
+    headers.forEach((header, index) => {
+      const isDate = index >= 3 && index < 3 + registry.dates.length;
+      drawCell(header, x, y, widths[index], height, {
+        bold: true,
+        fill: '#ffffff',
+        fontSize: 5.8,
+        align: index >= 2 ? 'right' : 'left',
+        subtext: isDate ? 'Daily Output' : ''
+      });
+      x += widths[index];
+    });
+    y += height;
+  };
+  const drawRow = (cells, options = {}) => {
+    const height = options.height || 18;
+    ensureSpace(height);
+    let x = left;
+    cells.forEach((cell, index) => {
+      drawCell(cell, x, y, widths[index], height, {
+        fill: options.fill || '#ffffff',
+        border: options.border || '#222222',
+        bold: options.bold || false,
+        fontSize: options.fontSize || 6.8,
+        align: index >= 2 ? 'right' : 'left'
+      });
+      x += widths[index];
+    });
+    y += height;
+  };
+  const drawGroupRow = (label, options = {}) => {
+    const height = options.height || 18;
+    ensureSpace(height);
+    drawCell(label, left, y, widths.reduce((sum, columnWidth) => sum + columnWidth, 0), height, {
+      fill: options.fill || '#f2f2f2',
+      bold: true,
+      fontSize: options.fontSize || 6.8
+    });
+    y += height;
+  };
+
+  heading();
+  drawHeader();
+  const employees = Array.isArray(registry.employees) ? registry.employees : [];
+  if (!employees.length) {
+    drawGroupRow('No sewing output was encoded for this payroll period.');
+  } else {
+    employees.forEach(employee => {
+      drawGroupRow(`${employee.employee} - ${employee.agency || 'Direct'}`);
+      employee.rows.forEach(item => drawRow([
+        item.operation_type,
+        item.size_range,
+        peso(item.rate_per_piece),
+        ...registry.dates.map(date => registryNumber(item.daily?.[date] || 0)),
+        registryNumber(item.total_output),
+        peso(item.amount),
+        item.partner_role
+      ]));
+      drawRow([
+        'Employee Daily Total',
+        '',
+        '',
+        ...registry.dates.map(date => registryNumber(employee.dailyTotals?.[date] || 0)),
+        registryNumber(employee.totalOutput),
+        peso(employee.totalAmount),
+        ''
+      ], { fill: '#f2f2f2', bold: true });
+    });
+  }
+  drawRow([
+    'Grand Daily Total',
+    '',
+    '',
+    ...registry.dates.map(date => registryNumber(registry.dailyTotals?.[date] || 0)),
+    registryNumber(registry.totalOutput),
+    peso(registry.totalAmount),
+    ''
+  ], { fill: '#f2f2f2', bold: true });
+  doc.end();
+}
+
+function sendSwrFxrRegistryPdf(res, registry, req) {
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 32 });
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+  doc.on('end', () => {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="swr-fxr-sum-${registry.payrollPeriod}.pdf"`);
+    res.send(Buffer.concat(chunks));
+  });
+  const left = doc.page.margins.left;
+  const width = doc.page.width - left - doc.page.margins.right;
+  const headers = ['#', 'Agency', 'No. of Days', 'Sewer (55%)', 'Sewer Amount', 'Fixer (45%)', 'Fixer Amount', 'Total', 'Partner Information'];
+  const widths = [24, 68, 50, 105, 72, 105, 72, 72, 92];
+  let y = 0;
+  const heading = () => {
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('#111827').text('MARULAS INDUSTRIAL CORPORATION', left, 34, { width, align: 'center' });
+    doc.font('Helvetica-Bold').fontSize(11).text('SWR-FXR-SUM PAYROLL REGISTRY', left, 51, { width, align: 'center' });
+    doc.font('Helvetica').fontSize(8).fillColor('#475467').text(`PAYROLL PERIOD: ${registry.payrollPeriod}`, left, 66, { width, align: 'center' });
+    doc.text(`Generated by: ${req.user?.username || 'System'}  |  ${new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}`, left, 78, { width, align: 'center' });
+    y = 101;
+  };
+  const row = (cells, header = false) => {
+    const height = header ? 24 : 23;
+    if (y + height > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage();
+      heading();
+    }
+    let x = left;
+    cells.forEach((cell, index) => {
+      doc.rect(x, y, widths[index], height).fillAndStroke(header ? '#eef2f6' : '#ffffff', '#98a2b3');
+      doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(header ? 6.5 : 6.6).fillColor('#101828')
+        .text(String(cell ?? '-'), x + 3, y + 7, { width: widths[index] - 6, height: height - 9, align: [0, 2, 4, 6, 7].includes(index) ? 'right' : 'left', ellipsis: true });
+      x += widths[index];
+    });
+    y += height;
+  };
+  heading();
+  row(headers, true);
+  if (!registry.rows.length) {
+    row(['No Sewer/Fixer production pairs were encoded for this payroll period.', ...Array(headers.length - 1).fill('')]);
+  } else {
+    registry.rows.forEach((item, index) => row([
+      index + 1, item.agency, item.days, item.sewer, peso(item.sewerAmount), item.fixer,
+      peso(item.fixerAmount), peso(item.total), 'Sewer + Fixer (55% / 45%)'
+    ]));
+  }
+  row(['TOTAL', '', '', '', peso(registry.sewerTotal), '', peso(registry.fixerTotal), peso(registry.total), ''], true);
+  doc.end();
+}
+
+function sendDtrPdf(res, record, req) {
+  const doc = new PDFDocument({ size: [612, 936], margin: 36 });
+  const chunks = [];
+  doc.on('data', chunk => chunks.push(chunk));
+  doc.on('end', () => {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance-dtr-${record.employee.employee_code || record.employee.id}-${record.start}.pdf"`);
+    res.send(Buffer.concat(chunks));
+  });
+
+  const formWidth = 360;
+  const left = (doc.page.width - formWidth) / 2;
+  const width = formWidth;
+  const right = left + width;
+  let y = 34;
+  const center = (text, size = 8, bold = false) => {
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(size)
+      .fillColor('#000000')
+      .text(text, left, y, { width, align: 'center' });
+    y += size + 4;
+  };
+  const textLine = (label, value, rowY) => {
+    doc.font('Helvetica').fontSize(8).fillColor('#000000').text(`${label}:`, left, rowY, { width: 72 });
+    doc.text(String(value || ''), left + 74, rowY, { width: width - 74 });
+    doc.moveTo(left + 74, rowY + 9).lineTo(right, rowY + 9).strokeColor('#000000').lineWidth(0.4).stroke();
+  };
+
+  center('REPUBLIC OF THE PHILIPPINES', 7, true);
+  center('Marulas Industrial Corporation', 8, true);
+  y += 12;
+  textLine('Name', record.employeeName, y);
+  y += 14;
+  textLine('Department', record.department, y);
+  y += 14;
+  textLine('For the Month of', dtrDateLabel(record.start, record.end), y);
+  y += 20;
+
+  const col = [34, 81.5, 81.5, 81.5, 81.5];
+  const tableLeft = left;
+  const rowH = 15;
+  const drawCell = (text, x, rowY, w, h, options = {}) => {
+    doc.rect(x, rowY, w, h).strokeColor('#000000').lineWidth(0.5).stroke();
+    doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(options.size || 7).fillColor('#000000')
+      .text(String(text || ''), x + 2, rowY + (options.offsetY || 3.5), {
+        width: w - 4,
+        height: h - 2,
+        align: options.align || 'center'
+      });
+  };
+
+  const headerY = y;
+  drawCell('-', tableLeft, y, col[0], rowH * 2, { bold: true, size: 7 });
+  drawCell('AM', tableLeft + col[0], y, col[1] + col[2], rowH, { bold: true });
+  drawCell('PM', tableLeft + col[0] + col[1] + col[2], y, col[3] + col[4], rowH, { bold: true });
+  y += rowH;
+  let x = tableLeft + col[0];
+  ['IN', 'OUT', 'IN', 'OUT'].forEach((label, index) => {
+    drawCell(label, x, y, col[index + 1], rowH, { bold: true });
+    x += col[index + 1];
+  });
+  y = headerY + (rowH * 2);
+
+  const dates = dtrFormDates(record);
+  const sameMonth = dates.every(date => String(date || '').slice(0, 7) === String(dates[0] || '').slice(0, 7));
+  dates.forEach(date => {
+    const row = record.attendanceByDate.get(date) || {};
+    const parsed = new Date(`${date}T00:00:00Z`);
+    const day = sameMonth
+      ? parsed.getUTCDate()
+      : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const timeIn = dtrTime(row.time_in);
+    const timeOut = dtrTime(row.time_out);
+    const inHour = dtrHour(row.time_in);
+    const outHour = dtrHour(row.time_out);
+    const amIn = timeIn && inHour !== null && inHour < 12 ? timeIn : '';
+    const pmIn = timeIn && inHour !== null && inHour >= 12 ? timeIn : '';
+    const amOut = timeOut && outHour !== null && outHour < 12 ? timeOut : '';
+    const pmOut = timeOut && outHour !== null && outHour >= 12 ? timeOut : '';
+    let cx = tableLeft;
+    [day, amIn, amOut, pmIn, pmOut].forEach((value, index) => {
+      drawCell(value, cx, y, col[index], rowH, { size: index === 0 && !sameMonth ? 6 : 7 });
+      cx += col[index];
+    });
+    y += rowH;
+  });
+  while (dates.length < 31) {
+    dates.push('');
+    const day = dates.length;
+    let cx = tableLeft;
+    [day, '', '', '', ''].forEach((value, index) => {
+      drawCell(value, cx, y, col[index], rowH, { size: 6 });
+      cx += col[index];
+    });
+    y += rowH;
+  }
+
+  y += 18;
+  doc.font('Helvetica').fontSize(8).fillColor('#000000')
+    .text('I certify on my honor that the above is true', left, y, { width, align: 'center' });
+  y += 11;
+  doc.text('and correct report of the hours of work performed.', left, y, { width, align: 'center' });
+  y += 46;
+  doc.moveTo(left + 72, y).lineTo(right - 72, y).strokeColor('#000000').lineWidth(0.5).stroke();
+  y += 5;
+  doc.font('Helvetica').fontSize(8).text('Employee Signature', left, y, { width, align: 'center' });
+  y += 32;
+  doc.moveTo(left + 72, y).lineTo(right - 72, y).stroke();
+  y += 5;
+  doc.font('Helvetica-Bold').fontSize(8).text(req.user?.username || 'Prepared By', left, y, { width, align: 'center' });
+  y += 11;
+  doc.font('Helvetica').fontSize(7).text('Prepared / Verified By', left, y, { width, align: 'center' });
+  doc.end();
 }
 
 function sendPdf(res, report, rows, req) {
@@ -694,6 +1569,47 @@ router.get('/:reportId.:format', requireAuth, requireRole(REPORT_ROLES), async (
     if (!report.formats.includes(format)) return res.status(400).json({ error: 'Export format is not available for this report.' });
 
     const filters = filtersFromRequest(req.query);
+    if (report.id === 'daily-attendance' && format === 'pdf') {
+      if (!/^\d+$/.test(String(filters.employeeId || ''))) {
+        return res.status(400).json({ error: 'Select one employee before generating an attendance DTR.' });
+      }
+      const record = await dtrRecord(filters);
+      await logReportExport(req, report, format, record.dates.length);
+      return sendDtrPdf(res, record, req);
+    }
+    if (report.id === 'payroll-register' && format === 'pdf') {
+      const kind = ['main', '55', '45', 'swr-fxr-sum'].includes(filters.registryType)
+        ? filters.registryType
+        : 'main';
+      const payrollPeriod = registryPeriod(filters);
+      if (kind === 'swr-fxr-sum') {
+        const registry = await swrFxrRegistryData(payrollPeriod);
+        await logReportExport(req, report, format, registry.rows.length);
+        return sendSwrFxrRegistryPdf(res, registry, req);
+      }
+      const registry = await sewingRegistryData(payrollPeriod, kind);
+      await logReportExport(req, report, format, registry.rows.length);
+      return sendSewingRegistryPdf(res, registry, req);
+    }
+    if (report.id === 'employee-payslip') {
+      if (!/^\d+$/.test(String(filters.employeeId || ''))) {
+        return res.status(400).json({ error: 'Select one employee before generating a payslip.' });
+      }
+      if (!filters.payrollPeriod) {
+        return res.status(400).json({ error: 'Select a payroll period before generating a payslip.' });
+      }
+
+      const records = await payslipRecords(filters);
+      if (!records.length) {
+        return res.status(404).json({ error: 'No finalized payslip was found for the selected employee and payroll period.' });
+      }
+      if (records.length > 1) {
+        return res.status(409).json({ error: 'More than one payroll record matched. Select the exact payroll period for one payslip.' });
+      }
+      await logReportExport(req, report, format, records.length);
+      return sendPayslipPdf(res, records[0], req);
+    }
+
     const rows = await reportRows(report, filters);
     await logReportExport(req, report, format, rows.length);
 
@@ -702,6 +1618,7 @@ router.get('/:reportId.:format', requireAuth, requireRole(REPORT_ROLES), async (
     return sendPdf(res, report, rows, req);
   } catch (err) {
     console.error('Report generation failed:', err);
+    if (err.status === 400) return res.status(400).json({ error: err.message || 'Invalid report filters.' });
     res.status(500).json({ error: 'Failed to generate report.' });
   }
 });

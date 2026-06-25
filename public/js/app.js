@@ -64,6 +64,12 @@ function enhanceResponsiveTables(root = document) {
     }
     table.querySelectorAll('tbody tr').forEach(row => {
       [...row.children].forEach((cell, index) => {
+        if (row.classList.contains('table-empty')
+          || cell.classList.contains('table-empty')
+          || Number(cell.colSpan || 1) > 1) {
+          delete cell.dataset.label;
+          return;
+        }
         if (!cell.dataset.label) cell.dataset.label = headers[index] || '';
       });
     });
@@ -176,6 +182,12 @@ function navigate(pageId, navEl, params = null) {
   const target = document.getElementById('page-' + pageId);
   if (target) target.classList.add('active');
   document.body.dataset.activePage = pageId;
+  const pageBody = document.querySelector('.page-body');
+  if (pageBody) {
+    pageBody.scrollTop = 0;
+    requestAnimationFrame(() => { pageBody.scrollTop = 0; });
+  }
+  window.scrollTo(0, 0);
 
   const titleEl = document.getElementById('page-title');
   if (titleEl) {

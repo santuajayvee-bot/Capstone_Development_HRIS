@@ -1,7 +1,9 @@
 let selfServiceState = {
   profile: null,
   originalEmail: '',
-  initialized: false
+  initialized: false,
+  previewUrl: null,
+  savedPhotoUrl: null
 };
 
 const SELF_HR_ROLES = new Set(['hr_manager', 'hr_admin', 'system_admin', 'admin']);
@@ -34,6 +36,44 @@ function setSelfValue(id, value) {
 function setSelfText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value || '-';
+}
+
+function revokeSelfPicturePreview() {
+  if (selfServiceState.previewUrl) {
+    URL.revokeObjectURL(selfServiceState.previewUrl);
+    selfServiceState.previewUrl = null;
+  }
+}
+
+function showSelfPictureUrl(url, temporary = false) {
+  if (!url) return;
+  const createImage = alt => {
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = alt;
+    return image;
+  };
+  document.getElementById('self-picture-preview')?.replaceChildren(createImage('Profile picture preview'));
+  document.getElementById('self-mobile-avatar')?.replaceChildren(createImage('Profile picture'));
+  if (temporary) selfServiceState.previewUrl = url;
+}
+
+function previewSelfPicture() {
+  const input = document.getElementById('self-picture-input');
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    input.value = '';
+    selfServiceNotify('Profile picture must be JPG or PNG.', 'error');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    input.value = '';
+    selfServiceNotify('Profile picture must be 5MB or smaller.', 'error');
+    return;
+  }
+  revokeSelfPicturePreview();
+  showSelfPictureUrl(URL.createObjectURL(file), true);
 }
 
 function formatSelfDate(value) {
@@ -131,8 +171,11 @@ async function loadSelfProfilePicture(url) {
     const res = await apiFetch(url);
     if (!res.ok) return;
     const blob = await res.blob();
+    revokeSelfPicturePreview();
+    if (selfServiceState.savedPhotoUrl) URL.revokeObjectURL(selfServiceState.savedPhotoUrl);
     const objectUrl = URL.createObjectURL(blob);
-    preview.innerHTML = `<img src="${objectUrl}" alt="Profile picture">`;
+    selfServiceState.savedPhotoUrl = objectUrl;
+    showSelfPictureUrl(objectUrl);
   } catch (_error) {
     preview.textContent = 'No Photo';
   }
@@ -247,6 +290,10 @@ async function uploadSelfPicture(event) {
     input.value = '';
     selfServiceNotify(data.message || 'Profile picture updated.', 'success');
     await loadSelfServiceProfile();
+    if (typeof refreshSidebarAvatar === 'function') await refreshSidebarAvatar();
+    window.dispatchEvent(new CustomEvent('profilePhotoUpdated', {
+      detail: { employeeId: Number(getUser()?.employeeId || 0) }
+    }));
   } catch (error) {
     selfServiceNotify(error.message, 'error');
   }
@@ -380,6 +427,7 @@ function wireSelfServiceEvents() {
   });
   document.getElementById('self-password-save')?.addEventListener('click', changeSelfPassword);
   document.getElementById('self-picture-form')?.addEventListener('submit', uploadSelfPicture);
+  document.getElementById('self-picture-input')?.addEventListener('change', previewSelfPicture);
   document.getElementById('self-change-request-form')?.addEventListener('submit', submitSelfChangeRequest);
   document.querySelectorAll('[data-self-mobile-tab]').forEach(button => {
     button.addEventListener('click', () => {

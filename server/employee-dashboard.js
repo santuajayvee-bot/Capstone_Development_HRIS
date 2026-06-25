@@ -169,12 +169,17 @@ router.get('/dashboard', async (req, res) => {
 
     // 2. Latest payslip summary
     const [payslipRows] = await pool.execute(
-      `SELECT ps.id, ps.net_pay, ps.total_earning, ps.total_deduction, ps.status,
-              pr.start_date AS period_start, pr.end_date AS period_end, pr.month_year
-       FROM payslips ps
-       JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
-       WHERE ps.employee_id = ?
-       ORDER BY ps.created_at DESC LIMIT 1`,
+      `SELECT sc.id, sc.net_pay, sc.gross_pay AS total_earning,
+              sc.total_deductions AS total_deduction, sc.status,
+              COALESCE(sc.period_start, pr.start_date, sc.calculation_date) AS period_start,
+              COALESCE(sc.period_end, pr.end_date, sc.calculation_date) AS period_end,
+              COALESCE(sc.payroll_period, pr.month_year) AS month_year
+       FROM salary_calculations sc
+       LEFT JOIN payroll_runs pr ON pr.id = sc.payroll_run_id
+       WHERE sc.employee_id = ?
+         AND sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')
+       ORDER BY COALESCE(sc.approved_at, sc.released_at, sc.updated_at, sc.created_at) DESC
+       LIMIT 1`,
       [empId]
     );
 
@@ -323,17 +328,48 @@ router.get('/payslips', async (req, res) => {
     const empId = req.user.employeeId;
 
     const [payslips] = await pool.execute(
-      `SELECT ps.*, pr.start_date AS period_start, pr.end_date AS period_end, pr.month_year, pr.status AS run_status,
-              wt.name AS wage_type_name
-       FROM payslips ps
-       JOIN payroll_runs pr ON pr.id = ps.payroll_run_id
-       JOIN wage_types wt ON wt.id = ps.wage_type_id
-       WHERE ps.employee_id = ?
-       ORDER BY ps.created_at DESC`,
+      `SELECT sc.id,
+              sc.gross_pay AS total_earning,
+              sc.total_deductions AS total_deduction,
+              sc.net_pay,
+              sc.status,
+              COALESCE(sc.period_start, pr.start_date, sc.calculation_date) AS period_start,
+              COALESCE(sc.period_end, pr.end_date, sc.calculation_date) AS period_end,
+              COALESCE(sc.payroll_period, pr.month_year) AS month_year,
+              wt.name AS wage_type_name,
+              integrity.Transaction_Hash AS transaction_hash,
+              integrity.Blockchain_Status AS blockchain_status
+       FROM salary_calculations sc
+       LEFT JOIN payroll_runs pr ON pr.id = sc.payroll_run_id
+       LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
+       LEFT JOIN PAYROLL_RECORD integrity
+              ON integrity.Payroll_ID = sc.id
+             AND integrity.Employee_ID = sc.employee_id
+       WHERE sc.employee_id = ?
+         AND sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')
+       ORDER BY COALESCE(sc.approved_at, sc.released_at, sc.updated_at, sc.created_at) DESC`,
       [empId]
     );
 
-    // For each payslip, verify against blockchain hash
+    return res.json(payslips.map(payslip => ({
+      id: payslip.id,
+      period_start: payslip.period_start,
+      period_end: payslip.period_end,
+      month_year: payslip.month_year,
+      wage_type: payslip.wage_type_name,
+      total_earning: payslip.total_earning,
+      total_deduction: payslip.total_deduction,
+      net_pay: payslip.net_pay,
+      status: payslip.status,
+      integrity: String(payslip.blockchain_status || '').toUpperCase() === 'RECORDED'
+        && payslip.transaction_hash ? 'RECORDED' : 'PENDING',
+      blockchain_hash: payslip.transaction_hash
+        ? `${String(payslip.transaction_hash).substring(0, 16)}...`
+        : null,
+    })));
+
+    /* Legacy local hash verification is intentionally bypassed. Current
+       payroll integrity metadata comes from PAYROLL_RECORD above.
     const verifiedPayslips = [];
     for (const ps of payslips) {
       const [hashRows] = await pool.execute(
@@ -397,6 +433,7 @@ router.get('/payslips', async (req, res) => {
     }
 
     return res.json(verifiedPayslips);
+    */
   } catch (err) {
     console.error('[Employee] Payslips error:', err.message);
     return res.status(500).json({ error: 'Failed to load payslips.' });

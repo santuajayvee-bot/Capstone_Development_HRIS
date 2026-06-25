@@ -130,6 +130,15 @@ body,
   color: #ffffff !important;
 }
 
+.user-avatar {
+  border-radius: 50% !important;
+  overflow: hidden !important;
+}
+
+.user-avatar img {
+  border-radius: inherit !important;
+}
+
 .sidebar-logo span,
 .nav-item.active,
 .nav-item:hover {
@@ -1133,13 +1142,14 @@ button,
   border-color: #e73737 !important;
 }
 
-/* Reports module: compact ERP report library */
+/* Reports module: limited payroll outputs */
 #page-reports .page-header {
   padding-bottom: 14px;
   margin-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
 
+#page-reports .report-output-panel,
 #page-reports .report-library-panel {
   overflow: visible !important;
   margin-bottom: 16px;
@@ -1151,7 +1161,7 @@ button,
 
 #page-reports .report-filter-grid {
   display: grid;
-  grid-template-columns: minmax(170px, 1.3fr) minmax(170px, 1.3fr) repeat(4, minmax(140px, 1fr));
+  grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
   gap: 14px;
   align-items: end;
   padding: 16px;
@@ -1162,18 +1172,14 @@ button,
   min-width: 0;
 }
 
-#page-reports .report-filter-grid .form-group:nth-child(1),
-#page-reports .report-filter-grid .form-group:nth-child(6) {
-  grid-column: span 2;
-}
-
 #page-reports .report-filter-grid label {
   display: block;
   margin-bottom: 6px;
   color: #475467 !important;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: .04em;
+  line-height: 1.2;
   text-transform: uppercase;
 }
 
@@ -1185,8 +1191,20 @@ button,
   border-radius: 0 !important;
   background: #ffffff !important;
   color: #101828 !important;
+  font-family: inherit !important;
+  font-size: 14px !important;
   font-weight: 400 !important;
+  line-height: 1.2 !important;
+  padding: 0 12px !important;
   box-shadow: none !important;
+}
+
+#page-reports .report-filter-grid input[type="date"]::-webkit-datetime-edit,
+#page-reports .report-filter-grid input[type="date"]::-webkit-date-and-time-value {
+  font-family: inherit !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.2 !important;
 }
 
 #page-reports .report-filter-grid .lgsv-date-field {
@@ -1203,11 +1221,14 @@ button,
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
 }
 
 #page-reports .report-filter-actions .btn {
   min-height: 42px;
   border-radius: 0 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
   white-space: nowrap;
 }
 
@@ -1239,7 +1260,7 @@ button,
 }
 
 #page-reports .report-library-table {
-  min-width: 1080px;
+  min-width: 760px;
   border-collapse: collapse;
 }
 
@@ -1268,17 +1289,10 @@ button,
   background: #fff7f7 !important;
 }
 
-#page-reports .report-star {
-  width: 32px;
-  height: 32px;
+#page-reports .report-format-select {
+  min-width: 110px;
+  min-height: 36px;
   border-radius: 0 !important;
-  font-size: 15px;
-}
-
-#page-reports .report-star.active {
-  color: #d92d20 !important;
-  border-color: #fda29b !important;
-  background: #fff1f1 !important;
 }
 
 #page-reports .badge-neutral {
@@ -1311,16 +1325,15 @@ button,
   #page-reports .report-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  #page-reports .report-filter-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 720px) {
   #page-reports .report-filter-grid {
     grid-template-columns: 1fr;
-  }
-
-  #page-reports .report-filter-grid .form-group:nth-child(1),
-  #page-reports .report-filter-grid .form-group:nth-child(6) {
-    grid-column: auto;
   }
 }
 
@@ -2656,11 +2669,418 @@ button,
   }
 }
 
+/* Compact phone shell corrections. Keep this final mobile block last. */
+@media (max-width: 480px) {
+  :root {
+    --mobile-topbar-height: calc(56px + env(safe-area-inset-top));
+  }
+
+  #app,
+  .app-layout,
+  .main-content {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+  }
+
+  .main-content {
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .topbar {
+    min-height: var(--mobile-topbar-height) !important;
+    height: var(--mobile-topbar-height) !important;
+    padding: env(safe-area-inset-top) 48px 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .topbar-title {
+    font-size: 14px !important;
+    line-height: 1 !important;
+  }
+
+  .mobile-menu-toggle,
+  .mobile-topbar-alert {
+    top: calc(env(safe-area-inset-top) + 14px) !important;
+    width: 28px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+  }
+
+  .mobile-menu-toggle {
+    left: 12px !important;
+  }
+
+  .mobile-topbar-alert {
+    right: 12px !important;
+  }
+
+  .page-body {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 0 !important;
+    scroll-padding-top: 0 !important;
+    overflow-x: hidden !important;
+    overflow-y: scroll !important;
+    overscroll-behavior-y: contain !important;
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body.role-employee .page.active {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100% !important;
+    max-height: none !important;
+    padding: var(--mobile-topbar-height) 0 calc(var(--mobile-bottom-nav-height) + 28px) !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+  }
+
+  body.role-employee #page-employee-dashboard > [data-include],
+  body.role-employee #page-attendance > [data-include],
+  body.role-employee #page-leave > [data-include],
+  body.role-employee #page-self-service > [data-include] {
+    display: block !important;
+    min-height: 1px !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+  }
+
+  #page-attendance .page-header,
+  #page-leave .leave-tabs {
+    position: relative !important;
+    top: auto !important;
+    z-index: 2 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #ffffff !important;
+    margin-top: 0 !important;
+  }
+
+  #page-attendance .page-header {
+    padding: 0 !important;
+  }
+
+  #page-attendance .page-header-right {
+    display: block !important;
+  }
+
+  #page-attendance .attendance-tabs,
+  #page-leave .leave-tabs {
+    min-height: 42px !important;
+    height: 42px !important;
+    position: relative !important;
+    z-index: 1 !important;
+    overflow: visible !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #ffffff !important;
+    box-shadow: 0 1px 0 #e5e7eb !important;
+  }
+
+  body.role-employee #page-attendance #att-overview,
+  body.role-employee #page-attendance #att-records,
+  body.role-employee #page-leave .leave-tab-panel {
+    position: relative !important;
+    z-index: 1 !important;
+    margin-top: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.role-employee #page-employee-dashboard .emp-panel.active,
+  body.role-employee #page-self-service .self-service-page {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.role-employee #page-attendance .att-overview-head {
+    min-height: 112px !important;
+    padding: 16px 14px !important;
+    overflow: visible !important;
+  }
+
+  #page-attendance .attendance-tabs .tab,
+  #page-leave .leave-tab {
+    min-height: 42px !important;
+    height: 42px !important;
+    padding: 0 6px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+  }
+
+  body.role-employee #page-leave.leave-employee-mode:not(.leave-balances-mode) #leave-summary-cards {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  body.role-employee #page-leave.leave-employee-mode #leave-summary-cards .leave-card {
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 12px !important;
+  }
+
+  body.role-employee #page-leave.leave-employee-mode #leave-summary-cards .leave-card-label,
+  body.role-employee #page-leave.leave-employee-mode #leave-summary-cards .leave-card-value {
+    margin: 0 !important;
+    font-size: 12px !important;
+  }
+
+  .sidebar {
+    width: min(78vw, 280px) !important;
+    max-width: 78vw !important;
+  }
+
+  .sidebar-logo {
+    min-height: 58px !important;
+    height: 58px !important;
+    gap: 10px !important;
+    padding: 9px 14px !important;
+  }
+
+  .app-logo-sidebar {
+    width: 34px !important;
+    height: 34px !important;
+  }
+
+  .sidebar-logo span {
+    font-size: 15px !important;
+  }
+
+  .nav-item {
+    min-height: 46px !important;
+    height: 46px !important;
+    gap: 10px !important;
+    padding: 0 14px !important;
+    font-size: 13px !important;
+  }
+
+  .nav-icon {
+    width: 26px !important;
+    height: 26px !important;
+    font-size: 10px !important;
+  }
+
+  .sidebar-user {
+    min-height: 62px !important;
+    padding: 9px 12px !important;
+    gap: 9px !important;
+  }
+
+  .sidebar-user .user-avatar {
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    font-size: 11px !important;
+  }
+
+  .sidebar-user-info .name {
+    font-size: 12px !important;
+  }
+
+  .sidebar-user .role-badge {
+    padding: 2px 5px !important;
+    font-size: 8px !important;
+  }
+
+  .sidebar-user-actions button {
+    width: 28px !important;
+    min-width: 28px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+  }
+
+  /* Keep phone typography calm and prevent empty table labels from leaking. */
+  .topbar-title,
+  body.role-employee .emp-welcome h2,
+  body.role-employee .emp-mobile-list-row strong,
+  body.role-employee .self-mobile-list-row strong,
+  body.role-employee .emp-stat-value,
+  body.role-employee .att-metric strong,
+  body.role-employee .records-summary .att-summary-number,
+  body.role-employee .leave-card-value,
+  body.role-employee #leave-balances-list .leave-card-label,
+  body.role-employee #leave-balances-list .leave-card-value {
+    font-weight: 600 !important;
+  }
+
+  body.role-employee .section-label,
+  body.role-employee .emp-mobile-section-label,
+  body.role-employee .att-metric-grid::before,
+  body.role-employee .records-summary::before,
+  body.role-employee .emp-stat-grid::before {
+    font-weight: 600 !important;
+  }
+
+  body.role-employee .emp-mobile-empty-state strong {
+    font-weight: 500 !important;
+  }
+
+  body.role-employee #emp-payslips-table td.table-empty::before,
+  body.role-employee #emp-payslips-table tr.table-empty td::before {
+    content: none !important;
+    display: none !important;
+  }
+
+  .employee-bottom-nav-item,
+  .employee-bottom-nav-item.active {
+    outline: none !important;
+    font-weight: 500 !important;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .employee-bottom-nav-item span {
+    font-weight: 600 !important;
+  }
+
+  .employee-bottom-nav-item:focus,
+  .employee-bottom-nav-item:focus-visible,
+  .employee-bottom-nav-item.active {
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .att-mobile-records-list,
+  .leave-mobile-request-list {
+    display: none !important;
+    width: 100% !important;
+    background: #f3f4f6 !important;
+  }
+
+  body.role-employee .att-mobile-records-list,
+  body.role-employee .leave-mobile-request-list {
+    display: block !important;
+  }
+
+  body.role-employee #page-attendance .att-records-actionbar {
+    display: none !important;
+  }
+
+  body.role-employee #page-attendance .att-records-table-wrap,
+  body.role-employee #page-leave #leave-panel-requests .leave-table-wrap {
+    display: none !important;
+  }
+
+  .att-mobile-record,
+  .leave-mobile-request {
+    padding: 14px 12px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+  }
+
+  .att-mobile-record-head,
+  .leave-mobile-request-head {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 10px !important;
+    color: #101828 !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+  }
+
+  .att-mobile-record-head time {
+    font-weight: 500 !important;
+  }
+
+  .att-mobile-record-times {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    margin-top: 12px !important;
+  }
+
+  .att-mobile-record-times div {
+    min-width: 0 !important;
+    padding: 8px !important;
+    background: #f8fafc !important;
+  }
+
+  .att-mobile-record-times span,
+  .att-mobile-record-times strong {
+    display: block !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .att-mobile-record-times span {
+    color: #98a2b3 !important;
+    font-size: 9px !important;
+    text-transform: uppercase !important;
+  }
+
+  .att-mobile-record-times strong {
+    margin-top: 3px !important;
+    color: #344054 !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+  }
+
+  .att-mobile-record-meta,
+  .leave-mobile-request-meta {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px 12px !important;
+    margin-top: 9px !important;
+    color: #667085 !important;
+    font-size: 10px !important;
+  }
+
+  .leave-mobile-request-dates {
+    margin-top: 8px !important;
+    color: #344054 !important;
+    font-size: 12px !important;
+  }
+
+  .att-mobile-empty,
+  .leave-mobile-empty {
+    padding: 48px 16px !important;
+    background: #ffffff !important;
+    color: #98a2b3 !important;
+    font-size: 12px !important;
+    text-align: center !important;
+  }
+
+  body.role-employee #att-records-pagination {
+    min-height: 48px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 10px !important;
+    padding: 8px 12px !important;
+    background: #ffffff !important;
+  }
+
+  body.role-employee #att-records-pagination .btn {
+    width: auto !important;
+    min-width: 88px !important;
+    min-height: 34px !important;
+  }
+
+  body.role-employee #att-records-pagination .att-records-pagination-page {
+    font-size: 11px !important;
+  }
+}
+
 @media (min-width: 481px) {
   .emp-mobile-quick-access,
   .self-mobile-profile-summary,
   .self-mobile-info-block,
-  .self-mobile-manage {
+  .self-mobile-manage,
+  .att-mobile-records-list,
+  .leave-mobile-request-list {
     display: none !important;
   }
 }

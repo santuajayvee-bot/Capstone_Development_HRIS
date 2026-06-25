@@ -368,9 +368,11 @@ async function denyLeave(btn) {
   const leaveId = row?.dataset.leaveId;
   if (!leaveId) { alert('Error: Could not find leave request'); return; }
   if (!confirm('Deny this leave request?')) return;
+  const remarks = prompt('Enter rejection remarks:');
+  if (!remarks) return alert('Remarks are required when rejecting.');
   try {
     const res = await apiFetch(`/api/leave/${leaveId}/status`, {
-      method: 'PATCH', body: JSON.stringify({ status: 'Denied' })
+      method: 'PATCH', body: JSON.stringify({ status: 'Rejected', remarks })
     });
     if (!res || !res.ok) throw new Error('Failed to deny');
     alert('Leave denied successfully');
@@ -417,7 +419,7 @@ function renderAllRequests(leaves, genReqs) {
     details: `${l.type} · ${new Date(l.date_from).toLocaleDateString()} – ${new Date(l.date_to).toLocaleDateString()} (${l.days || 1}d)`,
     reason: l.reason || '-',
     date: new Date(l.created_at),
-    status: l.status,
+    status: leaveStatusValue(l.status),
   }));
 
   const genRows = myGenReqs.map(r => ({
@@ -427,7 +429,7 @@ function renderAllRequests(leaves, genReqs) {
     details: '—',
     reason: r.reason || '-',
     date: new Date(r.created_at),
-    status: r.status,
+    status: leaveStatusValue(r.status),
   }));
 
   const all = [...leaveRows, ...genRows].sort((a, b) => b.date - a.date);
@@ -444,7 +446,7 @@ function renderAllRequests(leaves, genReqs) {
       <td style="font-size:12px;color:var(--muted);">${r.details}</td>
       <td>${r.reason}</td>
       <td style="font-size:12px;color:var(--muted);">${r.date.toLocaleDateString()}</td>
-      <td><span class="badge badge-${r.status === 'Approved' ? 'green' : r.status === 'Denied' ? 'red' : 'yellow'}">${r.status}</span></td>
+      <td><span class="badge badge-${r.status === 'Approved' ? 'green' : r.status === 'Rejected' ? 'red' : 'yellow'}">${r.status}</span></td>
       <td style="display:none"></td>
     </tr>
   `).join('');
@@ -479,7 +481,7 @@ async function denyRequest(btn) {
   if (!confirm('Deny this request?')) return;
   try {
     const url = source === 'leave' ? `/api/leave/${id}/status` : `/api/requests/${id}/status`;
-    const res = await apiFetch(url, { method: 'PATCH', body: JSON.stringify({ status: 'Denied' }) });
+    const res = await apiFetch(url, { method: 'PATCH', body: JSON.stringify({ status: 'Rejected' }) });
     if (!res || !res.ok) throw new Error('Failed to deny');
     alert('Request denied successfully');
     loadAllRequests();
@@ -970,7 +972,7 @@ async function denyGenRequest(btn) {
   if (!confirm('Deny this request?')) return;
   try {
     const res = await apiFetch(`/api/requests/${id}/status`, {
-      method: 'PATCH', body: JSON.stringify({ status: 'Denied' })
+      method: 'PATCH', body: JSON.stringify({ status: 'Rejected' })
     });
     if (!res || !res.ok) throw new Error('Failed to deny');
     alert('Request denied.');
@@ -1035,7 +1037,7 @@ async function loadLeaveRequests() {
     await fetchCurrentUser();
     const [leaveRes, empRes, typeRes, auditRes] = await Promise.all([
       apiFetch('/api/leave'),
-      apiFetch('/api/employees'),
+      isLeaveManager() ? apiFetch('/api/employees') : Promise.resolve(null),
       apiFetch(`/api/leave/types${isLeaveManager() ? '?include_inactive=1' : ''}`),
       isLeaveManager() ? apiFetch('/api/leave/audit') : Promise.resolve(null)
     ]);
@@ -1136,6 +1138,23 @@ function filterLeaveBalanceViewerEmployees() {
   renderLeaveBalanceViewerEmployeeOptions();
 }
 
+function formatLeaveDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function escapeLeaveText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
 function renderLeaveSummary() {
   const today = new Date().toISOString().slice(0, 10);
   const monthPrefix = today.slice(0, 7);
@@ -1174,6 +1193,7 @@ function getFilteredLeaves() {
 window.renderLeaveTable = function() {
   const tbody = document.getElementById('leave-tbody');
   const empty = document.getElementById('leave-empty-state');
+  const mobileList = document.getElementById('leave-mobile-request-list');
   if (!tbody) return;
 
   const filtered = getFilteredLeaves();
@@ -1193,7 +1213,7 @@ window.renderLeaveTable = function() {
       <td>${leave.department || '-'}</td>
       <td>${leave.pay_type || '-'}</td>
       <td>${leave.type || '-'}</td>
-      <td>${leave.date_from || '-'} to ${leave.date_to || '-'}<div style="color:var(--muted);font-size:11px;">${leave.days || 1} day(s)</div></td>
+      <td>${formatLeaveDate(leave.date_from)} to ${formatLeaveDate(leave.date_to)}<div style="color:var(--muted);font-size:11px;">${leave.days || 1} day(s)</div></td>
       <td>${leaveBadge(leave.filing_source, leave.filing_source)}</td>
       <td>${leaveBadge(leave.status, leave.status)}</td>
       <td><div class="leave-actions">
@@ -1202,6 +1222,21 @@ window.renderLeaveTable = function() {
       </div></td>
     </tr>
   `).join('');
+  if (mobileList) {
+    mobileList.innerHTML = pageData.length ? pageData.map(leave => `
+      <article class="leave-mobile-request">
+        <div class="leave-mobile-request-head">
+          <span>${escapeLeaveText(leave.type || 'Leave Request')}</span>
+          ${leaveBadge(leave.status, leave.status)}
+        </div>
+        <div class="leave-mobile-request-dates">${formatLeaveDate(leave.date_from)} - ${formatLeaveDate(leave.date_to)}</div>
+        <div class="leave-mobile-request-meta">
+          <span>${leave.days || 1} day(s)</span>
+          <span>Filed ${formatLeaveDate(leave.created_at)}</span>
+        </div>
+      </article>
+    `).join('') : '<div class="leave-mobile-empty">No leave records found.</div>';
+  }
 };
 
 async function approveLeaveById(id) {
@@ -1707,6 +1742,11 @@ function switchLeaveModuleTab(tabName) {
     panel.classList.toggle('active', panel.id === `leave-panel-${panelTabName}`);
   });
   document.getElementById('page-leave')?.classList.toggle('leave-balances-mode', tabName === 'balances');
+  const pageBody = document.querySelector('.page-body');
+  if (pageBody && tabName !== 'balances') {
+    pageBody.scrollTop = 0;
+    requestAnimationFrame(() => { pageBody.scrollTop = 0; });
+  }
   if (tabName === 'balances') {
     requestAnimationFrame(() => document.getElementById('leave-balances-card')?.scrollIntoView({ block: 'start' }));
   }

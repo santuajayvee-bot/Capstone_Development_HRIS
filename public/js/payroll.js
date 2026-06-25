@@ -2977,23 +2977,58 @@ function renderSewingRegistry(registry) {
 async function generateSewingRegistry(kind) {
   const period = document.getElementById('sewing-registry-period')?.value || document.getElementById('report-period')?.value;
   const target = document.getElementById('sewing-registry');
-  if (!period) { if (target) target.innerHTML = '<div class="payroll-empty-state">Select a payroll period first.</div>'; return; }
+  if (!period) {
+    if (target) target.innerHTML = '<div class="payroll-empty-state">Select a payroll period first.</div>';
+    return null;
+  }
   try {
     const response = await apiFetch(`/api/payroll/sewing-registries?month_year=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind)}`);
     const registry = await response.json();
     if (!response.ok) throw new Error(registry.error || 'Failed to generate sewing registry.');
     currentSewingRegistry = registry;
     target.innerHTML = renderSewingRegistry(registry);
-  } catch (error) { if (target) target.innerHTML = `<div class="payroll-empty-state">${payrollEscape(error.message)}</div>`; }
+    return registry;
+  } catch (error) {
+    if (target) target.innerHTML = `<div class="payroll-empty-state">${payrollEscape(error.message)}</div>`;
+    return null;
+  }
 }
 
 function printSewingRegistry() {
   const content = document.getElementById('sewing-registry')?.innerHTML;
-  if (!currentSewingRegistry || !content) return;
+  if (!currentSewingRegistry || !content) {
+    alert('Generate a sewing registry once before printing.');
+    return;
+  }
   const popup = window.open('', '_blank', 'width=1200,height=800');
   if (!popup) return;
   popup.document.write(`<html><head><title>Sewing Payroll Registry</title><style>body{font-family:Arial,sans-serif;padding:18px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #222;padding:4px;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.sewing-registry-date span,.sewing-registry-date small{display:block;line-height:1.2}.sewing-registry-date small{font-size:9px;font-weight:400}.sewing-registry-employee th{text-align:left;background:#eee}.sewing-registry-total th{background:#f7f7f7}@page{size:landscape;margin:10mm}</style></head><body>${content}</body></html>`);
   popup.document.close(); popup.focus(); popup.print();
+}
+
+async function printPayrollRegistryReport(reportId) {
+  if (!isSewingRegistryReport(reportId)) return;
+  const kind = sewingRegistryKindFromReport(reportId);
+  const period = document.getElementById('report-period')?.value
+    || document.getElementById('sewing-registry-period')?.value
+    || document.getElementById('payroll-filter-month')?.value
+    || '';
+  if (!period) {
+    alert('Select a payroll period first.');
+    return;
+  }
+
+  const periodInput = document.getElementById('sewing-registry-period');
+  if (periodInput) periodInput.value = period;
+  const hasMatchingRegistry = currentSewingRegistry
+    && currentSewingRegistry.kind === kind
+    && currentSewingRegistry.payroll_period === period;
+
+  if (!hasMatchingRegistry) {
+    const registry = await generateSewingRegistry(kind);
+    if (!registry) return;
+  }
+  printSewingRegistry();
 }
 
 async function loadPayrollSettings(type) {
@@ -3020,7 +3055,7 @@ async function loadPayrollSettings(type) {
 function renderDeductionSettings(rows) {
   return `
     <table>
-      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Employee Share</th><th>Employer Share</th><th>Priority</th><th>Schedule</th><th>Proration</th><th>Status</th><th>Effective</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Category</th><th>Computation</th><th>Employee Share</th><th>Base Limits</th><th>Priority</th><th>Schedule</th><th>Proration</th><th>Status</th><th>Effective</th><th>Actions</th></tr></thead>
       <tbody>
         ${rows.map(row => `
           <tr>
@@ -3028,7 +3063,11 @@ function renderDeductionSettings(rows) {
             <td>${payrollEscape(row.category)}</td>
             <td>${payrollEscape(row.computation_type)}</td>
             <td>${payrollEscape(row.employee_share_rate || row.rate_or_amount || 0)}</td>
-            <td>${payrollEscape(row.employer_share_rate || 0)}</td>
+            <td>
+              <span class="payroll-deduction-detail">Floor: ${money(row.minimum_salary_base || 0)}</span>
+              <span class="payroll-deduction-detail">Ceiling: ${money(row.maximum_salary_ceiling || 0)}</span>
+              <span class="payroll-deduction-detail">Cap: ${money(row.maximum_contribution_cap || 0)}</span>
+            </td>
             <td>${payrollEscape(row.priority_order || 5)}</td>
             <td>${payrollEscape(row.apply_schedule)}</td>
             <td>${payrollEscape(row.proration_mode || 'Fixed Divisor')}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}</td>
@@ -3379,6 +3418,10 @@ async function savePayrollSetting(event, type) {
       data.total_contribution_rate = 0;
       if (!data.priority_order || Number(data.priority_order) > 1) data.priority_order = 1;
     }
+    if (data.category === 'Government' && /^(philhealth|pag-?ibig)$/i.test(String(data.name || '').trim())) {
+      data.computation_type = 'Percentage';
+      data.rate_or_amount = data.employee_share_rate || data.rate_or_amount || 0;
+    }
     if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
       data.fixed_divisor = data.apply_schedule === 'Monthly' ? 1
         : ['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(data.apply_schedule) ? 2
@@ -3490,18 +3533,30 @@ function toggleDeductionFormSections() {
   const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Fixed Divisor';
   const fixedDivisorGroup = document.getElementById('deduction-fixed-divisor-group');
   if (fixedDivisorGroup) fixedDivisorGroup.style.display = prorationMode === 'Fixed Divisor' ? '' : 'none';
+  const deductionName = String(getSelectedDeductionName()).trim();
   const sssSelected = isSssDeductionSelected();
+  const percentageStatutorySelected = category === 'Government' && /^(philhealth|pag-?ibig)$/i.test(deductionName);
   if (sssSelected && computationSelect) {
     computationSelect.value = 'Table Lookup / Matrix Bracket';
     computationSelect.title = 'SSS uses the active SSS contribution matrix.';
+  } else if (percentageStatutorySelected && computationSelect) {
+    computationSelect.value = 'Percentage';
+    computationSelect.title = `${deductionName} uses percentage-based monthly contribution limits.`;
   } else if (computationSelect) {
     computationSelect.title = '';
   }
-  if (rateGroup) rateGroup.style.display = sssSelected ? 'none' : '';
+  if (rateGroup) rateGroup.style.display = (sssSelected || percentageStatutorySelected) ? 'none' : '';
   if (rateInput && sssSelected) {
     rateInput.value = '0';
     rateInput.required = false;
   }
+  if (rateInput && percentageStatutorySelected) rateInput.required = false;
+  document.querySelectorAll('.deduction-statutory-section, .deduction-statutory-field').forEach(el => {
+    el.style.display = percentageStatutorySelected ? '' : 'none';
+  });
+  document.querySelectorAll('.deduction-statutory-field input').forEach(input => {
+    input.disabled = !percentageStatutorySelected;
+  });
   const computationType = computationSelect?.value || '';
   const showBracket = computationType === 'Table Lookup / Matrix Bracket' && sssSelected;
   document.querySelectorAll('.deduction-bracket-section').forEach(el => { el.style.display = showBracket ? '' : 'none'; });
@@ -3979,7 +4034,12 @@ function renderPayrollReportLibrary() {
       <td><span class="report-category-badge">${report.category}</span></td>
       <td>${report.description}</td>
       <td>${report.formats.join(' | ')}</td>
-      <td><button class="btn btn-outline btn-sm" type="button" onclick="openPayrollReportModal('${report.id}')">Generate</button></td>
+      <td>
+        <div class="button-row">
+          <button class="btn btn-outline btn-sm" type="button" onclick="openPayrollReportModal('${report.id}')">Generate</button>
+          ${isSewingRegistryReport(report.id) ? `<button class="btn btn-primary btn-sm" type="button" onclick="printPayrollRegistryReport('${report.id}')">Print</button>` : ''}
+        </div>
+      </td>
     </tr>
   `).join('') || '<tr><td colspan="6">No reports match your filters.</td></tr>';
   const pagination = document.getElementById('payroll-report-pagination');
@@ -3992,6 +4052,16 @@ function renderPayrollReportLibrary() {
     pagination.querySelector('[data-payroll-report-page-action="prev"]')?.addEventListener('click', () => changePayrollReportPage(-1));
     pagination.querySelector('[data-payroll-report-page-action="next"]')?.addEventListener('click', () => changePayrollReportPage(1));
   }
+}
+
+function isSewingRegistryReport(reportId) {
+  return ['sewing-registry', 'sewing-55-registry', 'sewing-45-registry'].includes(reportId);
+}
+
+function sewingRegistryKindFromReport(reportId) {
+  if (reportId === 'sewing-55-registry') return '55';
+  if (reportId === 'sewing-45-registry') return '45';
+  return 'main';
 }
 
 function changePayrollReportPage(delta) {
@@ -4209,6 +4279,7 @@ window.exportPayrollReport = exportPayrollReport;
 window.renderPayrollReportLibrary = renderPayrollReportLibrary;
 window.changePayrollReportPage = changePayrollReportPage;
 window.togglePayrollReportFavorite = togglePayrollReportFavorite;
+window.printPayrollRegistryReport = printPayrollRegistryReport;
 window.resetPayrollReportFilters = resetPayrollReportFilters;
 window.syncReportPeriod = syncReportPeriod;
 window.openPayrollReportModal = openPayrollReportModal;
