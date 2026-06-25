@@ -4,7 +4,10 @@
 
 let attendanceAjaxRefreshTimer = null;
 let attendanceAjaxRefreshing = false;
+let attendanceRealtimeListenerReady = false;
+let attendanceBroadcastChannel = null;
 const ATTENDANCE_AJAX_REFRESH_MS = 5000;
+const ATTENDANCE_SCAN_CHANNEL = 'lgsv-attendance-scan';
 
 function currentPageId() {
   return window.ROUTE_PARAMS?.pageId || document.querySelector('.page.active')?.id?.replace(/^page-/, '') || 'dashboard';
@@ -69,6 +72,37 @@ async function reloadAttendanceRealtimeSurfaces(forceDashboard = true) {
   }
 }
 
+function handleAttendanceScanNotification(payload = {}) {
+  if (payload.type && payload.type !== 'attendance-scan') return;
+  const scan = payload.data || payload;
+  const action = String(scan.action || scan.attendance_type || 'scan').replace(/_/g, ' ').toLowerCase();
+  attendanceRealtimeToast(`Attendance ${action} received. Refreshing records...`);
+  reloadAttendanceRealtimeSurfaces(true);
+}
+
+function startAttendanceRealtimeListeners() {
+  if (attendanceRealtimeListenerReady) return;
+  attendanceRealtimeListenerReady = true;
+
+  if ('BroadcastChannel' in window) {
+    attendanceBroadcastChannel = new BroadcastChannel(ATTENDANCE_SCAN_CHANNEL);
+    attendanceBroadcastChannel.onmessage = event => handleAttendanceScanNotification(event.data || {});
+  }
+
+  window.addEventListener('storage', event => {
+    if (event.key !== ATTENDANCE_SCAN_CHANNEL || !event.newValue) return;
+    try {
+      handleAttendanceScanNotification(JSON.parse(event.newValue));
+    } catch (_) {
+      handleAttendanceScanNotification({});
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) reloadAttendanceRealtimeSurfaces(false);
+  });
+}
+
 function startAttendanceAjaxRefresh() {
   if (attendanceAjaxRefreshTimer) return;
   attendanceAjaxRefreshTimer = window.setInterval(() => {
@@ -86,6 +120,7 @@ function stopAttendanceAjaxRefresh() {
 }
 
 function initAttendanceRealtime() {
+  startAttendanceRealtimeListeners();
   startAttendanceAjaxRefresh();
 }
 

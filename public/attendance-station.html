@@ -152,6 +152,7 @@
 
   <script>
     const bridgeUrl = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
+    const attendanceScanChannel = 'lgsv-attendance-scan';
 
     function setText(id, value) {
       const element = document.getElementById(id);
@@ -176,6 +177,21 @@
         try { return JSON.parse(scanResponse.hris_response); } catch (_) { return scanResponse; }
       }
       return scanResponse.hris_response;
+    }
+
+    function notifyAttendanceScan(data) {
+      const payload = { type: 'attendance-scan', at: Date.now(), data };
+      try {
+        if ('BroadcastChannel' in window) {
+          const channel = new BroadcastChannel(attendanceScanChannel);
+          channel.postMessage(payload);
+          channel.close();
+        }
+      } catch (_) {}
+      try {
+        localStorage.setItem(attendanceScanChannel, JSON.stringify(payload));
+        localStorage.removeItem(attendanceScanChannel);
+      } catch (_) {}
     }
 
     async function loadStationStatus() {
@@ -216,6 +232,7 @@
         if (!response.ok) throw new Error(bridgeData.error || 'Fingerprint scan failed.');
 
         const data = parseHrisResponse(bridgeData);
+        notifyAttendanceScan(data);
         setText('employee-name', data.employee?.name || bridgeData.employee_name || '');
         setText('employee-code', data.employee?.employee_code || bridgeData.employee_code || '');
         setText('attendance-type', (data.action || '-').replace('_', ' '));
