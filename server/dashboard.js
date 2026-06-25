@@ -21,7 +21,7 @@ const FALLBACK_PERMISSIONS = {
   payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
   payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
   manager: ['attendance.view', 'leave.request.approve', 'report.view'],
-  employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'payroll.view'],
+  employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'document.view'],
 };
 
 function hasPermission(permissions, key) {

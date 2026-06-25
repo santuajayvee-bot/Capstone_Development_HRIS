@@ -1706,3 +1706,961 @@ button,
     height: var(--mobile-bottom-nav-height) !important;
   }
 }
+
+/* Final phone app layer. Keep this last so mobile is not overridden by older
+   desktop/tablet rules above. */
+.mobile-topbar-alert {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  :root {
+    --mobile-topbar-height: calc(76px + env(safe-area-inset-top));
+    --mobile-bottom-nav-height: calc(58px + env(safe-area-inset-bottom));
+  }
+
+  html,
+  body,
+  #app,
+  .app-layout,
+  .main-content,
+  .page.active {
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  body,
+  .page-body {
+    background: #f3f4f6 !important;
+  }
+
+  .topbar {
+    min-height: var(--mobile-topbar-height) !important;
+    height: var(--mobile-topbar-height) !important;
+    padding: calc(18px + env(safe-area-inset-top)) 50px 14px 50px !important;
+    align-items: center !important;
+    border: 0 !important;
+    background: #e60012 !important;
+    color: #ffffff !important;
+  }
+
+  .mobile-topbar-alert {
+    position: fixed;
+    top: calc(37px + env(safe-area-inset-top));
+    right: 14px;
+    z-index: 10091;
+    width: 30px !important;
+    min-height: 30px !important;
+    height: 30px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: #ffffff;
+  }
+
+  .mobile-topbar-alert svg {
+    width: 17px !important;
+    height: 17px !important;
+    stroke: currentColor !important;
+    stroke-width: 2 !important;
+    stroke-linecap: round !important;
+    stroke-linejoin: round !important;
+    fill: none !important;
+  }
+
+  .topbar-title {
+    max-width: calc(100vw - 104px) !important;
+    color: #ffffff !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .topbar-date {
+    display: none !important;
+  }
+
+  .mobile-menu-toggle {
+    top: calc(38px + env(safe-area-inset-top)) !important;
+    left: 14px !important;
+    width: 28px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  .mobile-menu-toggle span {
+    width: 14px !important;
+    height: 2px !important;
+    background: #ffffff !important;
+  }
+
+  .page-body {
+    height: 100svh !important;
+    min-height: 100svh !important;
+    padding: var(--mobile-topbar-height) 0 var(--mobile-bottom-nav-height) !important;
+    overflow-y: auto !important;
+  }
+
+  body:not(.has-employee-bottom-nav) .page-body {
+    padding-bottom: 0 !important;
+  }
+
+  .page-header,
+  .erp-page-header,
+  .dashboard-header {
+    margin: 0 !important;
+    padding: 10px 12px !important;
+    border: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+  }
+
+  .page-header > div:first-child,
+  .erp-page-header > div:first-child,
+  .dashboard-header > div:first-child {
+    display: none !important;
+  }
+
+  .page-header-right,
+  .erp-actions,
+  .att-actions,
+  .payroll-form-actions,
+  .salary-form-actions,
+  .report-filter-actions {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .card,
+  .dashboard-panel,
+  .erp-panel,
+  .leave-card,
+  .emp-card,
+  .att-overview-panel,
+  .att-metric,
+  .table-wrap,
+  .leave-table-wrap,
+  .erp-table-wrap,
+  .sysadmin-table-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-width: 0 0 1px !important;
+    border-color: #e5e7eb !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  .card,
+  .erp-panel,
+  .leave-card,
+  .emp-card,
+  .att-overview-panel {
+    padding: 14px 12px !important;
+  }
+
+  .form-grid,
+  .employee-form-grid,
+  .erp-form-grid,
+  .leave-form-grid,
+  .leave-filter-bar,
+  .att-form-grid,
+  .att-toolbar,
+  .payroll-form-grid,
+  .payroll-filter-grid,
+  .report-filter-grid,
+  .salary-form-row,
+  .records-summary,
+  .stat-grid,
+  .dashboard-grid,
+  .emp-stat-grid,
+  .leave-summary-grid,
+  .att-metric-grid,
+  [style*="grid-template-columns"] {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .form-group,
+  .leave-field,
+  .erp-form-grid label,
+  .att-toolbar > div,
+  .form-grid .span-2,
+  .leave-form-grid .full,
+  .erp-span-2 {
+    grid-column: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  input,
+  select,
+  textarea,
+  .form-control,
+  .form-select,
+  .search-input,
+  .filter-select,
+  .btn,
+  button {
+    max-width: 100% !important;
+    min-height: 42px !important;
+    border-radius: 0 !important;
+    box-sizing: border-box !important;
+    font-size: 13px !important;
+  }
+
+  input,
+  select,
+  textarea,
+  .form-control,
+  .form-select,
+  .search-input,
+  .filter-select {
+    width: 100% !important;
+    border-color: #d1d5db !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  .btn-primary {
+    background: #e60012 !important;
+    border-color: #e60012 !important;
+    color: #ffffff !important;
+  }
+
+  .btn-outline,
+  .btn-secondary {
+    background: #ffffff !important;
+    border-color: #d1d5db !important;
+    color: #344054 !important;
+  }
+
+  .section-label,
+  .emp-mobile-section-label,
+  .self-mobile-section-label,
+  .erp-section-title,
+  .emp-section-title,
+  .leave-section-title,
+  .att-title,
+  .att-section-label {
+    display: block !important;
+    margin: 0 !important;
+    padding: 14px 12px 9px !important;
+    border: 0 !important;
+    background: #f3f4f6 !important;
+    color: #98a2b3 !important;
+    font-size: 10px !important;
+    font-weight: 800 !important;
+    letter-spacing: .12em !important;
+    line-height: 1.2 !important;
+    text-transform: uppercase !important;
+  }
+
+  .tabs,
+  .attendance-tabs,
+  .leave-tabs,
+  .emp-tabs,
+  .self-service-tabs,
+  .erp-tabs {
+    width: 100% !important;
+    min-height: 34px !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  .tab,
+  .leave-tab,
+  .emp-tab,
+  .tab-btn {
+    min-width: 0 !important;
+    width: 100% !important;
+    min-height: 34px !important;
+    padding: 0 6px !important;
+    border: 0 !important;
+    border-bottom: 1px solid transparent !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    color: #475467 !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    text-align: center !important;
+    white-space: normal !important;
+    box-shadow: none !important;
+  }
+
+  .tab.active,
+  .leave-tab.active,
+  .emp-tab.active,
+  .tab-btn.active {
+    border-bottom-color: #e60012 !important;
+    color: #e60012 !important;
+    background: #ffffff !important;
+  }
+
+  body.role-employee .emp-tabs {
+    display: none !important;
+  }
+
+  body:not(.role-employee) #page-leave .leave-employee-balance-tab {
+    display: none !important;
+  }
+
+  body.role-employee #page-attendance .attendance-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body.role-employee #page-leave .leave-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  body.role-employee .emp-welcome {
+    padding: 12px 12px 16px !important;
+    border: 0 !important;
+    background: #eef4ff !important;
+  }
+
+  body.role-employee .emp-welcome h2 {
+    margin: 3px 0 4px !important;
+    color: #0f172a !important;
+    font-size: 18px !important;
+    font-weight: 800 !important;
+    line-height: 1.15 !important;
+    text-transform: uppercase;
+  }
+
+  body.role-employee .emp-welcome h2::before {
+    content: "Welcome Back";
+    display: block;
+    margin-bottom: 4px;
+    color: #667085;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .1em;
+  }
+
+  body.role-employee #emp-role-desc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    color: #1d4ed8;
+    font-size: 9px;
+    text-transform: uppercase;
+  }
+
+  .emp-mobile-chip {
+    padding: 2px 7px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-size: 9px;
+    font-weight: 800;
+  }
+
+  body.role-employee .emp-security-badge {
+    display: block;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #bcd0f7;
+    background: transparent !important;
+    color: #1d4ed8 !important;
+    font-size: 10px !important;
+    font-weight: 500 !important;
+  }
+
+  body.role-employee .emp-stat-grid {
+    display: block !important;
+    background: #ffffff !important;
+  }
+
+  body.role-employee .emp-stat-grid::before {
+    content: "Summary";
+    display: block;
+    padding: 14px 12px 9px;
+    border-top: 1px solid #d9dee7;
+    border-bottom: 1px solid #d9dee7;
+    background: #f3f4f6;
+    color: #98a2b3;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+
+  body.role-employee .emp-stat-card {
+    min-height: 42px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 11px 12px !important;
+    border: 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
+    background: #ffffff !important;
+  }
+
+  body.role-employee .emp-stat-card:nth-child(n+4) {
+    display: none !important;
+  }
+
+  body.role-employee .emp-stat-icon,
+  body.role-employee .emp-stat-sub {
+    display: none !important;
+  }
+
+  body.role-employee .emp-stat-body {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  body.role-employee .emp-stat-label {
+    color: #475467 !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+  }
+
+  body.role-employee .emp-stat-value {
+    margin: 0 !important;
+    color: #000000 !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    text-align: right !important;
+  }
+
+  .emp-mobile-quick-access {
+    display: block !important;
+    background: #ffffff;
+  }
+
+  .emp-mobile-list-row,
+  .self-mobile-list-row {
+    width: 100% !important;
+    min-height: 56px !important;
+    display: grid !important;
+    grid-template-columns: 28px minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 9px 12px !important;
+    border: 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
+    background: #ffffff !important;
+    color: #101828 !important;
+    text-align: left !important;
+  }
+
+  .emp-mobile-list-row strong,
+  .self-mobile-list-row strong {
+    display: block;
+    color: #101828;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .emp-mobile-list-row small,
+  .self-mobile-list-row small {
+    display: block;
+    margin-top: 2px;
+    color: #98a2b3;
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .emp-mobile-list-icon,
+  .self-mobile-list-row > span:first-child {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #f2f4f7;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0;
+  }
+
+  .emp-mobile-icon-blue { color: #2563eb; }
+  .emp-mobile-icon-red { color: #ef4444; }
+  .emp-mobile-icon-green { color: #10b981; }
+  .emp-mobile-icon-orange { color: #f97316; }
+  .emp-mobile-chevron,
+  .self-mobile-list-row em {
+    color: #cbd5e1;
+    font-style: normal;
+    font-size: 18px;
+  }
+
+  .emp-card-header {
+    display: flex !important;
+    align-items: flex-start !important;
+    justify-content: space-between !important;
+    gap: 8px !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+
+  .emp-card-header h3 {
+    margin: 0 !important;
+    color: #101828 !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+  }
+
+  .emp-crypto-badge {
+    padding: 3px 6px !important;
+    background: #f4e8ff !important;
+    color: #7c3aed !important;
+    font-size: 9px !important;
+  }
+
+  .emp-mobile-empty-state {
+    min-height: calc(100svh - 260px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #98a2b3;
+    text-align: center;
+  }
+
+  .emp-mobile-empty-state strong {
+    margin-top: 8px;
+    color: #101828;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .emp-mobile-empty-state span {
+    margin-top: 6px;
+    font-size: 12px;
+  }
+
+  .emp-mobile-empty-icon {
+    color: #cbd5e1;
+    font-size: 26px;
+  }
+
+  body.role-employee #emp-payslips-table,
+  body.role-employee #emp-payslips-table tbody,
+  body.role-employee #emp-payslips-table tr,
+  body.role-employee #emp-payslips-table td {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  body.role-employee #emp-payslips-table thead {
+    display: none !important;
+  }
+
+  .att-overview-panel {
+    padding: 0 !important;
+  }
+
+  .att-overview-head {
+    display: block !important;
+    padding: 16px 14px !important;
+    border: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .att-panel-title {
+    color: #101828 !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+  }
+
+  .att-panel-sub {
+    margin-top: 6px !important;
+    color: #667085 !important;
+    font-size: 11px !important;
+    line-height: 1.45 !important;
+  }
+
+  #att-date-label {
+    padding: 10px 0 0 !important;
+    background: #ffffff !important;
+    color: #e60012 !important;
+    font-size: 10px !important;
+  }
+
+  .att-overview-row {
+    padding: 0 !important;
+    border: 0 !important;
+  }
+
+  .att-overview-row.att-overview-head {
+    padding: 16px 14px !important;
+  }
+
+  .att-metric-grid,
+  .records-summary {
+    display: block !important;
+    background: #ffffff !important;
+  }
+
+  .att-metric-grid::before {
+    content: "Today";
+  }
+
+  .records-summary::before {
+    content: "Monthly Summary";
+  }
+
+  .att-metric-grid::before,
+  .records-summary::before {
+    display: block;
+    padding: 14px 12px 9px;
+    border-top: 1px solid #d9dee7;
+    border-bottom: 1px solid #d9dee7;
+    background: #f3f4f6;
+    color: #98a2b3;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+
+  .att-metric,
+  .records-summary .card {
+    min-height: 43px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 11px 12px !important;
+    border: 0 !important;
+    border-bottom: 1px solid #eef2f7 !important;
+    background: #ffffff !important;
+  }
+
+  .att-metric span {
+    display: none !important;
+  }
+
+  .att-metric small,
+  .records-summary .att-kicker {
+    display: block !important;
+    order: 1 !important;
+    color: #475467 !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+  }
+
+  .att-metric strong,
+  .records-summary .att-summary-number {
+    order: 2 !important;
+    color: #000000 !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    text-align: right !important;
+  }
+
+  #emp-summary-card {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #emp-summary-card .att-title {
+    display: none !important;
+  }
+
+  body.role-employee #page-attendance .att-toolbar,
+  body.role-employee #page-attendance .att-actions,
+  body.role-employee #att-records .att-records-actionbar > div:first-child {
+    display: none !important;
+  }
+
+  body.role-employee #page-leave .page-header {
+    display: none !important;
+  }
+
+  body.role-employee #page-leave.leave-balances-mode #leave-summary-cards {
+    display: none !important;
+  }
+
+  body.role-employee #page-leave.leave-balances-mode #leave-balances-card {
+    display: block !important;
+  }
+
+  body.role-employee #page-leave:not(.leave-balances-mode) #leave-balances-card {
+    display: none !important;
+  }
+
+  body.role-employee #page-leave .leave-tab:not([data-leave-tab="overview"]):not([data-leave-tab="requests"]):not([data-leave-tab="balances"]) {
+    display: none !important;
+  }
+
+  body.role-employee #page-leave .leave-filter-bar,
+  body.role-employee #page-leave #leave-pagination {
+    display: none !important;
+  }
+
+  body.role-employee .leave-table {
+    min-width: 0 !important;
+  }
+
+  body.role-employee .leave-table thead {
+    display: none !important;
+  }
+
+  body.role-employee .leave-table,
+  body.role-employee .leave-table tbody,
+  body.role-employee .leave-table tr,
+  body.role-employee .leave-table td {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  body.role-employee .leave-table tr {
+    padding: 10px 12px !important;
+    border-bottom: 1px solid #eef2f7 !important;
+  }
+
+  body.role-employee .leave-table td {
+    min-height: 0 !important;
+    padding: 2px 0 !important;
+    border: 0 !important;
+  }
+
+  body.role-employee .leave-table td:nth-child(2),
+  body.role-employee .leave-table td:nth-child(3),
+  body.role-employee .leave-table td:nth-child(6),
+  body.role-employee .leave-table td:nth-child(8) {
+    display: none !important;
+  }
+
+  #leave-balances-list {
+    margin: 0 !important;
+  }
+
+  #leave-balances-list > div {
+    display: grid !important;
+    grid-template-columns: 1fr auto !important;
+    gap: 6px 10px !important;
+    padding: 13px 12px !important;
+    border-bottom: 1px solid #eef2f7 !important;
+  }
+
+  #leave-balances-list .leave-card-label {
+    color: #101828 !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+  }
+
+  #leave-balances-list .leave-card-value {
+    color: #475467 !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+  }
+
+  .self-mobile-profile-summary,
+  .self-mobile-info-block,
+  .self-mobile-manage {
+    display: block !important;
+    background: #ffffff !important;
+  }
+
+  .self-mobile-profile-summary {
+    display: grid !important;
+    grid-template-columns: 46px minmax(0, 1fr) !important;
+    gap: 12px !important;
+    padding: 18px 14px !important;
+    border-bottom: 1px solid #e5e7eb !important;
+  }
+
+  .self-mobile-avatar {
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e60012;
+    color: #ffffff;
+    font-size: 19px;
+    font-weight: 800;
+  }
+
+  .self-mobile-name {
+    color: #101828;
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .self-mobile-meta {
+    margin-top: 3px;
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .self-mobile-badges {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .self-mobile-badges span {
+    color: #667085;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
+  #self-mobile-status {
+    padding: 2px 7px;
+    background: #d1fae5;
+    color: #047857;
+    font-weight: 800;
+  }
+
+  .self-mobile-stat-row {
+    min-height: 43px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 12px;
+    border-bottom: 1px solid #eef2f7;
+    background: #ffffff;
+  }
+
+  .self-mobile-stat-row span {
+    color: #667085;
+    font-size: 12px;
+  }
+
+  .self-mobile-stat-row strong {
+    color: #000000;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: right;
+  }
+
+  body.role-employee .self-service-tabs {
+    display: none !important;
+  }
+
+  body.role-employee #self-tab-personal {
+    display: none !important;
+  }
+
+  body.role-employee .self-tab-panel:not(.active) {
+    display: none !important;
+  }
+
+  body.role-employee .self-tab-panel.active:not(#self-tab-personal) {
+    margin-top: 0 !important;
+    border-top: 1px solid #e5e7eb !important;
+  }
+
+  .sidebar {
+    width: min(86vw, 320px) !important;
+    max-width: 86vw !important;
+    background: #ffffff !important;
+  }
+
+  .sidebar-logo {
+    min-height: 88px !important;
+    padding: 18px 20px !important;
+    border-bottom: 1px solid #eef2f7 !important;
+  }
+
+  .nav-items {
+    padding: 0 !important;
+  }
+
+  .nav-item {
+    min-height: 58px !important;
+    padding: 0 20px !important;
+    border-bottom: 1px solid #eef2f7 !important;
+    background: #ffffff !important;
+    color: #667085 !important;
+  }
+
+  .nav-item.active {
+    color: #e60012 !important;
+    background: #fff1f2 !important;
+    border-left-color: #e60012 !important;
+  }
+
+  .employee-bottom-nav {
+    min-height: var(--mobile-bottom-nav-height) !important;
+    height: var(--mobile-bottom-nav-height) !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 0 !important;
+    padding: 3px 0 calc(3px + env(safe-area-inset-bottom)) !important;
+    border-top: 1px solid #d9dee7 !important;
+    background: #ffffff !important;
+  }
+
+  .employee-bottom-nav-item {
+    min-height: 50px !important;
+    gap: 2px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    color: #98a2b3 !important;
+  }
+
+  .employee-bottom-nav-item span {
+    font-size: 12px !important;
+    font-weight: 800 !important;
+  }
+
+  .employee-bottom-nav-item small {
+    font-size: 9px !important;
+    line-height: 1.1 !important;
+  }
+
+  .employee-bottom-nav-item.active {
+    color: #e60012 !important;
+    background: #ffffff !important;
+    outline: 1px solid #111827;
+    outline-offset: -1px;
+  }
+
+  .modal-dialog,
+  .leave-modal-card,
+  .modal-content {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    max-height: calc(100svh - 20px) !important;
+    margin: 10px auto !important;
+  }
+}
+
+@media (min-width: 481px) {
+  .emp-mobile-quick-access,
+  .self-mobile-profile-summary,
+  .self-mobile-info-block,
+  .self-mobile-manage {
+    display: none !important;
+  }
+}

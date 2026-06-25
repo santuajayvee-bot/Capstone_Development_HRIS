@@ -1028,7 +1028,7 @@ function leaveEmployeeOptions(employees, placeholder = 'Select employee') {
     .join('');
 }
 
-const EMPLOYEE_LEAVE_TABS = new Set(['overview', 'requests']);
+const EMPLOYEE_LEAVE_TABS = new Set(['overview', 'requests', 'balances']);
 
 async function loadLeaveRequests() {
   try {
@@ -1699,12 +1699,17 @@ function switchLeaveModuleTab(tabName) {
   if (isLeaveEmployee() && !EMPLOYEE_LEAVE_TABS.has(tabName)) {
     tabName = 'overview';
   }
+  const panelTabName = tabName === 'balances' ? 'overview' : tabName;
   document.querySelectorAll('.leave-tab').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.leaveTab === tabName);
   });
   document.querySelectorAll('.leave-tab-panel').forEach(panel => {
-    panel.classList.toggle('active', panel.id === `leave-panel-${tabName}`);
+    panel.classList.toggle('active', panel.id === `leave-panel-${panelTabName}`);
   });
+  document.getElementById('page-leave')?.classList.toggle('leave-balances-mode', tabName === 'balances');
+  if (tabName === 'balances') {
+    requestAnimationFrame(() => document.getElementById('leave-balances-card')?.scrollIntoView({ block: 'start' }));
+  }
   if (tabName === 'calendar') window.renderLeaveCalendar();
   if (tabName === 'policies') loadLeaveTypes(isLeaveManager());
 }

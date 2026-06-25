@@ -39,6 +39,12 @@ function showEmpToast(message, type = 'info') {
   setTimeout(() => { toast.style.display = 'none'; }, 4000);
 }
 
+function empEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TASK 1: EMPLOYEE DASHBOARD
 // ═══════════════════════════════════════════════════════════════
@@ -59,7 +65,10 @@ async function loadEmpDashboard() {
     const greetEl = document.getElementById('emp-greeting');
     const descEl = document.getElementById('emp-role-desc');
     if (greetEl) greetEl.textContent = `Welcome back, ${p.first_name}!`;
-    if (descEl) descEl.textContent = `${p.position || 'Employee'} · ${p.department || 'Unassigned'} · ${p.employment_type || 'Full-time'}`;
+    if (descEl) {
+      const chips = [p.position || 'Employee', p.department || 'Unassigned', p.employment_type || 'Full-time'];
+      descEl.innerHTML = chips.map(chip => `<span class="emp-mobile-chip">${empEscape(chip)}</span>`).join('');
+    }
 
     // Stats
     if (data.latest_payslip) {
@@ -191,7 +200,7 @@ async function loadEmpPayslips() {
 
     if (!tbody) return;
     if (payslips.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No payslips found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><div class="emp-mobile-empty-icon">□</div><strong>No payslips found</strong><span>Your payslips will appear here once available.</span></div></td></tr>';
       return;
     }
 

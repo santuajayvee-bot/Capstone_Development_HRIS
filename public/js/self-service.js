@@ -31,6 +31,11 @@ function setSelfValue(id, value) {
   if (el) el.value = value || '';
 }
 
+function setSelfText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value || '-';
+}
+
 function formatSelfDate(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -97,6 +102,20 @@ function fillSelfServiceProfile(profile) {
   setSelfValue('self-emergency-relationship', editable.emergency_contact_relationship);
   setSelfValue('self-emergency-number', editable.emergency_contact_num);
   setSelfValue('self-emergency-email', editable.emergency_contact_email);
+
+  const displayName = ro.full_name || '-';
+  const initial = displayName.trim().charAt(0).toUpperCase() || '-';
+  setSelfText('self-mobile-avatar', initial);
+  setSelfText('self-mobile-name', displayName);
+  setSelfText('self-mobile-meta', [ro.position, ro.department].filter(Boolean).join(' · '));
+  setSelfText('self-mobile-status', ro.employment_status || '-');
+  setSelfText('self-mobile-code', ro.employee_code || '-');
+  setSelfText('self-mobile-employee-code', ro.employee_code || '-');
+  setSelfText('self-mobile-department', ro.department || '-');
+  setSelfText('self-mobile-position', ro.position || '-');
+  setSelfText('self-mobile-wage-type', ro.wage_type || '-');
+  setSelfText('self-mobile-employment-status', ro.employment_status || '-');
+  setSelfText('self-mobile-date-hired', formatSelfDate(ro.date_hired) || '-');
 
   const preview = document.getElementById('self-picture-preview');
   if (preview) {
@@ -362,6 +381,12 @@ function wireSelfServiceEvents() {
   document.getElementById('self-password-save')?.addEventListener('click', changeSelfPassword);
   document.getElementById('self-picture-form')?.addEventListener('submit', uploadSelfPicture);
   document.getElementById('self-change-request-form')?.addEventListener('submit', submitSelfChangeRequest);
+  document.querySelectorAll('[data-self-mobile-tab]').forEach(button => {
+    button.addEventListener('click', () => {
+      setSelfServiceTab(button.dataset.selfMobileTab);
+      document.querySelector('.self-service-tabs')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  });
 }
 
 async function initSelfServiceProfile() {

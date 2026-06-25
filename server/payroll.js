@@ -27,15 +27,15 @@ const {
 } = require('./security-controls');
 
 const PAYROLL_PERMISSIONS = {
-  view: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
+  view: ['payroll_officer', 'payroll_manager'],
   calculate: ROLES.payroll_any,
   approve: ['payroll_manager'],
   release: ['payroll_manager'],
-  settings: ['payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin'],
-  reports: ['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin', 'admin']
+  settings: ['payroll_officer', 'payroll_manager'],
+  reports: ['payroll_officer', 'payroll_manager']
 };
 
-const DEDUCTION_POLICY_MANAGERS = new Set(['payroll_manager', 'hr_manager', 'hr_admin', 'admin', 'system_admin']);
+const DEDUCTION_POLICY_MANAGERS = new Set(['payroll_officer', 'payroll_manager']);
 const DEDUCTION_COMPUTATION_TYPES = new Set(['Fixed Amount', 'Percentage', 'Manual Amount', 'Table Lookup / Matrix Bracket', 'Loan Amortization', 'Attendance-Based']);
 const DEDUCTION_CATEGORIES = new Set(['Government', 'Company', 'Other']);
 const DEDUCTION_FREQUENCIES = new Set(['Every Payroll', 'Weekly', 'Semi-Monthly', 'Monthly', 'First Payroll of Month', 'Last Payroll of Month', '1st Week', '2nd Week', '3rd Week', '4th Week', '5th Week']);

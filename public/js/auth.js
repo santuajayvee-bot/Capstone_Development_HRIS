@@ -10,11 +10,11 @@ const ROLE_PERMISSIONS = {
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'onboarding', 'employee-profile', 'self-service',
+    'attendance', 'reports', 'onboarding', 'employee-profile', 'self-service',
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'reports', 'onboarding', 'employee-profile', 'self-service',
+    'attendance', 'reports', 'onboarding', 'employee-profile', 'self-service',
   ],
   system_admin: [
     'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain', 'self-service',
@@ -50,7 +50,7 @@ const NAV_CONFIG = {
     { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'leave', icon: 'LV', label: 'Leave Management' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
-    { page: 'payroll', icon: 'PR', label: 'Payroll' },
+    { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
   ],
   hr_manager: [
@@ -59,7 +59,6 @@ const NAV_CONFIG = {
     { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'leave', icon: 'LV', label: 'Leave Management' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
-    { page: 'payroll', icon: 'PR', label: 'Payroll' },
     { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
   ],
@@ -106,6 +105,13 @@ const EMPLOYEE_ALLOWED_PAGES = new Set([
   'leave',
   'self-service',
 ]);
+
+const PAGE_ROLE_ALLOWLIST = {
+  payroll: new Set(['payroll_officer', 'payroll_manager']),
+  reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
+  'system-admin': new Set(['system_admin', 'admin']),
+  blockchain: new Set(['system_admin', 'admin', 'payroll_officer', 'payroll_manager']),
+};
 
 const ROLE_ALIASES = {
   administrator: 'system_admin',
@@ -294,6 +300,9 @@ function canAccess(pageId) {
   if (!user) return false;
   if (isEmployeeRole(user.role)) {
     return EMPLOYEE_ALLOWED_PAGES.has(pageId);
+  }
+  if (PAGE_ROLE_ALLOWLIST[pageId]) {
+    return PAGE_ROLE_ALLOWLIST[pageId].has(user.role);
   }
   if (pageId === 'blockchain') {
     return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(user.role);

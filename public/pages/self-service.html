@@ -7,6 +7,39 @@
     <button type="button" class="btn btn-secondary" id="self-service-refresh">Refresh</button>
   </div>
 
+  <div class="self-mobile-profile-summary" aria-label="Employee profile summary">
+    <div class="self-mobile-avatar" id="self-mobile-avatar">-</div>
+    <div>
+      <div class="self-mobile-name" id="self-mobile-name">-</div>
+      <div class="self-mobile-meta" id="self-mobile-meta">-</div>
+      <div class="self-mobile-badges">
+        <span id="self-mobile-status">-</span>
+        <span id="self-mobile-code">-</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="self-mobile-info-block" aria-label="Employee information">
+    <div class="self-mobile-section-label">Employee Information</div>
+    <div class="self-mobile-stat-row"><span>Employee ID</span><strong id="self-mobile-employee-code">-</strong></div>
+    <div class="self-mobile-stat-row"><span>Department</span><strong id="self-mobile-department">-</strong></div>
+    <div class="self-mobile-stat-row"><span>Position</span><strong id="self-mobile-position">-</strong></div>
+    <div class="self-mobile-stat-row"><span>Wage Type</span><strong id="self-mobile-wage-type">-</strong></div>
+    <div class="self-mobile-stat-row"><span>Employment Status</span><strong id="self-mobile-employment-status">-</strong></div>
+    <div class="self-mobile-stat-row"><span>Date Hired</span><strong id="self-mobile-date-hired">-</strong></div>
+  </div>
+
+  <div class="self-mobile-manage" aria-label="Manage profile">
+    <div class="self-mobile-section-label">Manage Profile</div>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="personal"><span>PI</span><span><strong>Personal Information</strong><small>Name, civil status, birthdate</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="contact"><span>CI</span><span><strong>Contact Information</strong><small>Phone, email address</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="address"><span>AI</span><span><strong>Address Information</strong><small>Current and permanent address</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="emergency"><span>EC</span><span><strong>Emergency Contact</strong><small>Emergency contact details</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="security"><span>AS</span><span><strong>Account Security</strong><small>Password, 2FA settings</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="requests"><span>CR</span><span><strong>Change Requests</strong><small>Pending change requests</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="activity"><span>AL</span><span><strong>Activity Log</strong><small>Recent account activity</small></span><em>›</em></button>
+  </div>
+
   <div class="erp-tabs self-service-tabs">
     <button type="button" class="tab-btn active" data-self-tab="personal">Personal Information</button>
     <button type="button" class="tab-btn" data-self-tab="contact">Contact Information</button>

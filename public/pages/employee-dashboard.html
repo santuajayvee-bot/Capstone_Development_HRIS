@@ -68,6 +68,42 @@
     </div>
   </div>
 
+  <div class="emp-mobile-quick-access" aria-label="Quick access">
+    <div class="emp-mobile-section-label">Quick Access</div>
+    <button type="button" class="emp-mobile-list-row" onclick="navigate('self-service')">
+      <span class="emp-mobile-list-icon emp-mobile-icon-blue">ID</span>
+      <span>
+        <strong>My 201-File</strong>
+        <small>View personal documents</small>
+      </span>
+      <span class="emp-mobile-chevron">›</span>
+    </button>
+    <button type="button" class="emp-mobile-list-row" onclick="navigate('employee-dashboard', null, { employeeTab: 'payslips' })">
+      <span class="emp-mobile-list-icon emp-mobile-icon-red">PS</span>
+      <span>
+        <strong>My Payslips</strong>
+        <small>View salary records</small>
+      </span>
+      <span class="emp-mobile-chevron">›</span>
+    </button>
+    <button type="button" class="emp-mobile-list-row" onclick="navigate('attendance')">
+      <span class="emp-mobile-list-icon emp-mobile-icon-green">AT</span>
+      <span>
+        <strong>My Attendance</strong>
+        <small>Check attendance records</small>
+      </span>
+      <span class="emp-mobile-chevron">›</span>
+    </button>
+    <button type="button" class="emp-mobile-list-row" onclick="navigate('leave')">
+      <span class="emp-mobile-list-icon emp-mobile-icon-orange">LV</span>
+      <span>
+        <strong>My Leave</strong>
+        <small>Manage leave requests</small>
+      </span>
+      <span class="emp-mobile-chevron">›</span>
+    </button>
+  </div>
+
   <!-- Latest Payslip Preview -->
   <div class="emp-card" id="emp-latest-payslip-card" style="display:none;">
     <div class="emp-card-header">

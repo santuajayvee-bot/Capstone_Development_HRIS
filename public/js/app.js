@@ -178,7 +178,21 @@ function navigate(pageId, navEl, params = null) {
   document.body.dataset.activePage = pageId;
 
   const titleEl = document.getElementById('page-title');
-  if (titleEl) titleEl.textContent = PAGE_TITLES[pageId] || pageId;
+  if (titleEl) {
+    const isEmployeeUser = typeof isEmployeeRole === 'function' ? isEmployeeRole(user?.role) : user?.role === 'employee';
+    const employeeTitles = {
+      'employee-dashboard:overview': 'My Dashboard',
+      'employee-dashboard:payslips': 'My Payslips',
+      attendance: 'My Attendance',
+      leave: 'My Leave',
+      'self-service': 'My Profile',
+      requests: 'My Requests',
+    };
+    const titleKey = params?.employeeTab ? `${pageId}:${params.employeeTab}` : pageId;
+    titleEl.textContent = isEmployeeUser && employeeTitles[titleKey]
+      ? employeeTitles[titleKey]
+      : PAGE_TITLES[pageId] || pageId;
+  }
 
   const navKey = params?.employeeTab ? `${pageId}:${params.employeeTab}` : pageId;
 
