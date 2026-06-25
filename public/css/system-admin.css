@@ -212,7 +212,7 @@
 .sysadmin-table-wrapper {
   border: 1px solid var(--border, #2a2d35);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .sysadmin-table {
@@ -756,331 +756,144 @@
   }
 }
 
-@media (max-width: 480px) {
-  .sysadmin-tabs {
-    flex-direction: row;
-    gap: 6px;
-    margin: 0 -6px 14px;
-    padding: 0 6px 4px;
-    overflow-x: auto;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    scrollbar-width: thin;
-  }
-
-  .sysadmin-tab {
-    flex: 0 0 auto;
-    min-width: 112px;
-    min-height: 38px;
-    padding: 8px 10px;
-    border: 1px solid var(--border, #d0d5dd);
-    border-radius: 2px;
-    background: var(--card, #fff);
-    font-size: 11px;
-    line-height: 1.25;
-    white-space: normal;
-  }
-
-  .sysadmin-tab .tab-icon {
-    display: none;
-  }
-
-  .sysadmin-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  .stat-card {
-    min-height: 68px;
-    padding: 10px 8px;
-    border-radius: 2px;
-  }
-
-  .stat-value {
-    margin-bottom: 2px;
-    font-size: 18px;
-    line-height: 1.2;
-  }
-
-  .stat-label {
-    font-size: 10px;
-    line-height: 1.25;
-    letter-spacing: .03em;
-  }
-
-  .sysadmin-action-bar,
-  .action-left {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  .sysadmin-search,
-  .sysadmin-select,
-  .sysadmin-input {
-    width: 100%;
-    min-height: 42px;
-    padding: 8px 10px;
-    border-radius: 2px;
-    font-size: 14px;
-    line-height: 1.3;
-  }
-
-  .sysadmin-search {
-    max-width: none;
-  }
-
-  .btn-sysadmin-primary,
-  .btn-sysadmin-outline {
-    width: 100%;
-    min-height: 42px;
-    padding: 8px 12px;
-    border-radius: 2px;
-    font-size: 13px;
-    justify-content: center;
-  }
-
-  .sysadmin-table-wrapper {
-    margin: 0;
-    border-radius: 2px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .sysadmin-table {
-    min-width: 760px;
-    font-size: 12px;
-  }
-
-  .sysadmin-table th,
-  .sysadmin-table td {
-    padding: 10px 12px;
-    vertical-align: top;
-  }
-
-  .sysadmin-table th {
-    font-size: 10px;
-  }
-
-  .sysadmin-table td {
-    line-height: 1.35;
-  }
-
-  .badge-active,
-  .badge-inactive,
-  .badge-locked,
-  .badge-clear,
-  .badge-level {
-    padding: 3px 8px;
-    border-radius: 999px;
-    font-size: 10px;
-  }
-
-  .action-group {
-    justify-content: flex-start;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .action-group .btn-sysadmin-sm,
-  .action-group .btn-sysadmin-danger {
-    width: 32px;
-    height: 32px;
-    border-radius: 2px;
-    font-size: 13px;
-  }
-
-  .roles-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
-  .role-card {
-    padding: 14px;
-    border-radius: 2px;
-  }
-
-  .role-card-title {
-    font-size: 14px;
-  }
-
-  .role-card-desc,
-  .role-card-users {
-    font-size: 12px;
-  }
-
-  .sysadmin-settings-card {
-    padding: 12px;
-    border-radius: 2px;
-  }
-
-  .sysadmin-form-grid,
-  .form-row {
-    grid-template-columns: 1fr;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
-
-  .sysadmin-label {
-    margin-bottom: 4px;
-    font-size: 10px;
-  }
-
-  .input-hint {
-    font-size: 10.5px;
-  }
-
-  .sysadmin-modal-overlay {
-    align-items: flex-end;
-    padding: 0;
-  }
-
-  .sysadmin-modal {
-    width: 100vw;
-    max-width: 100vw;
-    max-height: 92vh;
-    border-right: 0;
-    border-bottom: 0;
-    border-left: 0;
-    border-radius: 8px 8px 0 0;
-  }
-
-  .modal-header {
-    padding: 14px 16px;
-  }
-
-  .modal-header h3 {
-    font-size: 16px;
-  }
-
-  .modal-body {
-    padding: 14px 16px;
-  }
-
-  .modal-footer {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 12px 16px 16px;
-  }
-
-  .modal-footer > div[style*="flex"] {
-    display: none;
-  }
-
-  .modal-steps {
-    gap: 6px;
-    margin-bottom: 14px;
-  }
-
-  .modal-steps .step {
-    padding: 8px;
-    border-radius: 2px;
-    font-size: 11px;
-  }
-
-  .modal-steps .step span {
-    width: 20px;
-    height: 20px;
-  }
-
-  .employee-preview {
-    padding: 12px;
-    border-radius: 2px;
-  }
-
-  .preview-row {
-    display: grid;
-    grid-template-columns: 92px minmax(0, 1fr);
-    gap: 8px;
-    font-size: 12px;
-  }
-
-  .sysadmin-toast {
-    right: 12px;
-    bottom: 12px;
-    left: 12px;
-    padding: 12px 14px;
-    border-radius: 2px;
-    font-size: 13px;
-  }
-}
-
-/* Polished compact account action buttons */
+/* Account actions: compact menu keeps the table easy to scan. */
 .action-group {
+  display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  min-width: 120px;
+  min-width: 36px;
 }
 
-.action-group .btn-sysadmin-sm,
-.action-group .btn-sysadmin-danger {
-  width: 34px;
-  height: 34px;
+.account-menu {
+  position: relative;
+}
+
+.account-menu-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
   padding: 0;
+  border: 1px solid var(--border, #d7e1ef);
   border-radius: 8px;
-  border: 1px solid var(--action-border, rgba(108, 92, 231, 0.34));
-  background: var(--action-bg, rgba(108, 92, 231, 0.1));
-  color: var(--action-color, #6c5ce7);
-  font-size: 14px;
-  line-height: 1;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
-  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  background: var(--card, #fff);
+  color: var(--muted, #64748b);
+  font: 700 22px/1 sans-serif;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
 
-.action-group .btn-sysadmin-sm:nth-child(1) {
-  --action-color: #3b82f6;
-  --action-border: rgba(59, 130, 246, 0.34);
-  --action-bg: rgba(59, 130, 246, 0.1);
-  --action-bg-hover: rgba(59, 130, 246, 0.18);
-  --action-shadow: rgba(59, 130, 246, 0.2);
-}
-
-.action-group .btn-sysadmin-sm:nth-child(2) {
-  --action-color: #f59e0b;
-  --action-border: rgba(245, 158, 11, 0.34);
-  --action-bg: rgba(245, 158, 11, 0.1);
-  --action-bg-hover: rgba(245, 158, 11, 0.18);
-  --action-shadow: rgba(245, 158, 11, 0.2);
-}
-
-.action-group .btn-sysadmin-sm:nth-child(3) {
-  --action-color: #22c55e;
-  --action-border: rgba(34, 197, 94, 0.34);
-  --action-bg: rgba(34, 197, 94, 0.1);
-  --action-bg-hover: rgba(34, 197, 94, 0.18);
-  --action-shadow: rgba(34, 197, 94, 0.2);
-}
-
-.action-group .btn-sysadmin-danger {
-  --action-color: #ef4444;
-  --action-border: rgba(239, 68, 68, 0.34);
-  --action-bg: rgba(239, 68, 68, 0.1);
-  --action-bg-hover: rgba(239, 68, 68, 0.18);
-  --action-shadow: rgba(239, 68, 68, 0.2);
-}
-
-.action-group .btn-sysadmin-sm:hover,
-.action-group .btn-sysadmin-danger:hover,
-.action-group .btn-sysadmin-sm:focus-visible,
-.action-group .btn-sysadmin-danger:focus-visible {
+.account-menu-trigger:hover,
+.account-menu-trigger:focus-visible,
+.account-menu.is-open .account-menu-trigger {
   outline: none;
-  border-color: var(--action-color);
-  background: var(--action-bg-hover, rgba(108, 92, 231, 0.18));
-  color: var(--action-color);
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px var(--action-shadow, rgba(108, 92, 231, 0.2));
+  border-color: #93b8e7;
+  background: #f2f8ff;
+  color: #2563b9;
+  box-shadow: 0 3px 10px rgba(37, 99, 185, .14);
 }
 
-.action-group .btn-sysadmin-sm:active,
-.action-group .btn-sysadmin-danger:active {
-  transform: translateY(0);
-  box-shadow: none;
+.account-menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: none;
+  width: 168px;
+  padding: 5px;
+  border: 1px solid var(--border, #d7e1ef);
+  border-radius: 9px;
+  background: var(--card, #fff);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, .16);
+}
+
+.account-menu.is-open .account-menu-popover {
+  display: grid;
+  gap: 2px;
+  animation: account-menu-in .14s ease-out;
+}
+
+.account-menu.is-open-up .account-menu-popover {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.account-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--action-color, #315f9b);
+  font: 600 12px/1 var(--font-main, sans-serif);
+  text-align: left;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+
+.account-menu-item:hover,
+.account-menu-item:focus-visible {
+  outline: none;
+  background: var(--action-bg, #f7faff);
+}
+
+.account-action-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.account-action-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-action-role {
+  --action-color: #2563b9;
+  --action-border: #b9d4f6;
+  --action-bg: #f2f8ff;
+}
+
+.account-action-credentials {
+  --action-color: #a45c00;
+  --action-border: #f2d19e;
+  --action-bg: #fffaf0;
+}
+
+.account-action-deactivate {
+  --action-color: #bd3131;
+  --action-border: #f1baba;
+  --action-bg: #fff5f5;
+}
+
+.account-action-activate {
+  --action-color: #18764d;
+  --action-border: #b8e2cd;
+  --action-bg: #f1fcf6;
+}
+
+.account-menu-item:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+.account-self-label {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  font-style: italic;
+}
+
+@keyframes account-menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }

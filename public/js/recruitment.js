@@ -26,7 +26,12 @@ const ONB_WAGE_STYLE_POSITIONS = ['Base Salary Worker', 'Hourly Worker', 'Per-Tr
 
 function onbCanFinalApprove() {
   const user = typeof getUser === 'function' ? getUser() : null;
-  return user?.role === 'hr_manager';
+  return ['hr_admin', 'hr_manager'].includes(user?.role);
+}
+
+function onbCanCreateEmployeeAccount() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return ['hr_admin', 'hr_manager'].includes(user?.role);
 }
 
 function onbEscape(value) {
@@ -714,7 +719,27 @@ function onbAuditRows(audit) {
   `).join('');
 }
 
-function onbRenderReview(applicant, documents, audit, integrity) {
+function onbEmployeeAccountSection(applicant, account) {
+  if (!applicant.converted_employee_id) return '';
+  const details = account
+    ? '<div class="onb-record-grid">' +
+        '<div><span>Account status</span><strong>' + onbBadge(account.account_status) + '</strong></div>' +
+        '<div><span>Username</span><strong>' + onbEscape(account.username) + '</strong></div>' +
+        '<div><span>Role</span><strong>' + onbEscape(account.role?.label || 'Regular Employee') + ' (' + onbEscape(account.role?.access_level || 'Level 1') + ')</strong></div>' +
+      '</div>'
+    : '<p class="onb-muted">No employee account has been created yet.</p>';
+  const createAction = !account && onbCanCreateEmployeeAccount()
+    ? '<p class="onb-muted">This action creates a Regular Employee (Level 1) account only. The role cannot be changed here.</p>' +
+      '<div class="onb-modal-actions"><button class="btn btn-primary" type="button" onclick="onbOpenEmployeeAccountModal(' + Number(applicant.converted_employee_id) + ')">Create Level 1 Account</button></div>'
+    : '';
+  return '<section class="onb-review-section">' +
+    '<h4>Employee Account</h4>' +
+    details +
+    createAction +
+    '</section>';
+}
+
+function onbRenderReview(applicant, documents, audit, integrity, account = null) {
   const body = document.getElementById('onb-review-body');
   if (!body) return;
   const locked = applicant.workflow_status === 'Transferred';
@@ -724,6 +749,7 @@ function onbRenderReview(applicant, documents, audit, integrity) {
   body.innerHTML = `
     <div class="onb-record-page">
       ${onbApplicantDetails(applicant)}
+      ${onbEmployeeAccountSection(applicant, account)}
       <section class="onb-review-section">
         <h4>Workflow Status</h4>
         ${onbRecordTable([
@@ -737,14 +763,12 @@ function onbRenderReview(applicant, documents, audit, integrity) {
           <div class="onb-workflow-grid">
             <select id="onb-screening-status">${onbOptions(ONB_SCREENING, applicant.screening_status)}</select>
             <select id="onb-training-status">${onbOptions(ONB_TRAINING, applicant.training_status)}</select>
-            <textarea id="onb-progress-reason" rows="2" placeholder="Required reason for this workflow change"></textarea>
           </div>
           <div class="onb-modal-actions"><button class="btn btn-secondary" type="button" onclick="onbUpdateProgress()">Save Progress</button></div>
           ${canFinalApprove ? `
-            <h4>HR Manager Decision</h4>
+            <h4>HR Approval Decision</h4>
             <div class="onb-workflow-grid">
               <select id="onb-decision">${onbOptions(ONB_DECISIONS, applicant.approval_status)}</select>
-              <textarea id="onb-decision-reason" rows="2" placeholder="Required reason for this decision"></textarea>
             </div>
             <div class="onb-modal-actions"><button class="btn btn-primary" type="button" onclick="onbSaveDecision()">Record Decision</button></div>
           ` : ''}
@@ -767,7 +791,6 @@ function onbRenderReview(applicant, documents, audit, integrity) {
         <p class="onb-muted">Creates the official Employee Directory record and payroll-ready wage row, carries prepared documents forward, and activates the biometric reference mapping when configured.</p>
         <div class="onb-upload">
           <input id="onb-transfer-code" placeholder="Optional employee code (auto-generated when blank)" />
-          <input id="onb-transfer-reason" placeholder="Required transfer reason" />
           <button class="btn btn-primary" type="button" onclick="onbTransferApplicant()">Transfer to Employee Directory</button>
         </div>
       </section>
@@ -775,9 +798,9 @@ function onbRenderReview(applicant, documents, audit, integrity) {
     ${locked ? '' : `
       <section class="onb-review-section onb-danger-zone">
         <h4>Remove Applicant</h4>
-        <p class="onb-muted">Removes this pre-employment record from the active onboarding list. The deletion reason and integrity audit trail are retained. Transferred hires cannot be removed here.</p>
+        <p class="onb-muted">Removes this pre-employment record from the active onboarding list. Transferred hires cannot be removed here.</p>
         <div class="onb-upload">
-          <input id="onb-delete-reason" placeholder="Required reason for removal" />
+          <input id="onb-delete-confirmation" placeholder="Type delete to confirm removal" autocomplete="off" />
           <button class="btn onb-btn-danger" type="button" onclick="onbDeleteApplicant()">Delete Applicant</button>
         </div>
       </section>
@@ -802,12 +825,17 @@ async function onbOpenApplicant(applicantId) {
       onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/audit`),
       onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/integrity`),
     ]);
+    let account = null;
+    if (applicant.converted_employee_id && onbCanCreateEmployeeAccount()) {
+      const accountData = await onbJson('/api/account-requests/approved-employees/' + Number(applicant.converted_employee_id));
+      account = accountData.account || null;
+    }
     document.getElementById('onb-review-title').textContent = `${applicant.first_name} ${applicant.last_name}`;
     const wageSummary = applicant.expected_wage_type
       ? `Wage: ${applicant.expected_wage_type}${applicant.expected_base_rate != null ? ` at ${applicant.expected_base_rate}` : ''}`
       : 'Wage: not set';
     document.getElementById('onb-review-subtitle').textContent = `${applicant.applicant_code} · Position: ${applicant.applied_position} · ${wageSummary}`;
-    onbRenderReview(applicant, documents, audit, integrity);
+    onbRenderReview(applicant, documents, audit, integrity, account);
   } catch (error) {
     onbToast(error.message, 'error');
   }
@@ -820,7 +848,6 @@ async function onbUpdateProgress() {
       body: JSON.stringify({
         screening_status: document.getElementById('onb-screening-status').value,
         training_status: document.getElementById('onb-training-status').value,
-        reason: document.getElementById('onb-progress-reason').value,
       }),
     });
     onbToast('Screening and training progress saved.');
@@ -837,7 +864,6 @@ async function onbSaveDecision() {
       method: 'PATCH',
       body: JSON.stringify({
         approval_status: document.getElementById('onb-decision').value,
-        reason: document.getElementById('onb-decision-reason').value,
       }),
     });
     onbToast('HR decision recorded.');
@@ -855,7 +881,6 @@ async function onbTransferApplicant() {
       method: 'POST',
       body: JSON.stringify({
         employee_code: document.getElementById('onb-transfer-code').value,
-        reason: document.getElementById('onb-transfer-reason').value,
       }),
     });
     onbToast(`${data.employee_code} created in the Employee Directory.`);
@@ -865,14 +890,66 @@ async function onbTransferApplicant() {
   }
 }
 
+function onbOpenEmployeeAccountModal(employeeId) {
+  if (!onbCanCreateEmployeeAccount()) {
+    return onbToast('Only HR Admin or HR Manager can create this employee account.', 'error');
+  }
+  const normalizedEmployeeId = Number(employeeId);
+  if (!Number.isInteger(normalizedEmployeeId) || normalizedEmployeeId <= 0) {
+    return onbToast('The transferred employee record is unavailable.', 'error');
+  }
+
+  const employeeLabel = document.getElementById('onb-review-title')?.textContent || 'Transferred employee';
+  document.getElementById('onb-account-create-employee-id').value = String(normalizedEmployeeId);
+  document.getElementById('onb-account-create-employee').textContent = employeeLabel;
+  document.getElementById('onb-account-create-username').value = '';
+  document.getElementById('onb-account-create-temporary-password').value = '';
+  onbCloseModals();
+  onbOpenModal('onb-account-create-modal');
+  setTimeout(() => document.getElementById('onb-account-create-username')?.focus(), 0);
+}
+
+async function onbCreateEmployeeAccount(event) {
+  event?.preventDefault();
+  if (!onbCanCreateEmployeeAccount()) {
+    return onbToast('Only HR Admin or HR Manager can create this employee account.', 'error');
+  }
+  const employeeId = Number(document.getElementById('onb-account-create-employee-id')?.value);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    return onbToast('The transferred employee record is unavailable.', 'error');
+  }
+  try {
+    const username = document.getElementById('onb-account-create-username')?.value.trim() || '';
+    const temporaryPassword = document.getElementById('onb-account-create-temporary-password')?.value || '';
+    const body = {};
+    if (username) body.username = username;
+    if (temporaryPassword) body.temporary_password = temporaryPassword;
+    const data = await onbJson('/api/account-requests/approved-employees/' + employeeId, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    onbCloseModals();
+    await onbRefresh();
+    if (data.generatedTemporaryPassword) {
+      const message = 'Account created. Give the employee this temporary password through an approved secure channel; it is shown only once: ' + data.generatedTemporaryPassword;
+      if (typeof showAlert === 'function') await showAlert(message, 'Employee Account Created', 'success');
+      else window.alert(message);
+    } else {
+      onbToast(data.message || 'Employee account created.');
+    }
+  } catch (error) {
+    onbToast(error.message, 'error');
+  }
+}
+
 async function onbDeleteApplicant() {
-  const reason = document.getElementById('onb-delete-reason')?.value.trim() || '';
-  if (reason.length < 8) return onbToast('Enter a deletion reason of at least 8 characters.', 'error');
+  const confirmation = document.getElementById('onb-delete-confirmation')?.value.trim().toLowerCase() || '';
+  if (confirmation !== 'delete') return onbToast('Type delete to confirm removal.', 'error');
   if (!confirm('Delete this applicant from active onboarding? This cannot be undone from the dashboard.')) return;
   try {
     const data = await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}`, {
       method: 'DELETE',
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ confirmation }),
     });
     onbCloseModals();
     ONB_ACTIVE_APPLICANT = null;
@@ -1025,6 +1102,7 @@ async function initOnboarding() {
       event.currentTarget._onbTimer = setTimeout(onbLoadApplicants, 250);
     });
     document.getElementById('onb-create-form')?.addEventListener('submit', onbCreateApplicant);
+    document.getElementById('onb-account-create-form')?.addEventListener('submit', onbCreateEmployeeAccount);
     document.getElementById('onb-route-form')?.addEventListener('submit', onbSavePositionRoute);
     document.getElementById('onb-hiring-type')?.addEventListener('change', onbToggleAgency);
     document.getElementById('onb-wage-type')?.addEventListener('change', onbUpdateRateHelp);
@@ -1058,6 +1136,7 @@ window.onbOpenApplicant = onbOpenApplicant;
 window.onbUpdateProgress = onbUpdateProgress;
 window.onbSaveDecision = onbSaveDecision;
 window.onbTransferApplicant = onbTransferApplicant;
+window.onbOpenEmployeeAccountModal = onbOpenEmployeeAccountModal;
 window.onbDeleteApplicant = onbDeleteApplicant;
 window.onbUploadDocument = onbUploadDocument;
 window.onbDownloadDocument = onbDownloadDocument;

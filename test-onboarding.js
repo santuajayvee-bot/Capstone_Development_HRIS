@@ -48,11 +48,11 @@ async function run() {
       FROM users u
       JOIN roles r ON r.id = u.role_id
   `);
-  const hrManager = users.find(user => user.username === 'hr.admin' && user.role === 'hr_manager')
-    || users.find(user => user.role === 'hr_manager');
+  const hrManager = users.find(user => user.username === 'hr.admin' && ['hr_admin', 'hr_manager'].includes(user.role))
+    || users.find(user => ['hr_admin', 'hr_manager'].includes(user.role));
   const sysAdmin = users.find(user => user.role === 'system_admin');
   const payrollOfficer = users.find(user => user.role === 'payroll_officer');
-  check('Required HR manager, system admin, and payroll roles exist', hrManager && sysAdmin && payrollOfficer);
+  check('Required HR Admin/Manager, system admin, and payroll roles exist', hrManager && sysAdmin && payrollOfficer);
   const hrToken = issueToken(hrManager);
   const sysAdminToken = issueToken(sysAdmin);
   const payrollToken = issueToken(payrollOfficer);
@@ -361,6 +361,40 @@ async function run() {
   [[storedDocument]] = await pool.execute('SELECT * FROM onboarding_applicant_document WHERE document_id = ?', [documentId]);
   check('Prepared document is linked to official employee 201-file', storedDocument.transferred_employee_id === directEmployeeId);
 
+  result = await api(`/api/account-requests/approved-employees/${directEmployeeId}`, {
+    method: 'POST',
+    headers: jsonHeaders(payrollToken),
+    body: JSON.stringify({}),
+  });
+  check('Payroll officer cannot create a transferred employee account', result.status === 403);
+
+  const directAccountUsername = `employee.direct.${nonce}`;
+  result = await api(`/api/account-requests/approved-employees/${directEmployeeId}`, {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({ username: directAccountUsername }),
+  });
+  check('HR can directly create a Level 1 account only after approval and transfer', result.status === 201 && result.data.account?.role?.name === 'employee' && result.data.generatedTemporaryPassword);
+  const [[directAccount]] = await pool.execute(
+    `SELECT u.username, u.force_password_change, r.name AS role_name
+       FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE u.employee_id = ?`,
+    [directEmployeeId]
+  );
+  check('Direct account is locked to the Regular Employee role and forces a password change', directAccount.username === directAccountUsername && directAccount.role_name === 'employee' && Number(directAccount.force_password_change) === 1);
+
+  result = await api(`/api/account-requests/approved-employees/${directEmployeeId}`, {
+    headers: jsonHeaders(hrToken),
+  });
+  check('HR can view the created account status from the transferred applicant record', result.status === 200 && result.data.account?.username === directAccountUsername && result.data.account?.role?.name === 'employee');
+
+  result = await api(`/api/account-requests/approved-employees/${directEmployeeId}`, {
+    method: 'POST',
+    headers: jsonHeaders(hrToken),
+    body: JSON.stringify({ username: `duplicate.${nonce}` }),
+  });
+  check('A transferred employee cannot receive a second account', result.status === 409);
+
   result = await api(`/api/onboarding/applicants/${directApplicantId}`, {
     method: 'DELETE',
     headers: jsonHeaders(hrToken),
@@ -536,8 +570,10 @@ async function cleanup() {
   }
   for (const employeeId of employeeIds) {
     await pool.execute('DELETE FROM system_audit_log WHERE module = ? AND target_employee_id = ?', ['EMPLOYEE_LIFECYCLE', employeeId]);
+    await pool.execute('DELETE FROM system_audit_log WHERE module = ? AND target_employee_id = ?', ['ACCOUNT_LIFECYCLE', employeeId]);
     await pool.execute('DELETE FROM biometric_employee_mapping WHERE employee_id = ?', [employeeId]);
     await pool.execute('DELETE FROM employee_wage_rates WHERE employee_id = ?', [employeeId]);
+    await pool.execute('DELETE FROM users WHERE employee_id = ?', [employeeId]);
   }
   await pool.execute(`DELETE FROM onboarding_applicant WHERE applicant_id IN (${applicantIds.map(() => '?').join(',') || 'NULL'})`, applicantIds);
   for (const employeeId of employeeIds) {

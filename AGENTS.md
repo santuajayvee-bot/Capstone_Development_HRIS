@@ -81,7 +81,8 @@ All code must follow these security requirements:
    - Backup/restore actions
 
 8. Never allow silent privilege escalation.
-   - Only System Administrator can create accounts and assign roles.
+   - Only System Administrator can create accounts and assign roles, except that HR Admin and HR Manager may directly create a locked Regular Employee (Level 1) account for an applicant already approved and transferred to the Employee Directory.
+   - This HR exception must not accept a client-selected role, must bind the account to that transferred employee only, must force a password change on first login, and must create an audit log.
    - Payroll Officer must not be able to grant themselves Payroll Manager access.
    - Any RBAC update must generate an audit log.
 
@@ -118,6 +119,14 @@ Not allowed:
 - Modify blockchain records
 - Access unrelated system configuration
 
+### HR Manager Account Provisioning Exception
+Allowed:
+- Create a locked Regular Employee (Level 1) account only after the applicant has been approved and transferred to the Employee Directory
+
+Not allowed:
+- Select, alter, or grant any role through this account-creation flow
+- Create an account for an applicant who is not both approved and transferred
+
 ### Level 2 — HR Admin
 Allowed:
 - Manage employee lifecycle
@@ -127,11 +136,13 @@ Allowed:
 - Manage leave requests
 - Print payslips for non-technical workers
 - View HR reports
+- Create a locked Regular Employee (Level 1) account only after the applicant has been approved and transferred to the Employee Directory
 
 Not allowed:
 - Export final financial summary reports
 - Approve final payroll
 - Manage RBAC permissions
+- Select, alter, or grant any role through the employee account-creation flow
 
 ### Level 2 — Payroll Officer
 Allowed:

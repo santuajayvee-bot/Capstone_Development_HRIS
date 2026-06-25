@@ -15,7 +15,7 @@ const router   = express.Router();
 const pool     = require('../config/db');
 const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
-const { decryptColumnValue } = require('./data-protection');
+const { decryptColumnValue, nullableText } = require('./data-protection');
 const {
   hashTemporaryPassword,
   validateTemporaryPassword,
@@ -33,11 +33,34 @@ async function hasColumn(tableName, columnName) {
   return Number(rows[0]?.count || 0) > 0;
 }
 
+function resemblesEncryptedPayload(value) {
+  const parts = nullableText(value)?.split(':') || [];
+  // AES-GCM values use iv:authTag:ciphertext. This broader check means a
+  // malformed value is still treated as protected data and never sent to UI.
+  return parts.length === 3 && parts[0].length === 32 && parts[1].length === 32;
+}
+
 function decryptEmployeeUserFields(row) {
   if (!row) return row;
+
   ['first_name', 'last_name'].forEach(field => {
-    if (Object.prototype.hasOwnProperty.call(row, field)) {
-      row[field] = decryptColumnValue(row[field]);
+    if (!Object.prototype.hasOwnProperty.call(row, field)) return;
+
+    const storedValue = row[field];
+    const appearsEncrypted = resemblesEncryptedPayload(storedValue);
+    try {
+      const decrypted = decryptColumnValue(storedValue);
+
+      // Do not fall through with a ciphertext-shaped value if it could not
+      // be recognised by the normal decryptor.
+      row[field] = appearsEncrypted && decrypted === nullableText(storedValue)
+        ? null
+        : decrypted;
+    } catch (error) {
+      // Fail closed: an unreadable protected field must never leak its
+      // database representation to the browser.
+      console.warn(`[RBAC] Unable to decrypt employee ${field} for account-list response:`, error.message);
+      row[field] = null;
     }
   });
   return row;
@@ -209,7 +232,7 @@ router.post('/register-role', async (req, res) => {
 
     // Check if user account already exists for this employee
     const [existingUser] = await conn.execute(
-      'SELECT id, role_id FROM users WHERE employee_id = ?',
+      'SELECT id, role_id FROM users WHERE employee_id = ? FOR UPDATE',
       [employee_id]
     );
 

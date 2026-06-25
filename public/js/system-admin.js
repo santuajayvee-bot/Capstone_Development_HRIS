@@ -8,6 +8,7 @@ let sysAllUsers     = [];
 let sysAllRoles     = [];
 let sysAllEmployees = [];
 let sysBiometricDevices = [];
+let sysAccountRequests = [];
 let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
 
@@ -15,6 +16,20 @@ function sysEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[char]));
+}
+
+function sysLooksEncryptedPayload(value) {
+  if (typeof value !== 'string') return false;
+  const parts = value.trim().split(':');
+  return parts.length === 3 && parts[0].length === 32 && parts[1].length === 32;
+}
+
+function sysProtectEmployeeIdentity(user) {
+  const safeUser = { ...user };
+  ['first_name', 'last_name'].forEach(field => {
+    if (sysLooksEncryptedPayload(safeUser[field])) safeUser[field] = null;
+  });
+  return safeUser;
 }
 
 function sysFormatDateTime(value) {
@@ -57,6 +72,117 @@ function sysActionIcon(icon) {
   return icons[icon] || '';
 }
 
+function sysAccountMenuAction(action, label, icon, userId) {
+  return '<button type="button" class="account-menu-item account-action-' + action + '" ' +
+    'data-account-action="' + action + '" data-user-id="' + Number(userId) + '" ' +
+    'role="menuitem">' +
+    '<span class="account-action-icon">' + sysActionIcon(icon) + '</span>' +
+    '<span>' + label + '</span>' +
+  '</button>';
+}
+
+function sysAccountActionMenu(user) {
+  const statusAction = user.is_active
+    ? sysAccountMenuAction('deactivate', 'Deactivate', 'pause', user.id)
+    : sysAccountMenuAction('activate', 'Activate', 'play', user.id);
+
+  return '<div class="account-menu">' +
+    '<button type="button" class="account-menu-trigger" data-account-menu-toggle ' +
+      'aria-label="Account actions for ' + sysEsc(user.username) + '" aria-haspopup="menu" aria-expanded="false">' +
+      '<span aria-hidden="true">&#8942;</span>' +
+    '</button>' +
+    '<div class="account-menu-popover" role="menu" aria-label="Actions for ' + sysEsc(user.username) + '">' +
+      sysAccountMenuAction('role', 'Change role', 'shield', user.id) +
+      sysAccountMenuAction('credentials', 'Reset password', 'key', user.id) +
+      statusAction +
+    '</div>' +
+  '</div>';
+}
+
+function closeAccountActionMenus(exceptMenu = null) {
+  document.querySelectorAll('.account-menu.is-open').forEach(menu => {
+    if (menu === exceptMenu) return;
+    menu.classList.remove('is-open', 'is-open-up');
+    const trigger = menu.querySelector('[data-account-menu-toggle]');
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function openAccountActionMenu(menu, trigger) {
+  closeAccountActionMenus(menu);
+  const estimatedMenuHeight = 150;
+  const triggerBounds = trigger.getBoundingClientRect();
+  const shouldOpenUpward = window.innerHeight - triggerBounds.bottom < estimatedMenuHeight
+    && triggerBounds.top > estimatedMenuHeight;
+  menu.classList.toggle('is-open-up', shouldOpenUpward);
+  menu.classList.add('is-open');
+  trigger.setAttribute('aria-expanded', 'true');
+}
+
+async function openRoleUpdateForUser(user) {
+  if (!sysAllRoles.length) await loadRolesList();
+  showRoleModal(Number(user.id), user.username, user.role_label || user.role_name, Number(user.role_id));
+}
+
+function bindAccountActionButtons() {
+  const tableBody = document.getElementById('users-tbody');
+  if (!tableBody || tableBody.dataset.actionsBound === 'true') return;
+  tableBody.dataset.actionsBound = 'true';
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.account-menu')) closeAccountActionMenus();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeAccountActionMenus();
+  });
+
+  tableBody.addEventListener('click', async event => {
+    const menuToggle = event.target.closest('[data-account-menu-toggle]');
+    if (menuToggle) {
+      event.preventDefault();
+      const menu = menuToggle.closest('.account-menu');
+      if (!menu) return;
+      if (menu.classList.contains('is-open')) {
+        closeAccountActionMenus();
+      } else {
+        openAccountActionMenu(menu, menuToggle);
+      }
+      return;
+    }
+
+    const button = event.target.closest('[data-account-action]');
+    if (!button) return;
+    event.preventDefault();
+    closeAccountActionMenus();
+
+    const userId = Number(button.dataset.userId);
+    const user = sysAllUsers.find(item => Number(item.id) === userId);
+    if (!user) {
+      showSysToast('This account is no longer available. Refreshing the list.', 'error');
+      await loadUsersTable();
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      if (button.dataset.accountAction === 'role') {
+        await openRoleUpdateForUser(user);
+      } else if (button.dataset.accountAction === 'credentials') {
+        showCredentialsModal(Number(user.id), user.username);
+      } else if (button.dataset.accountAction === 'deactivate') {
+        await toggleUserStatus(Number(user.id), false);
+      } else if (button.dataset.accountAction === 'activate') {
+        await toggleUserStatus(Number(user.id), true);
+      }
+    } catch (error) {
+      console.error('[SysAdmin] account action error:', error);
+      showSysToast(error.message || 'Unable to open this account action.', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 // ── Tab Switching ────────────────────────────────────────────
 function switchSysAdminTab(tabId, el) {
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
@@ -72,12 +198,14 @@ function switchSysAdminTab(tabId, el) {
     stopAccountRealtime();
   }
   if (tabId === 'roles')    loadRolesGrid();
+  if (tabId === 'account-requests') loadAccountCreationRequests();
   if (tabId === 'audit')    loadAuditLog();
   if (tabId === 'biometric-settings') loadBiometricSettings();
 }
 
 // ── Initialize on navigation ────────────────────────────────
 function initSystemAdmin() {
+  bindAccountActionButtons();
   loadUsersTable();
   loadRolesList();
   startAccountRealtime();
@@ -94,7 +222,10 @@ async function loadUsersTable() {
       console.error('Failed to load users');
       return;
     }
-    sysAllUsers = await res.json();
+    // Names are decrypted by the authorized server response. This is only a
+    // display safeguard so an unexpected protected database value is never
+    // rendered or retained in the screen's account-list state.
+    sysAllUsers = (await res.json()).map(sysProtectEmployeeIdentity);
 
     // Also load employees for the unlinked count
     const empRes = await apiFetch('/api/employees');
@@ -163,7 +294,9 @@ function renderUsersTable(users) {
         : 'Clear';
     const empName = (u.first_name && u.last_name) 
       ? `${sysEsc(u.first_name)} ${sysEsc(u.last_name)}` 
-      : '<span style="color:var(--muted)">Unlinked</span>';
+      : u.employee_id
+        ? '<span style="color:var(--muted)">Employee record unavailable</span>'
+        : '<span style="color:var(--muted)">Unlinked</span>';
     const empCode = sysEsc(u.employee_code || '—');
     const lastLogin = u.last_login 
       ? new Date(u.last_login).toLocaleString('en-PH', { dateStyle: 'short', timeStyle: 'short' })
@@ -184,14 +317,9 @@ function renderUsersTable(users) {
         <td><small>${lastLogin}</small></td>
         <td>
           <div class="action-group">
-            ${!isSelf ? `
-              <button class="btn-sysadmin-sm" onclick="showRoleModal(${Number(u.id)}, ${sysJsString(u.username)}, ${sysJsString(u.role_label || u.role_name)}, ${Number(u.role_id)})" title="Change Role">🛡️</button>
-              <button class="btn-sysadmin-sm" onclick="showCredentialsModal(${Number(u.id)}, ${sysJsString(u.username)})" title="Reset Password">🔑</button>
-              ${u.is_active 
-                ? `<button class="btn-sysadmin-danger" onclick="toggleUserStatus(${Number(u.id)}, false)" title="Deactivate">⏸</button>`
-                : `<button class="btn-sysadmin-sm" onclick="toggleUserStatus(${Number(u.id)}, true)" title="Activate">▶</button>`
-              }
-            ` : '<small style="color:var(--muted)">You</small>'}
+            ${!isSelf ?
+              sysAccountActionMenu(u)
+              : '<small class="account-self-label">Your account</small>'}
           </div>
         </td>
       </tr>
@@ -553,17 +681,17 @@ async function submitRegistration() {
   }
   if (!validateRegistrationAccountSetup()) return;
 
-  const payload = {
-    employee_id: employeeId,
-    username,
-    password,
-    role_id: roleId,
-  };
-
   try {
     const submitBtn = document.getElementById('btn-reg-submit');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Processing...';
+
+    const payload = {
+      employee_id: employeeId,
+      username,
+      password,
+      role_id: roleId,
+    };
 
     const res = await apiFetch('/api/admin/register-role', {
       method: 'POST',
@@ -596,13 +724,17 @@ async function submitRegistration() {
 // ═══════════════════════════════════════════════════════════════
 
 function showRoleModal(userId, username, currentRole, currentRoleId) {
+  if (!sysAllRoles.length) {
+    showSysToast('Role data is still loading. Please try again.', 'error');
+    return;
+  }
   document.getElementById('role-modal-username').textContent = username;
   document.getElementById('role-modal-current').textContent = currentRole;
   document.getElementById('role-modal-user-id').value = userId;
 
   const roleSelect = document.getElementById('role-modal-new-role');
   roleSelect.innerHTML = sysAllRoles
-    .map(r => `<option value="${r.id}" ${r.id === currentRoleId ? 'selected' : ''}>${r.label} (${r.access_level || '—'})</option>`)
+    .map(r => `<option value="${r.id}" ${Number(r.id) === Number(currentRoleId) ? 'selected' : ''}>${r.label} (${r.access_level || '—'})</option>`)
     .join('');
 
   document.getElementById('role-modal').style.display = 'flex';
@@ -782,6 +914,140 @@ function clearBiometricSettingsForm() {
   if (active) active.value = '1';
 }
 
+async function loadAccountCreationRequests() {
+  const tbody = document.getElementById('account-request-tbody');
+  if (!tbody) return;
+  try {
+    const response = await apiFetch('/api/account-requests');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to load account requests.');
+    sysAccountRequests = Array.isArray(data.requests) ? data.requests : [];
+    renderAccountCreationRequests(sysAccountRequests);
+  } catch (error) {
+    console.error('[SysAdmin] account request load error:', error);
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Unable to load account requests.</td></tr>';
+    showSysToast(error.message || 'Unable to load account requests.', 'error');
+  }
+}
+
+function renderAccountCreationRequests(requests) {
+  const tbody = document.getElementById('account-request-tbody');
+  if (!tbody) return;
+  if (!requests.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No account creation requests found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = requests.map(request => {
+    const employeeLabel = request.employee_name
+      ? request.employee_code + ' - ' + request.employee_name
+      : request.employee_code || ('Employee ' + request.employee_id);
+    const requestedAt = sysFormatDateTime(request.created_at);
+    const action = request.status === 'PENDING'
+      ? '<button class="btn-sysadmin-sm" type="button" onclick="openAccountRequestModal(' + Number(request.request_id) + ')">Review</button>'
+      : '<small style="color:var(--muted)">Reviewed</small>';
+    return '<tr>' +
+      '<td><strong>' + sysEsc(employeeLabel) + '</strong></td>' +
+      '<td>' + sysEsc(request.suggested_username) + '</td>' +
+      '<td>' + sysEsc(request.default_role?.label || 'Regular Employee') + '</td>' +
+      '<td>' + sysEsc(request.requested_by_username || 'System') + '</td>' +
+      '<td><small>' + sysEsc(requestedAt) + '</small></td>' +
+      '<td><span class="badge-level badge-level-2">' + sysEsc(request.status) + '</span></td>' +
+      '<td><span class="badge-level badge-level-1">' + sysEsc(request.account_status) + '</span></td>' +
+      '<td>' + action + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function openAccountRequestModal(requestId) {
+  if (!sysAllRoles.length) await loadRolesList();
+  const request = sysAccountRequests.find(item => Number(item.request_id) === Number(requestId));
+  if (!request) {
+    showSysToast('Account request not found.', 'error');
+    return;
+  }
+  const employeeLabel = request.employee_name
+    ? request.employee_code + ' - ' + request.employee_name
+    : request.employee_code || ('Employee ' + request.employee_id);
+  document.getElementById('account-request-id').value = request.request_id;
+  document.getElementById('account-request-employee').textContent = employeeLabel;
+  document.getElementById('account-request-requested-by').textContent = request.requested_by_username || 'System';
+  document.getElementById('account-request-username').value = request.suggested_username || '';
+  document.getElementById('account-request-password').value = '';
+  document.getElementById('account-request-reason').value = '';
+  const generated = document.getElementById('account-request-generated');
+  generated.style.display = 'none';
+  generated.textContent = '';
+
+  const roleSelect = document.getElementById('account-request-role');
+  roleSelect.innerHTML = sysAllRoles.map(role => {
+    const selected = Number(role.id) === Number(request.default_role?.id) ? ' selected' : '';
+    return '<option value="' + Number(role.id) + '"' + selected + '>' +
+      sysEsc(role.label + ' (' + (role.access_level || 'Level 1') + ')') +
+      '</option>';
+  }).join('');
+  document.getElementById('account-request-modal').style.display = 'flex';
+}
+
+function closeAccountRequestModal() {
+  document.getElementById('account-request-modal').style.display = 'none';
+}
+
+async function approveAccountCreationRequest() {
+  const requestId = Number(document.getElementById('account-request-id').value);
+  const username = document.getElementById('account-request-username').value.trim();
+  const roleId = Number(document.getElementById('account-request-role').value);
+  const temporaryPassword = document.getElementById('account-request-password').value;
+  if (!requestId || !username || !roleId) {
+    showSysToast('Username and role assignment are required.', 'error');
+    return;
+  }
+  const body = { username, assigned_role_id: roleId };
+  if (temporaryPassword) body.temporary_password = temporaryPassword;
+
+  try {
+    const response = await apiFetch('/api/account-requests/' + requestId + '/approve', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to create employee account.');
+
+    const generated = document.getElementById('account-request-generated');
+    if (data.generatedTemporaryPassword) {
+      generated.textContent = 'Temporary password (show once): ' + data.generatedTemporaryPassword;
+      generated.style.display = 'block';
+    } else {
+      closeAccountRequestModal();
+    }
+    showSysToast(data.message || 'Employee account created.', 'success');
+    await Promise.all([loadAccountCreationRequests(), loadUsersTable()]);
+  } catch (error) {
+    showSysToast(error.message || 'Unable to create employee account.', 'error');
+  }
+}
+
+async function rejectAccountCreationRequest() {
+  const requestId = Number(document.getElementById('account-request-id').value);
+  const reason = document.getElementById('account-request-reason').value.trim();
+  if (reason.length < 8) {
+    showSysToast('Enter a rejection reason of at least 8 characters.', 'error');
+    return;
+  }
+  try {
+    const response = await apiFetch('/api/account-requests/' + requestId + '/reject', {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to reject account request.');
+    closeAccountRequestModal();
+    showSysToast(data.message || 'Account request rejected.', 'success');
+    await loadAccountCreationRequests();
+  } catch (error) {
+    showSysToast(error.message || 'Unable to reject account request.', 'error');
+  }
+}
+
 function editBiometricSettings(deviceId) {
   const device = sysBiometricDevices.find(item => Number(item.device_id) === Number(deviceId));
   if (!device) return;
@@ -862,6 +1128,11 @@ window.togglePasswordVisibility = togglePasswordVisibility;
 window.toggleCredPasswordVisibility = toggleCredPasswordVisibility;
 window.filterUserTable       = filterUserTable;
 window.loadAuditLog          = loadAuditLog;
+window.loadAccountCreationRequests = loadAccountCreationRequests;
+window.openAccountRequestModal = openAccountRequestModal;
+window.closeAccountRequestModal = closeAccountRequestModal;
+window.approveAccountCreationRequest = approveAccountCreationRequest;
+window.rejectAccountCreationRequest = rejectAccountCreationRequest;
 window.toggleRoleUsers       = toggleRoleUsers;
 window.loadBiometricSettings = loadBiometricSettings;
 window.clearBiometricSettingsForm = clearBiometricSettingsForm;

@@ -220,4 +220,25 @@
   </div>
 </div>
 
+<div class="onb-modal" id="onb-account-create-modal" aria-hidden="true">
+  <div class="onb-modal-card" style="max-width:520px;">
+    <div class="onb-modal-header">
+      <div><h3>Create Level 1 Account</h3><p>Regular Employee access only</p></div>
+      <button class="onb-close" type="button" data-onb-close>&times;</button>
+    </div>
+    <form id="onb-account-create-form" class="onb-form" style="padding:20px 24px 24px;">
+      <input id="onb-account-create-employee-id" type="hidden" />
+      <p class="onb-muted" style="margin-top:0;">Creating an account for <strong id="onb-account-create-employee">Transferred employee</strong>. The role is permanently set to Regular Employee (Level 1) in this flow.</p>
+      <div class="onb-form-grid">
+        <label>Username <small>Optional; generated from the employee ID when blank</small><input id="onb-account-create-username" maxlength="100" autocomplete="username" /></label>
+        <label>Temporary password <small>Optional; a secure password is generated when blank</small><input id="onb-account-create-temporary-password" type="password" maxlength="128" autocomplete="new-password" /></label>
+      </div>
+      <div class="onb-modal-actions">
+        <button class="btn btn-secondary" type="button" data-onb-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Create Account</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="onb-toast" id="onb-toast" role="status"></div>

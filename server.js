@@ -23,6 +23,7 @@ const biometricRoutes                        = require('./server/biometric');
 const blockchainPayrollRoutes                = require('./server/routes/blockchain-payroll');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
+const accountCreationRequestRoutes           = require('./server/account-creation-requests');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
 const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson } = require('./server/data-protection');
@@ -784,6 +785,7 @@ app.use('/api/blockchain/payroll', blockchainPayrollRoutes);
 
 // Onboarding Module (pre-employment lifecycle, secure document vault, transfer)
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/account-requests', accountCreationRequestRoutes);
 
 // Admin RBAC Module — Account Registration & Role Management (Level 4 only)
 app.use('/api/admin', adminRbacRoutes);
@@ -5480,5 +5482,3 @@ if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
     }
   });
 }
-
-

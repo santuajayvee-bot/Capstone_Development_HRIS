@@ -216,12 +216,6 @@ function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim().slice(0, 45);
 }
 
-function requireReason(value) {
-  const reason = cleanText(value, 500);
-  if (reason.length < 8) throw new Error('A reason of at least 8 characters is required.');
-  return reason;
-}
-
 function publicApplicant(row) {
   return {
     applicant_id: row.applicant_id,
@@ -930,7 +924,11 @@ router.delete('/applicants/:applicantId', async (req, res) => {
   let documentPaths = [];
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
-    const reason = requireReason(req.body.reason);
+    const confirmation = cleanText(req.body.confirmation, 20).toLowerCase();
+    if (confirmation !== 'delete') {
+      throw new Error('Type delete to remove this applicant.');
+    }
+    const deletionReason = 'Deletion confirmed by HR user.';
     await connection.beginTransaction();
     const applicant = await getApplicant(connection, applicantId, true);
     if (!applicant) {
@@ -945,7 +943,7 @@ router.delete('/applicants/:applicantId', async (req, res) => {
       [applicantId]
     );
     documentPaths = documents.map(document => document.encrypted_file_path);
-    await writeActivity(connection, req, applicantId, 'APPLICANT_ARCHIVED', reason, {
+    await writeActivity(connection, req, applicantId, 'APPLICANT_ARCHIVED', deletionReason, {
       workflow_status: applicant.workflow_status,
       document_count: Number(applicant.document_count || 0),
     }, {
@@ -955,7 +953,7 @@ router.delete('/applicants/:applicantId', async (req, res) => {
       `UPDATE onboarding_applicant
           SET deleted_at = NOW(), deleted_by = ?, deletion_reason = ?, updated_by = ?
         WHERE applicant_id = ?`,
-      [req.user.id, reason, req.user.id, applicantId]
+      [req.user.id, deletionReason, req.user.id, applicantId]
     );
     await connection.execute(
       'DELETE FROM onboarding_applicant_document WHERE applicant_id = ?',
@@ -999,7 +997,7 @@ router.patch('/applicants/:applicantId/progress', async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
-    const reason = requireReason(req.body.reason);
+    const reason = cleanText(req.body.reason, 500) || null;
     await connection.beginTransaction();
     const applicant = await getApplicant(connection, applicantId, true);
     if (!applicant) {
@@ -1210,7 +1208,7 @@ router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
-    const reason = requireReason(req.body.reason);
+    const reason = cleanText(req.body.reason, 500) || null;
     const decision = cleanText(req.body.approval_status, 40);
     if (!DECISIONS.includes(decision)) throw new Error('Invalid approval decision.');
     await connection.beginTransaction();
@@ -1263,7 +1261,7 @@ router.post('/applicants/:applicantId/transfer', requireRole(HR_FINAL_APPROVAL_R
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
-    const reason = requireReason(req.body.reason);
+    const reason = cleanText(req.body.reason, 500) || null;
     await connection.beginTransaction();
     const applicant = await getApplicant(connection, applicantId, true);
     if (!applicant) {
@@ -1373,7 +1371,7 @@ router.patch('/applicants/:applicantId/documents/:documentId/verify', async (req
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     const documentId = positiveInteger(req.params.documentId, 'documentId');
     const status = cleanText(req.body.verification_status, 20);
-    const reason = status === 'Rejected' ? requireReason(req.body.reason) : cleanText(req.body.reason, 500) || null;
+    const reason = cleanText(req.body.reason, 500) || null;
     if (!['Verified', 'Rejected'].includes(status)) return res.status(400).json({ error: 'Document status must be Verified or Rejected.' });
     await connection.beginTransaction();
     const [result] = await connection.execute(
