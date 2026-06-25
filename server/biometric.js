@@ -93,6 +93,20 @@ function getManilaParts(value) {
   };
 }
 
+function minutesFromTime(value) {
+  const match = String(value || '').match(/^(\d{2}):(\d{2})/);
+  if (!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function isLaterTime(candidate, current) {
+  return minutesFromTime(candidate) > minutesFromTime(current);
+}
+
+function isAutoTimeOutEligible(scanTime, policy) {
+  return minutesFromTime(scanTime) >= minutesFromTime(policy.work_end_time || '17:00');
+}
+
 function normalizeScanType(value) {
   const normalized = cleanText(value, 20).toUpperCase().replace(/[\s-]+/g, '_');
   if (!normalized || normalized === 'AUTO') return 'AUTO';
@@ -519,12 +533,94 @@ async function recordBiometricAttendance(req, res, options = {}) {
       [employeeId, scan.date]
     );
     const record = records[0] || null;
+    let isAutoTimeOutUpdate = false;
 
     if (scanType === 'AUTO') {
-      scanType = !record?.time_in ? 'TIME_IN' : !record?.time_out ? 'TIME_OUT' : 'DUPLICATE';
+      if (!record?.time_in) {
+        scanType = 'TIME_IN';
+      } else if (!record.time_out) {
+        if (!isAutoTimeOutEligible(scan.time, attendancePolicy)) {
+          const attendanceId = record.attendance_id;
+          const payload = {
+            employee_id: employeeId,
+            device_id: deviceReference,
+            scan_type: 'AUTO',
+            scan_time: scan.dateTime,
+            verification_score: score,
+          };
+          const payloadHash = sha256(canonicalJson(payload));
+          const idempotencyKey = sha256(`${device.device_id}:${employeeId}:${scan.dateTime}:AUTO:${payloadHash}`);
+          await conn.execute(
+            `INSERT INTO biometric_scan_event
+               (external_event_id, idempotency_key, device_id, employee_id, biometric_user_hash,
+                biometric_user_id_encrypted, scan_timestamp, attendance_type, verification_score,
+                verification_status, attendance_id, payload_hash, error_message)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, 'VALIDATED', ?, ?, ?)`,
+            [
+              cleanText(req.body.external_event_id, 190) || null,
+              idempotencyKey,
+              device.device_id,
+              employeeId,
+              mapping.biometric_user_hash,
+              mapping.biometric_user_id_encrypted,
+              scan.dateTime,
+              score,
+              attendanceId,
+              payloadHash,
+              'Intermediate biometric scan before scheduled time-out; attendance unchanged.',
+            ]
+          );
+          await conn.execute(
+            `UPDATE biometric_device
+                SET last_sync_at = NOW(), last_success_at = NOW(), last_error_message = NULL
+              WHERE device_id = ?`,
+            [device.device_id]
+          );
+          await conn.commit();
+          biometricStep(5, 'Intermediate AUTO scan accepted without changing attendance', {
+            employeeId,
+            attendanceId,
+            scanTime: scan.dateTime,
+            workEndTime: attendancePolicy.work_end_time,
+          });
+          await writeBiometricAudit(req, employeeId, 'INTERMEDIATE BIOMETRIC SCAN IGNORED', null, {
+            scanType: 'AUTO',
+            scanTime: scan.dateTime,
+            deviceReference,
+            attendanceId,
+            reason: 'Scan occurred before configured work_end_time.',
+          });
+          return res.json({
+            message: 'Intermediate biometric scan recorded; attendance time-out unchanged.',
+            action: 'INTERMEDIATE_SCAN',
+            attendance_id: attendanceId,
+            employee: {
+              id: employee.id,
+              employee_code: employee.employee_code,
+              name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+            },
+            device_id: deviceReference,
+            scan_time: scan.dateTime,
+            verification_score: score,
+            result: record.verification_status || 'PENDING_VALIDATION',
+          });
+        }
+        scanType = 'TIME_OUT';
+      } else if (isAutoTimeOutEligible(scan.time, attendancePolicy) && isLaterTime(scan.time, record.time_out)) {
+        scanType = 'TIME_OUT';
+        isAutoTimeOutUpdate = true;
+      } else {
+        scanType = 'DUPLICATE';
+      }
     }
     let attendanceId = record?.attendance_id || null;
-    biometricStep(5, 'Attendance action determined', { employeeId, attendanceId: attendanceId || null, scanType, existingRecord: !!record });
+    biometricStep(5, 'Attendance action determined', {
+      employeeId,
+      attendanceId: attendanceId || null,
+      scanType,
+      existingRecord: !!record,
+      isAutoTimeOutUpdate,
+    });
 
     if (scanType === 'DUPLICATE') {
       await conn.rollback();
@@ -538,7 +634,7 @@ async function recordBiometricAttendance(req, res, options = {}) {
       await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC TIME_IN REJECTED', null, { scanTime: scan.dateTime });
       return res.status(409).json({ error: 'A TIME_IN record already exists for this shift.' });
     }
-    if (scanType === 'TIME_OUT' && record?.time_out) {
+    if (scanType === 'TIME_OUT' && record?.time_out && !isAutoTimeOutUpdate) {
       await conn.rollback();
       await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC TIME_OUT REJECTED', null, { scanTime: scan.dateTime });
       return res.status(409).json({ error: 'A TIME_OUT record already exists for this shift.' });

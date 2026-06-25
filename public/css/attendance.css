@@ -171,7 +171,7 @@
 }
 .att-summary-card {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -181,42 +181,49 @@
 }
 .att-summary-status .badge {
   margin: 0;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  line-height: 1.2;
 }
 .att-summary-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
 }
+#page-attendance .badge,
 .att-summary-chip,
 .att-summary-normal {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.att-summary-chip,
+.att-summary-normal {
   border: 1px solid var(--border);
-  border-radius: 5px;
   background: #ffffff;
   color: var(--text);
-  font-size: 10px;
-  line-height: 1;
 }
 .att-summary-chip {
   gap: 5px;
-  padding: 4px 7px;
 }
 .att-summary-chip span {
   color: var(--muted);
-  font-weight: 600;
+  font-size: inherit;
+  font-weight: inherit;
   text-transform: uppercase;
-  letter-spacing: .02em;
+  letter-spacing: 0;
 }
 .att-summary-chip strong {
   color: var(--text);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: inherit;
+  font-weight: inherit;
 }
 .att-summary-chip-warn {
   border-color: #fde68a;
@@ -240,7 +247,6 @@
   color: #1d4ed8;
 }
 .att-summary-normal {
-  padding: 4px 7px;
   color: #475569;
   background: #f8fafc;
 }

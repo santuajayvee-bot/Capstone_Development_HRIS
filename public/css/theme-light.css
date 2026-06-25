@@ -847,6 +847,61 @@ tr:hover td,
   border-color: #fde68a !important;
 }
 
+#page-attendance .badge,
+#page-attendance .att-summary-chip,
+#page-attendance .att-summary-normal {
+  min-height: 24px !important;
+  padding: 0 10px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-radius: 999px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  vertical-align: middle !important;
+}
+
+#page-attendance .att-summary-card,
+#page-attendance .att-summary-metrics {
+  gap: 6px !important;
+}
+
+#page-attendance .att-summary-chip span,
+#page-attendance .att-summary-chip strong {
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  letter-spacing: 0 !important;
+}
+
+#page-attendance .att-summary-chip-warn {
+  background: #fffbeb !important;
+  color: #92400e !important;
+  border-color: #fde68a !important;
+}
+
+#page-attendance .att-summary-chip-bad {
+  background: #fef3f2 !important;
+  color: #b42318 !important;
+  border-color: #fecdca !important;
+}
+
+#page-attendance .att-summary-chip-info {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
+#page-attendance .att-summary-normal {
+  background: #f8fafc !important;
+  color: #475569 !important;
+  border-color: #cbd5e1 !important;
+}
+
 .att-menu-panel button {
   color: #1f2937 !important;
 }

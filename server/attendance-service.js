@@ -115,6 +115,20 @@ function getManilaParts(date) {
   };
 }
 
+function minutesFromTime(value) {
+  const match = String(value || '').match(/^(\d{2}):(\d{2})/);
+  if (!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function isLaterTime(candidate, current) {
+  return minutesFromTime(candidate) > minutesFromTime(current);
+}
+
+function isAutoTimeOutEligible(scanTime, policy) {
+  return minutesFromTime(scanTime) >= minutesFromTime(policy.work_end_time || '17:00');
+}
+
 function normalizeTimestamp(value) {
   if (!value) throw new Error('scan_timestamp is required.');
   const raw = String(value).trim();
@@ -434,9 +448,40 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
   );
   let record = rows[0] || null;
   let attendanceType = event.attendanceType;
+  let isAutoTimeOutUpdate = false;
 
   if (attendanceType === 'AUTO') {
-    attendanceType = record && record.time_in && !record.time_out ? 'TIME_OUT' : 'TIME_IN';
+    if (!record?.time_in) {
+      attendanceType = 'TIME_IN';
+    } else if (!record.time_out) {
+      if (!isAutoTimeOutEligible(manila.time, policy)) {
+        await updateScanEvent(conn, scanEventId, {
+          ...match,
+          biometricUserIdEncrypted: encryptedBiometricId,
+          verificationStatus: 'VALIDATED',
+          attendanceId: record.attendance_id,
+          errorMessage: 'Intermediate biometric scan before scheduled time-out; attendance unchanged.',
+        });
+        return { status: 'intermediate', attendanceId: record.attendance_id };
+      }
+      attendanceType = 'TIME_OUT';
+    } else if (isAutoTimeOutEligible(manila.time, policy) && isLaterTime(manila.time, record.time_out)) {
+      attendanceType = 'TIME_OUT';
+      isAutoTimeOutUpdate = true;
+    } else {
+      attendanceType = 'DUPLICATE';
+    }
+  }
+
+  if (attendanceType === 'DUPLICATE') {
+    await updateScanEvent(conn, scanEventId, {
+      ...match,
+      biometricUserIdEncrypted: encryptedBiometricId,
+      verificationStatus: 'DUPLICATE',
+      attendanceId: record?.attendance_id,
+      errorMessage: 'Attendance already has a current time-in/time-out for this employee and date.',
+    });
+    return { status: 'duplicate', attendanceId: record?.attendance_id };
   }
 
   if (attendanceType === 'TIME_IN' && record?.time_in) {
@@ -450,7 +495,7 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
     return { status: 'duplicate', attendanceId: record.attendance_id };
   }
 
-  if (attendanceType === 'TIME_OUT' && record?.time_out) {
+  if (attendanceType === 'TIME_OUT' && record?.time_out && !isAutoTimeOutUpdate) {
     await updateScanEvent(conn, scanEventId, {
       ...match,
       biometricUserIdEncrypted: encryptedBiometricId,
