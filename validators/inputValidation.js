@@ -222,7 +222,7 @@ function isGovernmentId(value, fieldName) {
   const digits = text.replace(/\D/g, '');
   if (/sss/.test(fieldName)) return /^\d{10}$/.test(digits);
   if (/philhealth|pagibig/.test(fieldName)) return /^\d{12}$/.test(digits);
-  if (/tin|tax_id/.test(fieldName)) return /^\d{9,12}$/.test(digits);
+  if (/tin|tax_id/.test(fieldName)) return /^\d{9}$/.test(digits);
   return false;
 }
 

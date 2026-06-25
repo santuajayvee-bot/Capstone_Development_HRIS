@@ -105,6 +105,11 @@ const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIE
 });
 
 const PAYROLL_CLEARANCE_ALLOWED_FIELDS = new Set([
+  'final_attendance_cutoff',
+  'unpaid_salary',
+  'final_deductions',
+  'final_allowances',
+  'pending_benefits',
   'last_payroll_period_checked',
   'attendance_checked',
   'leave_balance_checked',
@@ -125,6 +130,7 @@ const YES_NO = new Set(['Yes', 'No']);
 const YES_NO_NA = new Set(['Yes', 'No', 'Not Applicable']);
 const PAYROLL_CLEARANCE_STATUSES = new Set(['Pending', 'Checked', 'Cleared', 'With Issue']);
 const FINAL_PAY_STATUSES = new Set(['Pending', 'For Approval', 'Approved', 'Released', 'With Issue']);
+const MONEY_REVIEW_FIELDS = ['unpaid_salary', 'final_deductions', 'final_allowances', 'pending_benefits'];
 
 function hasPayrollRole(req, roles) {
   return roles.includes(req.user?.role);
@@ -147,11 +153,41 @@ function requireChoice(body, field, allowed) {
   return value;
 }
 
+function cleanMoneyReviewValue(body, field, fallback = 0) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] === '' || body[field] === null || body[field] === undefined) {
+    return Number(fallback || 0).toFixed(2);
+  }
+  const value = Number(body[field]);
+  if (!Number.isFinite(value) || value < 0 || value > 10000000) {
+    const err = new Error(`${field} must be a valid non-negative amount.`);
+    err.status = 400;
+    throw err;
+  }
+  return value.toFixed(2);
+}
+
+function cleanOptionalDate(value, field) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(new Date(`${text}T00:00:00Z`).getTime())) {
+    const err = new Error(`${field} is invalid.`);
+    err.status = 400;
+    throw err;
+  }
+  return text;
+}
+
 async function ensurePayrollOffboardingSchema(pool) {
   const columns = [
     ['payroll_clearance_status', "ENUM('Pending','Checked','Cleared','With Issue') NOT NULL DEFAULT 'Pending'"],
     ['payroll_checked_by', 'INT NULL'],
     ['payroll_checked_at', 'DATETIME NULL'],
+    ['final_attendance_cutoff', 'DATE NULL'],
+    ['unpaid_salary', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['final_deductions', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['final_allowances', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['pending_benefits', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
     ['last_payroll_period_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
     ['attendance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
     ['leave_balance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
@@ -165,7 +201,8 @@ async function ensurePayrollOffboardingSchema(pool) {
     ['final_pay_release_date', 'DATE NULL'],
     ['final_pay_remarks', 'VARCHAR(500) NULL'],
   ];
-  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','For Offboarding','Clearance Pending','Payroll Review','Final Approval','Approved','Completed','Offboarded','Inactive','Cancelled') NOT NULL DEFAULT 'For Offboarding'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN offboarding_type ENUM('Resignation','Termination','End of Contract','Retirement','AWOL','Redundancy') NOT NULL").catch(() => {});
   await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN final_pay_status ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'").catch(() => {});
   for (const [name, definition] of columns) {
     const [existing] = await pool.execute(`SHOW COLUMNS FROM employee_offboarding_case LIKE '${name}'`);
@@ -8853,6 +8890,7 @@ function offboardingPayrollSelect(whereClause) {
                  oc.clearance_status, oc.payroll_clearance_status, oc.final_pay_status,
                  oc.last_payroll_period_checked, oc.attendance_checked, oc.leave_balance_checked,
                  oc.deductions_checked, oc.loans_or_cash_advances_checked, oc.benefits_or_13th_month_checked,
+                 oc.final_attendance_cutoff, oc.unpaid_salary, oc.final_deductions, oc.final_allowances, oc.pending_benefits,
                  oc.payroll_remarks, oc.final_pay_release_date, oc.final_pay_remarks,
                  e.employee_code, e.first_name, e.middle_name, e.last_name, e.position,
                  d.name AS department
@@ -8868,7 +8906,7 @@ router.get('/offboarding-clearance', requireAuth, requireRole([...ROLES.payroll_
     const pool = require('../config/db');
     await ensurePayrollOffboardingSchema(pool);
     const [rows] = await pool.execute(offboardingPayrollSelect(
-      "oc.payroll_clearance_status IN ('Pending','Checked','Cleared','With Issue') AND oc.status IN ('Pending','In Progress')"
+      "oc.payroll_clearance_status IN ('Pending','Checked','Cleared','With Issue') AND oc.status IN ('Payroll Review','Clearance Pending','Pending','In Progress','For Offboarding')"
     ));
     await auditOffboardingPayroll(req, 'PAYROLL_CLEARANCE_VIEWED', null, 'success', 'Viewed pending offboarding payroll clearances');
     res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
@@ -8893,6 +8931,12 @@ router.patch('/offboarding-clearance/:id', requireAuth, requireRole(ROLES.payrol
     const body = req.body || {};
     const clearanceStatus = body.payroll_clearance_status ? requireChoice(body, 'payroll_clearance_status', PAYROLL_CLEARANCE_STATUSES) : row.payroll_clearance_status || 'Pending';
     const remarks = Object.prototype.hasOwnProperty.call(body, 'payroll_remarks') ? cleanPayrollText(body.payroll_remarks) : row.payroll_remarks;
+    const finalAttendanceCutoff = cleanOptionalDate(body.final_attendance_cutoff || row.final_attendance_cutoff, 'final_attendance_cutoff');
+    const moneyValues = Object.fromEntries(MONEY_REVIEW_FIELDS.map(field => [field, cleanMoneyReviewValue(body, field, row[field])]));
+    const nextWorkflowStatus = ['Checked', 'Cleared'].includes(clearanceStatus) ? 'Final Approval' : 'Payroll Review';
+    const nextFinalPayStatus = ['Checked', 'Cleared'].includes(clearanceStatus) && ['Pending', 'For Processing'].includes(row.final_pay_status)
+      ? 'For Approval'
+      : row.final_pay_status;
 
     await pool.execute(
       `UPDATE employee_offboarding_case
@@ -8902,8 +8946,15 @@ router.patch('/offboarding-clearance/:id', requireAuth, requireRole(ROLES.payrol
               deductions_checked = ?,
               loans_or_cash_advances_checked = ?,
               benefits_or_13th_month_checked = ?,
+              final_attendance_cutoff = ?,
+              unpaid_salary = ?,
+              final_deductions = ?,
+              final_allowances = ?,
+              pending_benefits = ?,
               payroll_remarks = ?,
               payroll_clearance_status = ?,
+              final_pay_status = ?,
+              status = CASE WHEN status IN ('For Offboarding','Clearance Pending','Payroll Review','Pending','In Progress') THEN ? ELSE status END,
               payroll_checked_by = ?,
               payroll_checked_at = NOW()
         WHERE offboarding_case_id = ?`,
@@ -8914,8 +8965,15 @@ router.patch('/offboarding-clearance/:id', requireAuth, requireRole(ROLES.payrol
         body.deductions_checked ? requireChoice(body, 'deductions_checked', YES_NO) : row.deductions_checked || 'No',
         body.loans_or_cash_advances_checked ? requireChoice(body, 'loans_or_cash_advances_checked', YES_NO_NA) : row.loans_or_cash_advances_checked || 'No',
         body.benefits_or_13th_month_checked ? requireChoice(body, 'benefits_or_13th_month_checked', YES_NO) : row.benefits_or_13th_month_checked || 'No',
+        finalAttendanceCutoff,
+        moneyValues.unpaid_salary,
+        moneyValues.final_deductions,
+        moneyValues.final_allowances,
+        moneyValues.pending_benefits,
         remarks,
         clearanceStatus,
+        nextFinalPayStatus,
+        nextWorkflowStatus,
         currentUserId(req),
         id,
       ]
@@ -8933,7 +8991,7 @@ router.get('/final-pay-approval', requireAuth, requireRole([...ROLES.payroll_man
     const pool = require('../config/db');
     await ensurePayrollOffboardingSchema(pool);
     const [rows] = await pool.execute(offboardingPayrollSelect(
-      "oc.payroll_clearance_status IN ('Checked','Cleared') AND oc.final_pay_status IN ('Pending','For Approval') AND oc.status IN ('Pending','In Progress')"
+      "oc.payroll_clearance_status IN ('Checked','Cleared') AND oc.final_pay_status IN ('Pending','For Approval','Approved','Released','With Issue') AND oc.status IN ('Final Approval','Payroll Review','Pending','In Progress')"
     ));
     res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
   } catch (err) {
@@ -8952,8 +9010,7 @@ router.patch('/final-pay-approval/:id', requireAuth, requireRole(ROLES.payroll_m
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'Valid offboarding id is required.' });
     const finalPayStatus = requireChoice(req.body, 'final_pay_status', FINAL_PAY_STATUSES);
-    const releaseDate = req.body.final_pay_release_date || null;
-    if (releaseDate && Number.isNaN(new Date(releaseDate).getTime())) return res.status(400).json({ error: 'Final pay release date is invalid.' });
+    const releaseDate = cleanOptionalDate(req.body.final_pay_release_date, 'final_pay_release_date');
     const remarks = cleanPayrollText(req.body.final_pay_remarks);
     const [rows] = await pool.execute('SELECT * FROM employee_offboarding_case WHERE offboarding_case_id = ? LIMIT 1', [id]);
     if (!rows.length) return res.status(404).json({ error: 'Offboarding record not found.' });
@@ -8965,7 +9022,8 @@ router.patch('/final-pay-approval/:id', requireAuth, requireRole(ROLES.payroll_m
               final_pay_release_date = ?,
               final_pay_remarks = ?,
               final_pay_approved_by = CASE WHEN ? IN ('Approved','Released') THEN ? ELSE final_pay_approved_by END,
-              final_pay_approved_at = CASE WHEN ? IN ('Approved','Released') THEN NOW() ELSE final_pay_approved_at END
+              final_pay_approved_at = CASE WHEN ? IN ('Approved','Released') THEN NOW() ELSE final_pay_approved_at END,
+              status = CASE WHEN status IN ('Payroll Review','Pending','In Progress') THEN 'Final Approval' ELSE status END
         WHERE offboarding_case_id = ?`,
       [finalPayStatus, releaseDate, remarks, finalPayStatus, currentUserId(req), finalPayStatus, id]
     );

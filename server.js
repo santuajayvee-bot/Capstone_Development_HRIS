@@ -113,6 +113,15 @@ const EMPLOYEE_PAYROLL_PROTECTED_FIELDS = new Set([
 const EMPLOYEE_WAGE_CONFIG_FIELDS = new Set(['wage_type', 'wage_type_id', 'base_rate', 'sewingRates']);
 const EMPLOYEE_GOVERNMENT_ID_FIELDS = new Set(['sss_number', 'philhealth_number', 'pagibig_number', 'tin']);
 const EMPLOYEE_PAYROLL_ONLY_FIELDS = new Set(['allowances', 'allowance', 'payroll_schedule', 'salary_grade', 'tax_status', 'bank_name', 'bank_account']);
+const EMPLOYEE_BANK_ACCOUNT_FORMATS = [
+  { label: 'BPI', aliases: ['bpi', 'bank of the philippine islands'], lengths: [10] },
+  { label: 'BDO Unibank', aliases: ['bdo', 'bdo unibank'], lengths: [12] },
+  { label: 'Metrobank', aliases: ['metrobank', 'metropolitan bank and trust company'], lengths: [13] },
+  { label: 'Security Bank', aliases: ['security bank'], lengths: [13] },
+  { label: 'PNB', aliases: ['pnb', 'philippine national bank'], lengths: [12] },
+  { label: 'LandBank', aliases: ['landbank', 'land bank', 'land bank of the philippines'], lengths: [10, 16] },
+  { label: 'RCBC', aliases: ['rcbc', 'rizal commercial banking corporation'], lengths: [10, 16] },
+];
 const EMPLOYEE_HR_PROTECTED_FIELDS = new Set([
   'department_id', 'position', 'employment_type', 'hiring_type', 'deployment_status',
   'date_hired', 'end_of_contract', 'employee_level', 'status', 'employment_status', 'supervisor',
@@ -186,6 +195,7 @@ const EMPLOYEE_DOCUMENT_ALLOWED_FIELDS = new Set(['docType', 'document_type']);
 const EMPLOYEE_STATUS_ALLOWED_FIELDS = new Set(['status', 'employment_status', 'separation_date', 'separation_reason', 'offboarding_remarks']);
 const EMPLOYEE_OFFBOARD_ALLOWED_FIELDS = new Set([
   'offboarding_type', 'effective_date', 'last_working_day', 'reason', 'clearance_status', 'final_pay_status', 'account_action', 'remarks',
+  'clearance_items',
   'company_property_status', 'turnover_status', 'exit_interview_status', 'attendance_leave_clearance',
   'payroll_clearance_status', 'payroll_checked_by', 'final_pay_approved_by', 'final_pay_release_date',
   'it_access_status', 'permissions_revoked', 'sessions_invalidated', 'biometric_access_removed', 'it_processed_by', 'it_processed_at',
@@ -243,6 +253,7 @@ const EMPLOYEE_OFFBOARDING_TYPES = new Map([
   ['End of Contract', 'End of Contract'],
   ['Retirement', 'Retired'],
   ['AWOL', 'Offboarded'],
+  ['Redundancy', 'Offboarded'],
 ]);
 const EMPLOYEE_CLEARANCE_STATUSES = new Set(['Pending', 'Cleared', 'Not Cleared']);
 const EMPLOYEE_COMPANY_PROPERTY_STATUSES = new Set(['Pending', 'Partially Returned', 'Completed', 'Not Applicable']);
@@ -252,7 +263,44 @@ const EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES = new Set(['Pending', 'Checked', 'Wit
 const EMPLOYEE_PAYROLL_CLEARANCE_STATUSES = new Set(['Pending', 'Checked', 'Cleared', 'With Issue']);
 const EMPLOYEE_FINAL_PAY_STATUSES = new Set(['Pending', 'For Processing', 'For Approval', 'Approved', 'Processed', 'Released', 'With Issue']);
 const EMPLOYEE_IT_ACCESS_STATUSES = new Set(['Pending', 'Disabled', 'Revoked']);
-const EMPLOYEE_OFFBOARDING_PROCESS_STATUSES = new Set(['Pending', 'In Progress', 'Completed', 'Cancelled']);
+const EMPLOYEE_OFFBOARDING_PROCESS_STATUSES = new Set([
+  'Pending', 'In Progress', 'For Offboarding', 'Clearance Pending', 'Payroll Review',
+  'Final Approval', 'Approved', 'Completed', 'Offboarded', 'Inactive', 'Cancelled'
+]);
+const EMPLOYEE_OFFBOARDING_FINAL_STATUSES = new Set(['Offboarded', 'Inactive', 'Completed']);
+const EMPLOYEE_OFFBOARDING_CLEARANCE_ITEM_STATUSES = new Set(['Pending', 'Cleared', 'Not Applicable']);
+const EMPLOYEE_OFFBOARDING_CHECKLIST_ITEMS = [
+  ['company_id_returned', 'Company ID returned'],
+  ['uniform_ppe_returned', 'Uniform/PPE returned'],
+  ['tools_equipment_returned', 'Tools/equipment returned'],
+  ['documents_submitted', 'Documents submitted'],
+  ['pending_attendance_checked', 'Pending attendance checked'],
+  ['pending_payroll_final_pay_checked', 'Pending payroll/final pay checked'],
+  ['account_access_reviewed', 'Account access reviewed'],
+  ['final_hr_approval', 'Final HR approval'],
+];
+const EMPLOYEE_OFFBOARDING_CHECKLIST_KEYS = new Set(EMPLOYEE_OFFBOARDING_CHECKLIST_ITEMS.map(([key]) => key));
+const EMPLOYEE_OFFBOARDING_DOCUMENT_TYPES = new Map([
+  ['Separation_Notice', 'Separation notice / resignation letter'],
+  ['Offboarding_Clearance', 'Clearance / accountability form'],
+  ['Property_Return', 'Company property return proof'],
+  ['Attendance_Timesheet', 'Final attendance / timesheet support'],
+  ['Final_Pay_Computation', 'Final pay computation support'],
+  ['COE_Request', 'Certificate of Employment request/release'],
+  ['Exit_Interview', 'Exit interview form'],
+  ['Final_Pay_Acknowledgement', 'Final pay acknowledgement / quitclaim if used'],
+  ['Other', 'Other supporting document'],
+]);
+const EMPLOYEE_OFFBOARDING_DOCUMENT_TYPE_VALUES = [...EMPLOYEE_OFFBOARDING_DOCUMENT_TYPES.keys()];
+const EMPLOYEE_DOCUMENT_TYPE_ENUM_VALUES = [
+  'Resume',
+  'Government_ID',
+  'NBI_Clearance',
+  'Contract',
+  'Other',
+  ...EMPLOYEE_OFFBOARDING_DOCUMENT_TYPE_VALUES.filter(value => value !== 'Other'),
+];
+const EMPLOYEE_OFFBOARDING_DOCUMENT_ALLOWED_FIELDS = new Set(['docType', 'document_type']);
 const EMPLOYEE_ACCOUNT_ACTIONS = new Set(['Disable Immediately', 'Disable on Effective Date']);
 const EMPLOYEE_PAYROLL_SETUP_STATUSES = new Set(['Pending', 'Ready']);
 const EMPLOYEE_LIFECYCLE_PENDING_STATUSES = new Set(['Pending']);
@@ -389,10 +437,24 @@ function decryptEmployeeStrictPii(row) {
   if (!row) return row;
   for (const field of EMPLOYEE_STRICT_PII_COLUMNS) {
     if (Object.prototype.hasOwnProperty.call(row, field)) {
-      row[field] = decryptColumnValue(row[field]);
+      row[field] = safeDecryptEmployeeColumnValue(row, field);
     }
   }
   return row;
+}
+
+function safeDecryptEmployeeColumnValue(row, field) {
+  try {
+    return decryptColumnValue(row?.[field]);
+  } catch (error) {
+    console.warn('Employee PII decrypt failed; returning null for field.', {
+      employee_id: row?.id || null,
+      employee_code: row?.employee_code || null,
+      field,
+      reason: error.message,
+    });
+    return null;
+  }
 }
 
 function encryptEmployeeStrictPiiPayload(payload) {
@@ -900,6 +962,8 @@ const EMPLOYEE_FIELD_LABELS = {
   tin: 'TIN',
   philhealth_number: 'PhilHealth',
   pagibig_number: 'Pag-IBIG',
+  bank_account: 'Bank Account Number',
+  clearance_items: 'Clearance Checklist',
   base_rate: 'Basic Salary',
   allowances: 'Allowances',
   allowance: 'Allowance'
@@ -1017,6 +1081,178 @@ function validateLifecycleChoice(body, field, allowed) {
   validateNoDangerousText(field, value);
   if (!allowed.has(value)) throw rejectEmployeeInput(field);
   return value;
+}
+
+function normalizeOffboardingStatusForStorage(status) {
+  if (status === 'Pending' || status === 'In Progress') return 'For Offboarding';
+  if (status === 'Approved') return 'Final Approval';
+  if (status === 'Completed') return 'Offboarded';
+  return status;
+}
+
+function isTerminalOffboardingStatus(status) {
+  return ['Offboarded', 'Inactive', 'Completed'].includes(String(status || ''));
+}
+
+function employeeStatusFromOffboardingFinalStatus(status, separationType = 'Offboarded') {
+  if (status === 'Inactive') return 'Inactive';
+  if (status === 'Completed') return separationType || 'Offboarded';
+  return 'Offboarded';
+}
+
+function isAllowedOffboardingTransition(currentStatus, requestedStatus) {
+  const current = normalizeOffboardingStatusForStorage(currentStatus);
+  const requested = normalizeOffboardingStatusForStorage(requestedStatus);
+  if (!requested || current === requested) return true;
+  const allowed = {
+    'For Offboarding': new Set(['Clearance Pending', 'Cancelled']),
+    'Clearance Pending': new Set(['Payroll Review', 'Cancelled']),
+    'Payroll Review': new Set(['Final Approval']),
+    'Final Approval': new Set(['Offboarded', 'Inactive']),
+    Pending: new Set(['For Offboarding', 'Clearance Pending', 'Cancelled']),
+    'In Progress': new Set(['For Offboarding', 'Clearance Pending', 'Payroll Review', 'Cancelled']),
+    Approved: new Set(['Final Approval', 'Offboarded', 'Inactive']),
+  };
+  return Boolean(allowed[current]?.has(requested));
+}
+
+function normalizeClearanceStatusFromItems(items = []) {
+  if (!items.length) return 'Pending';
+  const statuses = items.map(item => item.status);
+  if (statuses.some(status => status === 'Pending')) return 'Pending';
+  return 'Cleared';
+}
+
+function areOffboardingChecklistItemsComplete(items = []) {
+  return items.length > 0 && items.every(item => ['Cleared', 'Not Applicable'].includes(item.status));
+}
+
+function validateOffboardingClearanceItems(input) {
+  if (input === undefined || input === null || input === '') return [];
+  let items;
+  try {
+    items = typeof input === 'string' ? JSON.parse(input) : input;
+  } catch (_error) {
+    throw rejectEmployeeInput('clearance_items', 'Checklist format is invalid.');
+  }
+  if (!Array.isArray(items)) throw rejectEmployeeInput('clearance_items', 'Checklist must be an array.');
+  return items.map(item => {
+    const itemKey = normalizeBlank(item?.item_key || item?.key);
+    if (!EMPLOYEE_OFFBOARDING_CHECKLIST_KEYS.has(itemKey)) throw rejectEmployeeInput('clearance_items', 'Unknown checklist item.');
+    const status = normalizeBlank(item?.status) || 'Pending';
+    if (!EMPLOYEE_OFFBOARDING_CLEARANCE_ITEM_STATUSES.has(status)) throw rejectEmployeeInput('clearance_items', 'Invalid checklist status.');
+    const remarksBody = { remarks: item?.remarks || null };
+    validateEmployeeTextField(remarksBody, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+    const [, defaultLabel] = EMPLOYEE_OFFBOARDING_CHECKLIST_ITEMS.find(([key]) => key === itemKey);
+    return {
+      item_key: itemKey,
+      item_label: defaultLabel,
+      status,
+      remarks: remarksBody.remarks || null,
+    };
+  });
+}
+
+async function seedOffboardingChecklistItems(executor, caseId) {
+  for (const [itemKey, itemLabel] of EMPLOYEE_OFFBOARDING_CHECKLIST_ITEMS) {
+    await executor.execute(
+      `INSERT INTO employee_offboarding_clearance_item
+         (offboarding_case_id, item_key, item_label)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE item_label = VALUES(item_label)`,
+      [caseId, itemKey, itemLabel]
+    );
+  }
+}
+
+async function upsertOffboardingChecklistItems(executor, req, caseId, items) {
+  if (!items?.length) return;
+  for (const item of items) {
+    const checkedBy = item.status === 'Pending' ? null : req.user.id || null;
+    await executor.execute(
+      `INSERT INTO employee_offboarding_clearance_item
+         (offboarding_case_id, item_key, item_label, status, checked_by, checked_at, remarks)
+       VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 'Pending' THEN NULL ELSE NOW() END, ?)
+       ON DUPLICATE KEY UPDATE
+         item_label = VALUES(item_label),
+         status = VALUES(status),
+         checked_by = CASE WHEN VALUES(status) = 'Pending' THEN NULL ELSE VALUES(checked_by) END,
+         checked_at = CASE WHEN VALUES(status) = 'Pending' THEN NULL ELSE NOW() END,
+         remarks = VALUES(remarks)`,
+      [caseId, item.item_key, item.item_label, item.status, checkedBy, item.status, item.remarks]
+    );
+  }
+}
+
+async function loadOffboardingChecklistItems(executor, caseId) {
+  await seedOffboardingChecklistItems(executor, caseId);
+  const [items] = await executor.execute(
+    `SELECT ci.clearance_item_id, ci.offboarding_case_id, ci.item_key, ci.item_label,
+            ci.status, ci.checked_by, ci.checked_at, ci.remarks,
+            u.username AS checked_by_username
+       FROM employee_offboarding_clearance_item ci
+       LEFT JOIN users u ON u.id = ci.checked_by
+      WHERE ci.offboarding_case_id = ?
+      ORDER BY FIELD(ci.item_key,
+        'company_id_returned',
+        'uniform_ppe_returned',
+        'tools_equipment_returned',
+        'documents_submitted',
+        'pending_attendance_checked',
+        'pending_payroll_final_pay_checked',
+        'account_access_reviewed',
+        'final_hr_approval'
+      ), ci.clearance_item_id`,
+    [caseId]
+  );
+  return items;
+}
+
+function sqlEnumList(values) {
+  return values.map(value => `'${String(value).replace(/'/g, "''")}'`).join(',');
+}
+
+function normalizeOffboardingDocumentType(value) {
+  const requested = normalizeBlank(value);
+  if (!requested) return 'Other';
+  return EMPLOYEE_OFFBOARDING_DOCUMENT_TYPES.has(requested) ? requested : 'Other';
+}
+
+function offboardingDocumentLabel(documentType) {
+  return EMPLOYEE_OFFBOARDING_DOCUMENT_TYPES.get(documentType) || documentType || 'Supporting document';
+}
+
+async function ensureOffboardingDocumentSchema(pool) {
+  const [tables] = await pool.execute("SHOW TABLES LIKE 'documents'");
+  if (!tables.length) return;
+  await pool.execute(
+    `ALTER TABLE documents MODIFY COLUMN document_type ENUM(${sqlEnumList(EMPLOYEE_DOCUMENT_TYPE_ENUM_VALUES)}) NOT NULL`
+  ).catch(() => {});
+
+  const columns = [
+    ['offboarding_case_id', 'BIGINT NULL AFTER employee_id'],
+    ['document_stage', "ENUM('Employee Profile','Offboarding') NOT NULL DEFAULT 'Employee Profile' AFTER document_type"],
+    ['uploaded_by', 'INT NULL AFTER uploaded_date'],
+  ];
+  for (const [name, definition] of columns) {
+    const [existing] = await pool.execute(`SHOW COLUMNS FROM documents LIKE '${name}'`);
+    if (!existing.length) await pool.execute(`ALTER TABLE documents ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+async function loadOffboardingDocuments(executor, caseId) {
+  const [documents] = await executor.execute(
+    `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_date, uploaded_by
+       FROM documents
+      WHERE offboarding_case_id = ?
+        AND document_stage = 'Offboarding'
+      ORDER BY uploaded_date DESC, id DESC`,
+    [caseId]
+  );
+  return documents.map(document => ({
+    ...document,
+    document_label: offboardingDocumentLabel(document.document_type),
+  }));
 }
 
 function employeeDisplayName(row) {
@@ -1152,6 +1388,52 @@ function validateGovernmentIdField(body, field, pattern) {
   if (!/^[\d\s-]+$/.test(text)) throw rejectEmployeeInput(field, 'This field must contain numbers only.');
   if (!pattern.test(digits)) throw rejectEmployeeInput(field, 'Please enter the required number of digits.');
   body[field] = digits;
+}
+
+function normalizeEmployeeBankName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function resolveEmployeeBankAccountFormat(bankName) {
+  const normalized = normalizeEmployeeBankName(bankName);
+  if (!normalized) return null;
+  return EMPLOYEE_BANK_ACCOUNT_FORMATS.find(rule =>
+    rule.aliases.some(alias => {
+      const normalizedAlias = normalizeEmployeeBankName(alias);
+      return normalized === normalizedAlias || normalized.includes(normalizedAlias);
+    })
+  ) || null;
+}
+
+function describeAllowedDigitLengths(lengths) {
+  return lengths.map(length => `${length} digits`).join(' or ');
+}
+
+function validateBankAccountField(body) {
+  if (!Object.prototype.hasOwnProperty.call(body, 'bank_account')) return;
+  const value = normalizeBlank(body.bank_account);
+  if (value == null) {
+    body.bank_account = null;
+    return;
+  }
+
+  const text = validateNoDangerousText('bank_account', value);
+  const digits = text.replace(/\D/g, '');
+  if (!/^\d+$/.test(text)) throw rejectEmployeeInput('bank_account', 'This field must contain numbers only.');
+
+  const bankFormat = resolveEmployeeBankAccountFormat(body.bank_name);
+  if (bankFormat && !bankFormat.lengths.includes(digits.length)) {
+    throw rejectEmployeeInput(
+      'bank_account',
+      `${bankFormat.label} account numbers must contain ${describeAllowedDigitLengths(bankFormat.lengths)}.`
+    );
+  }
+
+  if (!bankFormat && (digits.length < 6 || digits.length > 20)) {
+    throw rejectEmployeeInput('bank_account', 'For unconfigured banks, enter a numeric account number from 6 to 20 digits.');
+  }
+
+  body.bank_account = digits;
 }
 
 function validateLatLngField(body, field, min, max) {
@@ -1307,7 +1589,7 @@ function applyEmployeeUpdateDefaults(body, existingEmployee) {
       Object.prototype.hasOwnProperty.call(existingEmployee, field)
     ) {
       body[field] = EMPLOYEE_STRICT_PII_COLUMNS.includes(field)
-        ? decryptColumnValue(existingEmployee[field])
+        ? safeDecryptEmployeeColumnValue(existingEmployee, field)
         : existingEmployee[field];
     }
   }
@@ -1333,7 +1615,9 @@ function employeeFieldUnchanged(existing, field, submittedValue) {
   if (!existing) return false;
   const existingField = field === 'allowance' ? 'allowances' : field;
   if (!Object.prototype.hasOwnProperty.call(existing, existingField)) return false;
-  const currentValue = decryptColumnValue(existing[existingField]);
+  const currentValue = EMPLOYEE_STRICT_PII_COLUMNS.includes(existingField)
+    ? safeDecryptEmployeeColumnValue(existing, existingField)
+    : existing[existingField];
   const current = comparableEmployeeValue(currentValue);
   const submitted = comparableEmployeeValue(submittedValue);
   if (['allowances', 'allowance', 'base_rate'].includes(field) && current !== '' && submitted !== '') {
@@ -1508,9 +1792,10 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     validateEmployeeMoneyField(body, 'allowance');
     validateEmployeeMoneyField(body, 'base_rate');
     validateGovernmentIdField(body, 'sss_number', /^\d{10}$/);
-    validateGovernmentIdField(body, 'tin', /^\d{9,12}$/);
+    validateGovernmentIdField(body, 'tin', /^\d{9}$/);
     validateGovernmentIdField(body, 'philhealth_number', /^\d{12}$/);
     validateGovernmentIdField(body, 'pagibig_number', /^\d{12}$/);
+    validateBankAccountField(body);
 
     if (Array.isArray(body.sewingRates)) {
       for (const rate of body.sewingRates) {
@@ -1960,6 +2245,8 @@ async function ensureEmployeeLifecycleColumns(pool) {
     ['separation_date', 'DATE NULL'],
     ['separation_reason', 'VARCHAR(120) NULL'],
     ['offboarding_remarks', 'VARCHAR(500) NULL'],
+    ['offboarding_clearance_result', "ENUM('Pending','Cleared','Not Cleared','Not Applicable') NULL"],
+    ['updated_at', 'TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'],
   ];
 
   for (const [name, definition] of columns) {
@@ -1994,6 +2281,7 @@ async function ensureEmployeeLifecycleColumns(pool) {
 
 async function ensureEmployeeLifecycleManagementSchema(pool) {
   await ensureEmployeeLifecycleColumns(pool);
+  await ensureOffboardingDocumentSchema(pool);
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS employee_lifecycle_event (
@@ -2017,7 +2305,7 @@ async function ensureEmployeeLifecycleManagementSchema(pool) {
       offboarding_case_id BIGINT AUTO_INCREMENT PRIMARY KEY,
       employee_id INT NOT NULL,
       status ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending',
-      offboarding_type ENUM('Resignation','Termination','End of Contract','Retirement','AWOL') NOT NULL,
+      offboarding_type ENUM('Resignation','Termination','End of Contract','Retirement','AWOL','Redundancy') NOT NULL,
       separation_type ENUM('Resigned','Terminated','End of Contract','Retired','Offboarded') NOT NULL,
       effective_date DATE NOT NULL,
       last_working_day DATE NOT NULL,
@@ -2064,7 +2352,8 @@ async function ensureEmployeeLifecycleManagementSchema(pool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN status ENUM('Pending','In Progress','For Offboarding','Clearance Pending','Payroll Review','Final Approval','Approved','Completed','Offboarded','Inactive','Cancelled') NOT NULL DEFAULT 'For Offboarding'").catch(() => {});
+  await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN offboarding_type ENUM('Resignation','Termination','End of Contract','Retirement','AWOL','Redundancy') NOT NULL").catch(() => {});
   await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN separation_type ENUM('Resigned','Terminated','End of Contract','Retired','Offboarded') NOT NULL").catch(() => {});
   await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN clearance_status ENUM('Pending','Cleared','Not Cleared') NOT NULL DEFAULT 'Pending'").catch(() => {});
   await pool.execute("ALTER TABLE employee_offboarding_case MODIFY COLUMN final_pay_status ENUM('Pending','For Processing','For Approval','Approved','Processed','Released','With Issue') NOT NULL DEFAULT 'Pending'").catch(() => {});
@@ -2081,6 +2370,11 @@ async function ensureEmployeeLifecycleManagementSchema(pool) {
     ['payroll_clearance_status', "ENUM('Pending','Checked','Cleared','With Issue') NOT NULL DEFAULT 'Pending'"],
     ['payroll_checked_by', 'INT NULL'],
     ['payroll_checked_at', 'DATETIME NULL'],
+    ['final_attendance_cutoff', 'DATE NULL'],
+    ['unpaid_salary', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['final_deductions', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['final_allowances', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
+    ['pending_benefits', 'DECIMAL(10,2) NOT NULL DEFAULT 0.00'],
     ['last_payroll_period_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
     ['attendance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
     ['leave_balance_checked', "ENUM('Yes','No') NOT NULL DEFAULT 'No'"],
@@ -2106,6 +2400,30 @@ async function ensureEmployeeLifecycleManagementSchema(pool) {
     const [existing] = await pool.execute(`SHOW COLUMNS FROM employee_offboarding_case LIKE '${name}'`);
     if (!existing.length) await pool.execute(`ALTER TABLE employee_offboarding_case ADD COLUMN ${name} ${definition}`);
   }
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS employee_offboarding_clearance_item (
+      clearance_item_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      offboarding_case_id BIGINT NOT NULL,
+      item_key VARCHAR(80) NOT NULL,
+      item_label VARCHAR(160) NOT NULL,
+      status ENUM('Pending','Cleared','Not Applicable') NOT NULL DEFAULT 'Pending',
+      checked_by INT NULL,
+      checked_at DATETIME NULL,
+      remarks VARCHAR(500) NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_offboarding_clearance_item (offboarding_case_id, item_key),
+      INDEX idx_offboarding_clearance_item_case (offboarding_case_id, status),
+      INDEX idx_offboarding_clearance_item_checked_by (checked_by),
+      CONSTRAINT fk_offboarding_clearance_item_case
+        FOREIGN KEY (offboarding_case_id) REFERENCES employee_offboarding_case(offboarding_case_id)
+        ON DELETE CASCADE,
+      CONSTRAINT fk_offboarding_clearance_item_checked_by
+        FOREIGN KEY (checked_by) REFERENCES users(id)
+        ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 
   const reonboardingColumns = [
     ['status', "ENUM('Pending','Approved','Completed','Cancelled') NOT NULL DEFAULT 'Pending'"],
@@ -2494,7 +2812,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
               e.education_college_school, e.education_college_attainment, e.education_college_units, e.education_college_from, e.education_college_to, e.education_college_year_graduated,
               e.department_id, e.position, e.employment_type, e.date_hired, e.end_of_contract, e.supervisor, e.work_location,
               e.shift_schedule, e.employee_level, e.employment_history, e.status, e.status AS employment_status,
-              e.separation_date, e.separation_reason, e.offboarding_remarks, e.wage_type_id,
+              e.separation_date, e.separation_reason, e.offboarding_remarks, e.offboarding_clearance_result, e.wage_type_id,
               e.salary_grade, e.allowances, e.payroll_schedule,
               e.sss_number, e.philhealth_number, e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account,
               e.hiring_type, e.agency_name, e.agency_contact_person, e.agency_contact_number,
@@ -2510,10 +2828,19 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
               (
                 SELECT eoc.offboarding_case_id
                 FROM employee_offboarding_case eoc
-                WHERE eoc.employee_id = e.id AND eoc.status = 'Pending'
+                WHERE eoc.employee_id = e.id
+                  AND eoc.status IN ('Pending','In Progress','For Offboarding','Clearance Pending','Payroll Review','Final Approval')
                 ORDER BY eoc.created_at DESC
                 LIMIT 1
               ) AS pending_offboarding_request_id,
+              (
+                SELECT eoc.status
+                FROM employee_offboarding_case eoc
+                WHERE eoc.employee_id = e.id
+                  AND eoc.status IN ('Pending','In Progress','For Offboarding','Clearance Pending','Payroll Review','Final Approval')
+                ORDER BY eoc.created_at DESC
+                LIMIT 1
+              ) AS pending_offboarding_status,
               (
                 SELECT erc.reonboarding_case_id
                 FROM employee_reonboarding_case erc
@@ -3247,6 +3574,7 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
     let payrollClearanceStatus;
     let itAccessStatus;
     let offboardingStatus;
+    let clearanceItems = [];
     try {
       const choiceOrDefault = (field, allowed, fallback) => {
         if (req.body[field] === undefined || req.body[field] === null || String(req.body[field]).trim() === '') {
@@ -3268,8 +3596,10 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
       attendanceLeaveClearance = choiceOrDefault('attendance_leave_clearance', EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES, 'Pending');
       payrollClearanceStatus = choiceOrDefault('payroll_clearance_status', EMPLOYEE_PAYROLL_CLEARANCE_STATUSES, 'Pending');
       itAccessStatus = choiceOrDefault('it_access_status', EMPLOYEE_IT_ACCESS_STATUSES, 'Pending');
-      offboardingStatus = choiceOrDefault('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES, 'In Progress');
-      if (offboardingStatus === 'Completed') return res.status(400).json({ error: 'Offboarding cannot be created as Completed. Complete it after payroll and IT clearance.' });
+      offboardingStatus = normalizeOffboardingStatusForStorage(choiceOrDefault('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES, 'For Offboarding'));
+      if (isTerminalOffboardingStatus(offboardingStatus)) return res.status(400).json({ error: 'Offboarding cannot be created as completed. Complete it after clearance, payroll review, and final approval.' });
+      clearanceItems = validateOffboardingClearanceItems(req.body.clearance_items);
+      if (clearanceItems.length) clearanceStatus = normalizeClearanceStatusFromItems(clearanceItems);
       accountAction = validateLifecycleChoice(req.body, 'account_action', EMPLOYEE_ACCOUNT_ACTIONS);
       validateEmployeeTextField(req.body, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
     } catch (error) {
@@ -3304,7 +3634,7 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
       `SELECT offboarding_case_id
          FROM employee_offboarding_case
         WHERE employee_id = ?
-          AND status IN ('Pending','In Progress')
+          AND status IN ('Pending','In Progress','For Offboarding','Clearance Pending','Payroll Review','Final Approval')
         LIMIT 1`,
       [id]
     );
@@ -3322,7 +3652,7 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
           separation_date, separation_reason, clearance_status, company_property_status, turnover_status,
           exit_interview_status, attendance_leave_clearance, payroll_clearance_status, final_pay_status,
           it_access_status, account_action, account_deactivated, sessions_invalidated, remarks, created_by, processed_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         offboardingStatus,
@@ -3348,6 +3678,10 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
         req.user.id || null,
       ]
     );
+    await seedOffboardingChecklistItems(connection, caseResult.insertId);
+    if (clearanceItems.length) {
+      await upsertOffboardingChecklistItems(connection, req, caseResult.insertId, clearanceItems);
+    }
 
     await connection.execute(
       `UPDATE employees
@@ -3376,6 +3710,7 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
       offboarding_type: offboardingType,
       clearance_status: clearanceStatus,
       final_pay_status: finalPayStatus,
+      checklist_items: clearanceItems.length || EMPLOYEE_OFFBOARDING_CHECKLIST_ITEMS.length,
       account_action: accountAction,
       account_deactivated: accountDeactivated > 0,
     });
@@ -3412,13 +3747,15 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
       return rejectLifecycleUnauthorized(req, res, 'unauthorized_offboarding_attempt_denied', caseId);
     }
 
-    const hrFields = new Set(['clearance_status', 'company_property_status', 'turnover_status', 'exit_interview_status', 'attendance_leave_clearance', 'offboarding_status', 'remarks']);
+    const hrFields = new Set(['clearance_status', 'company_property_status', 'turnover_status', 'exit_interview_status', 'attendance_leave_clearance', 'offboarding_status', 'clearance_items', 'remarks']);
     const itFields = new Set(['it_access_status', 'permissions_revoked', 'sessions_invalidated', 'biometric_access_removed', 'it_processed_at']);
     const allowed = new Set([...(isHrProcessor ? hrFields : []), ...(isItProcessor ? itFields : [])]);
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, allowed, 'offboarding_update')) return;
 
     const updates = [];
     const values = [];
+    let requestedStatus = null;
+    let clearanceItems = [];
     const setChoice = (field, allowedValues) => {
       if (!Object.prototype.hasOwnProperty.call(req.body, field)) return null;
       const value = validateLifecycleChoice(req.body, field, allowedValues);
@@ -3440,7 +3777,14 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
       setChoice('turnover_status', EMPLOYEE_TURNOVER_STATUSES);
       setChoice('exit_interview_status', EMPLOYEE_EXIT_INTERVIEW_STATUSES);
       setChoice('attendance_leave_clearance', EMPLOYEE_ATTENDANCE_LEAVE_CLEARANCES);
-      const requestedStatus = setChoice('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES);
+      const requestedStatusRaw = setChoice('offboarding_status', EMPLOYEE_OFFBOARDING_PROCESS_STATUSES);
+      if (requestedStatusRaw) {
+        requestedStatus = normalizeOffboardingStatusForStorage(requestedStatusRaw);
+        values[values.length - 1] = requestedStatus;
+      }
+      if (isHrProcessor && Object.prototype.hasOwnProperty.call(req.body, 'clearance_items')) {
+        clearanceItems = validateOffboardingClearanceItems(req.body.clearance_items);
+      }
       setChoice('it_access_status', EMPLOYEE_IT_ACCESS_STATUSES);
       setBool('permissions_revoked');
       setBool('sessions_invalidated');
@@ -3457,12 +3801,12 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
         updates.push('remarks = ?');
         values.push(req.body.remarks || null);
       }
-      if (!updates.length) return res.status(400).json({ error: 'No valid offboarding fields supplied.' });
+      if (!updates.length && !clearanceItems.length) return res.status(400).json({ error: 'No valid offboarding fields supplied.' });
       if (isItProcessor && (req.body.it_access_status || req.body.permissions_revoked || req.body.sessions_invalidated || req.body.biometric_access_removed || req.body.it_processed_at)) {
         updates.push('it_processed_by = ?');
         values.push(req.user.id || null);
       }
-      if (requestedStatus === 'Completed') {
+      if (requestedStatus && isTerminalOffboardingStatus(requestedStatus)) {
         updates.push('completed_by = ?', 'completed_at = NOW()');
         values.push(req.user.id || null);
       }
@@ -3486,39 +3830,97 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
       return res.status(404).json({ error: 'Offboarding case not found.' });
     }
     const current = caseRows[0];
-    const next = { ...current, ...req.body };
+    requestedStatus = requestedStatus || current.status;
+    if (!isAllowedOffboardingTransition(current.status, requestedStatus)) {
+      await connection.rollback();
+      return res.status(400).json({ error: `Invalid offboarding transition from ${current.status} to ${requestedStatus}.` });
+    }
+    const oldChecklistItems = await loadOffboardingChecklistItems(connection, caseId);
+    if (clearanceItems.length) {
+      await upsertOffboardingChecklistItems(connection, req, caseId, clearanceItems);
+    }
+    const checklistItems = await loadOffboardingChecklistItems(connection, caseId);
+    const checklistComplete = areOffboardingChecklistItemsComplete(checklistItems);
+    const derivedClearanceStatus = normalizeClearanceStatusFromItems(checklistItems);
+    const next = { ...current, ...req.body, status: requestedStatus, clearance_status: derivedClearanceStatus };
     const truthyProcessValue = value => value === true || value === 1 || value === '1' || value === 'true' || value === 'Yes';
-    const completing = req.body.offboarding_status === 'Completed';
+    const completing = isTerminalOffboardingStatus(requestedStatus);
     if (completing) {
       const payrollOk = ['Checked', 'Cleared'].includes(String(current.payroll_clearance_status || next.payroll_clearance_status));
       const finalPayOk = ['Approved', 'Released', 'Processed'].includes(String(current.final_pay_status || next.final_pay_status));
-      const itOk = ['Disabled', 'Revoked'].includes(String(next.it_access_status || current.it_access_status))
-        && truthyProcessValue(next.permissions_revoked ?? current.permissions_revoked)
-        && truthyProcessValue(next.sessions_invalidated ?? current.sessions_invalidated)
-        && truthyProcessValue(next.biometric_access_removed ?? current.biometric_access_removed);
-      if (!payrollOk || !finalPayOk || !itOk) {
+      if (!checklistComplete || !payrollOk || !finalPayOk) {
         await connection.rollback();
-        return res.status(400).json({ error: 'Payroll clearance, final pay approval, and IT access revocation must be completed before finalizing offboarding.' });
+        return res.status(400).json({ error: 'Checklist clearance, payroll review, and final pay approval must be completed before final approval.' });
       }
     }
 
-    values.push(caseId);
-    await connection.execute(`UPDATE employee_offboarding_case SET ${updates.join(', ')} WHERE offboarding_case_id = ?`, values);
+    const hasExplicitStatusUpdate = updates.some(update => update.startsWith('offboarding_status') || update.startsWith('status'));
+    const statusUpdateIndex = updates.findIndex(update => update === 'offboarding_status = ?');
+    if (statusUpdateIndex >= 0) updates[statusUpdateIndex] = 'status = ?';
+    if (clearanceItems.length) {
+      const autoStatus = checklistComplete ? 'Payroll Review' : 'Clearance Pending';
+      if (!hasExplicitStatusUpdate && ['For Offboarding', 'Clearance Pending', 'Pending', 'In Progress'].includes(current.status)) {
+        updates.push('status = ?');
+        values.push(autoStatus);
+        requestedStatus = autoStatus;
+      }
+      if (!updates.some(update => update === 'clearance_status = ?')) {
+        updates.push('clearance_status = ?');
+        values.push(derivedClearanceStatus);
+      }
+    }
+
+    if (updates.length) {
+      values.push(caseId);
+      await connection.execute(`UPDATE employee_offboarding_case SET ${updates.join(', ')} WHERE offboarding_case_id = ?`, values);
+    }
 
     if (isItProcessor && (req.body.it_access_status || req.body.permissions_revoked || req.body.sessions_invalidated || req.body.biometric_access_removed)) {
       await writeEmployeeLifecycleAudit(connection, req, 'IT_ACCESS_REVOKED', current.employee_id, null, { offboarding_case_id: caseId, ...req.body });
     }
 
-    if (completing) {
+    if (requestedStatus === 'Cancelled') {
+      await connection.execute(
+        `UPDATE employees
+            SET status = 'Active',
+                lifecycle_status = 'Active',
+                separation_date = NULL,
+                separation_reason = NULL,
+                offboarding_remarks = NULL,
+                offboarding_clearance_result = NULL,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [current.employee_id]
+      );
+      await connection.execute(
+        `INSERT INTO employee_lifecycle_event
+           (employee_id, event_type, previous_status, new_status, effective_date, reason, remarks, created_by)
+         VALUES (?, 'STATUS_CHANGED', ?, 'Active', ?, 'Offboarding cancelled', ?, ?)`,
+        [current.employee_id, current.employee_status || null, current.effective_date, req.body.remarks || current.remarks || null, req.user.id || null]
+      );
+      await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_CANCELLED', current.employee_id, { offboarding_case_id: caseId, status: current.status }, { status: 'Active', remarks: req.body.remarks || null });
+    } else if (completing) {
+      const finalEmployeeStatus = employeeStatusFromOffboardingFinalStatus(requestedStatus, current.separation_type);
       await connection.execute(
         `UPDATE employees
             SET status = ?,
                 lifecycle_status = 'Active',
+                separation_date = ?,
+                separation_reason = ?,
+                offboarding_remarks = ?,
+                offboarding_clearance_result = ?,
                 updated_at = NOW()
           WHERE id = ?`,
-        [current.separation_type, current.employee_id]
+        [
+          finalEmployeeStatus,
+          current.effective_date,
+          employeeDbValue('separation_reason', current.separation_reason),
+          employeeDbValue('offboarding_remarks', req.body.remarks || current.remarks || null),
+          derivedClearanceStatus,
+          current.employee_id,
+        ]
       );
-      await deactivateLinkedUserAccounts(connection, Number(current.employee_id), current.separation_type, req);
+      const accountDeactivated = await deactivateLinkedUserAccounts(connection, Number(current.employee_id), finalEmployeeStatus, req);
       await connection.execute(
         `UPDATE biometric_employee_mapping
             SET is_active = 0,
@@ -3527,18 +3929,45 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
         [req.user.id || null, current.employee_id]
       ).catch(() => {});
       await connection.execute(
+        `UPDATE employee_offboarding_case
+            SET it_access_status = 'Revoked',
+                permissions_revoked = 1,
+                sessions_invalidated = 1,
+                biometric_access_removed = 1,
+                it_processed_by = ?,
+                it_processed_at = NOW(),
+                account_deactivated = CASE WHEN ? > 0 THEN 1 ELSE account_deactivated END
+          WHERE offboarding_case_id = ?`,
+        [req.user.id || null, accountDeactivated || 0, caseId]
+      );
+      await connection.execute(
         `INSERT INTO employee_lifecycle_event
            (employee_id, event_type, previous_status, new_status, effective_date, reason, remarks, created_by)
          VALUES (?, 'OFFBOARDED', ?, ?, ?, ?, ?, ?)`,
-        [current.employee_id, current.employee_status || null, current.separation_type, current.effective_date, current.separation_reason, current.remarks || null, req.user.id || null]
+        [current.employee_id, current.employee_status || null, finalEmployeeStatus, current.effective_date, current.separation_reason, req.body.remarks || current.remarks || null, req.user.id || null]
       );
-      await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_COMPLETED', current.employee_id, null, { offboarding_case_id: caseId, status: current.separation_type });
+      await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_FINAL_APPROVED', current.employee_id, { offboarding_case_id: caseId, status: current.status }, { offboarding_case_id: caseId, status: finalEmployeeStatus, clearance_status: derivedClearanceStatus });
     } else {
-      await writeEmployeeLifecycleAudit(connection, req, 'CLEARANCE_UPDATED', current.employee_id, null, { offboarding_case_id: caseId, ...req.body });
+      await writeEmployeeLifecycleAudit(connection, req, clearanceItems.length ? 'OFFBOARDING_CLEARANCE_CHECKLIST_UPDATED' : 'CLEARANCE_UPDATED', current.employee_id, {
+        offboarding_case_id: caseId,
+        status: current.status,
+        clearance_status: current.clearance_status,
+        checklist_items: oldChecklistItems,
+      }, {
+        offboarding_case_id: caseId,
+        status: requestedStatus,
+        clearance_status: derivedClearanceStatus,
+        checklist_items: checklistItems,
+        ...req.body,
+      });
     }
 
     await connection.commit();
-    return res.json({ message: completing ? 'Offboarding completed.' : 'Offboarding updated.' });
+    return res.json({
+      message: completing ? 'Offboarding final approval completed.' : requestedStatus === 'Cancelled' ? 'Offboarding cancelled and employee restored to Active.' : 'Offboarding updated.',
+      offboarding_case_id: caseId,
+      request_status: requestedStatus,
+    });
   } catch (err) {
     if (connection) await connection.rollback().catch(() => {});
     console.error('Error updating offboarding:', err.message, err.sqlMessage);
@@ -3761,12 +4190,22 @@ app.get('/api/employees/:id/lifecycle', requireAuth, requireRole(ROLES.any), asy
       `SELECT offboarding_case_id, status, offboarding_type, separation_type, effective_date,
               last_working_day, separation_date, separation_reason,
               clearance_status, final_pay_status, account_action, account_deactivated,
+              company_property_status, turnover_status, exit_interview_status, attendance_leave_clearance,
+              payroll_clearance_status, payroll_checked_by, payroll_checked_at,
+              final_attendance_cutoff, unpaid_salary, final_deductions, final_allowances, pending_benefits,
+              payroll_remarks, final_pay_approved_by, final_pay_approved_at,
+              final_pay_release_date, final_pay_remarks, it_access_status, permissions_revoked,
+              sessions_invalidated, biometric_access_removed, it_processed_by, it_processed_at,
               remarks, created_at, completed_at
          FROM employee_offboarding_case
         WHERE employee_id = ?
         ORDER BY created_at DESC`,
       [employeeId]
     );
+    for (const offboardingCase of offboardingCases) {
+      offboardingCase.clearance_items = await loadOffboardingChecklistItems(pool, offboardingCase.offboarding_case_id);
+      offboardingCase.documents = await loadOffboardingDocuments(pool, offboardingCase.offboarding_case_id);
+    }
     const [reonboardingCases] = await pool.execute(
       `SELECT reonboarding_case_id, previous_offboarding_case_id, rehire_date, department_id,
               work_location, position, employment_type, hiring_type, new_supervisor,
@@ -3886,6 +4325,107 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
   }
 });
 
+app.get('/api/employees/offboarding/:caseId/documents', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const caseId = Number(req.params.caseId);
+    if (!caseId) return res.status(400).json({ error: 'Valid offboarding case id is required.' });
+    if (!canCreateOffboarding(req)) return rejectLifecycleUnauthorized(req, res, 'blocked_offboarding_document_list_unauthorized', caseId);
+
+    const [cases] = await pool.execute(
+      `SELECT offboarding_case_id, employee_id
+         FROM employee_offboarding_case
+        WHERE offboarding_case_id = ?
+        LIMIT 1`,
+      [caseId]
+    );
+    if (!cases.length) return res.status(404).json({ error: 'Offboarding request not found.' });
+    if (!canAccessEmployeeRecord(req, cases[0].employee_id, { allowPermission: false })) {
+      return rejectEmployeeIdor(req, res, cases[0].employee_id, 'blocked_offboarding_document_list_idor_attempt');
+    }
+
+    const documents = await loadOffboardingDocuments(pool, caseId);
+    return res.json(documents);
+  } catch (err) {
+    console.error('Error fetching offboarding documents:', err.message, err.sqlMessage);
+    return res.status(500).json({ error: 'Failed to fetch offboarding documents.' });
+  }
+});
+
+app.post('/api/employees/offboarding/:caseId/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('file'), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    await ensureEmployeeLifecycleManagementSchema(pool);
+    const caseId = Number(req.params.caseId);
+    if (!caseId) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Valid offboarding case id is required.' });
+    }
+    if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_OFFBOARDING_DOCUMENT_ALLOWED_FIELDS, 'offboarding documents')) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return;
+    }
+    if (!canCreateOffboarding(req)) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return rejectLifecycleUnauthorized(req, res, 'blocked_offboarding_document_upload_unauthorized', caseId);
+    }
+    if (!req.file) return res.status(400).json({ error: 'No file provided.' });
+
+    const [cases] = await pool.execute(
+      `SELECT oc.offboarding_case_id, oc.employee_id, oc.status, e.employee_code
+         FROM employee_offboarding_case oc
+         JOIN employees e ON e.id = oc.employee_id
+        WHERE oc.offboarding_case_id = ?
+        LIMIT 1`,
+      [caseId]
+    );
+    if (!cases.length) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(404).json({ error: 'Offboarding request not found.' });
+    }
+    const offboardingCase = cases[0];
+    if (!canAccessEmployeeRecord(req, offboardingCase.employee_id, { allowPermission: false })) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return rejectEmployeeIdor(req, res, offboardingCase.employee_id, 'blocked_offboarding_document_upload_idor_attempt');
+    }
+    if (isTerminalOffboardingStatus(offboardingCase.status)) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Cannot attach documents to a completed offboarding request.' });
+    }
+
+    const docType = normalizeOffboardingDocumentType(req.body.docType || req.body.document_type);
+    const filePath = `/uploads/${req.file.filename}`;
+    const [result] = await pool.execute(
+      `INSERT INTO documents
+         (employee_id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_by)
+       VALUES (?, ?, ?, 'Offboarding', ?, ?, ?)`,
+      [offboardingCase.employee_id, caseId, docType, req.file.originalname, filePath, req.user.id || null]
+    );
+    await writeEmployeeLifecycleAudit(pool, req, 'OFFBOARDING_DOCUMENT_UPLOADED', offboardingCase.employee_id, null, {
+      offboarding_case_id: caseId,
+      document_id: result.insertId,
+      document_type: docType,
+    });
+
+    return res.status(200).json({
+      message: 'Offboarding document uploaded successfully.',
+      document: {
+        id: result.insertId,
+        offboarding_case_id: caseId,
+        document_type: docType,
+        document_label: offboardingDocumentLabel(docType),
+        file_name: req.file.originalname,
+        file_path: filePath,
+      },
+    });
+  } catch (err) {
+    console.error('Error uploading offboarding document:', err.message, err.sqlMessage);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(500).json({ error: 'Failed to upload offboarding document.' });
+  }
+});
+
 // Upload employee document
 app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('file'), async (req, res) => {
   try {
@@ -3960,15 +4500,24 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
       return rejectEmployeeIdor(req, res, employeeId, 'blocked_employee_document_list_idor_attempt');
     }
     
-    // Fetch all documents for this employee
+    await ensureOffboardingDocumentSchema(pool);
+
+    // Fetch all documents for this employee, including optional lifecycle support files.
     const [docs] = await pool.execute(
-      `SELECT id, document_type, file_name, file_path, uploaded_date FROM documents 
-       WHERE employee_id = ? ORDER BY document_type`,
+      `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_date
+         FROM documents
+        WHERE employee_id = ?
+        ORDER BY document_stage, document_type, uploaded_date DESC`,
       [employeeId]
     );
     
     console.log(`Fetched ${docs.length} documents for employee ${id}`);
-    return res.json(docs);
+    return res.json(docs.map(document => ({
+      ...document,
+      document_label: document.document_stage === 'Offboarding'
+        ? offboardingDocumentLabel(document.document_type)
+        : document.document_type,
+    })));
     
   } catch (err) {
     console.error('Error fetching documents:', err.message);

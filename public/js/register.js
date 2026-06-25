@@ -3,6 +3,7 @@
    ============================================================ */
 
 const FORM_SECTIONS = ['personal', 'contact', 'employment', 'payroll', 'documents'];
+const EMPLOYEE_WIZARD_REQUIRED_SECTIONS = ['personal', 'contact', 'employment', 'payroll'];
 let EDIT_MODE = false;
 let EDIT_EMPLOYEE_ID = null;           // Stores the employee_code (e.g. "EMP00001")
 let EDIT_EMPLOYEE_NUMERIC_ID = null;   // Stores the numeric database ID (for API calls)
@@ -10,6 +11,7 @@ let IS_SAVING = false;                 // Prevent double-submit
 let SELECTED_EMPLOYEE_PHOTO = null;
 let EMPLOYEE_PHOTO_PREVIEW_URL = null;
 let ACTIVE_EMPLOYEE_DRAFT_ID = null;
+let LAST_EMPLOYEE_WIZARD_REQUIRED_SECTION = 'personal';
 const EMPLOYEE_DRAFT_STORAGE_PREFIX = 'lgsv_employee_intake_drafts';
 
 // Store uploaded files temporarily (in memory before save)
@@ -35,6 +37,15 @@ const DEFAULT_DEPARTMENT_POSITIONS = {
   Logistics: ['Deliver Driver', 'Delivery Helper', 'Warehouse Staff', 'Logistics Coordinator'],
   Personnel: ['Personnel Officer', 'Personnel Assistant', 'Admin Staff'],
 };
+const PH_BANK_ACCOUNT_FORMATS = [
+  { label: 'BPI', aliases: ['bpi', 'bank of the philippine islands'], lengths: [10] },
+  { label: 'BDO Unibank', aliases: ['bdo', 'bdo unibank'], lengths: [12] },
+  { label: 'Metrobank', aliases: ['metrobank', 'metropolitan bank and trust company'], lengths: [13] },
+  { label: 'Security Bank', aliases: ['security bank'], lengths: [13] },
+  { label: 'PNB', aliases: ['pnb', 'philippine national bank'], lengths: [12] },
+  { label: 'LandBank', aliases: ['landbank', 'land bank', 'land bank of the philippines'], lengths: [10, 16] },
+  { label: 'RCBC', aliases: ['rcbc', 'rizal commercial banking corporation'], lengths: [10, 16] },
+];
 
 let EMPLOYEE_POSITION_ROUTES = [];
 let EMPLOYEE_DEPARTMENTS = [];
@@ -52,6 +63,69 @@ function sanitizeEmployeeCode(value) {
 
 function isValidManualEmployeeCode(value) {
   return /^[A-Z0-9_-]+$/i.test(String(value || '').trim());
+}
+
+function normalizeBankName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function findPhilippineBankAccountFormat(bankName) {
+  const normalized = normalizeBankName(bankName);
+  if (!normalized) return null;
+  return PH_BANK_ACCOUNT_FORMATS.find(rule => rule.aliases.some(alias => {
+    const normalizedAlias = normalizeBankName(alias);
+    return normalized === normalizedAlias || normalized.includes(normalizedAlias);
+  })) || null;
+}
+
+function describeDigitLengths(lengths) {
+  return lengths.map(length => `${length} digits`).join(' or ');
+}
+
+function applyBankAccountFormatHint() {
+  const bankInput = document.getElementById('emp-bank');
+  const accountInput = document.getElementById('emp-bank-account');
+  const hint = document.getElementById('emp-bank-account-hint');
+  if (!bankInput || !accountInput) return;
+
+  const rule = findPhilippineBankAccountFormat(bankInput.value);
+  delete accountInput.dataset.digits;
+  delete accountInput.dataset.digitsOptions;
+  delete accountInput.dataset.minDigits;
+  delete accountInput.dataset.maxDigits;
+  accountInput.maxLength = '20';
+
+  if (rule) {
+    accountInput.dataset.digitsOptions = rule.lengths.join(',');
+    accountInput.maxLength = String(Math.max(...rule.lengths));
+    accountInput.placeholder = `${rule.label}: ${describeDigitLengths(rule.lengths)}`;
+    accountInput.title = `${rule.label} account numbers must contain ${describeDigitLengths(rule.lengths)}.`;
+    if (hint) hint.textContent = `${rule.label}: account number must contain ${describeDigitLengths(rule.lengths)}.`;
+  } else {
+    accountInput.dataset.minDigits = '6';
+    accountInput.dataset.maxDigits = '20';
+    accountInput.placeholder = 'Account number';
+    accountInput.title = 'Digits only. Select a configured bank to enforce its exact account number length.';
+    if (hint) hint.textContent = bankInput.value.trim()
+      ? 'Bank is not configured yet; digits only will be accepted.'
+      : 'Select a configured bank to apply its account number length.';
+  }
+
+  if (accountInput.value && window.LGSVValidation?.validateElement) {
+    window.LGSVValidation.validateElement(accountInput, { commit: false });
+  }
+}
+
+function initializeBankAccountFormatControls() {
+  const bankInput = document.getElementById('emp-bank');
+  const accountInput = document.getElementById('emp-bank-account');
+  if (!bankInput || !accountInput) return;
+
+  bankInput.removeEventListener('input', applyBankAccountFormatHint);
+  bankInput.removeEventListener('change', applyBankAccountFormatHint);
+  bankInput.addEventListener('input', applyBankAccountFormatHint);
+  bankInput.addEventListener('change', applyBankAccountFormatHint);
+  applyBankAccountFormatHint();
 }
 
 function employeeOptionEscape(value) {
@@ -1083,6 +1157,7 @@ function loadEmployeeData() {
 
   const bankAccountInput = document.getElementById('emp-bank-account');
   if (bankAccountInput) bankAccountInput.value = emp.bank_account || '';
+  applyBankAccountFormatHint();
   
   // Set department by name (not ID) - use specific selector to avoid filter dropdown
   const deptSelect = document.querySelector('#form-employment select#emp-dept');
@@ -1370,6 +1445,9 @@ function switchFormTab(tabOrEl) {
     const panel = document.getElementById('form-' + s);
     if (panel) panel.style.display = (s === sectionId) ? 'block' : 'none';
   });
+  if (employeeWizardStepIndex(sectionId) >= 0) {
+    LAST_EMPLOYEE_WIZARD_REQUIRED_SECTION = sectionId;
+  }
   
   // Initialize file uploads when Documents tab is shown
   if (sectionId === 'documents') {
@@ -1381,6 +1459,119 @@ function switchFormTab(tabOrEl) {
   if (sectionId === 'contact') {
     setTimeout(() => initializeEmployeeAddressAutocomplete(), 50);
   }
+  updateEmployeeWizardActions(sectionId);
+}
+
+function employeeWizardStepIndex(sectionId) {
+  return EMPLOYEE_WIZARD_REQUIRED_SECTIONS.indexOf(sectionId);
+}
+
+function updateEmployeeWizardActions(sectionId = getActiveFormTab()) {
+  const backButton = document.getElementById('employee-wizard-back');
+  const nextButton = document.getElementById('employee-wizard-next');
+  const saveButton = document.getElementById('employee-wizard-save');
+  if (!backButton || !nextButton || !saveButton) return;
+
+  const stepIndex = employeeWizardStepIndex(sectionId);
+  const isRequiredWizardStep = stepIndex >= 0;
+  const isFirstStep = stepIndex === 0;
+  const isFinalStep = sectionId === 'payroll';
+  const isDocumentsStep = sectionId === 'documents';
+
+  backButton.style.display = (!isFirstStep && (isRequiredWizardStep || isDocumentsStep)) ? 'inline-flex' : 'none';
+  nextButton.style.display = isRequiredWizardStep && !isFinalStep ? 'inline-flex' : 'none';
+  saveButton.style.display = isFinalStep ? 'inline-flex' : 'none';
+
+  backButton.textContent = 'Back';
+}
+
+async function validateEmployeeWizardStep(sectionId) {
+  const panel = document.getElementById(`form-${sectionId}`);
+  if (panel && window.LGSVValidation && !window.LGSVValidation.validateScope(panel)) {
+    return false;
+  }
+
+  if (sectionId === 'personal') {
+    const employeeIdMode = document.getElementById('emp-id-mode')?.value || 'auto';
+    const isEditing = EDIT_MODE || window.PENDING_EDIT_MODE || window.IS_EDITING || false;
+    if (employeeIdMode === 'manual' && !isEditing && !(await checkManualEmployeeCodeAvailability())) {
+      document.getElementById('emp-id')?.focus();
+      return false;
+    }
+  }
+
+  if (sectionId === 'contact') {
+    const addressResult = collectEmployeeAddressPayload('emp');
+    if (addressResult.errors.length) {
+      alert(addressResult.errors.join('\n'));
+      return false;
+    }
+  }
+
+  if (sectionId === 'employment') {
+    const position = document.querySelector('#form-employment select#emp-position')?.value || '';
+    if (!position) {
+      alert('Please select a position / job title so the system can route the employee lifecycle correctly.');
+      document.querySelector('#form-employment select#emp-position')?.focus();
+      return false;
+    }
+
+    const lifecycleAction = getLifecycleDecision();
+    const lifecycleNote = document.getElementById('emp-lifecycle-note')?.value || '';
+    if (lifecycleAction === 'ON_HOLD' && lifecycleNote.trim().length < 8) {
+      alert('Please enter an HR note or reason of at least 8 characters when placing the record on hold.');
+      document.getElementById('emp-lifecycle-note')?.focus();
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function goEmployeeWizardStep(targetSectionId) {
+  if (!FORM_SECTIONS.includes(targetSectionId)) return;
+
+  const currentSectionId = getActiveFormTab();
+  const currentIndex = employeeWizardStepIndex(currentSectionId);
+  const targetIndex = employeeWizardStepIndex(targetSectionId);
+
+  if (targetIndex >= 0 && currentIndex >= 0 && targetIndex > currentIndex) {
+    for (let index = currentIndex; index < targetIndex; index += 1) {
+      const sectionId = EMPLOYEE_WIZARD_REQUIRED_SECTIONS[index];
+      switchFormTab(sectionId);
+      if (!(await validateEmployeeWizardStep(sectionId))) return;
+    }
+  }
+
+  switchFormTab(targetSectionId);
+}
+
+async function goEmployeeWizardNext() {
+  const currentSectionId = getActiveFormTab();
+  const currentIndex = employeeWizardStepIndex(currentSectionId);
+  if (currentIndex < 0 || currentIndex >= EMPLOYEE_WIZARD_REQUIRED_SECTIONS.length - 1) return;
+  if (!(await validateEmployeeWizardStep(currentSectionId))) return;
+  switchFormTab(EMPLOYEE_WIZARD_REQUIRED_SECTIONS[currentIndex + 1]);
+}
+
+function goEmployeeWizardBack() {
+  const currentSectionId = getActiveFormTab();
+  if (currentSectionId === 'documents') {
+    switchFormTab(LAST_EMPLOYEE_WIZARD_REQUIRED_SECTION || 'personal');
+    return;
+  }
+  const currentIndex = employeeWizardStepIndex(currentSectionId);
+  if (currentIndex <= 0) return;
+  switchFormTab(EMPLOYEE_WIZARD_REQUIRED_SECTIONS[currentIndex - 1]);
+}
+
+async function validateEmployeeWizardRequiredStepsBeforeSubmit() {
+  for (const sectionId of EMPLOYEE_WIZARD_REQUIRED_SECTIONS) {
+    switchFormTab(sectionId);
+    if (!(await validateEmployeeWizardStep(sectionId))) return false;
+  }
+  switchFormTab('payroll');
+  return true;
 }
 
 function toggleEmployeeAgencyFields() {
@@ -1472,9 +1663,9 @@ async function saveEmployee() {
   }
   IS_SAVING = true;
 
-  // The form is assembled from tabs instead of a native <form>, so invoke the
-  // shared browser validator explicitly before constructing the API payload.
-  if (window.LGSVValidation && !window.LGSVValidation.validateScope(document.getElementById('register-form-view'))) {
+  // The form is assembled as a wizard. Validate only the required wizard
+  // steps before final submit; Documents are optional during employee creation.
+  if (!(await validateEmployeeWizardRequiredStepsBeforeSubmit())) {
     IS_SAVING = false;
     return;
   }
@@ -2068,6 +2259,9 @@ window.initializeAddForm = function() {
 };
 
 window.switchFormTab  = switchFormTab;
+window.goEmployeeWizardStep = goEmployeeWizardStep;
+window.goEmployeeWizardNext = goEmployeeWizardNext;
+window.goEmployeeWizardBack = goEmployeeWizardBack;
 window.saveEmployee   = saveEmployee;
 window.saveEmployeeDraft = saveEmployeeDraft;
 window.loadEmployeeDraft = loadEmployeeDraft;
@@ -2473,6 +2667,8 @@ function initializeRegisterPage() {
   initializeEmployeeAddressAutocomplete();
   initializeEmployeeLifecycleControls();
   initializeEmployeePositionDropdowns();
+  initializeBankAccountFormatControls();
+  updateEmployeeWizardActions(getActiveFormTab());
   renderEmployeeDraftArchive();
   
   // Apply role-based access after a short delay to ensure DOM is ready

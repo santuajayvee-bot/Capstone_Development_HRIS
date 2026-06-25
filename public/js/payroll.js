@@ -2077,7 +2077,7 @@ function payrollOffboardingTable(rows, actionRenderer) {
     <table class="payroll-table">
       <thead><tr>
         <th>Employee ID</th><th>Employee Name</th><th>Position</th><th>Department</th>
-        <th>Offboarding Type</th><th>Last Working Day</th><th>Payroll Clearance</th><th>Final Pay</th><th>Actions</th>
+        <th>Offboarding Type</th><th>Last Working Day</th><th>Workflow</th><th>Payroll Clearance</th><th>Final Pay</th><th>Actions</th>
       </tr></thead>
       <tbody>${rows.map(row => `
         <tr>
@@ -2087,6 +2087,7 @@ function payrollOffboardingTable(rows, actionRenderer) {
           <td>${payrollEscape(row.department || '-')}</td>
           <td>${payrollEscape(row.offboarding_type || '-')}</td>
           <td>${payrollEscape(row.last_working_day || '-')}</td>
+          <td>${payrollEscape(row.offboarding_status || '-')}</td>
           <td>${payrollEscape(row.payroll_clearance_status || 'Pending')}</td>
           <td>${payrollEscape(row.final_pay_status || 'Pending')}</td>
           <td>${actionRenderer(row)}</td>
@@ -2136,6 +2137,7 @@ function offboardingReadonlyBlock(row) {
       ${item('Effective Date', row.effective_date)}
       ${item('Last Working Day', row.last_working_day)}
       ${item('Reason', row.separation_reason)}
+      ${item('Workflow Status', row.offboarding_status)}
     </div>
   `;
 }
@@ -2156,6 +2158,11 @@ function openPayrollClearanceReview(caseId) {
   payrollModal('payroll-clearance-modal', 'Payroll Clearance Review', `
     ${offboardingReadonlyBlock(row)}
     <form id="payroll-clearance-form" class="payroll-breakdown-grid" onsubmit="submitPayrollClearance(event, ${caseId})">
+      <label>final attendance cutoff<input name="final_attendance_cutoff" type="date" value="${payrollEscape(row.final_attendance_cutoff || '')}" /></label>
+      <label>unpaid salary<input name="unpaid_salary" type="number" min="0" step="0.01" value="${payrollEscape(row.unpaid_salary || '0.00')}" /></label>
+      <label>deductions<input name="final_deductions" type="number" min="0" step="0.01" value="${payrollEscape(row.final_deductions || '0.00')}" /></label>
+      <label>allowances<input name="final_allowances" type="number" min="0" step="0.01" value="${payrollEscape(row.final_allowances || '0.00')}" /></label>
+      <label>pending benefits<input name="pending_benefits" type="number" min="0" step="0.01" value="${payrollEscape(row.pending_benefits || '0.00')}" /></label>
       ${['last_payroll_period_checked','attendance_checked','leave_balance_checked','deductions_checked','benefits_or_13th_month_checked'].map(field => `
         <label>${field.replace(/_/g, ' ')}<select name="${field}"><option ${row[field] === 'No' ? 'selected' : ''}>No</option><option ${row[field] === 'Yes' ? 'selected' : ''}>Yes</option></select></label>
       `).join('')}
@@ -2185,6 +2192,11 @@ function openFinalPayReview(caseId) {
   payrollModal('final-pay-modal', 'Final Pay Approval', `
     ${offboardingReadonlyBlock(row)}
     <form id="final-pay-form" class="payroll-breakdown-grid" onsubmit="submitFinalPayApproval(event, ${caseId})">
+      <label>Final Attendance Cutoff<input value="${payrollEscape(row.final_attendance_cutoff || '-')}" readonly /></label>
+      <label>Unpaid Salary<input value="${money(row.unpaid_salary || 0)}" readonly /></label>
+      <label>Deductions<input value="${money(row.final_deductions || 0)}" readonly /></label>
+      <label>Allowances<input value="${money(row.final_allowances || 0)}" readonly /></label>
+      <label>Pending Benefits<input value="${money(row.pending_benefits || 0)}" readonly /></label>
       <label>Final Pay Status<select name="final_pay_status"><option>Pending</option><option>For Approval</option><option>Approved</option><option>Released</option><option>With Issue</option></select></label>
       <label>Final Pay Release Date<input name="final_pay_release_date" type="date" value="${payrollEscape(row.final_pay_release_date || '')}" /></label>
       <label style="grid-column:1/-1;">Final Pay Remarks<textarea name="final_pay_remarks" rows="3">${payrollEscape(row.final_pay_remarks || '')}</textarea></label>

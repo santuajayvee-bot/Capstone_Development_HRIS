@@ -11,6 +11,8 @@ let sysBiometricDevices = [];
 let sysAccountRequests = [];
 let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
+let sysUsersDataSignature = '';
+let sysEmployeesDataSignature = '';
 
 function sysEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -53,6 +55,38 @@ function sysFormatDuration(seconds) {
 
 function isUserLocked(user) {
   return Boolean(Number(user?.is_locked || 0)) && Number(user?.lock_seconds_remaining || 0) > 0;
+}
+
+function sysStableJson(value) {
+  return JSON.stringify(value);
+}
+
+function sysUserDataSignature(users) {
+  return sysStableJson((users || []).map(user => [
+    Number(user.id || 0),
+    user.username || '',
+    Number(user.employee_id || 0),
+    user.employee_code || '',
+    user.first_name || '',
+    user.last_name || '',
+    Number(user.role_id || 0),
+    user.role_name || '',
+    user.role_label || '',
+    user.access_level || '',
+    Number(user.is_active || 0),
+    Number(user.is_locked || 0),
+    Number(user.failed_login_attempts || 0),
+    Number(user.lock_seconds_remaining || 0),
+    user.last_login || '',
+  ]));
+}
+
+function sysEmployeeDataSignature(employees) {
+  return sysStableJson((employees || []).map(employee => [
+    Number(employee.id || 0),
+    employee.employee_code || '',
+    employee.status || '',
+  ]));
 }
 
 function sysPasswordErrors(password) {
@@ -225,16 +259,28 @@ async function loadUsersTable() {
     // Names are decrypted by the authorized server response. This is only a
     // display safeguard so an unexpected protected database value is never
     // rendered or retained in the screen's account-list state.
-    sysAllUsers = (await res.json()).map(sysProtectEmployeeIdentity);
+    const nextUsers = (await res.json()).map(sysProtectEmployeeIdentity);
+    const nextUsersSignature = sysUserDataSignature(nextUsers);
+    const usersChanged = nextUsersSignature !== sysUsersDataSignature;
+    sysAllUsers = nextUsers;
 
     // Also load employees for the unlinked count
     const empRes = await apiFetch('/api/employees');
+    let employeesChanged = false;
     if (empRes && empRes.ok) {
-      sysAllEmployees = await empRes.json();
+      const nextEmployees = await empRes.json();
+      const nextEmployeesSignature = sysEmployeeDataSignature(nextEmployees);
+      employeesChanged = nextEmployeesSignature !== sysEmployeesDataSignature;
+      sysAllEmployees = nextEmployees;
+      sysEmployeesDataSignature = nextEmployeesSignature;
     }
 
-    updateStats();
-    filterUserTable();
+    const needsInitialRender = document.getElementById('users-tbody')?.dataset.sysRendered !== 'true';
+    if (usersChanged || employeesChanged || needsInitialRender) updateStats();
+    if (usersChanged || needsInitialRender) {
+      sysUsersDataSignature = nextUsersSignature;
+      filterUserTable();
+    }
   } catch (err) {
     console.error('[SysAdmin] loadUsersTable error:', err);
   }
@@ -276,6 +322,7 @@ function updateStats() {
 function renderUsersTable(users) {
   const tbody = document.getElementById('users-tbody');
   if (!tbody) return;
+  tbody.dataset.sysRendered = 'true';
 
   if (users.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No accounts found.</td></tr>';

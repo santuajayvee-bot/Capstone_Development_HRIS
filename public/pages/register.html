@@ -452,11 +452,11 @@
     </div>
 
     <div class="employee-form-tabs">
-      <button type="button" class="form-tab active" data-form-section="personal" onclick="switchFormTab('personal')">Personal Info</button>
-      <button type="button" class="form-tab" data-form-section="contact" onclick="switchFormTab('contact')">Contact Info</button>
-      <button type="button" class="form-tab" data-form-section="employment" onclick="switchFormTab('employment')">Employment Info</button>
-      <button type="button" class="form-tab" data-form-section="payroll" onclick="switchFormTab('payroll')">Compensation</button>
-      <button type="button" class="form-tab" data-form-section="documents" onclick="switchFormTab('documents')">Documents</button>
+      <button type="button" class="form-tab active" data-form-section="personal" onclick="goEmployeeWizardStep('personal')">Personal Info</button>
+      <button type="button" class="form-tab" data-form-section="contact" onclick="goEmployeeWizardStep('contact')">Contact Info</button>
+      <button type="button" class="form-tab" data-form-section="employment" onclick="goEmployeeWizardStep('employment')">Employment Info</button>
+      <button type="button" class="form-tab" data-form-section="payroll" onclick="goEmployeeWizardStep('payroll')">Compensation</button>
+      <button type="button" class="form-tab" data-form-section="documents" onclick="goEmployeeWizardStep('documents')">Documents</button>
     </div>
 
     <!-- Personal Info -->
@@ -631,18 +631,34 @@
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Bank Account</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>Bank Name</label><input id="emp-bank" placeholder="e.g. BDO" /></div>
-          <div class="form-group"><label>Bank Account Number</label><input id="emp-bank-account" placeholder="Account number" /></div>
+          <div class="form-group">
+            <label>Bank Name</label>
+            <input id="emp-bank" list="emp-bank-options" placeholder="Select or type bank name" autocomplete="off" />
+            <datalist id="emp-bank-options">
+              <option value="BPI" label="Bank of the Philippine Islands"></option>
+              <option value="BDO Unibank"></option>
+              <option value="Metrobank"></option>
+              <option value="Security Bank"></option>
+              <option value="PNB" label="Philippine National Bank"></option>
+              <option value="LandBank"></option>
+              <option value="RCBC"></option>
+            </datalist>
+          </div>
+          <div class="form-group">
+            <label>Bank Account Number</label>
+            <input id="emp-bank-account" placeholder="Select bank first" inputmode="numeric" maxlength="20" data-validation="integer" data-min-digits="6" data-max-digits="20" />
+            <small id="emp-bank-account-hint" class="input-hint">Select a configured bank to apply its account number length.</small>
+          </div>
         </div>
       </div>
 
       <div class="employee-form-block">
         <h3 class="employee-form-block-title">Government & Tax Information</h3>
         <div class="employee-form-grid">
-          <div class="form-group"><label>TIN</label><input id="emp-tin" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
-          <div class="form-group"><label>SSS Number</label><input id="emp-sss" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
-          <div class="form-group"><label>PhilHealth Number</label><input id="emp-philhealth" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
-          <div class="form-group"><label>Pag-IBIG Number</label><input id="emp-pagibig" placeholder="Numbers only" inputmode="numeric" data-validation="integer" /></div>
+          <div class="form-group"><label>TIN</label><input id="emp-tin" placeholder="XXX-XXX-XXX" inputmode="numeric" maxlength="11" data-validation="government_id" data-digits="9" /></div>
+          <div class="form-group"><label>SSS Number</label><input id="emp-sss" placeholder="XX-XXXXXXX-X" inputmode="numeric" maxlength="12" data-validation="government_id" data-digits="10" /></div>
+          <div class="form-group"><label>PhilHealth Number</label><input id="emp-philhealth" placeholder="XX-XXXXXXXXX-X" inputmode="numeric" maxlength="14" data-validation="government_id" data-digits="12" /></div>
+          <div class="form-group"><label>Pag-IBIG Number</label><input id="emp-pagibig" placeholder="12-digit MID or RTN" inputmode="numeric" maxlength="12" data-validation="government_id" data-digits="12" /></div>
           <div class="form-group"><label>Tax Status</label><select id="emp-tax-status"><option value="">Select tax status</option><option>Single</option><option>Married</option><option>Head of Family</option><option>Exempt</option></select></div>
         </div>
       </div>
@@ -689,10 +705,10 @@
       </div>
     </div>
 
-    <div class="register-actions">
-      <button class="btn btn-outline" onclick="clearEmployeeForm()">Clear</button>
-      <button class="btn btn-outline" onclick="saveEmployeeDraft()">Save Draft</button>
-      <button class="btn btn-green" onclick="saveEmployee()">Save Employee</button>
+    <div class="register-actions employee-wizard-actions">
+      <button id="employee-wizard-back" class="btn btn-outline" type="button" onclick="goEmployeeWizardBack()" style="display:none;">Back</button>
+      <button id="employee-wizard-next" class="btn btn-green" type="button" onclick="goEmployeeWizardNext()">Next</button>
+      <button id="employee-wizard-save" class="btn btn-green" type="button" onclick="saveEmployee()" style="display:none;">Save Employee</button>
     </div>
   </div>
 </div>

@@ -7,6 +7,9 @@
   const PHONE_MESSAGE = 'Please enter a valid Philippine mobile number. Format: +63 9XX XXX XXXX.';
   const EMAIL_MESSAGE = 'Please enter a valid email address.';
   const GOVERNMENT_ID_MESSAGE = 'This field must contain numbers only. Spaces and hyphens are allowed as separators.';
+  const DIGIT_LENGTH_MESSAGE = count => `This field must contain exactly ${count} digits.`;
+  const DIGIT_OPTIONS_MESSAGE = counts => `This field must contain ${counts.map(count => `${count} digits`).join(' or ')}.`;
+  const DIGIT_RANGE_MESSAGE = (min, max) => `This field must contain ${min} to ${max} digits.`;
   const UNSAFE_MESSAGE = 'Input contains disallowed characters or patterns.';
 
   const NAME_FIELDS = new Set(['first_name', 'middle_name', 'last_name', 'beneficiary_name', 'emergency_contact_name', 'emergency_name']);
@@ -214,6 +217,26 @@
     if (type === 'phone' && !isValidPhilippinePhone(value)) return withFieldLabel(element, PHONE_MESSAGE);
     if (type === 'government_id' && !/^[\d\s-]+$/.test(value)) return withFieldLabel(element, GOVERNMENT_ID_MESSAGE);
     if (type === 'integer' && !/^\d+$/.test(value)) return withFieldLabel(element, NUMERIC_MESSAGE);
+    const exactDigits = Number(element.dataset.digits || 0);
+    const digitCount = value.replace(/\D/g, '').length;
+    const digitOptions = String(element.dataset.digitsOptions || '')
+      .split(',')
+      .map(item => Number(item.trim()))
+      .filter(item => Number.isInteger(item) && item > 0);
+    const minDigits = Number(element.dataset.minDigits || 0);
+    const maxDigits = Number(element.dataset.maxDigits || 0);
+    if (Number.isInteger(exactDigits) && exactDigits > 0 && digitCount !== exactDigits) {
+      return withFieldLabel(element, DIGIT_LENGTH_MESSAGE(exactDigits));
+    }
+    if (digitOptions.length && !digitOptions.includes(digitCount)) {
+      return withFieldLabel(element, DIGIT_OPTIONS_MESSAGE(digitOptions));
+    }
+    if (Number.isInteger(minDigits) && minDigits > 0 && digitCount < minDigits) {
+      return withFieldLabel(element, maxDigits > 0 ? DIGIT_RANGE_MESSAGE(minDigits, maxDigits) : `This field must contain at least ${minDigits} digits.`);
+    }
+    if (Number.isInteger(maxDigits) && maxDigits > 0 && digitCount > maxDigits) {
+      return withFieldLabel(element, minDigits > 0 ? DIGIT_RANGE_MESSAGE(minDigits, maxDigits) : `This field must contain at most ${maxDigits} digits.`);
+    }
     if (type === 'decimal' && !/^\d+(?:\.\d+)?$/.test(value)) return withFieldLabel(element, NUMERIC_MESSAGE);
     if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(value)) return withFieldLabel(element, EMAIL_MESSAGE);
     return '';

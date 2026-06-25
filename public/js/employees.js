@@ -10,6 +10,29 @@ const EMPLOYEE_DIRECTORY_PAGE_SIZE = 10;
 const EMPLOYMENT_STATUS_OPTIONS = ['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded', 'Rehired'];
 const OFFBOARDING_DETAIL_STATUSES = new Set(['Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded']);
 const REONBOARDABLE_STATUSES = new Set(['Resigned', 'Terminated', 'End of Contract', 'Retired', 'Offboarded']);
+const OFFBOARDING_WORKFLOW_STATUSES = new Set(['Pending', 'In Progress', 'For Offboarding', 'Clearance Pending', 'Payroll Review', 'Final Approval']);
+const OFFBOARDING_CLEARANCE_ITEMS = [
+  ['company_id_returned', 'Company ID returned'],
+  ['uniform_ppe_returned', 'Uniform/PPE returned'],
+  ['tools_equipment_returned', 'Tools/equipment returned'],
+  ['documents_submitted', 'Documents submitted'],
+  ['pending_attendance_checked', 'Pending attendance checked'],
+  ['pending_payroll_final_pay_checked', 'Pending payroll/final pay checked'],
+  ['account_access_reviewed', 'Account access reviewed'],
+  ['final_hr_approval', 'Final HR approval'],
+];
+const OFFBOARDING_DOCUMENT_TYPES = [
+  ['Separation_Notice', 'Separation notice / resignation letter'],
+  ['Offboarding_Clearance', 'Clearance / accountability form'],
+  ['Property_Return', 'Company property return proof'],
+  ['Attendance_Timesheet', 'Final attendance / timesheet support'],
+  ['Final_Pay_Computation', 'Final pay computation support'],
+  ['COE_Request', 'Certificate of Employment request/release'],
+  ['Exit_Interview', 'Exit interview form'],
+  ['Final_Pay_Acknowledgement', 'Final pay acknowledgement / quitclaim if used'],
+  ['Other', 'Other supporting document'],
+];
+const OFFBOARDING_DOCUMENT_ACCEPT = '.pdf,.docx,.jpg,.jpeg,.png';
 const ORG_SETUP_DEFAULT_PAGE_SIZE = 10;
 const ORG_SETUP_PAGINATION = {
   departments: 1,
@@ -561,21 +584,24 @@ function renderEmployees(list) {
   
   const renderedRows = pageEmployees.map(e => {
     const employeeId = Number(e.id);
-    const employmentStatus = statusBadgeText(e.status);
+    const pendingOffboardingStatus = e._raw?.pending_offboarding_status;
+    const employmentStatus = pendingOffboardingStatus || statusBadgeText(e.status);
     const employmentStatusClass = statusClassName(employmentStatus);
-    const statusMenuItems = EMPLOYMENT_STATUS_OPTIONS.map(option => `
-            <button class="emp-menu-item status-${statusClassName(option)}" type="button" onclick="setEmployeeStatus('${employeeId}', '${option}')" ${employmentStatus === option ? 'disabled' : ''}>Mark ${option}</button>
+    const statusMenuItems = pendingOffboardingStatus
+      ? `<button class="emp-menu-item" type="button" disabled>Use offboarding workflow</button>`
+      : EMPLOYMENT_STATUS_OPTIONS.map(option => `
+            <button class="emp-menu-item status-${statusClassName(option)}" type="button" onclick="employeeMenuInvoke(event, 'status', '${employeeId}', '${option}')" ${employmentStatus === option ? 'disabled' : ''}>Mark ${option}</button>
     `).join('');
     const pendingOffboardingId = e._raw?.pending_offboarding_request_id;
     const pendingReonboardingId = e._raw?.pending_reonboarding_request_id;
     const lifecycleAction = pendingOffboardingId
-      ? `<button class="emp-menu-item" type="button" onclick="viewLifecycleRequest('${employeeId}', 'offboarding')">View Offboarding Request</button>`
+      ? `<button class="emp-menu-item" type="button" onclick="employeeMenuInvoke(event, 'lifecycle', '${employeeId}', 'offboarding')">View Offboarding Request</button>`
       : pendingReonboardingId
-        ? `<button class="emp-menu-item" type="button" onclick="viewLifecycleRequest('${employeeId}', 'reonboarding')">View Re-onboarding Request</button>`
+        ? `<button class="emp-menu-item" type="button" onclick="employeeMenuInvoke(event, 'lifecycle', '${employeeId}', 'reonboarding')">View Re-onboarding Request</button>`
         : employmentStatus === 'Active'
-          ? `<button class="emp-menu-item deactivate" type="button" onclick="openOffboardingDrawer('${employeeId}')">Offboard Employee</button>`
+          ? `<button class="emp-menu-item deactivate" type="button" onclick="employeeMenuInvoke(event, 'offboard', '${employeeId}')">Offboard Employee</button>`
           : REONBOARDABLE_STATUSES.has(employmentStatus)
-            ? `<button class="emp-menu-item activate" type="button" onclick="openReonboardingDrawer('${employeeId}')">Re-onboard Employee</button>`
+            ? `<button class="emp-menu-item activate" type="button" onclick="employeeMenuInvoke(event, 'reonboard', '${employeeId}')">Re-onboard Employee</button>`
             : '';
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
@@ -600,7 +626,7 @@ function renderEmployees(list) {
         <div class="emp-action-menu">
           <button class="emp-action-trigger action-dots-button" type="button" title="Employee actions" aria-label="Employee actions" onclick="toggleEmployeeActionMenu(event, '${employeeId}')">${employeeActionDotsIcon()}</button>
           <div class="emp-action-dropdown" id="emp-action-menu-${employeeId}">
-            <button class="emp-menu-item" type="button" onclick="openEmployeeProfile('${employeeId}', 'personal')">View Profile</button>
+            <button class="emp-menu-item" type="button" onclick="employeeMenuInvoke(event, 'profile', '${employeeId}')">View Profile</button>
             ${lifecycleAction ? `<div class="emp-menu-section">Lifecycle</div>${lifecycleAction}` : ''}
             <div class="emp-menu-section">Status</div>
             ${statusMenuItems}
@@ -736,6 +762,7 @@ function closeEmployeeActionMenus() {
 }
 
 function toggleEmployeeActionMenu(event, employeeId) {
+  event.preventDefault();
   event.stopPropagation();
   const menu = document.getElementById(`emp-action-menu-${employeeId}`);
   const trigger = event.currentTarget;
@@ -757,6 +784,19 @@ function toggleEmployeeActionMenu(event, employeeId) {
     menu.style.right = 'auto';
     trigger.classList.add('active');
   }
+}
+
+function employeeMenuInvoke(event, action, employeeId, value = '') {
+  event?.preventDefault();
+  event?.stopPropagation();
+  closeEmployeeActionMenus();
+
+  if (action === 'profile') return openEmployeeProfile(employeeId, 'personal');
+  if (action === 'status') return setEmployeeStatus(employeeId, value);
+  if (action === 'lifecycle') return viewLifecycleRequest(employeeId, value);
+  if (action === 'offboard') return openOffboardingDrawer(employeeId);
+  if (action === 'reonboard') return openReonboardingDrawer(employeeId);
+  return null;
 }
 
 document.addEventListener('click', closeEmployeeActionMenus);
@@ -971,6 +1011,161 @@ function lifecycleReadonly(label, value) {
   return `<label><span>${employeeSetupEscape(label)}</span><input type="text" value="${employeeSetupEscape(value || '-')}" readonly></label>`;
 }
 
+function normalizeOffboardingClearanceItems(items = []) {
+  const byKey = new Map((Array.isArray(items) ? items : []).map(item => [item.item_key || item.key, item]));
+  return OFFBOARDING_CLEARANCE_ITEMS.map(([itemKey, itemLabel]) => ({
+    item_key: itemKey,
+    item_label: byKey.get(itemKey)?.item_label || itemLabel,
+    status: byKey.get(itemKey)?.status || 'Pending',
+    remarks: byKey.get(itemKey)?.remarks || '',
+    checked_by_username: byKey.get(itemKey)?.checked_by_username || '',
+    checked_at: byKey.get(itemKey)?.checked_at || '',
+  }));
+}
+
+function renderOffboardingClearanceChecklist(items = []) {
+  return `
+    <div class="offboarding-checklist-grid">
+      ${normalizeOffboardingClearanceItems(items).map(item => `
+        <div class="offboarding-clearance-row" data-item-key="${employeeSetupEscape(item.item_key)}">
+          <label>
+            <span>${employeeSetupEscape(item.item_label)}</span>
+            <select data-clearance-status>
+              <option ${item.status === 'Pending' ? 'selected' : ''}>Pending</option>
+              <option ${item.status === 'Cleared' ? 'selected' : ''}>Cleared</option>
+              <option ${item.status === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option>
+            </select>
+          </label>
+          <label>
+            <span>Remarks</span>
+            <textarea data-clearance-remarks rows="2">${employeeSetupEscape(item.remarks || '')}</textarea>
+          </label>
+          <div class="employee-lifecycle-note">
+            Checked by: ${employeeSetupEscape(item.checked_by_username || '-')}
+            ${item.checked_at ? ` · ${employeeSetupEscape(new Date(item.checked_at).toLocaleString('en-PH'))}` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function collectOffboardingClearanceItems(scope = document) {
+  return [...scope.querySelectorAll('.offboarding-clearance-row')].map(row => ({
+    item_key: row.dataset.itemKey,
+    status: row.querySelector('[data-clearance-status]')?.value || 'Pending',
+    remarks: row.querySelector('[data-clearance-remarks]')?.value || '',
+  }));
+}
+
+function sanitizeLifecyclePayload(payload) {
+  Object.keys(payload || {}).forEach(key => {
+    if (key.endsWith('_display') || key.endsWith('_display_name') || key.startsWith('offboarding_document_')) {
+      delete payload[key];
+    }
+  });
+  return payload;
+}
+
+function offboardingDocumentTypeLabel(value) {
+  return OFFBOARDING_DOCUMENT_TYPES.find(([type]) => type === value)?.[1] || value || 'Supporting document';
+}
+
+function renderOffboardingDocumentList(documents = [], employeeCode = '') {
+  const safeEmployeeCode = encodeURIComponent(employeeCode || '');
+  if (!Array.isArray(documents) || !documents.length) {
+    return '<div class="offboarding-doc-empty">No offboarding documents attached yet.</div>';
+  }
+  return documents.map(doc => `
+    <div class="offboarding-doc-card">
+      <div>
+        <div class="offboarding-doc-title">${employeeSetupEscape(doc.file_name || doc.document_label || 'Document')}</div>
+        <div class="offboarding-doc-meta">${employeeSetupEscape(doc.document_label || offboardingDocumentTypeLabel(doc.document_type))} &middot; ${employeeSetupEscape(doc.uploaded_date || '')}</div>
+      </div>
+      <button type="button" class="btn btn-outline" onclick="openOffboardingDocument('${safeEmployeeCode}', ${Number(doc.id)})">View</button>
+    </div>
+  `).join('');
+}
+
+function renderOffboardingDocumentAttachmentSection(documents = [], employeeCode = '') {
+  return `
+    <div class="offboarding-doc-section">
+      <p class="employee-lifecycle-note">
+        Optional supporting files. Attach what applies, then continue the workflow. Do not block offboarding just because a late document is missing.
+      </p>
+      <div class="offboarding-doc-upload-grid">
+        ${OFFBOARDING_DOCUMENT_TYPES.map(([type, label]) => `
+          <label class="offboarding-doc-upload">
+            <span>${employeeSetupEscape(label)}</span>
+            <input type="file" data-offboarding-doc-file data-doc-type="${employeeSetupEscape(type)}" multiple accept="${OFFBOARDING_DOCUMENT_ACCEPT}">
+          </label>
+        `).join('')}
+      </div>
+      <div class="offboarding-doc-existing">
+        <h4>Attached documents</h4>
+        ${renderOffboardingDocumentList(documents, employeeCode)}
+      </div>
+    </div>
+  `;
+}
+
+function collectOffboardingDocumentUploads(scope = document) {
+  return [...scope.querySelectorAll('[data-offboarding-doc-file]')].flatMap(input => {
+    const documentType = input.dataset.docType || 'Other';
+    return [...(input.files || [])].map(file => ({ file, documentType }));
+  });
+}
+
+async function uploadOffboardingDocuments(caseId, uploads = []) {
+  if (!caseId || !uploads.length) return { uploaded: 0, failed: 0 };
+  let uploaded = 0;
+  let failed = 0;
+  for (const item of uploads) {
+    const formData = new FormData();
+    formData.append('file', item.file);
+    formData.append('docType', item.documentType || 'Other');
+    try {
+      const response = await apiFetch(`/api/employees/offboarding/${caseId}/documents`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Failed to upload ${item.file?.name || 'document'}.`);
+      uploaded++;
+    } catch (error) {
+      console.error('Offboarding document upload error:', error);
+      failed++;
+    }
+  }
+  return { uploaded, failed };
+}
+
+async function openOffboardingDocument(encodedEmployeeCode, docId) {
+  const employeeCode = decodeURIComponent(encodedEmployeeCode || '');
+  if (!employeeCode || !docId) return;
+  try {
+    const response = await apiFetch(`/api/employees/${employeeCode}/documents/${docId}/view`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Failed to open document');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank', 'noopener');
+    if (!opened) {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener';
+      anchor.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    console.error('Offboarding document open error:', error);
+    await showAlert(error.message, 'Document Unavailable', 'error');
+  }
+}
+
 function ensureLifecycleDrawer() {
   let drawer = document.getElementById('employee-lifecycle-drawer');
   if (drawer) return drawer;
@@ -1105,41 +1300,41 @@ function openOffboardingDrawer(employeeId) {
     </fieldset>
     <fieldset>
       <legend>Offboarding Details</legend>
-      <label><span>Offboarding Type</span><select name="offboarding_type" required><option>Resignation</option><option>Termination</option><option>End of Contract</option><option>Retirement</option><option>AWOL</option></select></label>
+      <label><span>Offboarding Type</span><select name="offboarding_type" required><option>Resignation</option><option>Termination</option><option>End of Contract</option><option>Retirement</option><option>AWOL</option><option>Redundancy</option></select></label>
       <label><span>Effective Date</span><input name="effective_date" type="date" required value="${employeeTodayIsoDate()}"></label>
       <label><span>Last Working Day</span><input name="last_working_day" type="date" required value="${employeeTodayIsoDate()}"></label>
       <label style="grid-column:1/-1;"><span>Reason</span><textarea name="reason" required rows="3"></textarea></label>
-      <label><span>Clearance Status</span><select name="clearance_status" required><option>Pending</option><option>Cleared</option><option>Not Cleared</option></select></label>
       <label><span>Account Action</span><select name="account_action" required><option>Disable Immediately</option><option>Disable on Effective Date</option></select></label>
       <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
     </fieldset>
     <fieldset>
       <legend>Clearance Checklist</legend>
-      <label><span>Company Property Status</span><select name="company_property_status" required><option>Pending</option><option>Partially Returned</option><option>Completed</option><option>Not Applicable</option></select></label>
-      <label><span>Turnover Status</span><select name="turnover_status" required><option>Pending</option><option>Completed</option><option>Not Required</option></select></label>
-      <label><span>Exit Interview Status</span><select name="exit_interview_status" required><option>Pending</option><option>Completed</option><option>Not Required</option></select></label>
-      <label><span>Attendance and Leave Clearance</span><select name="attendance_leave_clearance" required><option>Pending</option><option>Checked</option><option>With Issue</option></select></label>
+      ${renderOffboardingClearanceChecklist()}
+    </fieldset>
+    <fieldset>
+      <legend>Supporting Documents (Optional)</legend>
+      ${renderOffboardingDocumentAttachmentSection([], employee.employee_code)}
     </fieldset>
     <fieldset>
       <legend>Payroll Clearance</legend>
-      <label><span>Payroll Clearance Status</span><select name="payroll_clearance_status" disabled><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select></label>
-      <label><span>Payroll Checked By</span><input name="payroll_checked_by" value="Payroll Officer" disabled></label>
-      <label><span>Final Pay Status</span><select name="final_pay_status" disabled><option>Pending</option><option>For Processing</option><option>For Approval</option><option>Approved</option><option>Released</option><option>With Issue</option></select></label>
-      <label><span>Final Pay Approved By</span><input name="final_pay_approved_by" value="Payroll Manager" disabled></label>
-      <label><span>Final Pay Release Date</span><input name="final_pay_release_date" type="date" disabled></label>
+      ${lifecycleReadonly('Payroll Clearance Status', 'Pending')}
+      ${lifecycleReadonly('Payroll Checked By', 'Payroll Officer / Manager')}
+      ${lifecycleReadonly('Final Pay Status', 'Pending')}
+      ${lifecycleReadonly('Final Pay Approved By', 'Payroll Manager')}
+      ${lifecycleReadonly('Final Pay Release Date', 'After approval')}
     </fieldset>
     <fieldset>
       <legend>IT Access Revocation</legend>
-      <label><span>IT Access Status</span><select name="it_access_status" disabled><option>Pending</option><option>Disabled</option><option>Revoked</option></select></label>
-      <label><span>Permissions Revoked</span><select name="permissions_revoked" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
-      <label><span>Active Sessions/JWT Invalidated</span><select name="sessions_invalidated" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
-      <label><span>Biometric/Attendance Access Removed</span><select name="biometric_access_removed" disabled><option value="false">No</option><option value="true">Yes</option></select></label>
-      <label><span>IT Processed By</span><input name="it_processed_by" value="IT Staff" disabled></label>
-      <label><span>IT Processed Date</span><input name="it_processed_at" type="datetime-local" disabled></label>
+      ${lifecycleReadonly('IT Access Status', 'Pending')}
+      ${lifecycleReadonly('Permissions Revoked', 'No')}
+      ${lifecycleReadonly('Active Sessions/JWT Invalidated', 'No')}
+      ${lifecycleReadonly('Biometric/Attendance Access Removed', 'No')}
+      ${lifecycleReadonly('IT Processed By', 'System Administrator / IT')}
+      ${lifecycleReadonly('IT Processed Date', 'After final approval')}
     </fieldset>
     <fieldset>
       <legend>Process Tracking</legend>
-      <label><span>Offboarding Status</span><select name="offboarding_status" required><option>In Progress</option><option>Pending</option><option>Cancelled</option></select></label>
+      <label><span>Offboarding Status</span><select name="offboarding_status" required><option>For Offboarding</option><option>Clearance Pending</option><option>Cancelled</option></select></label>
       <label><span>Processed By</span><input name="processed_by_display" value="Logged-in HR user" readonly></label>
       <label><span>Completed By</span><input name="completed_by_display" value="Auto-filled on completion" disabled></label>
       <label><span>Completed Date</span><input name="completed_at" type="datetime-local" disabled></label>
@@ -1197,7 +1392,11 @@ async function submitLifecycleForm(event, endpoint, fallbackMessage) {
     const confirmed = confirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.');
     if (!confirmed) return;
   }
-  const payload = Object.fromEntries(new FormData(form).entries());
+  const payload = sanitizeLifecyclePayload(Object.fromEntries(new FormData(form).entries()));
+  const offboardingUploads = endpoint.includes('/offboard') ? collectOffboardingDocumentUploads(form) : [];
+  if (endpoint.includes('/offboard')) {
+    payload.clearance_items = collectOffboardingClearanceItems(form);
+  }
 
   try {
     const response = await apiFetch(endpoint, {
@@ -1207,13 +1406,138 @@ async function submitLifecycleForm(event, endpoint, fallbackMessage) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to submit lifecycle request.');
+    let documentNote = '';
+    if (offboardingUploads.length && data.offboarding_case_id) {
+      const result = await uploadOffboardingDocuments(data.offboarding_case_id, offboardingUploads);
+      documentNote = result.failed
+        ? ` ${result.uploaded} document(s) attached; ${result.failed} failed.`
+        : ` ${result.uploaded} document(s) attached.`;
+    }
     closeLifecycleDrawer();
-    await showAlert(data.message || fallbackMessage, 'Success', 'success');
+    await showAlert(`${data.message || fallbackMessage}${documentNote}`, 'Success', 'success');
     await fetchEmployees();
   } catch (error) {
     console.error('Lifecycle request error:', error);
     await showAlert(error.message, 'Error', 'error');
   }
+}
+
+function offboardingMoney(value) {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? amount.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' }) : '₱0.00';
+}
+
+function renderOffboardingPayrollReadonly(request) {
+  return `
+    ${lifecycleReadonly('Payroll Clearance', request.payroll_clearance_status || 'Pending')}
+    ${lifecycleReadonly('Final Attendance Cutoff', request.final_attendance_cutoff || '-')}
+    ${lifecycleReadonly('Unpaid Salary', offboardingMoney(request.unpaid_salary))}
+    ${lifecycleReadonly('Deductions', offboardingMoney(request.final_deductions))}
+    ${lifecycleReadonly('Allowances', offboardingMoney(request.final_allowances))}
+    ${lifecycleReadonly('Pending Benefits', offboardingMoney(request.pending_benefits))}
+    <label style="grid-column:1/-1;"><span>Payroll Remarks</span><textarea readonly rows="3">${employeeSetupEscape(request.payroll_remarks || '')}</textarea></label>
+  `;
+}
+
+function renderOffboardingFinalPayReadonly(request) {
+  return `
+    ${lifecycleReadonly('Final Pay Status', request.final_pay_status || 'Pending')}
+    ${lifecycleReadonly('Final Pay Release Date', request.final_pay_release_date || '-')}
+    <label style="grid-column:1/-1;"><span>Final Pay Remarks</span><textarea readonly rows="3">${employeeSetupEscape(request.final_pay_remarks || '')}</textarea></label>
+  `;
+}
+
+async function submitOffboardingCaseUpdate(event, caseId) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = sanitizeLifecyclePayload(Object.fromEntries(new FormData(form).entries()));
+  const offboardingUploads = collectOffboardingDocumentUploads(form);
+  payload.clearance_items = collectOffboardingClearanceItems(form);
+  if (['Offboarded', 'Inactive'].includes(payload.offboarding_status || '')) {
+    const confirmed = confirm('Complete final approval? This will disable the linked account and prevent future login.');
+    if (!confirmed) return;
+  }
+  if (payload.offboarding_status === 'Cancelled') {
+    const confirmed = confirm('Cancel this offboarding request and restore the employee to Active?');
+    if (!confirmed) return;
+  }
+
+  try {
+    const uploadBeforeFinalApproval = ['Offboarded', 'Inactive'].includes(payload.offboarding_status || '');
+    let documentResult = { uploaded: 0, failed: 0 };
+    if (uploadBeforeFinalApproval && offboardingUploads.length) {
+      documentResult = await uploadOffboardingDocuments(caseId, offboardingUploads);
+    }
+    const response = await apiFetch(`/api/employees/offboarding/${caseId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to update offboarding.');
+    if (!uploadBeforeFinalApproval && offboardingUploads.length) {
+      documentResult = await uploadOffboardingDocuments(caseId, offboardingUploads);
+    }
+    const documentNote = offboardingUploads.length
+      ? (documentResult.failed
+        ? ` ${documentResult.uploaded} document(s) attached; ${documentResult.failed} failed.`
+        : ` ${documentResult.uploaded} document(s) attached.`)
+      : '';
+    closeLifecycleDrawer();
+    await showAlert(`${data.message || 'Offboarding updated.'}${documentNote}`, 'Success', 'success');
+    await fetchEmployees();
+  } catch (error) {
+    console.error('Offboarding update error:', error);
+    await showAlert(error.message, 'Error', 'error');
+  }
+}
+
+function openOffboardingManagementDrawer(employeeId, request) {
+  const employee = getDirectoryEmployee(employeeId) || {};
+  const status = request.status || 'For Offboarding';
+  lifecycleFormShell('Manage Offboarding', `
+    <fieldset>
+      <legend>Offboarding Request</legend>
+      ${lifecycleReadonly('Employee ID', employee.employee_code || request.employee_code)}
+      ${lifecycleReadonly('Name', fullEmployeeName(employee) || request.employee_name)}
+      ${lifecycleReadonly('Department', employee.department)}
+      ${lifecycleReadonly('Position', employee.position)}
+      ${lifecycleReadonly('Offboarding Type', request.offboarding_type)}
+      ${lifecycleReadonly('Reason', request.separation_reason)}
+      ${lifecycleReadonly('Effective Date', request.effective_date)}
+      ${lifecycleReadonly('Current Workflow Status', status)}
+    </fieldset>
+    <fieldset>
+      <legend>Clearance Checklist</legend>
+      ${renderOffboardingClearanceChecklist(request.clearance_items || [])}
+    </fieldset>
+    <fieldset>
+      <legend>Supporting Documents (Optional)</legend>
+      ${renderOffboardingDocumentAttachmentSection(request.documents || [], employee.employee_code || request.employee_code || '')}
+    </fieldset>
+    <fieldset>
+      <legend>Payroll / Final Pay Review</legend>
+      ${renderOffboardingPayrollReadonly(request)}
+      ${renderOffboardingFinalPayReadonly(request)}
+    </fieldset>
+    <fieldset>
+      <legend>Account Access / Final Approval</legend>
+      ${lifecycleReadonly('IT Access Status', request.it_access_status || 'Pending')}
+      ${lifecycleReadonly('Permissions Revoked', Number(request.permissions_revoked || 0) ? 'Yes' : 'No')}
+      ${lifecycleReadonly('Sessions Invalidated', Number(request.sessions_invalidated || 0) ? 'Yes' : 'No')}
+      ${lifecycleReadonly('Biometric Access Removed', Number(request.biometric_access_removed || 0) ? 'Yes' : 'No')}
+      <label><span>Workflow Action</span><select name="offboarding_status" required>
+        <option ${status === 'For Offboarding' ? 'selected' : ''}>For Offboarding</option>
+        <option ${status === 'Clearance Pending' ? 'selected' : ''}>Clearance Pending</option>
+        <option ${status === 'Payroll Review' ? 'selected' : ''}>Payroll Review</option>
+        <option ${status === 'Final Approval' ? 'selected' : ''}>Final Approval</option>
+        <option value="Offboarded">Final Approval - Offboarded</option>
+        <option value="Inactive">Final Approval - Inactive</option>
+        <option value="Cancelled">Cancel Offboarding</option>
+      </select></label>
+      <label style="grid-column:1/-1;"><span>HR Remarks</span><textarea name="remarks" rows="3">${employeeSetupEscape(request.remarks || '')}</textarea></label>
+    </fieldset>
+  `, event => submitOffboardingCaseUpdate(event, request.offboarding_case_id));
 }
 
 async function viewLifecycleRequest(employeeId, type) {
@@ -1223,8 +1547,12 @@ async function viewLifecycleRequest(employeeId, type) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to load lifecycle request.');
     const list = type === 'offboarding' ? data.offboarding_cases || [] : data.reonboarding_cases || [];
-    const request = list.find(item => item.status === 'Pending') || list[0];
+    const request = list.find(item => OFFBOARDING_WORKFLOW_STATUSES.has(item.status)) || list[0];
     if (!request) return showAlert('No lifecycle request found.', 'Lifecycle Request', 'info');
+    if (type === 'offboarding') {
+      openOffboardingManagementDrawer(employeeId, request);
+      return;
+    }
     const text = Object.entries(request)
       .filter(([, value]) => value !== null && value !== undefined && value !== '')
       .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
@@ -1398,14 +1726,18 @@ function clearEmployeeForm() {
   document.getElementById('emp-bank-account').value = '';
   
   // Reset to Personal Info tab
-  document.querySelectorAll('.form-tab').forEach(tab => tab.classList.remove('active'));
-  document.querySelector('.form-tab').classList.add('active');
-  document.getElementById('form-personal').style.display = 'block';
-  const formContact = document.getElementById('form-contact');
-  if (formContact) formContact.style.display = 'none';
-  document.getElementById('form-employment').style.display = 'none';
-  document.getElementById('form-payroll').style.display = 'none';
-  document.getElementById('form-documents').style.display = 'none';
+  if (typeof switchFormTab === 'function') {
+    switchFormTab('personal');
+  } else {
+    document.querySelectorAll('.form-tab').forEach(tab => tab.classList.remove('active'));
+    document.querySelector('.form-tab').classList.add('active');
+    document.getElementById('form-personal').style.display = 'block';
+    const formContact = document.getElementById('form-contact');
+    if (formContact) formContact.style.display = 'none';
+    document.getElementById('form-employment').style.display = 'none';
+    document.getElementById('form-payroll').style.display = 'none';
+    document.getElementById('form-documents').style.display = 'none';
+  }
   
   // Clear uploaded files if function is available
   if (typeof clearUploadedFiles === 'function') {
@@ -3887,6 +4219,8 @@ window.offboardEmployee = offboardEmployee;
 window.reonboardEmployee = reonboardEmployee;
 window.openOffboardingDrawer = openOffboardingDrawer;
 window.openReonboardingDrawer = openReonboardingDrawer;
+window.openOffboardingDocument = openOffboardingDocument;
+window.employeeMenuInvoke = employeeMenuInvoke;
 window.addEventListener('profilePhotoUpdated', event => {
   const employeeId = Number(event.detail?.employeeId || 0);
   if (!employeeId) return;
@@ -3946,6 +4280,8 @@ window.openOffboardingDrawer = openOffboardingDrawer;
 window.openReonboardingDrawer = openReonboardingDrawer;
 window.closeLifecycleDrawer = closeLifecycleDrawer;
 window.viewLifecycleRequest = viewLifecycleRequest;
+window.openOffboardingDocument = openOffboardingDocument;
+window.employeeMenuInvoke = employeeMenuInvoke;
 window.prefillEmployeeForm = prefillEmployeeForm;
 window.openPayrollConfigModal = openPayrollConfigModal;
 window.closePayrollConfigModal = closePayrollConfigModal;
