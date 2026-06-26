@@ -3,24 +3,82 @@
    Secure-by-Design: RBAC-restricted Employee-only interface
    ============================================================ */
 
+const EMPLOYEE_DASHBOARD_TABS = new Set(['overview', '201file', 'payslips', 'settings']);
+const EMPLOYEE_DASHBOARD_TITLES = {
+  overview: 'My Dashboard',
+  '201file': 'My Profile',
+  payslips: 'My Payslips',
+  settings: 'My Info',
+};
+let empPayslipsCache = null;
+let empPayslipsCacheKey = null;
+let empPayslipsLoadingPromise = null;
+let empPayslipsLoadingKey = null;
+
+function getEmpSessionKey() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return [
+    user?.id || user?.userId || '',
+    user?.employeeId || user?.Employee_ID || '',
+    user?.username || '',
+  ].join(':');
+}
+
+function resetEmployeeDashboardState() {
+  empPayslipsCache = null;
+  empPayslipsCacheKey = null;
+  empPayslipsLoadingPromise = null;
+  empPayslipsLoadingKey = null;
+  resetEmpDashboardPayslipUi();
+  const tbody = document.getElementById('emp-payslips-tbody');
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading payslips...</td></tr>';
+  }
+}
+
+function normalizeEmpTab(tabId) {
+  const tab = String(tabId || '').trim();
+  return EMPLOYEE_DASHBOARD_TABS.has(tab) ? tab : 'overview';
+}
+
+function syncEmpTabRoute(tabId) {
+  window.ROUTE_PARAMS = {
+    ...(window.ROUTE_PARAMS || {}),
+    pageId: 'employee-dashboard',
+    employeeTab: tabId,
+  };
+
+  const titleEl = document.getElementById('page-title');
+  if (titleEl && EMPLOYEE_DASHBOARD_TITLES[tabId]) {
+    titleEl.textContent = EMPLOYEE_DASHBOARD_TITLES[tabId];
+  }
+
+  const navKey = `employee-dashboard:${tabId}`;
+  document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(item => {
+    item.classList.toggle('active', (item.dataset.navKey || item.dataset.page) === navKey);
+  });
+}
+
 // ── Tab Switching ────────────────────────────────────────────
 function switchEmpTab(tabId, el) {
+  const activeTab = normalizeEmpTab(tabId);
+  syncEmpTabRoute(activeTab);
   document.querySelectorAll('.emp-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.emp-panel').forEach(p => p.classList.remove('active'));
-  const tabButton = el || document.querySelector(`.emp-tab[data-tab="${tabId}"]`);
+  const tabButton = el?.dataset?.tab === activeTab ? el : document.querySelector(`.emp-tab[data-tab="${activeTab}"]`);
   if (tabButton) tabButton.classList.add('active');
-  const panel = document.getElementById('emp-panel-' + tabId);
+  const panel = document.getElementById('emp-panel-' + activeTab);
   if (panel) panel.classList.add('active');
 
-  if (tabId === 'overview') loadEmpDashboard();
-  if (tabId === '201file')  loadEmp201File();
-  if (tabId === 'payslips') loadEmpPayslips();
-  if (tabId === 'settings') loadEmpSettings();
+  if (activeTab === 'overview') loadEmpDashboard();
+  if (activeTab === '201file')  loadEmp201File();
+  if (activeTab === 'payslips') loadEmpPayslips();
+  if (activeTab === 'settings') loadEmpSettings();
 }
 
 // ── Initialize ───────────────────────────────────────────────
 function initEmployeeDashboard() {
-  const tab = window.ROUTE_PARAMS?.employeeTab || 'overview';
+  const tab = normalizeEmpTab(window.ROUTE_PARAMS?.employeeTab);
   switchEmpTab(tab, document.querySelector(`.emp-tab[data-tab="${tab}"]`));
 }
 
@@ -51,6 +109,7 @@ function empEscape(value) {
 
 async function loadEmpDashboard() {
   try {
+    resetEmpDashboardPayslipUi();
     const res = await apiFetch('/api/employee/dashboard');
     if (!res) return;
     if (!res.ok) {
@@ -98,6 +157,8 @@ async function loadEmpDashboard() {
           psS.className = 'emp-payslip-status ' + (lp.status === 'Disbursed' ? 'badge-green' : lp.status === 'Approved' ? 'badge-blue' : 'badge-yellow');
         }
       }
+    } else {
+      resetEmpDashboardPayslipUi();
     }
 
     const docsEl = document.getElementById('emp-stat-docs');
@@ -117,6 +178,28 @@ async function loadEmpDashboard() {
     }
   } catch (err) {
     console.error('[EmpDashboard] Load error:', err);
+  }
+}
+
+function resetEmpDashboardPayslipUi() {
+  const card = document.getElementById('emp-latest-payslip-card');
+  if (card) card.style.display = 'none';
+  const netPayEl = document.getElementById('emp-stat-netpay');
+  const periodEl = document.getElementById('emp-stat-period');
+  const psP = document.getElementById('emp-ps-period');
+  const psE = document.getElementById('emp-ps-earnings');
+  const psD = document.getElementById('emp-ps-deductions');
+  const psN = document.getElementById('emp-ps-netpay');
+  const psS = document.getElementById('emp-payslip-status-badge');
+  if (netPayEl) netPayEl.textContent = '—';
+  if (periodEl) periodEl.textContent = 'No payslip available';
+  if (psP) psP.textContent = '—';
+  if (psE) psE.textContent = '—';
+  if (psD) psD.textContent = '—';
+  if (psN) psN.textContent = '—';
+  if (psS) {
+    psS.textContent = '—';
+    psS.className = 'emp-payslip-status';
   }
 }
 
@@ -186,55 +269,122 @@ async function loadEmp201File() {
 // TASK 3: DIGITAL PAYSLIPS (SHA-256 Blockchain Verification)
 // ═══════════════════════════════════════════════════════════════
 
-async function loadEmpPayslips() {
+function empMoney(value) {
+  return `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function renderEmpPayslips(payslips) {
   const tbody = document.getElementById('emp-payslips-tbody');
-  if (tbody) {
-    tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Loading payslips...</strong></div></td></tr>';
+  if (!tbody) return;
+
+  if (!Array.isArray(payslips) || payslips.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty"><div class="emp-mobile-empty-state"><div class="emp-mobile-empty-icon">PS</div><strong>No finalized payslips found</strong><span>Your payslips will appear here after final payroll approval.</span></div></td></tr>';
+    return;
   }
+
+  tbody.innerHTML = payslips.map(ps => {
+    const payslipId = Number(ps.id || 0);
+    const integrityClass = ps.integrity === 'VERIFIED' || ps.integrity === 'RECORDED' ? 'integrity-verified'
+      : ps.integrity === 'TAMPERED' ? 'integrity-tampered'
+      : 'integrity-unverified';
+    const integrityIcon = ps.integrity === 'VERIFIED' ? 'Verified'
+      : ps.integrity === 'RECORDED' ? 'Recorded'
+      : ps.integrity === 'TAMPERED' ? 'Tampered'
+      : 'Pending';
+    const statusClass = ps.status === 'Disbursed' || ps.status === 'Released' || ps.status === 'Paid' ? 'badge-green'
+      : ps.status === 'Approved' || ps.status === 'Finalized' || ps.status === 'Locked' ? 'badge-blue' : 'badge-yellow';
+
+    return `
+      <tr>
+        <td><small>${formatDate(ps.period_start)} – ${formatDate(ps.period_end)}</small></td>
+        <td>${empEscape(ps.wage_type || '—')}</td>
+        <td>${empMoney(ps.total_earning)}</td>
+        <td>${empMoney(ps.total_deduction)}</td>
+        <td><strong style="color:var(--accent)">${empMoney(ps.net_pay)}</strong></td>
+        <td><span class="badge ${statusClass}">${empEscape(ps.status || '—')}</span></td>
+        <td>
+          <span class="${integrityClass}">${integrityIcon}</span>
+          ${ps.blockchain_hash ? `<br><small style="color:var(--muted);font-size:9px;">${empEscape(ps.blockchain_hash)}</small>` : ''}
+        </td>
+        <td>
+          <button type="button" class="btn btn-outline btn-sm" onclick="viewEmpPayslip(${payslipId})" ${payslipId ? '' : 'disabled'}>
+            View Payslip
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadEmpPayslips(options = {}) {
+  const tbody = document.getElementById('emp-payslips-tbody');
+  const force = Boolean(options.force);
+  const sessionKey = getEmpSessionKey();
+
+  if (empPayslipsCacheKey && empPayslipsCacheKey !== sessionKey) {
+    empPayslipsCache = null;
+    empPayslipsCacheKey = null;
+  }
+
+  if (!force && empPayslipsCache && empPayslipsCacheKey === sessionKey) {
+    renderEmpPayslips(empPayslipsCache);
+    return;
+  }
+  if (empPayslipsLoadingPromise && empPayslipsLoadingKey === sessionKey) {
+    await empPayslipsLoadingPromise;
+    if (empPayslipsCacheKey === sessionKey) renderEmpPayslips(empPayslipsCache);
+    return;
+  }
+  if (empPayslipsLoadingPromise && empPayslipsLoadingKey !== sessionKey) {
+    empPayslipsLoadingPromise = null;
+    empPayslipsLoadingKey = null;
+  }
+  if (tbody && !empPayslipsCache) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty"><div class="emp-mobile-empty-state"><strong>Loading payslips...</strong></div></td></tr>';
+  }
+
+  empPayslipsLoadingKey = sessionKey;
+  empPayslipsLoadingPromise = (async () => {
   try {
     const res = await apiFetch('/api/employee/payslips');
     if (!res) return;
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>${empEscape(err.error || 'Please try again.')}</span></div></td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>${empEscape(err.error || 'Please try again.')}</span></div></td></tr>`;
       return;
     }
     const payslips = await res.json();
-
-    if (!tbody) return;
-    if (payslips.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><div class="emp-mobile-empty-icon">PS</div><strong>No finalized payslips found</strong><span>Your payslips will appear here after final payroll approval.</span></div></td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = payslips.map(ps => {
-      const integrityClass = ps.integrity === 'VERIFIED' ? 'integrity-verified'
-        : ps.integrity === 'TAMPERED' ? 'integrity-tampered'
-        : 'integrity-unverified';
-      const integrityIcon = ps.integrity === 'VERIFIED' ? '✓ Verified'
-        : ps.integrity === 'TAMPERED' ? '✗ Tampered'
-        : '? Unverified';
-      const statusClass = ps.status === 'Disbursed' ? 'badge-green'
-        : ps.status === 'Approved' ? 'badge-blue' : 'badge-yellow';
-
-      return `
-        <tr>
-          <td><small>${formatDate(ps.period_start)} – ${formatDate(ps.period_end)}</small></td>
-          <td>${ps.wage_type || '—'}</td>
-          <td>₱${Number(ps.total_earning || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-          <td>₱${Number(ps.total_deduction || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-          <td><strong style="color:var(--accent)">₱${Number(ps.net_pay || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong></td>
-          <td><span class="badge ${statusClass}">${ps.status}</span></td>
-          <td>
-            <span class="${integrityClass}">${integrityIcon}</span>
-            ${ps.blockchain_hash ? `<br><small style="color:var(--muted);font-size:9px;">${ps.blockchain_hash}</small>` : ''}
-          </td>
-        </tr>
-      `;
-    }).join('');
+    if (empPayslipsLoadingKey !== getEmpSessionKey()) return;
+    empPayslipsCache = Array.isArray(payslips) ? payslips : [];
+    empPayslipsCacheKey = sessionKey;
+    renderEmpPayslips(empPayslipsCache);
   } catch (err) {
     console.error('[EmpPayslips] Load error:', err);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>Please try again.</span></div></td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty"><div class="emp-mobile-empty-state"><strong>Unable to load payslips</strong><span>Please try again.</span></div></td></tr>';
+  } finally {
+    empPayslipsLoadingPromise = null;
+    empPayslipsLoadingKey = null;
+  }
+  })();
+
+  await empPayslipsLoadingPromise;
+}
+
+async function viewEmpPayslip(calculationId) {
+  const id = Number(calculationId || 0);
+  if (!id) return;
+
+  try {
+    const response = await apiFetch(`/api/payroll/salary-calculations/${id}/payslip`);
+    const payslip = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payslip.error || 'Failed to load payslip.');
+    if (typeof showPayslipPreview === 'function') {
+      showPayslipPreview(payslip);
+      return;
+    }
+    showEmpToast('Payslip details loaded, but the preview module is unavailable.', 'error');
+  } catch (err) {
+    showEmpToast(err.message || 'Failed to load payslip.', 'error');
   }
 }
 
@@ -308,3 +458,5 @@ function formatDate(dateStr) {
 window.switchEmpTab           = switchEmpTab;
 window.initEmployeeDashboard  = initEmployeeDashboard;
 window.submitEmergencyContact = submitEmergencyContact;
+window.viewEmpPayslip         = viewEmpPayslip;
+window.resetEmployeeDashboardState = resetEmployeeDashboardState;

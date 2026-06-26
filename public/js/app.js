@@ -194,7 +194,9 @@ function navigate(pageId, navEl, params = null) {
     const isEmployeeUser = typeof isEmployeeRole === 'function' ? isEmployeeRole(user?.role) : user?.role === 'employee';
     const employeeTitles = {
       'employee-dashboard:overview': 'My Dashboard',
+      'employee-dashboard:201file': 'My Profile',
       'employee-dashboard:payslips': 'My Payslips',
+      'employee-dashboard:settings': 'My Info',
       attendance: 'My Attendance',
       leave: 'My Leave',
       'self-service': 'My Profile',

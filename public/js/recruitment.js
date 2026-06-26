@@ -168,6 +168,9 @@ function onbRenderPositions(routes) {
       </td>
     </tr>
   `).join('') : '<tr><td colspan="6" class="onb-empty">No position routes configured.</td></tr>';
+  if (typeof enhanceResponsiveTables === 'function') {
+    enhanceResponsiveTables(document.getElementById('onb-panel-positions') || document);
+  }
 }
 
 function onbPopulateLookups() {

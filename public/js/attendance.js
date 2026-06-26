@@ -224,12 +224,14 @@ function esc(value) {
   }[char]));
 }
 
-function isHr() { return ['hr_admin', 'hr_manager', 'admin'].includes(ATT_USER?.role); }
+function isHr() { return ['hr', 'hradmin', 'hr_admin', 'hr_manager', 'admin'].includes(ATT_USER?.role); }
 function isSystemAdmin() { return ['system_admin', 'admin'].includes(ATT_USER?.role); }
 function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
 function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }
+function isPayrollAttendanceViewer() { return isPayrollOfficer() || isPayrollManager(); }
 function isEmployee() { return ATT_USER?.role === 'employee'; }
 function canManageBiometrics() { return isHr() || isSystemAdmin(); }
+function canViewAllAttendanceRecords() { return isHr() || isPayrollAttendanceViewer(); }
 
 function setVisible(id, visible) {
   const element = document.getElementById(id);
@@ -296,12 +298,28 @@ function badge(value, tone = '') {
   return `<span class="badge badge-${color}">${esc(text)}</span>`;
 }
 
-function attendanceBadge(value) {
-  const normalized = String(value || '').toLowerCase();
-  if (normalized.includes('late') || normalized.includes('review') || normalized.includes('incomplete')) return badge(value, 'yellow');
-  if (normalized.includes('overtime')) return badge(value, 'info');
-  if (normalized.includes('undertime') || normalized.includes('half day')) return badge(value, 'neutral');
-  return badge(value);
+function attendanceBadge(value, title = '') {
+  const text = String(value || '-').trim();
+  const normalized = text.toLowerCase();
+  const definitions = normalized.includes('overtime')
+    ? { code: 'OT', color: 'info' }
+    : normalized.includes('undertime')
+      ? { code: 'UT', color: 'red' }
+      : normalized.includes('late')
+        ? { code: 'L', color: 'yellow' }
+        : normalized.includes('half day')
+          ? { code: 'HD', color: 'neutral' }
+          : normalized.includes('present')
+            ? { code: 'P', color: 'green' }
+            : normalized.includes('absent')
+              ? { code: 'A', color: 'red' }
+              : normalized.includes('review') || normalized.includes('incomplete')
+                ? { code: 'NR', color: 'yellow' }
+                : normalized.includes('reject')
+                  ? { code: 'R', color: 'red' }
+                  : { code: text.slice(0, 2).toUpperCase(), color: 'neutral' };
+  const tooltip = title || text;
+  return `<span class="badge badge-${definitions.color} att-code-badge" title="${esc(tooltip)}" aria-label="${esc(tooltip)}">${esc(definitions.code)}</span>`;
 }
 
 function minuteValue(record, summaryKey, logKey) {
@@ -361,16 +379,11 @@ function attendanceSummary(record) {
 
 function renderAttendanceSummaryCell(primaryStatus, summary) {
   const metricHtml = summary.items.length
-    ? summary.items.map(item => `
-        <span class="att-summary-chip att-summary-chip-${esc(item.tone)}">
-          <span>${esc(item.label)}</span>
-          <strong>${esc(item.value)}</strong>
-        </span>
-      `).join('')
-    : '<span class="att-summary-normal">No late, undertime, or overtime</span>';
+    ? summary.items.map(item => attendanceBadge(item.label, `${item.label}: ${item.value}`)).join('')
+    : '';
 
   return `
-    <div class="att-summary-card">
+    <div class="att-summary-card" title="${esc(summary.title)}">
       <div class="att-summary-status">${attendanceBadge(primaryStatus)}</div>
       <div class="att-summary-metrics">${metricHtml}</div>
     </div>
@@ -398,17 +411,25 @@ function calculateHours(timeIn, timeOut) {
   return `${Math.max(0, milliseconds / 3600000).toFixed(1)}h`;
 }
 
+function calculateDtrHours(record) {
+  const segmentHours = (start, end) => {
+    if (!start || !end) return 0;
+    const milliseconds = new Date(`1970-01-01T${end}`) - new Date(`1970-01-01T${start}`);
+    return Math.max(0, milliseconds / 3600000);
+  };
+  const dtrHours = segmentHours(record.am_time_in, record.am_time_out)
+    + segmentHours(record.pm_time_in, record.pm_time_out);
+  if (dtrHours > 0) return `${dtrHours.toFixed(1)}h`;
+  return calculateHours(record.time_in, record.time_out);
+}
+
 function switchAttTab(tab, element) {
   ATT_USER = ATT_USER || getUser();
-  if (['overtime', 'exceptions', 'biometric', 'policies', 'audit'].includes(tab) && !canManageBiometrics()) {
+  if (['biometric', 'policies', 'payroll-policy', 'audit'].includes(tab) && !canManageBiometrics()) {
     tab = 'overview';
     element = document.querySelector('[data-att-tab="overview"]');
   }
-  if (tab === 'overtime' && !isHr()) {
-    tab = 'overview';
-    element = document.querySelector('[data-att-tab="overview"]');
-  }
-  ['overview', 'records', 'overtime', 'exceptions', 'biometric', 'policies', 'audit'].forEach(name => {
+  ['overview', 'records', 'biometric', 'policies', 'payroll-policy', 'audit'].forEach(name => {
     const panel = document.getElementById(`att-${name}`);
     if (panel) panel.style.display = name === tab ? 'block' : 'none';
   });
@@ -421,10 +442,9 @@ function switchAttTab(tab, element) {
   }
 
   if (tab === 'records') loadAttRecords();
-  if (tab === 'overtime') loadEmployees();
-  if (tab === 'exceptions') loadBiometricExceptions();
   if (tab === 'biometric') loadBiometricWorkspace();
   if (tab === 'policies') loadAttendancePolicies();
+  if (tab === 'payroll-policy' && typeof loadPayrollPolicySettings === 'function') loadPayrollPolicySettings();
   if (tab === 'audit') loadAuditLog();
 }
 
@@ -434,33 +454,47 @@ async function initAttendance() {
   document.getElementById('page-attendance')?.classList.toggle('attendance-employee-mode', isEmployee());
   initAttendanceDatePickers();
 
-  setVisible('biometric-attendance-card', !!ATT_USER.employeeId && !isSystemAdmin());
+  setVisible('biometric-attendance-card', isEmployee() && !!ATT_USER.employeeId);
   setVisible('emp-summary-card', isEmployee() && !!ATT_USER.employeeId);
-  setVisible('att-tab-overtime', isHr());
-  setVisible('att-tab-exceptions', isHr());
   setVisible('att-tab-biometric', canManageBiometrics());
   setVisible('att-tab-policies', canManageBiometrics());
+  setVisible('att-tab-payroll-policy', isHr() || isSystemAdmin());
   setVisible('att-tab-audit', canManageBiometrics());
   setVisible('btn-manual-attendance', isHr());
+  setVisible('att-select-all', isHr());
+  setVisible('hr-payroll-policy-card', isHr() || isSystemAdmin());
+  document.querySelectorAll('.att-hr-record-action').forEach(button => {
+    button.style.display = isHr() ? '' : 'none';
+  });
 
   const controls = document.querySelector('.att-toolbar');
   if (controls) controls.style.display = isEmployee() ? 'none' : 'flex';
   const recordActions = document.querySelector('#att-records .att-records-actionbar .att-actions');
   if (recordActions) recordActions.style.display = isEmployee() ? 'none' : 'flex';
 
-  if (!canManageBiometrics()) {
+  if (isEmployee()) {
     setText('att-page-title', 'My Attendance');
     setText('att-page-subtitle', 'Use fingerprint time in/out and monitor your attendance hours.');
     setText('att-banner-title', 'Fingerprint attendance');
     setText('att-banner-copy', 'Use the registered fingerprint scanner to record your time in and time out.');
+    setText('att-records-copy', 'View your attendance logs and validation status.');
     const recordsTab = document.querySelector('[data-att-tab="records"]');
     if (recordsTab) recordsTab.textContent = 'My Records';
     switchAttTab('overview', document.querySelector('[data-att-tab="overview"]'));
+  } else if (isPayrollAttendanceViewer()) {
+    setText('att-page-title', 'Attendance Records');
+    setText('att-page-subtitle', 'View employee attendance records for payroll review.');
+    setText('att-banner-title', 'Attendance Overview');
+    setText('att-banner-copy', 'Daily attendance summary for payroll review.');
+    setText('att-records-copy', 'View biometric attendance records, payroll-ready status, late, undertime, overtime, and attendance summaries.');
+    const recordsTab = document.querySelector('[data-att-tab="records"]');
+    if (recordsTab) recordsTab.textContent = 'Attendance Records';
   } else {
     setText('att-page-title', 'Attendance Management');
     setText('att-page-subtitle', '');
     setText('att-banner-title', 'Attendance Overview');
     setText('att-banner-copy', 'Summary metrics only. Validate and correct attendance from Attendance Records.');
+    setText('att-records-copy', 'Review biometric scans, validate records, reject invalid entries, correct punches, and prepare payroll-ready attendance.');
     const recordsTab = document.querySelector('[data-att-tab="records"]');
     if (recordsTab) recordsTab.textContent = 'Attendance Records';
   }
@@ -471,7 +505,7 @@ async function initAttendance() {
     return;
   }
 
-  if (ATT_USER.employeeId) {
+  if (isEmployee() && ATT_USER.employeeId) {
     loadClockStatus();
     loadBiometricAttendanceStatus();
     loadMySummary();
@@ -490,9 +524,10 @@ async function loadClockStatus() {
     if (!data.clocked_in) {
       label.textContent = 'No attendance recorded yet today. Use the Attendance Station to scan your fingerprint.';
     } else if (!data.clocked_out) {
-      label.textContent = `Time-in recorded at ${data.record?.time_in || '-'}. Use the Attendance Station again for time-out.`;
+      const nextPunch = data.record?.am_time_out ? 'PM time-in or PM time-out' : 'AM time-out';
+      label.textContent = `DTR started at ${data.record?.am_time_in || data.record?.pm_time_in || data.record?.time_in || '-'}. Next scan will record ${nextPunch} based on the schedule.`;
     } else {
-      label.textContent = `Completed: ${data.record?.time_in || '-'} to ${data.record?.time_out || '-'}.`;
+      label.textContent = `Completed DTR: ${data.record?.am_time_in || '-'} / ${data.record?.am_time_out || '-'} / ${data.record?.pm_time_in || '-'} / ${data.record?.pm_time_out || data.record?.time_out || '-'}.`;
     }
   } catch (err) {
     console.error('Attendance status error:', err);
@@ -566,7 +601,6 @@ async function loadAttRecords() {
       dateTo: document.getElementById('att-date-to-filter')?.value || '',
       status: document.getElementById('att-status-filter')?.value || '',
       validation: document.getElementById('att-validation-filter')?.value || '',
-      payrollReady: document.getElementById('att-payroll-ready-filter')?.value || '',
     };
     const nextSignature = JSON.stringify(filterState);
     if (nextSignature !== ATT_RECORDS_FILTER_SIGNATURE) {
@@ -579,18 +613,16 @@ async function loadAttRecords() {
     const dateTo = filterState.dateTo;
     const status = filterState.status;
     const validation = filterState.validation;
-    const payrollReady = filterState.payrollReady;
     if (search) params.set('search', search);
     if (department) params.set('department', department);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     if (status) params.set('status', status);
     if (validation) params.set('validation_status', validation);
-    if (payrollReady !== undefined && payrollReady !== '') params.set('payroll_ready', payrollReady);
 
-    const endpoint = isEmployee()
-      ? '/api/attendance/my-records'
-      : '/api/attendance/all';
+    const endpoint = canViewAllAttendanceRecords()
+      ? '/api/attendance/all'
+      : '/api/attendance/my-records';
     const loadSequence = ++ATT_RECORDS_LOAD_SEQUENCE;
     const res = await apiFetch(`${endpoint}${params.toString() ? `?${params}` : ''}`);
     if (loadSequence !== ATT_RECORDS_LOAD_SEQUENCE) return;
@@ -612,7 +644,7 @@ async function loadAttRecords() {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
     const mobileList = document.getElementById('att-mobile-records-list');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="att-empty">${esc(err.message)}</td></tr>`;
     if (mobileList) mobileList.innerHTML = `<div class="att-mobile-empty">${esc(err.message)}</div>`;
     renderAttendancePagination(0, 0, 0, 0);
   }
@@ -655,6 +687,19 @@ function isPayrollReadyRecord(record) {
   return status === 'PAYROLL_READY' || Number(record.payroll_ready || record.payroll_eligible || 0) === 1;
 }
 
+function missingDtrPunches(record) {
+  const missing = [];
+  if (!record?.am_time_in && !record?.pm_time_in && !record?.time_in) missing.push('AM/PM time in');
+  if (record?.am_time_in && !record?.am_time_out) missing.push('AM time out');
+  if ((record?.am_time_out || record?.pm_time_out || record?.time_out) && !record?.pm_time_in) missing.push('PM time in');
+  if (!record?.pm_time_out && !record?.time_out) missing.push('PM time out');
+  return missing;
+}
+
+function isIncompleteDtr(record) {
+  return missingDtrPunches(record).length > 0;
+}
+
 function populateAttendanceDepartmentFilter() {
   const select = document.getElementById('att-department-filter');
   if (!select || select.dataset.loaded === '1') return;
@@ -669,7 +714,7 @@ function renderAttRecords() {
   const mobileList = document.getElementById('att-mobile-records-list');
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="att-empty">No attendance records found.</td></tr>';
     if (mobileList) {
       mobileList.innerHTML = '<div class="att-mobile-empty">No attendance records found.</div>';
     }
@@ -687,17 +732,17 @@ function renderAttRecords() {
   tbody.innerHTML = visibleRecords.map(record => {
     const isSummary = Object.prototype.hasOwnProperty.call(record, 'regular_minutes');
     const attendanceId = record.attendance_id || '';
-    const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out);
+    const hours = isSummary ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateDtrHours(record);
     const summary = attendanceSummary(record);
     const primaryStatus = primaryAttendanceStatus(record);
     const verification = validationLabel(record.verification_status);
-    const payrollReady = isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready';
+    const dtrMissing = isIncompleteDtr(record);
     const actions = isHr() && attendanceId
       ? `<div class="att-row-menu">
            <button class="att-menu-trigger action-dots-button" onclick="toggleAttendanceActionMenu(event, ${Number(attendanceId)})" aria-label="Attendance actions">${actionDotsIcon()}</button>
            <div class="att-menu-panel" id="att-menu-${Number(attendanceId)}">
              <button onclick="openAttendanceDetail(${Number(attendanceId)})"><span>View</span> View Details</button>
-             <button onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')"><span class="status-ok">✓</span> Validate</button>
+             ${dtrMissing ? '' : `<button onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')"><span class="status-ok">✓</span> Validate</button>`}
              <button onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')"><span class="status-bad">×</span> Reject</button>
              <button onclick="openOverrideModal(${Number(attendanceId)})"><span>Edit</span> Correct</button>
            </div>
@@ -711,13 +756,15 @@ function renderAttRecords() {
       <td><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<br><small>${esc(record.employee_code)}</small>` : ''}</td>
       <td>${esc(record.department || '-')}</td>
       <td>${esc(formatDate(record.attendance_date || record.date))}</td>
-      <td>${esc(record.time_in || '-')} - ${esc(record.time_out || '-')}</td>
+      <td>${esc(record.am_time_in || '-')}</td>
+      <td>${esc(record.am_time_out || '-')}</td>
+      <td>${esc(record.pm_time_in || '-')}</td>
+      <td>${esc(record.pm_time_out || '-')}</td>
       <td>${esc(hours)}</td>
       <td class="att-summary-cell" title="${esc(summary.title)}">
         ${renderAttendanceSummaryCell(primaryStatus, summary)}
       </td>
       <td>${badge(verification)}</td>
-      <td>${badge(payrollReady)}</td>
       <td>${actions}</td>
     </tr>`;
   }).join('');
@@ -725,7 +772,7 @@ function renderAttRecords() {
     mobileList.innerHTML = visibleRecords.map(record => {
       const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
         ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
-        : calculateHours(record.time_in, record.time_out);
+        : calculateDtrHours(record);
       const status = primaryAttendanceStatus(record);
       const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
       const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
@@ -737,8 +784,10 @@ function renderAttRecords() {
             ${attendanceBadge(status)}
           </div>
           <div class="att-mobile-record-times">
-            <div><span>Time In</span><strong>${esc(record.time_in || '-')}</strong></div>
-            <div><span>Time Out</span><strong>${esc(record.time_out || '-')}</strong></div>
+            <div><span>AM In</span><strong>${esc(record.am_time_in || '-')}</strong></div>
+            <div><span>AM Out</span><strong>${esc(record.am_time_out || '-')}</strong></div>
+            <div><span>PM In</span><strong>${esc(record.pm_time_in || '-')}</strong></div>
+            <div><span>PM Out</span><strong>${esc(record.pm_time_out || '-')}</strong></div>
             <div><span>Hours</span><strong>${esc(hours)}</strong></div>
           </div>
           <div class="att-mobile-record-meta">
@@ -809,7 +858,7 @@ function toggleAttendanceActionMenu(event, attendanceId) {
 }
 
 function clearAttFilters() {
-  ['att-search', 'att-department-filter', 'att-date-from-filter', 'att-date-to-filter', 'att-status-filter', 'att-validation-filter', 'att-payroll-ready-filter']
+  ['att-search', 'att-department-filter', 'att-date-from-filter', 'att-date-to-filter', 'att-status-filter', 'att-validation-filter']
     .forEach(id => {
       const element = document.getElementById(id);
       if (element) element.value = '';
@@ -841,6 +890,12 @@ function firstSelectedAttendanceId() {
 async function bulkValidateAttendance() {
   const ids = selectedAttendanceIds();
   if (!ids.length) return alert('Select at least one attendance record to validate.');
+  const incomplete = ids
+    .map(id => ATT_RECORDS.find(record => Number(record.attendance_id) === Number(id)))
+    .filter(record => record && isIncompleteDtr(record));
+  if (incomplete.length) {
+    return alert('Some selected records have incomplete DTR punches. Correct AM/PM punches before marking payroll ready.');
+  }
   for (const id of ids) await verifyAttendance(id, 'VALIDATED', { silent: true });
   alert(`${ids.length} attendance record(s) validated.`);
   loadAttRecords();
@@ -865,14 +920,16 @@ function bulkCorrectAttendance() {
 
 function exportAttendanceRecords() {
   if (!ATT_RECORDS.length) return alert('No attendance records to export.');
-  const headers = ['Employee', 'Department', 'Date', 'Time In', 'Time Out', 'Hours Worked', 'Late Minutes', 'Undertime Minutes', 'Overtime Minutes', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
+  const headers = ['Employee', 'Department', 'Date', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours Worked', 'Late Minutes', 'Undertime Minutes', 'Overtime Minutes', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
   const rows = ATT_RECORDS.map(record => [
     record.employee_name || 'You',
     record.department || '',
     formatDate(record.attendance_date || record.date),
-    record.time_in || '',
-    record.time_out || '',
-    Object.prototype.hasOwnProperty.call(record, 'regular_minutes') ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateHours(record.time_in, record.time_out),
+    record.am_time_in || '',
+    record.am_time_out || '',
+    record.pm_time_in || '',
+    record.pm_time_out || '',
+    Object.prototype.hasOwnProperty.call(record, 'regular_minutes') ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateDtrHours(record),
     minuteValue(record, 'summary_late_minutes', 'late_minutes'),
     minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes'),
     minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes'),
@@ -901,10 +958,13 @@ function openAttendanceDetail(attendanceId) {
   if (!content) return;
   const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
     ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
-    : calculateHours(record.time_in, record.time_out);
+    : calculateDtrHours(record);
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
   const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+  const dtrMissing = missingDtrPunches(record);
+  const detailValidateButton = document.getElementById('attendance-detail-validate-button');
+  if (detailValidateButton) detailValidateButton.style.display = dtrMissing.length ? 'none' : '';
   content.innerHTML = `
     <section>
       <h4>Employee Information</h4>
@@ -917,7 +977,9 @@ function openAttendanceDetail(attendanceId) {
       <h4>Attendance Details</h4>
       <table><tbody>
         <tr><th>Date</th><td>${esc(formatDate(record.attendance_date || record.date))}</td><th>Hours Worked</th><td>${esc(hours)}</td></tr>
-        <tr><th>Time In</th><td>${esc(record.time_in || '-')}</td><th>Time Out</th><td>${esc(record.time_out || '-')}</td></tr>
+        <tr><th>AM In</th><td>${esc(record.am_time_in || '-')}</td><th>AM Out</th><td>${esc(record.am_time_out || '-')}</td></tr>
+        <tr><th>PM In</th><td>${esc(record.pm_time_in || '-')}</td><th>PM Out</th><td>${esc(record.pm_time_out || '-')}</td></tr>
+        ${dtrMissing.length ? `<tr><th>Missing DTR Punches</th><td colspan="3">${esc(dtrMissing.join(', '))}</td></tr>` : ''}
         <tr><th>Attendance Status</th><td>${attendanceFlagBadges(record)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
         <tr><th>Late Minutes</th><td>${esc(formatMinutes(lateMinutes))}</td><th>Undertime Minutes</th><td>${esc(formatMinutes(undertimeMinutes))}</td></tr>
         <tr><th>Overtime Minutes</th><td>${esc(formatMinutes(overtimeMinutes))}</td><th></th><td></td></tr>
@@ -950,6 +1012,11 @@ function closeAttendanceDetailModal() {
 }
 
 function detailValidateAttendance() {
+  const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(ATT_SELECTED_DETAIL_ID));
+  if (record && isIncompleteDtr(record)) {
+    alert('This DTR is incomplete. Correct AM/PM punches before marking payroll ready.');
+    return;
+  }
   if (ATT_SELECTED_DETAIL_ID) verifyAttendance(ATT_SELECTED_DETAIL_ID, 'VALIDATED');
   closeAttendanceDetailModal();
 }
@@ -971,8 +1038,10 @@ function openOverrideModal(attendanceId) {
   if (!record) return;
   document.getElementById('override-att-id').value = attendanceId;
   document.getElementById('override-emp-info').textContent = `${record.employee_name || 'Employee'} - ${formatDate(record.date)}`;
-  document.getElementById('override-time-in').value = record.time_in || '';
-  document.getElementById('override-time-out').value = record.time_out || '';
+  document.getElementById('override-am-time-in').value = record.am_time_in || '';
+  document.getElementById('override-am-time-out').value = record.am_time_out || '';
+  document.getElementById('override-pm-time-in').value = record.pm_time_in || '';
+  document.getElementById('override-pm-time-out').value = record.pm_time_out || '';
   document.getElementById('override-reason').value = '';
   document.getElementById('override-modal').style.display = 'flex';
 }
@@ -989,8 +1058,10 @@ async function submitOverride() {
     return;
   }
   const body = {
-    time_in: document.getElementById('override-time-in').value,
-    time_out: document.getElementById('override-time-out').value,
+    am_time_in: document.getElementById('override-am-time-in').value,
+    am_time_out: document.getElementById('override-am-time-out').value,
+    pm_time_in: document.getElementById('override-pm-time-in').value,
+    pm_time_out: document.getElementById('override-pm-time-out').value,
     reason,
   };
   try {
@@ -1250,8 +1321,10 @@ async function submitManualAttendance() {
   const body = {
     employee_id: manualAttendanceEl('manual-employee').value,
     date: manualAttendanceEl('manual-date').value,
-    time_in: manualAttendanceEl('manual-time-in').value,
-    time_out: manualAttendanceEl('manual-time-out').value,
+    am_time_in: manualAttendanceEl('manual-am-time-in').value,
+    am_time_out: manualAttendanceEl('manual-am-time-out').value,
+    pm_time_in: manualAttendanceEl('manual-pm-time-in').value,
+    pm_time_out: manualAttendanceEl('manual-pm-time-out').value,
     reason: manualAttendanceEl('manual-reason').value,
   };
   if (!body.employee_id || !body.date || body.reason.trim().length < 8) {
@@ -1266,25 +1339,6 @@ async function submitManualAttendance() {
     loadAttRecords();
   } catch (err) {
     alert(err.message);
-  }
-}
-
-async function loadBiometricExceptions() {
-  try {
-    const res = await apiFetch('/api/attendance/biometric/exceptions');
-    if (!res?.ok) return;
-    const rows = await res.json();
-    const tbody = document.getElementById('att-exceptions-tbody');
-    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
-      <td>${esc(formatDateTime(row.scan_timestamp))}</td>
-      <td>${esc(row.device_name)}</td>
-      <td>${esc(row.employee_name || 'Unmapped')}</td>
-      <td>${esc(row.attendance_type)}</td>
-      <td>${badge(formalValidationStatus(row.verification_status))}</td>
-      <td>${esc(row.error_message || '-')}</td>
-    </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No biometric exceptions.</td></tr>';
-  } catch (err) {
-    console.error(err);
   }
 }
 
@@ -1580,14 +1634,17 @@ async function anchorPendingIntegrity() {
 }
 
 async function loadAuditLog() {
+  const tbody = document.getElementById('audit-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" class="att-empty">Loading attendance audit log...</td></tr>';
   try {
     const res = await apiFetch('/api/attendance/audit-log');
-    if (!res?.ok) return;
-    const rows = await res.json();
-    const tbody = document.getElementById('audit-tbody');
+    const payload = await res?.json().catch(() => ({}));
+    if (!res?.ok) throw new Error(payload.error || 'Failed to load attendance audit log.');
+    const rows = Array.isArray(payload) ? payload : [];
     tbody.innerHTML = rows.length ? rows.map(row => `<tr>
       <td>${esc(formatDateTime(row.timestamp))}</td>
-      <td>${esc(row.performed_by)}</td>
+      <td>${esc(row.performed_by || 'System')}</td>
       <td>${esc(row.employee_name || '-')}</td>
       <td>${esc(row.action_performed)}</td>
       <td>${esc(row.old_value || '-')}</td>
@@ -1596,6 +1653,7 @@ async function loadAuditLog() {
     </tr>`).join('') : '<tr><td colspan="7" class="att-empty">No attendance audit entries.</td></tr>';
   } catch (err) {
     console.error(err);
+    tbody.innerHTML = `<tr><td colspan="7" class="att-empty">Unable to load attendance audit log: ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -1733,40 +1791,12 @@ async function loadAttendancePolicies() {
     setPolicyValue('policy-break-end-time', data.break_end_time || '13:00');
     setPolicyValue('policy-standard-work-hours', data.standard_work_hours ?? 8);
     document.getElementById('policy-grace-period').value = data.grace_period_minutes ?? 10;
-    setPolicyValue('policy-enable-late', String(data.enable_late_tracking ?? true));
-    setPolicyValue('policy-late-threshold', data.late_threshold_minutes ?? 0);
-    setPolicyValue('policy-count-late-payroll', String(data.count_late_for_payroll ?? true));
-    setPolicyValue('policy-enable-undertime', String(data.enable_undertime_tracking ?? true));
-    setPolicyValue('policy-count-undertime-payroll', String(data.count_undertime_for_payroll ?? true));
-    setPolicyValue('policy-enable-half-day', String(data.enable_half_day_rule ?? true));
-    setPolicyValue('policy-half-day-threshold', data.half_day_threshold_hours ?? 4);
     document.getElementById('policy-duplicate-window').value = data.duplicate_scan_window_seconds ?? 60;
     document.getElementById('policy-hr-validation').value = data.hr_validation_required ? '1' : '0';
     setPolicyValue('policy-auto-payroll-ready', String(data.auto_payroll_ready ?? false));
-    setPolicyValue('policy-validation-expiration', data.validation_expiration_days ?? 3);
-    setPolicyValue('policy-enable-overtime', String(data.enable_overtime ?? true));
-    setPolicyValue('policy-overtime-threshold-minutes', data.overtime_threshold_minutes ?? 480);
-    setPolicyValue('policy-overtime-approval', String(data.overtime_approval_required ?? true));
-    setPolicyValue('policy-minimum-overtime', data.minimum_overtime_minutes ?? 30);
-    document.getElementById('policy-missing-timeout').value = data.missing_timeout_handling || 'Needs Review';
-    setPolicyValue('policy-payroll-source', data.payroll_attendance_source || 'payroll_ready');
-    setPolicyValue('policy-working-days-month', data.working_days_per_month ?? 26);
-    setPolicyValue('policy-late-deduction-method', data.late_deduction_method || 'auto_compute');
-    setPolicyValue('policy-late-fixed-amount', data.late_fixed_deduction_amount ?? 0);
-    setPolicyValue('policy-late-apply-grace', String(data.late_apply_grace_period ?? true));
-    setPolicyValue('policy-late-approval', String(data.late_require_hr_approval ?? true));
-    setPolicyValue('policy-undertime-deduction-method', data.undertime_deduction_method || 'auto_compute');
-    setPolicyValue('policy-undertime-fixed-amount', data.undertime_fixed_deduction_amount ?? 0);
-    setPolicyValue('policy-undertime-approval', String(data.undertime_require_hr_approval ?? true));
-    setPolicyValue('policy-enable-holiday', String(data.enable_holiday_rules ?? false));
-    setPolicyValue('policy-regular-holiday', data.regular_holiday_multiplier ?? 2);
-    setPolicyValue('policy-special-holiday', data.special_holiday_multiplier ?? 1.3);
-    setPolicyValue('policy-rest-day', data.rest_day_multiplier ?? 1.3);
-    setPolicyValue('policy-holiday-overtime', data.holiday_overtime_multiplier ?? 1.3);
     setPolicyValue('policy-allow-manual', String(data.allow_manual_attendance ?? true));
     setPolicyValue('policy-allow-hr-correction', String(data.allow_hr_correction ?? true));
-    setPolicyValue('policy-allow-manager-cert', String(data.allow_manager_certification ?? false));
-    setPolicyValue('policy-device-failure', data.device_failure_handling || 'HR Correction Required');
+    syncAttendanceValidationPolicy();
     setText('attendance-policy-status', 'Active attendance policy loaded.');
   } catch (err) {
     setText('attendance-policy-status', err.message);
@@ -1778,16 +1808,26 @@ function setPolicyValue(id, value) {
   if (el) el.value = value ?? '';
 }
 
-function switchAttendancePolicyTab(tabName, trigger) {
-  document.querySelectorAll('[id^="policy-tab-"]').forEach(panel => {
-    panel.style.display = panel.id === `policy-tab-${tabName}` ? 'block' : 'none';
-  });
-  document.querySelectorAll('[data-policy-tab]').forEach(tab => tab.classList.remove('active'));
-  trigger?.classList?.add('active');
+function syncAttendanceValidationPolicy() {
+  const requireValidation = document.getElementById('policy-hr-validation')?.value === '1';
+  const autoReady = document.getElementById('policy-auto-payroll-ready');
+  if (!autoReady) return;
+  if (requireValidation) autoReady.value = 'false';
+  autoReady.disabled = requireValidation;
 }
 
 async function saveAttendancePolicies(event) {
   event?.preventDefault?.();
+  syncAttendanceValidationPolicy();
+  const button = document.getElementById('attendance-policy-save-button');
+  const feedback = document.getElementById('attendance-policy-save-feedback');
+  const setFeedback = (message, tone = '') => {
+    if (feedback) {
+      feedback.textContent = message;
+      feedback.className = tone ? `att-muted ${tone}` : 'att-muted';
+    }
+    setText('attendance-policy-status', message);
+  };
   const body = {
     effective_date: document.getElementById('policy-effective-date')?.value,
     work_start_time: document.getElementById('policy-work-start-time')?.value,
@@ -1796,55 +1836,54 @@ async function saveAttendancePolicies(event) {
     break_end_time: document.getElementById('policy-break-end-time')?.value,
     standard_work_hours: document.getElementById('policy-standard-work-hours')?.value,
     grace_period_minutes: Number(document.getElementById('policy-grace-period')?.value || 0),
-    enable_late_tracking: document.getElementById('policy-enable-late')?.value,
-    late_threshold_minutes: document.getElementById('policy-late-threshold')?.value,
-    count_late_for_payroll: document.getElementById('policy-count-late-payroll')?.value,
-    enable_undertime_tracking: document.getElementById('policy-enable-undertime')?.value,
-    count_undertime_for_payroll: document.getElementById('policy-count-undertime-payroll')?.value,
-    enable_half_day_rule: document.getElementById('policy-enable-half-day')?.value,
-    half_day_threshold_hours: document.getElementById('policy-half-day-threshold')?.value,
     duplicate_scan_window_seconds: Number(document.getElementById('policy-duplicate-window')?.value || 0),
     hr_validation_required: document.getElementById('policy-hr-validation')?.value === '1',
     require_hr_validation: document.getElementById('policy-hr-validation')?.value === '1',
     auto_payroll_ready: document.getElementById('policy-auto-payroll-ready')?.value,
-    validation_expiration_days: document.getElementById('policy-validation-expiration')?.value,
-    enable_overtime: document.getElementById('policy-enable-overtime')?.value,
-    overtime_threshold_minutes: document.getElementById('policy-overtime-threshold-minutes')?.value,
-    overtime_approval_required: document.getElementById('policy-overtime-approval')?.value,
-    minimum_overtime_minutes: document.getElementById('policy-minimum-overtime')?.value,
-    missing_timeout_handling: document.getElementById('policy-missing-timeout')?.value,
-    payroll_attendance_source: document.getElementById('policy-payroll-source')?.value,
-    working_days_per_month: document.getElementById('policy-working-days-month')?.value,
-    late_deduction_method: document.getElementById('policy-late-deduction-method')?.value,
-    late_fixed_deduction_amount: document.getElementById('policy-late-fixed-amount')?.value,
-    late_apply_grace_period: document.getElementById('policy-late-apply-grace')?.value,
-    late_require_hr_approval: document.getElementById('policy-late-approval')?.value,
-    undertime_deduction_method: document.getElementById('policy-undertime-deduction-method')?.value,
-    undertime_fixed_deduction_amount: document.getElementById('policy-undertime-fixed-amount')?.value,
-    undertime_require_hr_approval: document.getElementById('policy-undertime-approval')?.value,
-    enable_holiday_rules: document.getElementById('policy-enable-holiday')?.value,
-    regular_holiday_multiplier: document.getElementById('policy-regular-holiday')?.value,
-    special_holiday_multiplier: document.getElementById('policy-special-holiday')?.value,
-    rest_day_multiplier: document.getElementById('policy-rest-day')?.value,
-    holiday_overtime_multiplier: document.getElementById('policy-holiday-overtime')?.value,
     allow_manual_attendance: document.getElementById('policy-allow-manual')?.value,
     allow_hr_correction: document.getElementById('policy-allow-hr-correction')?.value,
-    allow_manager_certification: document.getElementById('policy-allow-manager-cert')?.value,
-    device_failure_handling: document.getElementById('policy-device-failure')?.value,
   };
+  if (!body.effective_date) {
+    setFeedback('Select an effective date before saving.', 'att-error');
+    return;
+  }
+  if (!body.work_start_time || !body.work_end_time || !body.break_start_time || !body.break_end_time) {
+    setFeedback('Complete the work and break schedule before saving.', 'att-error');
+    return;
+  }
+  if (!(Number(body.standard_work_hours) > 0)) {
+    setFeedback('Required daily working hours must be greater than zero.', 'att-error');
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Saving...';
+  }
+  setFeedback('Saving policy version...');
   try {
     const res = await apiFetch('/api/attendance/policies', { method: 'PUT', body: JSON.stringify(body) });
-    const data = await res.json();
+    if (!res) throw new Error('No response received from the server.');
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to save attendance policies.');
-    setText('attendance-policy-status', `${data.message || 'Attendance policies saved.'} ${data.changes?.length || 0} change(s) recorded.`);
+    const changes = Number(data.changes?.length || 0);
+    const message = changes
+      ? `Policy version saved. ${changes} change(s) recorded.`
+      : 'Policy version saved. No values changed.';
+    setFeedback(message, 'att-success');
   } catch (err) {
-    setText('attendance-policy-status', err.message);
+    setFeedback(`Save failed: ${err.message}`, 'att-error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Save Policy Version';
+    }
   }
 }
 
 window.addEventListener('DOMContentLoaded', watchAttendanceActivation);
 window.initAttendance = initAttendance;
 window.switchAttTab = switchAttTab;
+window.syncAttendanceValidationPolicy = syncAttendanceValidationPolicy;
 window.requestBiometricScan = requestBiometricScan;
 window.loadClockStatus = loadClockStatus;
 window.loadOverviewStats = loadOverviewStats;

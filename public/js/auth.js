@@ -107,6 +107,7 @@ const EMPLOYEE_ALLOWED_PAGES = new Set([
 ]);
 
 const PAGE_ROLE_ALLOWLIST = {
+  attendance: new Set(['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager', 'manager', 'employee']),
   payroll: new Set(['payroll_officer', 'payroll_manager']),
   reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
   'system-admin': new Set(['system_admin', 'admin']),
@@ -160,6 +161,7 @@ function applyUserRoleToDocument(user = null) {
 }
 
 function saveAuth(token, user) {
+  if (typeof resetEmployeeDashboardState === 'function') resetEmployeeDashboardState();
   const normalizedUser = normalizeClientUser(user);
   sessionStorage.setItem('vp_token', token);
   sessionStorage.setItem('vp_user', JSON.stringify(normalizedUser));
@@ -220,6 +222,7 @@ async function refreshSidebarAvatar(user = null) {
 }
 
 function clearAuth() {
+  if (typeof resetEmployeeDashboardState === 'function') resetEmployeeDashboardState();
   if (sidebarAvatarObjectUrl) {
     URL.revokeObjectURL(sidebarAvatarObjectUrl);
     sidebarAvatarObjectUrl = null;

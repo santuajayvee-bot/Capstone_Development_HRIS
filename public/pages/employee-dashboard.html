@@ -5,16 +5,16 @@
 
 <!-- Tab Navigation -->
 <div class="emp-tabs" id="emp-tabs">
-  <button class="emp-tab active" data-tab="overview" onclick="switchEmpTab('overview', this)">
+  <button type="button" class="emp-tab active" data-tab="overview" onclick="switchEmpTab('overview', this)">
     <span class="tab-icon">⊞</span> Overview
   </button>
-  <button class="emp-tab" data-tab="201file" onclick="switchEmpTab('201file', this)">
-    <span class="tab-icon">📄</span> My 201-File
+  <button type="button" class="emp-tab" data-tab="201file" onclick="switchEmpTab('201file', this)">
+    <span class="tab-icon">📄</span> My Profile
   </button>
-  <button class="emp-tab" data-tab="payslips" onclick="switchEmpTab('payslips', this)">
+  <button type="button" class="emp-tab" data-tab="payslips" onclick="switchEmpTab('payslips', this)">
     <span class="tab-icon">💰</span> My Payslips
   </button>
-  <button class="emp-tab" data-tab="settings" onclick="switchEmpTab('settings', this)">
+  <button type="button" class="emp-tab" data-tab="settings" onclick="switchEmpTab('settings', this)">
     <span class="tab-icon">⚙</span> My Info
   </button>
 </div>
@@ -45,7 +45,7 @@
     <div class="emp-stat-card">
       <div class="emp-stat-icon">📄</div>
       <div class="emp-stat-body">
-        <div class="emp-stat-label">201-File Documents</div>
+        <div class="emp-stat-label">Profile Documents</div>
         <div class="emp-stat-value" id="emp-stat-docs">—</div>
         <div class="emp-stat-sub">Uploaded files</div>
       </div>
@@ -70,10 +70,10 @@
 
   <div class="emp-mobile-quick-access" aria-label="Quick access">
     <div class="emp-mobile-section-label">Quick Access</div>
-    <button type="button" class="emp-mobile-list-row" onclick="navigate('self-service')">
+    <button type="button" class="emp-mobile-list-row" onclick="navigate('employee-dashboard', null, { employeeTab: '201file' })">
       <span class="emp-mobile-list-icon emp-mobile-icon-blue">ID</span>
       <span>
-        <strong>My 201-File</strong>
+        <strong>My Profile</strong>
         <small>View personal documents</small>
       </span>
       <span class="emp-mobile-chevron">›</span>
@@ -129,12 +129,12 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════
-     TAB 2: 201-FILE VIEW (Information Disclosure Protection)
+     TAB 2: PROFILE VIEW (Information Disclosure Protection)
      ═══════════════════════════════════════════════════════════════ -->
 <div class="emp-panel" id="emp-panel-201file">
   <div class="emp-card">
     <div class="emp-card-header">
-      <h3>🔐 My 201-File — Employee Record</h3>
+      <h3>🔐 My Profile — Employee Record</h3>
       <span class="emp-crypto-badge">AES-256 Protected</span>
     </div>
 
@@ -192,9 +192,6 @@
       <h3>💰 My Digital Payslips</h3>
       <span class="emp-crypto-badge">Finalized Only</span>
     </div>
-    <p style="color:var(--muted); font-size:12px; margin-bottom:16px;">
-      Only finalized payroll records are shown. Blockchain recording status is displayed when available.
-    </p>
     <div class="sysadmin-table-wrapper">
       <table class="sysadmin-table" id="emp-payslips-table">
         <thead>
@@ -206,10 +203,11 @@
             <th>Net Pay</th>
             <th>Status</th>
             <th>Integrity</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="emp-payslips-tbody">
-          <tr><td colspan="7" class="table-empty">Loading payslips...</td></tr>
+          <tr><td colspan="8" class="table-empty">Loading payslips...</td></tr>
         </tbody>
       </table>
     </div>
@@ -225,9 +223,6 @@
       <h3>⚙ Update Emergency Contact</h3>
       <span class="emp-crypto-badge">Input Hardened</span>
     </div>
-    <p style="color:var(--muted); font-size:12px; margin-bottom:16px;">
-      All inputs are sanitized against SQL Injection and XSS payloads before processing.
-    </p>
 
     <div class="form-grid">
       <div class="form-group">

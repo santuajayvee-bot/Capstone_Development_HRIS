@@ -10,10 +10,9 @@
     <div class="tabs attendance-tabs" style="margin-bottom:0;">
       <div class="tab active" data-att-tab="overview" onclick="switchAttTab('overview', this)">Overview</div>
       <div class="tab" data-att-tab="records" onclick="switchAttTab('records', this)">Attendance Records</div>
-      <div class="tab" id="att-tab-overtime" data-att-tab="overtime" onclick="switchAttTab('overtime', this)">Overtime</div>
-      <div class="tab" id="att-tab-exceptions" data-att-tab="exceptions" onclick="switchAttTab('exceptions', this)">Attendance Exceptions</div>
       <div class="tab" id="att-tab-biometric" data-att-tab="biometric" onclick="switchAttTab('biometric', this)">Biometrics</div>
-      <div class="tab" id="att-tab-policies" data-att-tab="policies" onclick="switchAttTab('policies', this)">Attendance Policies</div>
+      <div class="tab" id="att-tab-policies" data-att-tab="policies" onclick="switchAttTab('policies', this)">Policy</div>
+      <div class="tab" id="att-tab-payroll-policy" data-att-tab="payroll-policy" onclick="switchAttTab('payroll-policy', this)">Payroll Config</div>
       <div class="tab" id="att-tab-audit" data-att-tab="audit" onclick="switchAttTab('audit', this)">Audit Log</div>
     </div>
   </div>
@@ -55,12 +54,12 @@
   <div class="att-records-actionbar">
     <div>
       <h3 class="att-title">Attendance Records</h3>
-      <p class="att-muted">Review biometric scans, validate records, reject invalid entries, correct punches, and prepare payroll-ready attendance.</p>
+      <p class="att-muted" id="att-records-copy">Review biometric scans, validate records, reject invalid entries, correct punches, and prepare payroll-ready attendance.</p>
     </div>
     <div class="att-actions">
-      <button class="btn btn-primary btn-sm" onclick="bulkValidateAttendance()">Validate</button>
-      <button class="btn btn-outline btn-sm" onclick="bulkRejectAttendance()">Reject</button>
-      <button class="btn btn-outline btn-sm" onclick="bulkCorrectAttendance()">Correct</button>
+      <button class="btn btn-primary btn-sm att-hr-record-action" onclick="bulkValidateAttendance()">Validate</button>
+      <button class="btn btn-outline btn-sm att-hr-record-action" onclick="bulkRejectAttendance()">Reject</button>
+      <button class="btn btn-outline btn-sm att-hr-record-action" onclick="bulkCorrectAttendance()">Correct</button>
       <button class="btn btn-outline btn-sm" onclick="exportAttendanceRecords()">Export</button>
       <button class="btn btn-primary btn-sm" id="btn-manual-attendance" onclick="openManualModal()" style="display:none;">Add Manual Attendance</button>
     </div>
@@ -105,14 +104,6 @@
         <option value="CORRECTED_BY_HR">Corrected by HR</option>
       </select>
     </div>
-    <div>
-      <label>Payroll Ready</label>
-      <select id="att-payroll-ready-filter" onchange="loadAttRecords()">
-        <option value="">All</option>
-        <option value="1">Ready</option>
-        <option value="0">Not Ready</option>
-      </select>
-    </div>
     <button class="btn btn-outline btn-sm" onclick="clearAttFilters()">Clear Filters</button>
   </div>
   <div class="table-wrap att-records-table-wrap" data-no-pagination="1">
@@ -120,54 +111,19 @@
       <thead>
         <tr>
           <th><input type="checkbox" id="att-select-all" onchange="toggleAllAttendanceRows(this.checked)" /></th>
-          <th>Employee</th><th>Department</th><th>Date</th><th>Time</th>
-          <th>Hours</th><th>Attendance Summary</th><th>Validation</th><th>Payroll</th>
+          <th>Employee</th><th>Department</th><th>Date</th>
+          <th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th>
+          <th>Hours</th><th>Attendance Summary</th><th>Validation</th>
           <th id="att-action-col">Actions</th>
         </tr>
       </thead>
       <tbody id="att-records-tbody">
-        <tr><td colspan="10" class="att-empty">Loading...</td></tr>
+        <tr><td colspan="12" class="att-empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
   <div class="att-mobile-records-list" id="att-mobile-records-list" aria-live="polite"></div>
   <div class="att-records-pagination" id="att-records-pagination" aria-live="polite"></div>
-</div>
-
-<div id="att-overtime" style="display:none;">
-  <div class="card">
-    <h3 class="att-title">Approved Overtime Encoding</h3>
-    <p class="att-muted">HR may encode approved overtime. Every change requires a reason and is added to the integrity chain.</p>
-    <div class="att-form-grid att-form-grid-5">
-      <div><label>Employee</label><select id="ot-employee"><option value="">Select employee</option></select></div>
-      <div><label>Date</label><input type="text" id="ot-date" class="attendance-date-input" placeholder="Select date" readonly /></div>
-      <div><label>Hours</label><input type="number" id="ot-hours" min="0" max="24" step="0.5" placeholder="2.5" /></div>
-      <div><label>Reason</label><input type="text" id="ot-reason" placeholder="Approved OT request reference" /></div>
-      <button class="btn btn-primary" onclick="encodeOvertime()">Save OT</button>
-    </div>
-  </div>
-</div>
-
-<div id="att-exceptions" style="display:none;">
-  <div class="card">
-    <div class="att-card-heading">
-      <div><h3>Attendance Exceptions</h3><p>Review missing time out, duplicate scans, forgotten scans, rejected attendance, and HR corrections.</p></div>
-      <button class="btn btn-outline btn-sm" onclick="loadBiometricExceptions()">Refresh</button>
-    </div>
-    <div class="att-exception-types">
-      <span>Missing Time Out</span>
-      <span>Duplicate Scans</span>
-      <span>Forgot to Scan</span>
-      <span>Rejected Attendance</span>
-      <span>Attendance Corrections</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Timestamp</th><th>Device</th><th>Employee</th><th>Punch</th><th>Status</th><th>Reason</th></tr></thead>
-        <tbody id="att-exceptions-tbody"><tr><td colspan="6" class="att-empty">Loading...</td></tr></tbody>
-      </table>
-    </div>
-  </div>
 </div>
 
 <div id="att-biometric" style="display:none;">
@@ -247,90 +203,93 @@
   <div class="card">
     <div class="att-card-heading">
       <div>
-        <h3>Attendance Policies</h3>
-        <p>Configure active and future-dated attendance rules used during biometric processing, validation, and payroll preparation.</p>
+        <h3>Global Attendance Defaults</h3>
+        <p>Fallback rules used when no employee or group policy is configured.</p>
       </div>
       <button class="btn btn-outline btn-sm" onclick="loadAttendancePolicies()">Refresh</button>
     </div>
     <form id="attendance-policy-form" onsubmit="saveAttendancePolicies(event)">
       <div class="att-form-grid" style="margin-bottom:12px;">
         <div><label>Effective Date</label><input id="policy-effective-date" type="date" /></div>
-        <div style="align-self:end;"><button class="btn btn-primary" type="submit">Save Policy Version</button></div>
-      </div>
-      <div class="tabs" style="margin-bottom:14px;">
-        <button class="tab active" type="button" data-policy-tab="schedule" onclick="switchAttendancePolicyTab('schedule', this)">Schedule Policies</button>
-        <button class="tab" type="button" data-policy-tab="validation" onclick="switchAttendancePolicyTab('validation', this)">Validation Policies</button>
-        <button class="tab" type="button" data-policy-tab="overtime" onclick="switchAttendancePolicyTab('overtime', this)">Overtime Policies</button>
-        <button class="tab" type="button" data-policy-tab="payroll" onclick="switchAttendancePolicyTab('payroll', this)">Payroll Policies</button>
-        <button class="tab" type="button" data-policy-tab="biometric" onclick="switchAttendancePolicyTab('biometric', this)">Biometric Policies</button>
-        <button class="tab" type="button" data-policy-tab="holiday" onclick="switchAttendancePolicyTab('holiday', this)">Holiday Policies</button>
-      </div>
-      <div id="policy-tab-schedule" class="policy-tab-panel">
-        <div class="att-form-grid">
-          <div><label>Work Start Time</label><input id="policy-work-start-time" type="time" /></div>
-          <div><label>Work End Time</label><input id="policy-work-end-time" type="time" /></div>
-          <div><label>Break Start Time</label><input id="policy-break-start-time" type="time" /></div>
-          <div><label>Break End Time</label><input id="policy-break-end-time" type="time" /></div>
-          <div><label>Required Daily Working Hours</label><input id="policy-standard-work-hours" type="number" min="1" step="0.25" /></div>
+        <div class="attendance-policy-save-action">
+          <button class="btn btn-primary" id="attendance-policy-save-button" type="submit">Save Policy Version</button>
+          <span id="attendance-policy-save-feedback" class="att-muted" role="status" aria-live="polite"></span>
         </div>
       </div>
-      <div id="policy-tab-validation" class="policy-tab-panel" style="display:none;">
-        <div class="att-form-grid">
-          <div><label>Grace Period Minutes</label><input id="policy-grace-period" type="number" min="0" step="1" /></div>
-          <div><label>Enable Late Tracking</label><select id="policy-enable-late"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Late Threshold Minutes</label><input id="policy-late-threshold" type="number" min="0" step="1" /></div>
-          <div><label>Count Late for Payroll</label><select id="policy-count-late-payroll"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Enable Undertime Tracking</label><select id="policy-enable-undertime"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Count Undertime for Payroll</label><select id="policy-count-undertime-payroll"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Enable Half-Day Rule</label><select id="policy-enable-half-day"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Half-Day Threshold Hours</label><input id="policy-half-day-threshold" type="number" min="0" step="0.25" /></div>
-          <div><label>Require HR Validation</label><select id="policy-hr-validation"><option value="1">Yes</option><option value="0">No</option></select></div>
-          <div><label>Auto Payroll Ready</label><select id="policy-auto-payroll-ready"><option value="false">No</option><option value="true">Yes</option></select></div>
-          <div><label>Validation Expiration Days</label><input id="policy-validation-expiration" type="number" min="0" step="1" /></div>
-          <div><label>Missing Timeout Handling</label><select id="policy-missing-timeout"><option>Needs Review</option><option>Auto Close</option><option>HR Correction Required</option></select></div>
-        </div>
-      </div>
-      <div id="policy-tab-overtime" class="policy-tab-panel" style="display:none;">
-        <div class="att-form-grid">
-          <div><label>Enable Overtime</label><select id="policy-enable-overtime"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Overtime Threshold Minutes</label><input id="policy-overtime-threshold-minutes" type="number" min="0" step="1" /></div>
-          <div><label>Overtime Approval Required</label><select id="policy-overtime-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Minimum Overtime Minutes</label><input id="policy-minimum-overtime" type="number" min="0" step="1" /></div>
-        </div>
-      </div>
-      <div id="policy-tab-payroll" class="policy-tab-panel" style="display:none;">
-        <div class="att-form-grid">
-          <div><label>Payroll Attendance Source</label><select id="policy-payroll-source"><option value="payroll_ready">Use Payroll Ready Attendance</option><option value="validated">Use Validated Attendance</option></select></div>
-          <div><label>Working Days per Month</label><input id="policy-working-days-month" type="number" min="1" step="1" /><small>Used only for monthly-salaried employees.</small></div>
-          <div><label>Late Deduction Method</label><select id="policy-late-deduction-method"><option value="auto_compute">Auto-compute from employee rate</option><option value="fixed_per_minute">Fixed amount per minute</option><option value="fixed_per_hour">Fixed amount per hour</option><option value="none">No deduction</option></select></div>
-          <div><label>Late Fixed Amount</label><input id="policy-late-fixed-amount" type="number" min="0" step="0.01" /><small>Used only for a fixed Late deduction method.</small></div>
-          <div><label>Apply Grace Period to Late Deduction</label><select id="policy-late-apply-grace"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Late Deduction Requires HR Approval</label><select id="policy-late-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Undertime Deduction Method</label><select id="policy-undertime-deduction-method"><option value="auto_compute">Auto-compute from employee rate</option><option value="fixed_per_minute">Fixed amount per minute</option><option value="fixed_per_hour">Fixed amount per hour</option><option value="none">No deduction</option></select></div>
-          <div><label>Undertime Fixed Amount</label><input id="policy-undertime-fixed-amount" type="number" min="0" step="0.01" /><small>Used only for a fixed Undertime deduction method.</small></div>
-          <div><label>Undertime Deduction Requires HR Approval</label><select id="policy-undertime-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
-        </div>
-      </div>
-      <div id="policy-tab-biometric" class="policy-tab-panel" style="display:none;">
-        <div class="att-form-grid">
-          <div><label>Duplicate Scan Window Seconds</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
-        </div>
-      </div>
-      <div id="policy-tab-holiday" class="policy-tab-panel" style="display:none;">
-        <div class="att-form-grid">
-          <div><label>Enable Holiday Rules</label><select id="policy-enable-holiday"><option value="false">No</option><option value="true">Yes</option></select></div>
-          <div><label>Regular Holiday Multiplier</label><input id="policy-regular-holiday" type="number" min="0" step="0.01" /></div>
-          <div><label>Special Holiday Multiplier</label><input id="policy-special-holiday" type="number" min="0" step="0.01" /></div>
-          <div><label>Rest Day Multiplier</label><input id="policy-rest-day" type="number" min="0" step="0.01" /></div>
-          <div><label>Holiday Overtime Multiplier</label><input id="policy-holiday-overtime" type="number" min="0" step="0.01" /></div>
-          <div><label>Allow Manual Attendance</label><select id="policy-allow-manual"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Allow HR Correction</label><select id="policy-allow-hr-correction"><option value="true">Yes</option><option value="false">No</option></select></div>
-          <div><label>Allow Manager Certification</label><select id="policy-allow-manager-cert"><option value="false">No</option><option value="true">Yes</option></select></div>
-          <div><label>Device Failure Handling</label><select id="policy-device-failure"><option>HR Correction Required</option><option>Allow Manual Attendance</option><option>Needs Review</option></select></div>
-        </div>
+      <div class="att-form-grid">
+        <div><label>Work Start Time</label><input id="policy-work-start-time" type="time" /></div>
+        <div><label>Work End Time</label><input id="policy-work-end-time" type="time" /></div>
+        <div><label>Break Start Time</label><input id="policy-break-start-time" type="time" /></div>
+        <div><label>Break End Time</label><input id="policy-break-end-time" type="time" /></div>
+        <div><label>Required Daily Working Hours</label><input id="policy-standard-work-hours" type="number" min="1" step="0.25" /></div>
+        <div><label>Grace Period Minutes</label><input id="policy-grace-period" type="number" min="0" step="1" /></div>
+        <div><label>Require HR Validation</label><select id="policy-hr-validation" onchange="syncAttendanceValidationPolicy()"><option value="1">Yes</option><option value="0">No</option></select></div>
+        <div><label>Auto Payroll Ready</label><select id="policy-auto-payroll-ready"><option value="false">No</option><option value="true">Yes</option></select></div>
+        <div><label>Duplicate Scan Window Seconds</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
+        <div><label>Allow Manual Attendance</label><select id="policy-allow-manual"><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Allow HR Correction</label><select id="policy-allow-hr-correction"><option value="true">Yes</option><option value="false">No</option></select></div>
       </div>
     </form>
-    <div id="attendance-policy-status" class="att-muted" style="margin-top:10px;"></div>
+    <div id="attendance-policy-status" class="att-muted" style="margin-top:10px;" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<div id="att-payroll-policy" style="display:none;">
+  <div id="hr-payroll-policy-card" class="card policy-management-card" style="margin-top:20px;">
+    <div class="att-card-heading">
+      <div>
+        <h3>Employee and Group Payroll Configuration</h3>
+        <p>HR-owned schedule, workday factor, minute-rate divisor, and tardiness trigger setup.</p>
+      </div>
+      <button class="btn btn-outline btn-sm" type="button" onclick="loadPayrollPolicySettings()">Refresh</button>
+    </div>
+    <details class="payroll-collapsible" open>
+      <summary>Hourly Payroll Adjustments</summary>
+      <form id="payroll-policy-form" class="form-grid" onsubmit="savePayrollPolicySettings(event)">
+        <div class="form-group"><label>Hourly: Break Deduction Hours</label><input name="hourly_break_deduction_hours" type="number" min="0" step="0.25" /></div>
+        <div class="form-group"><label>Hourly: Round Off Rule</label><select name="hourly_round_off_rule"><option value="none">None</option><option value="nearest_quarter">Nearest Quarter</option><option value="nearest_half">Nearest Half</option></select></label></div>
+        <div class="form-note payroll-form-wide">Schedule, daily hours, working days, HR validation, payroll-ready rules, late, and undertime are controlled below or by the global defaults above.</div>
+        <div class="form-actions">
+          <span class="payroll-form-status" id="payroll-policy-save-status" aria-live="polite"></span>
+          <button class="btn btn-outline" type="button" onclick="loadPayrollPolicySettings()">Reload</button>
+          <button class="btn btn-primary" type="submit">Save Policy</button>
+        </div>
+      </form>
+    </details>
+    <details class="payroll-collapsible" open>
+      <summary>Employee and Group Policy Assignment</summary>
+      <form id="payroll-attendance-config-form" class="form-grid" onsubmit="savePayrollAttendanceConfig(event)">
+        <input type="hidden" name="id" />
+        <div class="form-group"><label>Configuration Name<input name="config_name" required placeholder="Staff 261-day schedule" /></label></div>
+        <div class="form-group"><label>Applies To<select name="scope_type" id="payroll-att-config-scope" onchange="togglePayrollAttendanceConfigScope()"><option value="DEFAULT">Default fallback</option><option value="DEPARTMENT">Department / Group</option><option value="EMPLOYMENT_TYPE">Employment Type</option><option value="WAGE_TYPE">Wage Type</option><option value="EMPLOYEE">Employee</option></select></label></div>
+        <div class="form-group payroll-att-config-scope payroll-att-config-department" style="display:none;"><label>Department<select name="department_id" id="payroll-att-config-department" onchange="renderPayrollAttendanceConfigOptions()"><option value="">Select department</option></select></label></div>
+        <div class="form-group payroll-att-config-scope payroll-att-config-employment" style="display:none;"><label>Employment Type<select name="scope_value" id="payroll-att-config-employment" onchange="renderPayrollAttendanceConfigOptions()"><option value="">Select employment type</option></select></label></div>
+        <div class="form-group payroll-att-config-scope payroll-att-config-wage" style="display:none;"><label>Wage Type<select name="wage_type_id" id="payroll-att-config-wage-type" onchange="renderPayrollAttendanceConfigOptions()"><option value="">Select wage type</option></select></label></div>
+        <div class="form-group payroll-att-config-scope payroll-att-config-employee" style="display:none;"><label>Employee<select name="employee_id" id="payroll-att-config-employee"><option value="">Select employee</option></select></label></div>
+        <div class="form-group"><label>Work Start<input name="work_start_time" type="time" value="08:00" /></label></div>
+        <div class="form-group"><label>Work End<input name="work_end_time" type="time" value="17:00" /></label></div>
+        <div class="form-group"><label>Break Start<input name="break_start_time" type="time" value="12:00" /></label></div>
+        <div class="form-group"><label>Break End<input name="break_end_time" type="time" value="13:00" /></label></div>
+        <div class="form-group"><label>Daily Hours<input name="daily_hours" type="number" min="1" max="24" step="0.25" value="8" required /></label></div>
+        <div class="form-group"><label>Working Days / Month<input name="working_days_per_month" type="number" min="1" max="31" step="0.01" placeholder="21.75 or 26.08" /></label></div>
+        <div class="form-group"><label>Working Days / Year<input name="working_days_per_year" type="number" min="1" max="366" step="1" placeholder="261 or 313" /></label></div>
+        <div class="form-group"><label>Grace Minutes<input name="grace_period_minutes" type="number" min="0" step="1" value="10" /></label></div>
+        <div class="form-group"><label>Tardiness Trigger Count<input name="habitual_tardiness_threshold" type="number" min="1" step="1" value="5" /></label></div>
+        <div class="form-group"><label>Alert HR<select name="tardiness_alert_enabled"><option value="true">Yes</option><option value="false">No</option></select></label></div>
+        <div class="form-group"><label>Priority<input name="priority" type="number" min="0" step="1" value="0" /></label></div>
+        <div class="form-group"><label>Effective Date<input name="effective_date" type="date" required /></label></div>
+        <div class="form-group"><label>End Date<input name="end_date" type="date" /></label></div>
+        <div class="form-group"><label>Status<select name="is_active"><option value="true">Active</option><option value="false">Inactive</option></select></label></div>
+        <div class="form-group span-2"><label>Notes<input name="notes" placeholder="Optional HR policy note" /></label></div>
+        <div class="form-note payroll-form-wide">Late and undertime deductions are locked to employee minute-rate computation. Fixed penalties are not used here.</div>
+        <div class="form-actions">
+          <span class="payroll-form-status" id="payroll-att-config-status" aria-live="polite"></span>
+          <button class="btn btn-outline" type="button" onclick="resetPayrollAttendanceConfigForm()">Clear</button>
+          <button class="btn btn-primary" type="submit">Save Configuration</button>
+        </div>
+      </form>
+      <div class="table-wrap"><div id="payroll-attendance-config-grid"></div></div>
+    </details>
   </div>
 </div>
 
@@ -360,7 +319,7 @@
     </div>
     <div id="attendance-detail-content" class="att-detail-sections"></div>
     <div class="att-modal-actions">
-      <button class="btn btn-primary" onclick="detailValidateAttendance()">Validate Attendance</button>
+      <button class="btn btn-primary" id="attendance-detail-validate-button" onclick="detailValidateAttendance()">Validate Attendance</button>
       <button class="btn btn-outline" onclick="detailRejectAttendance()">Reject Attendance</button>
       <button class="btn btn-outline" onclick="detailCorrectAttendance()">Correct Attendance</button>
     </div>
@@ -374,8 +333,10 @@
     <input type="hidden" id="override-att-id" />
     <div id="override-emp-info" class="att-note"></div>
     <div class="att-form-grid">
-      <div><label>Time In</label><input type="time" id="override-time-in" /></div>
-      <div><label>Time Out</label><input type="time" id="override-time-out" /></div>
+      <div><label>AM In</label><input type="time" id="override-am-time-in" /></div>
+      <div><label>AM Out</label><input type="time" id="override-am-time-out" /></div>
+      <div><label>PM In</label><input type="time" id="override-pm-time-in" /></div>
+      <div><label>PM Out</label><input type="time" id="override-pm-time-out" /></div>
     </div>
     <div><label>Correction Reason</label><textarea id="override-reason" rows="3" placeholder="Describe the device issue, missing punch, or approved adjustment."></textarea></div>
     <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeOverrideModal()">Cancel</button><button class="btn btn-primary" onclick="submitOverride()">Save Correction</button></div>
@@ -394,8 +355,10 @@
         <small id="manual-employee-status" class="att-muted"></small>
       </div>
       <div><label>Date</label><input type="date" id="manual-date" /></div>
-      <div><label>Time In</label><input type="time" id="manual-time-in" /></div>
-      <div><label>Time Out</label><input type="time" id="manual-time-out" /></div>
+      <div><label>AM In</label><input type="time" id="manual-am-time-in" /></div>
+      <div><label>AM Out</label><input type="time" id="manual-am-time-out" /></div>
+      <div><label>PM In</label><input type="time" id="manual-pm-time-in" /></div>
+      <div><label>PM Out</label><input type="time" id="manual-pm-time-out" /></div>
     </div>
     <div><label>Reason</label><textarea id="manual-reason" rows="3" placeholder="Document the outage or approved manual adjustment."></textarea></div>
     <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeManualModal()">Cancel</button><button class="btn btn-primary" onclick="submitManualAttendance()">Create Audited Record</button></div>

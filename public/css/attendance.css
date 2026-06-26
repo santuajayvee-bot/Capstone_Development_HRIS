@@ -164,7 +164,7 @@
   white-space: nowrap;
 }
 #att-records .att-summary-cell {
-  min-width: 230px;
+  min-width: 150px;
   white-space: normal;
   padding-top: 7px;
   padding-bottom: 7px;
@@ -186,6 +186,24 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.att-code-badge {
+  width: 32px;
+  min-width: 32px;
+  min-height: 24px;
+  padding: 0 !important;
+  border-radius: 4px !important;
+  cursor: help;
+}
+.attendance-policy-save-action {
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+}
+.attendance-policy-save-action #attendance-policy-save-feedback {
+  line-height: 1.3;
 }
 #page-attendance .badge,
 .att-summary-chip,
@@ -377,6 +395,14 @@
 }
 .att-menu-panel button:hover { background:rgba(79,124,255,.12); }
 .att-menu-panel span { min-width:18px; text-align:center; }
+#att-payroll-policy .policy-management-card,
+#att-payroll-policy .policy-management-card .payroll-collapsible,
+#att-payroll-policy .policy-management-card .table-wrap,
+#att-payroll-policy .policy-management-card input,
+#att-payroll-policy .policy-management-card select,
+#att-payroll-policy .policy-management-card button {
+  border-radius:0 !important;
+}
 @media (max-width: 1000px) {
   .att-stats, .records-summary, .att-sync-layout, .bio-status-grid, .bio-diagnostic-grid, .bio-steps { grid-template-columns:repeat(2, 1fr); }
   .att-detail-grid, .att-metric-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
@@ -390,7 +416,7 @@
   .att-records-actionbar { display:grid; }
   .att-overview-row { padding:14px; }
   #att-records .att-summary-cell {
-    min-width: 240px;
+    min-width: 150px;
   }
   #att-records .att-records-pagination {
     align-items: stretch;
