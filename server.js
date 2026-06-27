@@ -20,6 +20,7 @@ const payrollRoutes                          = require('./server/payroll');
 const fileManagementRoutes                   = require('./server/201-file-management');
 const attendanceRoutes                       = require('./server/attendance');
 const biometricRoutes                        = require('./server/biometric');
+const holidayRoutes                          = require('./server/holidays');
 const blockchainPayrollRoutes                = require('./server/routes/blockchain-payroll');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
@@ -836,6 +837,7 @@ app.use('/api/201-files', requireAuth, fileManagementRoutes);
 
 // Attendance Module (biometric attendance, records, manual correction, audit)
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/holidays', holidayRoutes);
 
 // Local biometric bridge endpoint for ZKTeco ZK9500 attendance scans
 app.use('/api/biometric', biometricRoutes);

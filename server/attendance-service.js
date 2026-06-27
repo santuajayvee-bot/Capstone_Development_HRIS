@@ -18,6 +18,7 @@ const {
   getInitialVerificationStatus,
 } = require('./attendance-policy-engine');
 const { classifyDtrPunch, dtrUpdateValues, hasRequiredDtrPunches } = require('./dtr-punch');
+const { getHolidayForDate } = require('./holiday-service');
 const { recordTardinessPolicyAlert } = require('./tardiness-policy');
 
 const GENESIS_HASH = '0'.repeat(64);
@@ -293,6 +294,7 @@ async function refreshSummary(conn, attendanceId) {
   await ensureAttendanceLogMetricColumns(conn);
 
   const policy = await getActiveAttendancePolicy(conn, row.date, { employee_id: row.employee_id });
+  const holiday = policy.enable_holiday_rules ? await getHolidayForDate(conn, row.date, 'PH') : null;
   const metrics = computeAttendanceMetrics(row, policy);
   const { regularMinutes, overtimeMinutes, lateMinutes, undertimeMinutes, attendanceStatus } = metrics;
   const statusReady = policy.payroll_attendance_source === 'validated'
@@ -318,6 +320,12 @@ async function refreshSummary(conn, attendanceId) {
     habitual_tardiness_threshold: policy.habitual_tardiness_threshold || null,
     holiday: {
       enabled: policy.enable_holiday_rules,
+      date: holiday?.holiday_date || null,
+      name: holiday?.name || null,
+      local_name: holiday?.local_name || null,
+      type: holiday?.holiday_type || null,
+      multiplier: holiday?.multiplier || null,
+      is_paid: holiday?.is_paid ?? null,
       regular_multiplier: policy.regular_holiday_multiplier,
       special_multiplier: policy.special_holiday_multiplier,
       rest_day_multiplier: policy.rest_day_multiplier,

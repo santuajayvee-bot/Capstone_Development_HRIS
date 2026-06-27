@@ -1897,8 +1897,14 @@ async function loadAttendancePolicies() {
     setPolicyValue('policy-auto-payroll-ready', String(data.auto_payroll_ready ?? false));
     setPolicyValue('policy-allow-manual', String(data.allow_manual_attendance ?? true));
     setPolicyValue('policy-allow-hr-correction', String(data.allow_hr_correction ?? true));
+    setPolicyValue('policy-enable-holiday', String(data.enable_holiday_rules ?? false));
+    setPolicyValue('policy-regular-holiday-multiplier', data.regular_holiday_multiplier ?? 2);
+    setPolicyValue('policy-special-holiday-multiplier', data.special_holiday_multiplier ?? 1.3);
+    setPolicyValue('policy-holiday-ot-multiplier', data.holiday_overtime_multiplier ?? 1.3);
+    setPolicyValue('holiday-calendar-year', new Date().getFullYear());
     syncAttendanceValidationPolicy();
     setText('attendance-policy-status', 'Active attendance policy loaded.');
+    loadHolidayCalendar();
   } catch (err) {
     setText('attendance-policy-status', err.message);
   }
@@ -1943,6 +1949,10 @@ async function saveAttendancePolicies(event) {
     auto_payroll_ready: document.getElementById('policy-auto-payroll-ready')?.value,
     allow_manual_attendance: document.getElementById('policy-allow-manual')?.value,
     allow_hr_correction: document.getElementById('policy-allow-hr-correction')?.value,
+    enable_holiday_rules: document.getElementById('policy-enable-holiday')?.value,
+    regular_holiday_multiplier: document.getElementById('policy-regular-holiday-multiplier')?.value,
+    special_holiday_multiplier: document.getElementById('policy-special-holiday-multiplier')?.value,
+    holiday_overtime_multiplier: document.getElementById('policy-holiday-ot-multiplier')?.value,
   };
   if (!body.effective_date) {
     setFeedback('Select an effective date before saving.', 'att-error');
@@ -1978,6 +1988,97 @@ async function saveAttendancePolicies(event) {
       button.disabled = false;
       button.textContent = 'Save Policy Version';
     }
+  }
+}
+
+function holidayCalendarYear() {
+  const year = Number(document.getElementById('holiday-calendar-year')?.value || new Date().getFullYear());
+  return Number.isInteger(year) && year >= 1900 && year <= 2200 ? year : new Date().getFullYear();
+}
+
+function holidayTypeOptions(value) {
+  const options = [
+    ['REGULAR', 'Regular'],
+    ['SPECIAL_NON_WORKING', 'Special Non-working'],
+    ['SPECIAL_WORKING', 'Special Working'],
+    ['COMPANY', 'Company'],
+    ['OTHER', 'Other'],
+  ];
+  return options.map(([key, label]) => `<option value="${key}" ${key === value ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+async function loadHolidayCalendar() {
+  const tbody = document.getElementById('holiday-calendar-tbody');
+  const status = document.getElementById('holiday-calendar-status');
+  if (!tbody) return;
+  if (status) status.textContent = 'Loading holiday calendar...';
+  try {
+    const year = holidayCalendarYear();
+    setPolicyValue('holiday-calendar-year', year);
+    const res = await apiFetch(`/api/holidays?year=${encodeURIComponent(year)}&country_code=PH&active=all`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load holidays.');
+    if (!Array.isArray(data) || !data.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="att-empty">No holidays found for this year. Sync PH holidays to populate.</td></tr>';
+      if (status) status.textContent = 'No holidays loaded.';
+      return;
+    }
+    tbody.innerHTML = data.map(row => {
+      const id = Number(row.holiday_id);
+      return `<tr>
+        <td>${esc(formatDate(row.holiday_date))}</td>
+        <td><strong>${esc(row.local_name || row.name)}</strong>${row.name && row.name !== row.local_name ? `<span class="att-employee-code">${esc(row.name)}</span>` : ''}</td>
+        <td><select id="holiday-type-${id}">${holidayTypeOptions(row.holiday_type)}</select></td>
+        <td><input id="holiday-multiplier-${id}" type="number" min="0" max="5" step="0.01" value="${esc(row.multiplier ?? 1)}" style="width:90px;" /></td>
+        <td><select id="holiday-active-${id}"><option value="true" ${row.is_active ? 'selected' : ''}>Active</option><option value="false" ${!row.is_active ? 'selected' : ''}>Inactive</option></select></td>
+        <td>${esc(row.source || 'MANUAL')}</td>
+        <td><button class="btn btn-outline btn-sm" type="button" onclick="saveHolidayOverride(${id})">Save</button></td>
+      </tr>`;
+    }).join('');
+    if (status) status.textContent = `Loaded ${data.length} holiday(s) for ${year}.`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function syncHolidayCalendar() {
+  const status = document.getElementById('holiday-calendar-status');
+  const year = holidayCalendarYear();
+  if (status) status.textContent = `Syncing PH holidays for ${year}...`;
+  try {
+    const res = await apiFetch('/api/holidays/sync', {
+      method: 'POST',
+      body: JSON.stringify({ year, country_code: 'PH' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to sync holidays.');
+    if (status) status.textContent = data.message || 'Holiday calendar synced.';
+    loadHolidayCalendar();
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  }
+}
+
+async function saveHolidayOverride(holidayId) {
+  const status = document.getElementById('holiday-calendar-status');
+  const body = {
+    holiday_type: document.getElementById(`holiday-type-${holidayId}`)?.value,
+    multiplier: document.getElementById(`holiday-multiplier-${holidayId}`)?.value,
+    is_active: document.getElementById(`holiday-active-${holidayId}`)?.value,
+  };
+  if (status) status.textContent = 'Saving holiday override...';
+  try {
+    const res = await apiFetch(`/api/holidays/${Number(holidayId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save holiday.');
+    if (status) status.textContent = data.message || 'Holiday updated.';
+    loadHolidayCalendar();
+  } catch (err) {
+    if (status) status.textContent = err.message;
   }
 }
 
@@ -2034,6 +2135,9 @@ window.anchorPendingIntegrity = anchorPendingIntegrity;
 window.loadAuditLog = loadAuditLog;
 window.loadAttendancePolicies = loadAttendancePolicies;
 window.saveAttendancePolicies = saveAttendancePolicies;
+window.loadHolidayCalendar = loadHolidayCalendar;
+window.syncHolidayCalendar = syncHolidayCalendar;
+window.saveHolidayOverride = saveHolidayOverride;
 window.switchAttendancePolicyTab = switchAttendancePolicyTab;
 document.addEventListener('click', closeAttendanceActionMenus);
 window.addEventListener('resize', closeAttendanceActionMenus);

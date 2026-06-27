@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS holiday_calendar (
+  holiday_id BIGINT NOT NULL AUTO_INCREMENT,
+  holiday_date DATE NOT NULL,
+  country_code CHAR(2) NOT NULL DEFAULT 'PH',
+  local_name VARCHAR(190) NULL,
+  name VARCHAR(190) NOT NULL,
+  holiday_type ENUM('REGULAR','SPECIAL_NON_WORKING','SPECIAL_WORKING','COMPANY','OTHER') NOT NULL DEFAULT 'REGULAR',
+  multiplier DECIMAL(6,2) NOT NULL DEFAULT 1.00,
+  is_paid TINYINT(1) NOT NULL DEFAULT 1,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  source VARCHAR(40) NOT NULL DEFAULT 'MANUAL',
+  source_id VARCHAR(190) NULL,
+  source_payload TEXT NULL,
+  created_by BIGINT NULL,
+  updated_by BIGINT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (holiday_id),
+  UNIQUE KEY uk_holiday_calendar_date_country (holiday_date, country_code),
+  INDEX idx_holiday_calendar_year (country_code, holiday_date, is_active),
+  INDEX idx_holiday_calendar_type (holiday_type, is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

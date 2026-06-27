@@ -61,6 +61,8 @@ const ATTENDANCE_POLICY_ALLOWED_FIELDS = new Set([
   'overtime_threshold_hours', 'overtime_threshold_minutes', 'missing_timeout_handling',
   'payroll_attendance_source', 'payroll_ready_rules', 'allow_manual_attendance',
   'allow_hr_correction', 'enable_overtime', 'minimum_overtime_minutes',
+  'enable_holiday_rules', 'regular_holiday_multiplier', 'special_holiday_multiplier',
+  'rest_day_multiplier', 'holiday_overtime_multiplier',
   'multiple_scan_handling', 'overtime_handling',
 ]);
 const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
@@ -863,6 +865,11 @@ router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
       payroll_attendance_source: body.payroll_attendance_source || (String(body.payroll_ready_rules || '').toLowerCase().includes('validated') ? 'validated' : 'payroll_ready'),
       late_deduction_method: lateDeductionMethod,
       undertime_deduction_method: undertimeDeductionMethod,
+      enable_holiday_rules: String(requestBool(body.enable_holiday_rules, false)),
+      regular_holiday_multiplier: String(Math.max(0, Number(body.regular_holiday_multiplier || 2))),
+      special_holiday_multiplier: String(Math.max(0, Number(body.special_holiday_multiplier || 1.3))),
+      rest_day_multiplier: String(Math.max(0, Number(body.rest_day_multiplier || 1.3))),
+      holiday_overtime_multiplier: String(Math.max(0, Number(body.holiday_overtime_multiplier || 1.3))),
     };
     const { changes, policy } = await saveAttendancePolicyValues(pool, normalized, req.user.id);
     await writeAuditLog(

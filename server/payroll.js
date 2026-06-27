@@ -1487,6 +1487,17 @@ function numeric(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function roundMoney(value) {
   return Math.round((numeric(value) + Number.EPSILON) * 100) / 100;
 }
@@ -2965,6 +2976,26 @@ async function validateDailyHourlyPayroll(pool, options) {
   const absentDays = attendanceRows.filter(row => String(row.attendance_status || '').toLowerCase().includes('absent')).length;
   const rawRegularHours = attendanceRows.reduce((sum, row) => sum + Number(row.regular_minutes || 0) / 60, 0);
   const overtimeHours = attendanceRows.reduce((sum, row) => sum + Number(row.overtime_minutes || 0) / 60, 0);
+  const holidayRows = attendanceRows.map(row => {
+    const snapshot = parseJsonObject(row.policy_snapshot_json);
+    const holiday = snapshot.holiday || {};
+    const multiplier = numeric(holiday.multiplier);
+    const premiumMultiplier = holiday.enabled && holiday.name && multiplier > 1 ? multiplier - 1 : 0;
+    const regularHours = Number(row.regular_minutes || 0) / 60;
+    const amount = premiumMultiplier > 0
+      ? (isHourly ? rate * regularHours * premiumMultiplier : rate * premiumMultiplier)
+      : 0;
+    return {
+      attendance_date: row.attendance_date,
+      name: holiday.name || null,
+      type: holiday.type || null,
+      multiplier,
+      premium_multiplier: premiumMultiplier,
+      regular_hours: regularHours,
+      amount: roundMoney(amount),
+    };
+  }).filter(row => row.amount > 0);
+  const holidayPremium = holidayRows.reduce((sum, row) => sum + row.amount, 0);
   const activePolicy = (isDaily || isMonthly) ? policy.daily : policy.hourly;
   const scheduledStartMinutes = payrollClockMinutes(activePolicy.work_start_time);
   const graceCreditHours = isHourly && activePolicy.late_apply_grace_period
@@ -2997,11 +3028,12 @@ async function validateDailyHourlyPayroll(pool, options) {
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
 
   const monthlyConversionMethod = isMonthly ? policy.monthly.conversion_method : null;
-  const grossPay = isMonthly && monthlyConversionMethod === 'weekly_from_monthly'
+  const baseGrossPay = isMonthly && monthlyConversionMethod === 'weekly_from_monthly'
     ? monthlySalary / 4
     : (isDaily || isMonthly)
       ? rate * daysWorked
       : rate * hoursWorked;
+  const grossPay = baseGrossPay + holidayPremium;
   const result = {
     ok: errors.length === 0,
     errors,
@@ -3031,6 +3063,8 @@ async function validateDailyHourlyPayroll(pool, options) {
     hours_worked: Number(hoursWorked.toFixed(2)),
     regular_hours: Number(hoursWorked.toFixed(2)),
     overtime_hours: Number(overtimeHours.toFixed(2)),
+    holiday_premium: roundMoney(holidayPremium),
+    holiday_rows: holidayRows,
     late_minutes: attendanceDeductions.late_minutes,
     deductible_late_minutes: attendanceDeductions.deductible_late_minutes,
     undertime_minutes: attendanceDeductions.undertime_minutes,
@@ -3038,6 +3072,7 @@ async function validateDailyHourlyPayroll(pool, options) {
     late_deduction: attendanceDeductions.late_deduction,
     undertime_deduction: attendanceDeductions.undertime_deduction,
     tardy_ut_deduction: attendanceDeductions.tardy_ut_deduction,
+    base_gross_pay: roundMoney(baseGrossPay),
     gross_pay: Number(grossPay.toFixed(2)),
     validation_status: errors.length ? 'Blocked' : 'Ready',
     policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
@@ -3053,6 +3088,7 @@ async function validateDailyHourlyPayroll(pool, options) {
       overtime_hours: Number(row.overtime_minutes || 0) / 60,
       late_minutes: Number(row.late_minutes || 0),
       undertime_minutes: Number(row.undertime_minutes || 0),
+      holiday: parseJsonObject(row.policy_snapshot_json).holiday || null,
       time_in: row.time_in,
       time_out: row.time_out
     }))

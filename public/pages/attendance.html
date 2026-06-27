@@ -229,9 +229,34 @@
         <div><label>Duplicate Scan Window Seconds</label><input id="policy-duplicate-window" type="number" min="0" step="1" /></div>
         <div><label>Allow Manual Attendance</label><select id="policy-allow-manual"><option value="true">Yes</option><option value="false">No</option></select></div>
         <div><label>Allow HR Correction</label><select id="policy-allow-hr-correction"><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div><label>Enable Holiday Rules</label><select id="policy-enable-holiday"><option value="false">No</option><option value="true">Yes</option></select></div>
+        <div><label>Regular Holiday Multiplier</label><input id="policy-regular-holiday-multiplier" type="number" min="0" max="5" step="0.01" /></div>
+        <div><label>Special Holiday Multiplier</label><input id="policy-special-holiday-multiplier" type="number" min="0" max="5" step="0.01" /></div>
+        <div><label>Holiday OT Multiplier</label><input id="policy-holiday-ot-multiplier" type="number" min="0" max="5" step="0.01" /></div>
       </div>
     </form>
     <div id="attendance-policy-status" class="att-muted" style="margin-top:10px;" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="card policy-management-card" style="margin-top:20px;">
+    <div class="att-card-heading">
+      <div>
+        <h3>Holiday Calendar</h3>
+        <p>Sync Philippine holidays by year, then review type and multiplier before payroll use.</p>
+      </div>
+      <div class="att-actions">
+        <input id="holiday-calendar-year" type="number" min="1900" max="2200" step="1" style="width:110px;" />
+        <button class="btn btn-outline btn-sm" type="button" onclick="loadHolidayCalendar()">Refresh</button>
+        <button class="btn btn-primary btn-sm" type="button" onclick="syncHolidayCalendar()">Sync PH Holidays</button>
+      </div>
+    </div>
+    <div id="holiday-calendar-status" class="att-muted" role="status" aria-live="polite"></div>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table>
+        <thead><tr><th>Date</th><th>Name</th><th>Type</th><th>Multiplier</th><th>Status</th><th>Source</th><th>Action</th></tr></thead>
+        <tbody id="holiday-calendar-tbody"><tr><td colspan="7" class="att-empty">Load the holiday calendar.</td></tr></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
