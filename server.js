@@ -89,7 +89,7 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
 const EMPLOYEE_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s.-]+$/;
-const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()/-]+$/;
+const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+:/-]+$/;
 const EMPLOYEE_SAFE_TEXT_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+:/-]+$/;
 const EMPLOYEE_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
 const EMPLOYEE_ENUMS = {
@@ -563,8 +563,7 @@ function localPhilippineAddressSuggestions(query, limit = 8) {
   for (const region of philippineAddressCache.regions) {
     if (normalizeLookupKey(region.name).includes(needle)) {
       pushSuggestion(`${region.name}, Philippines`, {
-        region: region.name,
-        street_address: query
+        region: region.name
       });
     }
 
@@ -572,8 +571,7 @@ function localPhilippineAddressSuggestions(query, limit = 8) {
       if (normalizeLookupKey(provinceName).includes(needle)) {
         pushSuggestion(`${provinceName}, ${region.name}, Philippines`, {
           region: region.name,
-          province: provinceName,
-          street_address: query
+          province: provinceName
         });
       }
 
@@ -582,8 +580,7 @@ function localPhilippineAddressSuggestions(query, limit = 8) {
           pushSuggestion(`${cityName}, ${provinceName}, ${region.name}, Philippines`, {
             region: region.name,
             province: provinceName,
-            city_municipality: cityName,
-            street_address: query
+            city_municipality: cityName
           });
         }
 
@@ -593,8 +590,7 @@ function localPhilippineAddressSuggestions(query, limit = 8) {
               region: region.name,
               province: provinceName,
               city_municipality: cityName,
-              barangay: barangayName,
-              street_address: query
+              barangay: barangayName
             });
           }
           if (suggestions.length >= limit) return suggestions;
@@ -1741,7 +1737,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
       'residential_address', 'current_address', 'mailing_address', 'emergency_contact_address',
       'residential_address_full_address', 'current_address_full_address', 'mailing_address_full_address',
       'residential_address_street_address', 'current_address_street_address', 'mailing_address_street_address'
-    ].forEach(field => validateEmployeeTextField(body, field, { max: 255, pattern: EMPLOYEE_ADDRESS_PATTERN }));
+    ].forEach(field => validateEmployeeTextField(body, field, { max: 500, pattern: EMPLOYEE_ADDRESS_PATTERN }));
 
     [
       'residential_address_region', 'residential_address_province', 'residential_address_city_municipality',

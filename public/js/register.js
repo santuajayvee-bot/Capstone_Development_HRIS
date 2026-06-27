@@ -475,6 +475,7 @@ function clearAddressSelection(input) {
   delete input.dataset.cityMunicipality;
   delete input.dataset.barangay;
   delete input.dataset.streetAddress;
+  delete input.dataset.locationAddress;
   delete input.dataset.fullAddress;
 }
 
@@ -490,6 +491,7 @@ function setAddressSelection(input, address, latitude, longitude, placeId = '', 
   input.dataset.cityMunicipality = details.city_municipality || '';
   input.dataset.barangay = details.barangay || '';
   input.dataset.streetAddress = details.street_address || '';
+  input.dataset.locationAddress = details.location_address || details.full_address || address || '';
   input.dataset.fullAddress = details.full_address || address || '';
 }
 
@@ -506,8 +508,29 @@ function getAddressLocationValue(input) {
   return (input?.dataset.fullAddress || input?.value || '').trim();
 }
 
-function buildEmployeeFullAddress(line, input) {
-  const location = getAddressLocationValue(input);
+function getAddressLocationOnlyValue(item, input) {
+  const line = getAddressLineValue(item, input);
+  const selectedLocation = (input?.dataset.locationAddress || '').trim();
+  if (selectedLocation) return selectedLocation;
+
+  const rawValue = (input?.value || '').trim();
+  const rawFullAddress = (input?.dataset.fullAddress || '').trim();
+  const candidate = rawFullAddress || rawValue;
+  if (!line || !candidate) return candidate;
+
+  const normalizedLine = line.replace(/\s+/g, ' ').toLowerCase();
+  const normalizedCandidate = candidate.replace(/\s+/g, ' ').toLowerCase();
+  if (normalizedCandidate === normalizedLine) return '';
+
+  const linePrefix = `${normalizedLine}, `;
+  if (normalizedCandidate.startsWith(linePrefix)) {
+    return candidate.slice(candidate.indexOf(',') + 1).trim();
+  }
+
+  return candidate;
+}
+
+function buildEmployeeFullAddress(line, location) {
   return [line, location].filter(Boolean).join(', ');
 }
 
@@ -515,10 +538,12 @@ function syncAddressFullValue(item) {
   const input = document.getElementById(item.input);
   if (!input) return '';
   const line = getAddressLineValue(item, input);
-  const fullAddress = buildEmployeeFullAddress(line, input);
+  const location = item.line ? getAddressLocationOnlyValue(item, input) : getAddressLocationValue(input);
+  const fullAddress = buildEmployeeFullAddress(line, location);
   input.dataset.streetAddress = line;
-  input.dataset.fullAddress = fullAddress || getAddressLocationValue(input);
-  return fullAddress || input.value || '';
+  if (item.line) input.dataset.locationAddress = location;
+  input.dataset.fullAddress = fullAddress || location;
+  return fullAddress || location || input.value || '';
 }
 
 function copyHomeAddress(config) {
@@ -1416,6 +1441,19 @@ function initializeEmployeeIdControls() {
   loadEmployeeIdConfig().then(() => onEmployeeIdModeChange());
 }
 
+function getActiveFormTab() {
+  const activeSection = document.querySelector('#register-form-view .form-tab.active')?.dataset?.formSection;
+  if (FORM_SECTIONS.includes(activeSection)) return activeSection;
+
+  const visibleSection = FORM_SECTIONS.find(sectionId => {
+    const panel = document.getElementById(`form-${sectionId}`);
+    if (!panel) return false;
+    return window.getComputedStyle(panel).display !== 'none';
+  });
+
+  return visibleSection || 'personal';
+}
+
 function switchFormTab(tabOrEl) {
   const map = {
     'Personal Info': 'personal',
@@ -2259,6 +2297,7 @@ window.initializeAddForm = function() {
 };
 
 window.switchFormTab  = switchFormTab;
+window.getActiveFormTab = getActiveFormTab;
 window.goEmployeeWizardStep = goEmployeeWizardStep;
 window.goEmployeeWizardNext = goEmployeeWizardNext;
 window.goEmployeeWizardBack = goEmployeeWizardBack;

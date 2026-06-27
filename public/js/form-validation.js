@@ -204,6 +204,7 @@
 
   function validationMessage(element, { commit = false } = {}) {
     if (!element || element.disabled || element.type === 'hidden' || element.type === 'file') return '';
+    if (element.closest('[hidden]') || element.offsetParent === null) return '';
     if (typeof element.value !== 'string') return '';
 
     // Preserve a trailing space while typing so multi-word names remain enterable.
