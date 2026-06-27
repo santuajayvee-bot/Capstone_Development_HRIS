@@ -1,3 +1,6 @@
+const { missingDtrPunches } = require('./dtr-punch');
+const { resolveEmployeePayrollAttendancePolicy } = require('./employee-payroll-policy');
+
 const DEFAULT_ATTENDANCE_POLICIES = [
   ['Work Schedule Policy', 'schedule', 'work_start_time', '08:00'],
   ['Work Schedule Policy', 'schedule', 'work_end_time', '17:00'],
@@ -9,13 +12,11 @@ const DEFAULT_ATTENDANCE_POLICIES = [
   ['Late Policy', 'validation', 'late_threshold_minutes', '0'],
   ['Late Policy', 'validation', 'count_late_for_payroll', 'true'],
   ['Late Deduction Policy', 'payroll', 'late_deduction_method', 'auto_compute'],
-  ['Late Deduction Policy', 'payroll', 'late_fixed_deduction_amount', '0'],
   ['Late Deduction Policy', 'payroll', 'late_apply_grace_period', 'true'],
   ['Late Deduction Policy', 'payroll', 'late_require_hr_approval', 'true'],
   ['Undertime Policy', 'validation', 'enable_undertime_tracking', 'true'],
   ['Undertime Policy', 'validation', 'count_undertime_for_payroll', 'true'],
   ['Undertime Deduction Policy', 'payroll', 'undertime_deduction_method', 'auto_compute'],
-  ['Undertime Deduction Policy', 'payroll', 'undertime_fixed_deduction_amount', '0'],
   ['Undertime Deduction Policy', 'payroll', 'undertime_require_hr_approval', 'true'],
   ['Half-Day Policy', 'validation', 'enable_half_day_rule', 'true'],
   ['Half-Day Policy', 'validation', 'half_day_threshold_hours', '4'],
@@ -42,6 +43,8 @@ const DEFAULT_ATTENDANCE_POLICIES = [
 ];
 
 const POLICY_KEYS = new Set(DEFAULT_ATTENDANCE_POLICIES.map((row) => row[2]));
+let attendancePolicySchemaReady = false;
+let attendancePolicySchemaPromise = null;
 
 function toBool(value, fallback = false) {
   if (value === true || value === 1 || value === '1') return true;
@@ -114,6 +117,18 @@ async function normalizeLegacyPolicyTable(pool) {
 }
 
 async function ensureAttendancePolicySettings(pool) {
+  if (attendancePolicySchemaReady) return;
+  if (attendancePolicySchemaPromise) return attendancePolicySchemaPromise;
+  attendancePolicySchemaPromise = initializeAttendancePolicySettings(pool);
+  try {
+    await attendancePolicySchemaPromise;
+    attendancePolicySchemaReady = true;
+  } finally {
+    attendancePolicySchemaPromise = null;
+  }
+}
+
+async function initializeAttendancePolicySettings(pool) {
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS attendance_policy_settings (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -192,7 +207,7 @@ async function migrateLegacyPolicyValues(pool) {
   }
 }
 
-async function getActiveAttendancePolicy(pool, asOfDate = null) {
+async function getActiveAttendancePolicy(pool, asOfDate = null, context = {}) {
   await ensureAttendancePolicySettings(pool);
   const date = normalizeDate(asOfDate);
   const [rows] = await pool.execute(
@@ -231,14 +246,12 @@ async function getActiveAttendancePolicy(pool, asOfDate = null) {
     enable_late_tracking: toBool(flat.enable_late_tracking, true),
     late_threshold_minutes: Math.max(0, Math.floor(toNumber(flat.late_threshold_minutes, 0))),
     count_late_for_payroll: toBool(flat.count_late_for_payroll, true),
-    late_deduction_method: flat.late_deduction_method || 'auto_compute',
-    late_fixed_deduction_amount: Math.max(0, toNumber(flat.late_fixed_deduction_amount, 0)),
+    late_deduction_method: 'auto_compute',
     late_apply_grace_period: toBool(flat.late_apply_grace_period, true),
     late_require_hr_approval: toBool(flat.late_require_hr_approval, true),
     enable_undertime_tracking: toBool(flat.enable_undertime_tracking, true),
     count_undertime_for_payroll: toBool(flat.count_undertime_for_payroll, true),
-    undertime_deduction_method: flat.undertime_deduction_method || 'auto_compute',
-    undertime_fixed_deduction_amount: Math.max(0, toNumber(flat.undertime_fixed_deduction_amount, 0)),
+    undertime_deduction_method: 'auto_compute',
     undertime_require_hr_approval: toBool(flat.undertime_require_hr_approval, true),
     enable_half_day_rule: toBool(flat.enable_half_day_rule, true),
     half_day_threshold_hours: toNumber(flat.half_day_threshold_hours, 4),
@@ -266,6 +279,13 @@ async function getActiveAttendancePolicy(pool, asOfDate = null) {
     allow_manager_certification: toBool(flat.allow_manager_certification, false),
     device_failure_handling: flat.device_failure_handling || 'HR Correction Required',
   };
+  if (context?.employee_id || context?.employeeId) {
+    return resolveEmployeePayrollAttendancePolicy(pool, {
+      employeeId: context.employee_id || context.employeeId,
+      asOfDate: date,
+      basePolicy: policy,
+    });
+  }
   return policy;
 }
 
@@ -306,8 +326,12 @@ function computeAttendanceMetrics(record, policy) {
   const gracePeriodMinutes = Math.max(0, Math.round(Number(policy.grace_period_minutes ?? 10) || 0));
   const lateThresholdMinutes = Math.max(0, Math.round(Number(policy.late_threshold_minutes ?? 0) || 0));
   const halfDayThresholdHours = Math.max(0, Number(policy.half_day_threshold_hours ?? 4) || 0);
+  const dtrMissingPunches = missingDtrPunches(record);
+  const hasIncompleteDtr = dtrMissingPunches.length > 0;
   const grossMinutes = timeIn && timeOut ? minutesBetween(timeIn, timeOut) : 0;
-  const netWorkedMinutes = Math.max(0, grossMinutes - breakOverlapMinutes(timeIn, timeOut, policy));
+  const netWorkedMinutes = hasIncompleteDtr
+    ? 0
+    : Math.max(0, grossMinutes - breakOverlapMinutes(timeIn, timeOut, policy));
   const standardMinutes = Math.round(Number(policy.standard_work_hours || 8) * 60);
   const scheduledStart = minutesFromTime(policy.work_start_time);
   const scheduledEnd = minutesFromTime(policy.work_end_time);
@@ -323,10 +347,10 @@ function computeAttendanceMetrics(record, policy) {
     ? Math.max(0, scheduledEnd - actualOut)
     : 0;
 
-  const scheduledOvertimeMinutes = timeOut && policy.enable_overtime
+  const scheduledOvertimeMinutes = timeOut && policy.enable_overtime && !hasIncompleteDtr
     ? Math.max(0, actualOut - scheduledEnd)
     : 0;
-  const manualOvertimeMinutes = policy.enable_overtime
+  const manualOvertimeMinutes = policy.enable_overtime && !hasIncompleteDtr
     ? Math.max(0, Math.round(Number(record?.overtime_hours || 0) * 60))
     : 0;
   const overtimeMinutes = Math.max(manualOvertimeMinutes, scheduledOvertimeMinutes);
@@ -335,7 +359,8 @@ function computeAttendanceMetrics(record, policy) {
     : netWorkedMinutes;
 
   let attendanceStatus = record?.status || 'Present';
-  if (!timeIn && timeOut) attendanceStatus = 'Incomplete';
+  if (hasIncompleteDtr) attendanceStatus = 'Incomplete';
+  else if (!timeIn && timeOut) attendanceStatus = 'Incomplete';
   else if (timeIn && !timeOut && policy.missing_timeout_handling !== 'Auto Close') attendanceStatus = 'Needs Review';
   else if (timeIn && timeOut) {
     attendanceStatus = lateMinutes > 0 ? 'Late' : 'Present';
@@ -360,6 +385,7 @@ function computeAttendanceMetrics(record, policy) {
     undertimeMinutes,
     attendanceStatus,
     flags,
+    missingDtrPunches: dtrMissingPunches,
   };
 }
 
@@ -375,25 +401,53 @@ async function saveAttendancePolicyValues(pool, body, userId) {
   const changes = [];
   const keys = Object.keys(body).filter((key) => POLICY_KEYS.has(key));
   const current = await getActiveAttendancePolicy(pool, effectiveDate);
-
-  for (const key of keys) {
+  const entries = keys.map((key) => {
     const value = cleanPolicyValue(body[key]);
     const def = DEFAULT_ATTENDANCE_POLICIES.find((item) => item[2] === key);
     const oldValue = current.values[key] ?? null;
-    await pool.execute(
+    if (String(oldValue) !== String(value)) changes.push({ key, old_value: oldValue, new_value: value, effective_date: effectiveDate });
+    return { key, value, def };
+  });
+
+  if (!entries.length) return { changes, policy: current };
+
+  const connection = typeof pool.getConnection === 'function' ? await pool.getConnection() : pool;
+  const ownsConnection = connection !== pool;
+  try {
+    if (typeof connection.beginTransaction === 'function') await connection.beginTransaction();
+    await connection.execute(
       `UPDATE attendance_policy_settings
           SET is_active = 0, updated_by = ?
-        WHERE policy_key = ?
-          AND effective_date = ?`,
-      [userId || null, key, effectiveDate]
+        WHERE effective_date = ?
+          AND policy_key IN (${entries.map(() => '?').join(', ')})`,
+      [userId || null, effectiveDate, ...entries.map(entry => entry.key)]
     );
-    await pool.execute(
+
+    const values = [];
+    const placeholders = entries.map(entry => {
+      values.push(
+        entry.def[0],
+        entry.def[1],
+        entry.key,
+        entry.value,
+        effectiveDate,
+        userId || null,
+        userId || null
+      );
+      return '(?, ?, ?, ?, ?, 1, ?, ?)';
+    });
+    await connection.execute(
       `INSERT INTO attendance_policy_settings
          (policy_name, policy_category, policy_key, policy_value, effective_date, is_active, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-      [def[0], def[1], key, value, effectiveDate, userId || null, userId || null]
+       VALUES ${placeholders.join(', ')}`,
+      values
     );
-    if (String(oldValue) !== String(value)) changes.push({ key, old_value: oldValue, new_value: value, effective_date: effectiveDate });
+    if (typeof connection.commit === 'function') await connection.commit();
+  } catch (error) {
+    if (typeof connection.rollback === 'function') await connection.rollback();
+    throw error;
+  } finally {
+    if (ownsConnection) connection.release();
   }
 
   return { changes, policy: await getActiveAttendancePolicy(pool, effectiveDate) };

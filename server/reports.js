@@ -6,15 +6,22 @@ const express = require('express');
 const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 const pool = require('../config/db');
-const { requireAuth, requireRole } = require('./middleware');
+const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { decryptColumnValue } = require('./data-protection');
 
 const router = express.Router();
 
-const REPORT_ROLES = [
-  'payroll_officer',
-  'payroll_manager'
-];
+const REPORT_HR_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any, 'hr', 'hradmin', 'manager'];
+const REPORT_ROLE_GROUPS = {
+  attendance: [...REPORT_HR_ROLES, ...ROLES.payroll_any],
+  payroll: ROLES.payroll_any,
+  payslip: [...REPORT_HR_ROLES, ...ROLES.payroll_any],
+};
+const REPORT_ACCESS_ROLES = [...new Set([
+  ...REPORT_ROLE_GROUPS.attendance,
+  ...REPORT_ROLE_GROUPS.payroll,
+  ...REPORT_ROLE_GROUPS.payslip,
+])];
 
 const BASE_FORMATS = ['csv', 'excel', 'pdf'];
 const EXCEL_ONLY = ['excel'];
@@ -117,7 +124,7 @@ const REPORTS = [
       return {
         ...report,
         name: 'Attendance DTR',
-        description: 'Daily time record with time in, time out, hours, late, undertime, and payroll-ready status.'
+        description: 'Daily time record with AM in/out, PM in/out, hours, late, undertime, and payroll-ready status.'
       };
     }
     if (report.id === 'payroll-register') {
@@ -131,6 +138,16 @@ const REPORTS = [
   });
 
 const REPORT_BY_ID = new Map(REPORTS.map(report => [report.id, report]));
+
+function rolesForReport(reportId) {
+  if (reportId === 'daily-attendance') return REPORT_ROLE_GROUPS.attendance;
+  if (reportId === 'employee-payslip') return REPORT_ROLE_GROUPS.payslip;
+  return REPORT_ROLE_GROUPS.payroll;
+}
+
+function userCanAccessReport(req, reportId) {
+  return rolesForReport(reportId).includes(String(req.user?.role || '').trim());
+}
 
 function cleanFilter(value) {
   const text = String(value || '').trim();
@@ -378,6 +395,14 @@ function dtrDateLabel(start, end) {
   const startDate = new Date(`${start}T00:00:00Z`);
   const endDate = new Date(`${end}T00:00:00Z`);
   if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return `${start} - ${end}`;
+  if (start === end) {
+    return startDate.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    });
+  }
   const sameMonth = startDate.getUTCFullYear() === endDate.getUTCFullYear()
     && startDate.getUTCMonth() === endDate.getUTCMonth();
   if (sameMonth) {
@@ -400,24 +425,7 @@ function enumerateDtrDates(start, end) {
 }
 
 function dtrFormDates(record) {
-  const startDate = new Date(`${record.start}T00:00:00Z`);
-  const endDate = new Date(`${record.end}T00:00:00Z`);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-    return record.dates.length ? record.dates : enumerateDtrDates(record.start, record.end);
-  }
-
-  const sameMonth = startDate.getUTCFullYear() === endDate.getUTCFullYear()
-    && startDate.getUTCMonth() === endDate.getUTCMonth();
-  if (!sameMonth) return record.dates.length ? record.dates : enumerateDtrDates(record.start, record.end);
-
-  const dates = [];
-  const current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
-  const last = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0));
-  while (current <= last && dates.length < 31) {
-    dates.push(current.toISOString().slice(0, 10));
-    current.setUTCDate(current.getUTCDate() + 1);
-  }
-  return dates;
+  return record.dates.length ? record.dates : enumerateDtrDates(record.start, record.end);
 }
 
 async function dtrRecord(filters) {
@@ -598,6 +606,9 @@ async function payslipRecords(filters) {
   // Payslips are released only after payroll is finalized. Draft calculations
   // remain available in Payroll Records, but must not be issued as payslips.
   where.push("sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')");
+  where.push("(sc.agency_name IS NULL OR TRIM(sc.agency_name) = '')");
+  where.push("(e.agency_name IS NULL OR TRIM(e.agency_name) = '')");
+  where.push("(e.hiring_type IS NULL OR LOWER(e.hiring_type) NOT LIKE '%agency%')");
 
   const rows = await safeQuery('salary_calculations', `
     SELECT
@@ -609,6 +620,7 @@ async function payslipRecords(filters) {
       e.middle_name,
       e.last_name,
       e.position,
+      DATE_FORMAT(e.date_hired, '%Y-%m-%d') AS date_hired,
       COALESCE(d.name, '-') AS department,
       COALESCE(wt.name, '-') AS wage_type,
       COALESCE(sc.payroll_period, DATE_FORMAT(sc.calculation_date, '%Y-%m')) AS payroll_period,
@@ -1053,12 +1065,18 @@ function payslipLineItems(record) {
     - numeric(record.pagibig_deduction)
     - numeric(record.employee_deduction_total));
 
+  const wageType = String(record.wage_type || '').toLowerCase();
+  const primaryLabel = wageType.includes('piece')
+    ? 'Output Pay'
+    : wageType.includes('trip')
+      ? 'Trip Pay'
+      : 'Basic Pay';
   const earnings = [
-    ['Basic Pay', basePay],
+    [primaryLabel, basePay],
     ['Overtime / Premium', overtime],
     ['Allowances', allowances],
-    ['Gross Pay', grossPay]
-  ];
+    ['Total Earnings', grossPay]
+  ].filter(([label, amount]) => amount > 0 || label === 'Total Earnings');
 
   const deductions = [
     ['SSS', numeric(record.sss_deduction)],
@@ -1072,96 +1090,147 @@ function payslipLineItems(record) {
   return { earnings, deductions };
 }
 
+function payslipWorkLabel(record) {
+  const wageType = String(record.wage_type || '').toLowerCase();
+  if (wageType.includes('piece')) return 'Output Quantity';
+  if (wageType.includes('trip')) return 'Trip Count';
+  if (numeric(record.hours_worked) > 0) return 'Worked Hours';
+  return 'Worked Days';
+}
+
+function payslipWorkValue(record) {
+  const wageType = String(record.wage_type || '').toLowerCase();
+  if (wageType.includes('piece') || wageType.includes('trip')) return numeric(record.quantity);
+  if (numeric(record.hours_worked) > 0) return numeric(record.hours_worked);
+  return numeric(record.days_worked);
+}
+
+function payslipAmountToWords(value) {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+  const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const chunk = number => {
+    const parts = [];
+    const hundreds = Math.floor(number / 100);
+    const rest = number % 100;
+    if (hundreds) parts.push(`${ones[hundreds]} Hundred`);
+    if (rest >= 20) {
+      parts.push([tens[Math.floor(rest / 10)], ones[rest % 10]].filter(Boolean).join(' '));
+    } else if (rest >= 10) {
+      parts.push(teens[rest - 10]);
+    } else if (rest > 0) {
+      parts.push(ones[rest]);
+    }
+    return parts.join(' ');
+  };
+  const integerWords = number => {
+    if (number === 0) return 'Zero';
+    const scales = ['', 'Thousand', 'Million', 'Billion'];
+    const parts = [];
+    let remaining = number;
+    let scale = 0;
+    while (remaining > 0) {
+      const current = remaining % 1000;
+      if (current) parts.unshift([chunk(current), scales[scale]].filter(Boolean).join(' '));
+      remaining = Math.floor(remaining / 1000);
+      scale += 1;
+    }
+    return parts.join(' ');
+  };
+  const amount = Math.abs(numeric(value));
+  const pesos = Math.floor(amount);
+  const centavos = Math.round((amount - pesos) * 100);
+  return `${integerWords(pesos)} Pesos${centavos ? ` and ${String(centavos).padStart(2, '0')}/100` : ''}`;
+}
+
 function drawStandardPayslip(doc, record, req) {
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const width = right - left;
-  const ink = '#111827';
-  const muted = '#667085';
-  const red = '#e73236';
-  const border = '#d0d5dd';
-  const soft = '#f8fafc';
+  const ink = '#000000';
+  const border = '#111111';
+  const headerFill = '#d9d9d9';
   const generated = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' });
   const { earnings, deductions } = payslipLineItems(record);
+  const deductionRows = [...deductions, ['Net Pay', numeric(record.net_pay)]];
 
-  const hLine = y => doc.moveTo(left, y).lineTo(right, y).strokeColor(border).lineWidth(0.6).stroke();
-  const labelValue = (label, value, x, y, w) => {
-    doc.font('Helvetica').fontSize(7).fillColor(muted).text(label, x, y, { width: w });
-    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(ink).text(String(value || '-'), x, y + 10, { width: w, ellipsis: true });
+  const detail = (label, value, x, y, labelWidth, valueWidth) => {
+    doc.font('Helvetica').fontSize(11).fillColor(ink).text(label, x, y, { width: labelWidth });
+    doc.text(':', x + labelWidth + 4, y, { width: 8 });
+    doc.text(String(value ?? '-'), x + labelWidth + 18, y, { width: valueWidth, ellipsis: true });
   };
-  const moneyRow = (label, amount, x, y, w, bold = false) => {
-    const labelWidth = w - 96;
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(ink)
-      .text(label, x + 8, y, { width: labelWidth - 12, ellipsis: true });
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(ink)
-      .text(peso(amount), x + labelWidth, y, { width: 88, align: 'right' });
-    doc.moveTo(x, y + 14).lineTo(x + w, y + 14).strokeColor('#eaecf0').lineWidth(0.4).stroke();
+  const table = (title, rows, y) => {
+    const amountWidth = 118;
+    const labelWidth = width - amountWidth;
+    const headerHeight = 24;
+    const rowHeight = 21;
+    doc.rect(left, y, labelWidth, headerHeight).fillAndStroke(headerFill, border);
+    doc.rect(left + labelWidth, y, amountWidth, headerHeight).fillAndStroke(headerFill, border);
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(ink)
+      .text(title, left, y + 6, { width: labelWidth, align: 'center' })
+      .text('Amount', left + labelWidth, y + 6, { width: amountWidth, align: 'center' });
+    y += headerHeight;
+    for (const [label, amount] of rows) {
+      const isTotal = ['Total Earnings', 'Total Deductions', 'Net Pay'].includes(label);
+      doc.rect(left, y, labelWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
+      doc.rect(left + labelWidth, y, amountWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
+      doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5).fillColor(ink)
+        .text(label, left + 6, y + 5, { width: labelWidth - 12, align: isTotal ? 'right' : 'left', ellipsis: true })
+        .text(peso(amount), left + labelWidth + 6, y + 5, { width: amountWidth - 12, align: 'right' });
+      y += rowHeight;
+    }
+    return y;
   };
 
-  doc.rect(left, 26, width, 356).strokeColor(border).lineWidth(0.8).stroke();
-  doc.rect(left, 26, 6, 54).fill(red);
-  doc.font('Helvetica-Bold').fontSize(15).fillColor(ink).text('MARULAS INDUSTRIAL CORP', left + 18, 38);
-  doc.font('Helvetica').fontSize(8).fillColor(muted).text('Employee Payslip', left + 18, 58);
-  doc.font('Helvetica-Bold').fontSize(13).fillColor(ink).text('PAYSLIP', right - 150, 38, { width: 140, align: 'right' });
-  doc.font('Helvetica').fontSize(8).fillColor(muted).text(`Reference: CALC-${String(record.id).padStart(5, '0')}`, right - 180, 58, { width: 170, align: 'right' });
-  hLine(80);
+  let y = 32;
+  doc.font('Helvetica-Bold').fontSize(17).fillColor(ink).text('Payslip', left, y, { width, align: 'center' });
+  y += 26;
+  doc.font('Helvetica').fontSize(13).text('Marulas Industrial Corporation', left, y, { width, align: 'center' });
+  y += 20;
+  doc.font('Helvetica').fontSize(11).text('LGSV HR Payroll System', left, y, { width, align: 'center' });
+  y += 58;
 
-  doc.rect(left, 81, width, 52).fill(soft);
-  const col = (width - 32) / 4;
-  labelValue('Employee Name', record.employee_name, left + 14, 94, col);
-  labelValue('Employee ID', record.employee_code, left + 14 + col, 94, col);
-  labelValue('Department', record.department, left + 14 + col * 2, 94, col);
-  labelValue('Position', record.position || '-', left + 14 + col * 3, 94, col - 10);
-  hLine(133);
+  const half = width / 2;
+  const labelWidth = 118;
+  detail('Date Hired', record.date_hired || '-', left, y, labelWidth, half - labelWidth - 28);
+  detail('Employee Name', record.employee_name, left + half + 14, y, labelWidth, half - labelWidth - 14);
+  y += 24;
+  detail('Pay Period', record.payroll_period, left, y, labelWidth, half - labelWidth - 28);
+  detail('Designation', record.position || '-', left + half + 14, y, labelWidth, half - labelWidth - 14);
+  y += 24;
+  detail(payslipWorkLabel(record), payslipWorkValue(record), left, y, labelWidth, half - labelWidth - 28);
+  detail('Department', record.department || '-', left + half + 14, y, labelWidth, half - labelWidth - 14);
+  y += 22;
+  detail('Wage Type', record.wage_type || '-', left, y, labelWidth, half - labelWidth - 28);
+  detail('Reference No.', `CALC-${String(record.id).padStart(5, '0')}`, left + half + 14, y, labelWidth, half - labelWidth - 14);
+  y += 48;
 
-  const detailY = 145;
-  labelValue('Payroll Period', record.payroll_period, left + 14, detailY, col);
-  labelValue('Calculation Date', record.calculation_date, left + 14 + col, detailY, col);
-  labelValue('Wage Type', record.wage_type, left + 14 + col * 2, detailY, col);
-  labelValue('Status', record.status, left + 14 + col * 3, detailY, col - 10);
-
-  const metricY = 181;
-  labelValue('Days Worked', numeric(record.days_worked), left + 14, metricY, col);
-  labelValue('Hours Worked', numeric(record.hours_worked), left + 14 + col, metricY, col);
-  labelValue(record.wage_type === 'Per-Trip' ? 'Trips' : 'Output / Quantity', numeric(record.quantity), left + 14 + col * 2, metricY, col);
-  labelValue('Base Rate', peso(record.base_rate || record.daily_rate || record.hourly_rate), left + 14 + col * 3, metricY, col - 10);
-
-  const sectionY = 224;
-  const gap = 18;
-  const sectionW = (width - 28 - gap) / 2;
-  const earnX = left + 14;
-  const deductX = earnX + sectionW + gap;
-  doc.rect(earnX, sectionY, sectionW, 22).fill('#ffffff').strokeColor(border).stroke();
-  doc.rect(deductX, sectionY, sectionW, 22).fill('#ffffff').strokeColor(border).stroke();
-  doc.font('Helvetica-Bold').fontSize(9).fillColor(ink).text('Earnings', earnX + 8, sectionY + 7);
-  doc.text('Deductions', deductX + 8, sectionY + 7);
-
-  let rowY = sectionY + 31;
-  const rows = Math.max(earnings.length, deductions.length);
-  for (let i = 0; i < rows; i += 1) {
-    if (earnings[i]) moneyRow(earnings[i][0], earnings[i][1], earnX, rowY, sectionW, earnings[i][0] === 'Gross Pay');
-    if (deductions[i]) moneyRow(deductions[i][0], deductions[i][1], deductX, rowY, sectionW, deductions[i][0] === 'Total Deductions');
-    rowY += 17;
+  y = table('Earnings', earnings, y);
+  y += 28;
+  y = table('Deductions', deductionRows, y);
+  if (y > doc.page.height - 245) {
+    doc.addPage();
+    y = doc.page.margins.top;
   }
+  y += 44;
 
-  const netY = 318;
-  doc.rect(left + 14, netY, width - 28, 28).fill('#fff1f1').strokeColor('#fda29b').lineWidth(0.6).stroke();
-  doc.font('Helvetica-Bold').fontSize(11).fillColor(red).text('NET PAY', left + 24, netY + 9);
-  doc.text(peso(record.net_pay), right - 190, netY + 9, { width: 170, align: 'right' });
+  doc.font('Helvetica').fontSize(12).fillColor(ink).text(peso(record.net_pay), left, y, { width, align: 'center' });
+  y += 20;
+  doc.font('Helvetica').fontSize(11).text(payslipAmountToWords(record.net_pay), left, y, { width, align: 'center' });
 
-  const signY = 364;
-  doc.font('Helvetica').fontSize(7.5).fillColor(muted)
-    .text(`Generated: ${generated}`, left + 14, signY - 12)
-    .text(`Generated by: ${req.user?.username || 'System'}`, left + 14, signY);
-  doc.moveTo(right - 260, signY + 1).lineTo(right - 150, signY + 1).strokeColor(border).stroke();
-  doc.moveTo(right - 120, signY + 1).lineTo(right - 10, signY + 1).strokeColor(border).stroke();
-  doc.font('Helvetica').fontSize(7).fillColor(muted)
-    .text('Prepared By', right - 260, signY + 6, { width: 110, align: 'center' })
-    .text('Received By', right - 120, signY + 6, { width: 110, align: 'center' });
+  const signY = Math.max(y + 74, doc.page.height - 155);
+  const signatureWidth = 170;
+  doc.font('Helvetica').fontSize(11).text('Employer Signature', left + 62, signY - 34, { width: signatureWidth, align: 'center' });
+  doc.text('Employee Signature', right - signatureWidth - 62, signY - 34, { width: signatureWidth, align: 'center' });
+  doc.moveTo(left + 62, signY + 42).lineTo(left + 62 + signatureWidth, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
+  doc.moveTo(right - signatureWidth - 62, signY + 42).lineTo(right - 62, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
+
+  doc.font('Helvetica').fontSize(8).text(`Generated: ${generated} | Prepared by: ${req.user?.username || 'System'}`, left, doc.page.height - 58, { width, align: 'center' });
+  doc.font('Helvetica').fontSize(10).text('This is a system generated payslip', left, doc.page.height - 36, { width, align: 'center' });
 }
 
 function sendPayslipPdf(res, record, req) {
-  const doc = new PDFDocument({ size: 'A5', layout: 'landscape', margin: 24 });
+  const doc = new PDFDocument({ size: 'A4', margin: 54 });
   const chunks = [];
   doc.on('data', chunk => chunks.push(chunk));
   doc.on('end', () => {
@@ -1416,10 +1485,10 @@ function sendDtrPdf(res, record, req) {
   y += 14;
   textLine('Department', record.department, y);
   y += 14;
-  textLine('For the Month of', dtrDateLabel(record.start, record.end), y);
+  textLine(record.start === record.end ? 'For the Date of' : 'For the Period of', dtrDateLabel(record.start, record.end), y);
   y += 20;
 
-  const col = [34, 81.5, 81.5, 81.5, 81.5];
+  const col = [60, 150, 150];
   const tableLeft = left;
   const rowH = 15;
   const drawCell = (text, x, rowY, w, h, options = {}) => {
@@ -1432,17 +1501,12 @@ function sendDtrPdf(res, record, req) {
       });
   };
 
-  const headerY = y;
-  drawCell('-', tableLeft, y, col[0], rowH * 2, { bold: true, size: 7 });
-  drawCell('AM', tableLeft + col[0], y, col[1] + col[2], rowH, { bold: true });
-  drawCell('PM', tableLeft + col[0] + col[1] + col[2], y, col[3] + col[4], rowH, { bold: true });
-  y += rowH;
-  let x = tableLeft + col[0];
-  ['IN', 'OUT', 'IN', 'OUT'].forEach((label, index) => {
-    drawCell(label, x, y, col[index + 1], rowH, { bold: true });
-    x += col[index + 1];
+  let x = tableLeft;
+  ['DAY', 'TIME IN', 'TIME OUT'].forEach((label, index) => {
+    drawCell(label, x, y, col[index], rowH, { bold: true });
+    x += col[index];
   });
-  y = headerY + (rowH * 2);
+  y += rowH;
 
   const dates = dtrFormDates(record);
   const sameMonth = dates.every(date => String(date || '').slice(0, 7) === String(dates[0] || '').slice(0, 7));
@@ -1454,30 +1518,13 @@ function sendDtrPdf(res, record, req) {
       : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
     const timeIn = dtrTime(row.time_in);
     const timeOut = dtrTime(row.time_out);
-    const inHour = dtrHour(row.time_in);
-    const outHour = dtrHour(row.time_out);
-    const amIn = timeIn && inHour !== null && inHour < 12 ? timeIn : '';
-    const pmIn = timeIn && inHour !== null && inHour >= 12 ? timeIn : '';
-    const amOut = timeOut && outHour !== null && outHour < 12 ? timeOut : '';
-    const pmOut = timeOut && outHour !== null && outHour >= 12 ? timeOut : '';
     let cx = tableLeft;
-    [day, amIn, amOut, pmIn, pmOut].forEach((value, index) => {
+    [day, timeIn, timeOut].forEach((value, index) => {
       drawCell(value, cx, y, col[index], rowH, { size: index === 0 && !sameMonth ? 6 : 7 });
       cx += col[index];
     });
     y += rowH;
   });
-  while (dates.length < 31) {
-    dates.push('');
-    const day = dates.length;
-    let cx = tableLeft;
-    [day, '', '', '', ''].forEach((value, index) => {
-      drawCell(value, cx, y, col[index], rowH, { size: 6 });
-      cx += col[index];
-    });
-    y += rowH;
-  }
-
   y += 18;
   doc.font('Helvetica').fontSize(8).fillColor('#000000')
     .text('I certify on my honor that the above is true', left, y, { width, align: 'center' });
@@ -1557,15 +1604,141 @@ async function logReportExport(req, report, format, rowCount) {
   }
 }
 
-router.get('/library', requireAuth, requireRole(REPORT_ROLES), (_req, res) => {
-  res.json({ reports: REPORTS });
+async function safeLookupQuery(tableName, query, params = []) {
+  if (!(await tableExists(tableName))) return [];
+  try {
+    const [rows] = await pool.execute(query, params);
+    return rows;
+  } catch (err) {
+    console.warn(`Report lookup skipped for ${tableName}:`, err.message);
+    return [];
+  }
+}
+
+function reportLookupEmployeeName(row) {
+  const first = decryptReportValue(row.first_name) || row.first_name;
+  const middle = decryptReportValue(row.middle_name) || row.middle_name;
+  const last = decryptReportValue(row.last_name) || row.last_name;
+  return [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
+    || row.employee_code
+    || `Employee #${row.id}`;
+}
+
+async function reportEmployeeLookupRows() {
+  const rows = await safeLookupQuery('employees', `
+    SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name,
+           COALESCE(d.name, '') AS department
+      FROM employees e
+      LEFT JOIN departments d ON d.id = e.department_id
+     WHERE COALESCE(e.status, 'Active') NOT IN ('Deleted', 'Archived')
+     ORDER BY e.employee_code, e.last_name, e.first_name
+     LIMIT 1000
+  `);
+  return rows.map(row => ({
+    id: row.id,
+    employee_code: row.employee_code,
+    employee_name: reportLookupEmployeeName(row),
+    department: row.department || ''
+  }));
+}
+
+async function reportDepartmentLookupRows() {
+  const rows = await safeLookupQuery('departments', `
+    SELECT id, name
+      FROM departments
+     WHERE COALESCE(name, '') <> ''
+     ORDER BY name
+     LIMIT 500
+  `);
+  return rows.map(row => ({ id: row.id, name: row.name }));
+}
+
+async function reportPayrollPeriodLookupRows() {
+  const periods = new Map();
+  const addPeriod = row => {
+    const value = row.month_year || row.payroll_period;
+    if (!/^\d{4}-\d{2}(?:-W[1-5])?$/.test(String(value || ''))) return;
+    if (!periods.has(value)) {
+      periods.set(value, {
+        id: row.id || value,
+        month_year: value,
+        payroll_period: value,
+        period_label: row.period_label || row.payroll_period_label || value,
+        start_date: row.start_date || null,
+        end_date: row.end_date || null,
+        source: row.source || null
+      });
+    }
+  };
+
+  (await safeLookupQuery('payroll_runs', `
+    SELECT id, month_year, period_label,
+           DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+           DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date,
+           'payroll_runs' AS source
+      FROM payroll_runs
+     WHERE month_year REGEXP '^[0-9]{4}-[0-9]{2}(-W[1-5])?$'
+     ORDER BY month_year DESC
+     LIMIT 100
+  `)).forEach(addPeriod);
+
+  (await safeLookupQuery('salary_calculations', `
+    SELECT NULL AS id, payroll_period AS month_year,
+           NULL AS period_label,
+           DATE_FORMAT(MIN(calculation_date), '%Y-%m-%d') AS start_date,
+           DATE_FORMAT(MAX(calculation_date), '%Y-%m-%d') AS end_date,
+           'salary_calculations' AS source
+      FROM salary_calculations
+     WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}(-W[1-5])?$'
+     GROUP BY payroll_period
+     ORDER BY payroll_period DESC
+     LIMIT 100
+  `)).forEach(addPeriod);
+
+  (await safeLookupQuery('payroll_production_pairs', `
+    SELECT NULL AS id, payroll_period AS month_year,
+           NULL AS period_label,
+           DATE_FORMAT(MIN(production_date), '%Y-%m-%d') AS start_date,
+           DATE_FORMAT(MAX(production_date), '%Y-%m-%d') AS end_date,
+           'payroll_production_pairs' AS source
+      FROM payroll_production_pairs
+     WHERE payroll_period REGEXP '^[0-9]{4}-[0-9]{2}(-W[1-5])?$'
+     GROUP BY payroll_period
+     ORDER BY payroll_period DESC
+     LIMIT 100
+  `)).forEach(addPeriod);
+
+  return [...periods.values()].sort((a, b) => String(b.month_year).localeCompare(String(a.month_year)));
+}
+
+router.get('/library', requireAuth, requireRole(REPORT_ACCESS_ROLES), (req, res) => {
+  res.json({ reports: REPORTS.filter(report => userCanAccessReport(req, report.id)) });
 });
 
-router.get('/:reportId.:format', requireAuth, requireRole(REPORT_ROLES), async (req, res) => {
+router.get('/filters', requireAuth, requireRole(REPORT_ACCESS_ROLES), async (_req, res) => {
+  try {
+    const [employees, departments, payrollPeriods] = await Promise.all([
+      reportEmployeeLookupRows(),
+      reportDepartmentLookupRows(),
+      reportPayrollPeriodLookupRows()
+    ]);
+    res.json({
+      employees,
+      departments,
+      payroll_periods: payrollPeriods
+    });
+  } catch (err) {
+    console.error('Error loading report filters:', err);
+    res.status(500).json({ error: 'Failed to load report filters.' });
+  }
+});
+
+router.get('/:reportId.:format', requireAuth, requireRole(REPORT_ACCESS_ROLES), async (req, res) => {
   try {
     const report = REPORT_BY_ID.get(req.params.reportId);
     const format = String(req.params.format || '').toLowerCase();
     if (!report) return res.status(404).json({ error: 'Report not found.' });
+    if (!userCanAccessReport(req, report.id)) return res.status(403).json({ error: 'Access denied.' });
     if (!report.formats.includes(format)) return res.status(400).json({ error: 'Export format is not available for this report.' });
 
     const filters = filtersFromRequest(req.query);

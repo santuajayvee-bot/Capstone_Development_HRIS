@@ -60,32 +60,31 @@ function renderDashboard(data) {
   const subtitle = document.getElementById('dashboard-subtitle');
   const role = document.getElementById('dashboard-role');
 
-  if (title) title.textContent = data.welcome || 'Dashboard';
-  if (subtitle) subtitle.textContent = data.subtitle || 'Here are the items that need your attention.';
+  if (title) title.textContent = 'System Overview';
+  if (subtitle) subtitle.textContent = 'Current HRIS record counts.';
   if (role) role.textContent = data.roleLabel || data.role || 'Role';
 
   renderDashboardStats(data.stats || []);
   renderDashboardTables(data.tables || []);
   renderDashboardActions(data.actions || []);
   renderDashboardList('dashboard-notifications', data.notifications || [], 'No notifications.');
-  renderDashboardList('dashboard-tasks', data.pendingTasks || [], 'No pending tasks.');
-  renderDashboardList('dashboard-activities', data.recentActivities || [], 'No recent activities.');
 }
 
 function renderDashboardStats(stats) {
   const container = document.getElementById('dashboard-stats');
   if (!container) return;
   if (!stats.length) {
-    renderDashboardEmpty(container, 'No statistics available.');
+    renderDashboardEmpty(container, 'No record counts available.');
     return;
   }
 
-  container.innerHTML = stats.map(item => `
-    <div class="stat-card">
-      <div class="stat-label">${dashEscape(item.label)}</div>
-      <div class="stat-val">${dashEscape(item.value)}</div>
-      <div class="stat-sub">${dashEscape(item.sub || '')}</div>
-    </div>
+  container.innerHTML = stats.map((item, index) => `
+    <article class="dashboard-count-item dashboard-count-item-${(index % 7) + 1}">
+      <div class="dashboard-count-circle" aria-label="${dashEscape(item.label)}: ${dashEscape(item.value)}">
+        <strong>${dashEscape(item.value)}</strong>
+      </div>
+      <div class="dashboard-count-label">${dashEscape(item.label)}</div>
+    </article>
   `).join('');
 }
 

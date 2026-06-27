@@ -5,13 +5,16 @@
 <section class="dashboard-shell" id="dashboard-root">
   <div class="dashboard-header">
     <div>
-      <div class="section-title" id="dashboard-title">Dashboard</div>
-      <div class="section-sub" id="dashboard-subtitle">Loading dashboard...</div>
+      <div class="section-title" id="dashboard-title">System Overview</div>
+      <div class="section-sub" id="dashboard-subtitle">Current HRIS record counts.</div>
     </div>
     <span class="dashboard-role-badge" id="dashboard-role">Role</span>
   </div>
 
-  <div class="stat-grid" id="dashboard-stats"></div>
+  <section class="dashboard-summary" aria-labelledby="dashboard-summary-title">
+    <div class="dashboard-section-title" id="dashboard-summary-title">Record Summary</div>
+    <div class="dashboard-count-grid" id="dashboard-stats"></div>
+  </section>
 
   <div class="dashboard-grid">
     <div class="dashboard-main" id="dashboard-main"></div>
@@ -25,16 +28,6 @@
         <div class="dashboard-panel-title">Notifications</div>
         <div class="dashboard-list" id="dashboard-notifications"></div>
       </section>
-
-      <section class="card dashboard-panel">
-        <div class="dashboard-panel-title">Pending Tasks</div>
-        <div class="dashboard-list" id="dashboard-tasks"></div>
-      </section>
     </aside>
   </div>
-
-  <section class="card dashboard-panel">
-    <div class="dashboard-panel-title">Recent Activities</div>
-    <div class="dashboard-list" id="dashboard-activities"></div>
-  </section>
 </section>

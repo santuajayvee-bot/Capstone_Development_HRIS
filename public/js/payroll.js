@@ -10,13 +10,13 @@ let currentSalaryCalculationRecords = [];
 let salaryCalculationPage = 1;
 let payrollRecordWorkflowFilter = 'all';
 const SALARY_CALCULATION_PAGE_SIZE = 10;
-let payrollReportPage = 1;
-let selectedPayrollReport = null;
 let offboardingClearanceRows = [];
 let finalPayApprovalRows = [];
 let weeklyPayrollEmployees = [];
 let weeklyPayrollRegistryPayload = null;
 let weeklyPayrollRegistryPage = 1;
+let payrollAttendanceConfigRows = [];
+let payrollAttendanceConfigOptions = { departments: [], employees: [], pay_types: [], employment_types: [] };
 const WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE = 10;
 let pieceRateConfig = {
   sew_types: [],
@@ -46,6 +46,11 @@ function payrollEscape(value) {
     '"': '&quot;',
     "'": '&#39;'
   }[char]));
+}
+
+function payrollOffboardingCaseId(row) {
+  const id = Number(row?.offboarding_case_id);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
 function payrollActionDotsIcon() {
@@ -351,7 +356,7 @@ function renderPayrollRecords(records) {
           const approvalAction = normalizedStatusKey === 'submitted' && canApproveSalaryCalculations()
             ? `<button class="btn btn-primary btn-sm" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
             : '';
-          const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
+          const blockchainRecordAction = ['approved', 'finalized', 'released'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
             ? `<button class="btn btn-primary btn-sm" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Record on Blockchain</button>`
             : '';
           return `
@@ -404,7 +409,7 @@ function renderPayslipManagement(records) {
             <td>PHP ${parseFloat(r.total_deductions || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
             <td><strong style="color:var(--accent);">PHP ${parseFloat(r.net_pay || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></td>
             <td>${payrollBadge(r.status)}</td>
-            <td><button class="btn btn-outline btn-sm" onclick="exportPayrollReport('employee','pdf')">PDF</button></td>
+            <td><button class="btn btn-outline btn-sm" onclick="generatePayslipPreview(${Number(r.id)})">View</button></td>
           </tr>
         `).join('')}
       </tbody>
@@ -530,8 +535,13 @@ function dateInputValue(date) {
 }
 
 function payrollWeekKeyFromDates(startDate, endDate) {
-  const end = new Date(`${endDate}T00:00:00`);
-  const week = Math.min(5, Math.max(1, Math.ceil(end.getDate() / 7)));
+  const match = String(endDate || startDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return `${String(startDate || endDate).slice(0, 7)}-W1`;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const firstDayOfMonth = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
+  const week = Math.min(5, Math.max(1, Math.ceil((day + firstDayOfMonth) / 7)));
   return `${String(startDate || endDate).slice(0, 7)}-W${week}`;
 }
 
@@ -544,7 +554,7 @@ function setDefaultWeeklyPayrollDates() {
   const start = new Date(now);
   start.setDate(now.getDate() - day + 1);
   const end = new Date(start);
-  end.setDate(start.getDate() + 6);
+  end.setDate(start.getDate() + 5);
   startInput.value = dateInputValue(start);
   endInput.value = dateInputValue(end);
 }
@@ -628,9 +638,14 @@ function renderWeeklyPayrollRegistry(payload = {}) {
   const target = document.getElementById('weekly-payroll-registry');
   if (!target) return;
   const rows = payload.rows || payload.registry || [];
-  weeklyPayrollRegistryPayload = { ...payload, rows };
+  const skipped = Array.isArray(payload.skipped) ? payload.skipped : [];
+  weeklyPayrollRegistryPayload = { ...payload, rows, skipped };
   if (!rows.length) {
-    const skipped = Array.isArray(payload.skipped) ? payload.skipped : [];
+    const totalPages = Math.max(1, Math.ceil(skipped.length / WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE));
+    weeklyPayrollRegistryPage = Math.min(Math.max(weeklyPayrollRegistryPage, 1), totalPages);
+    const startIndex = (weeklyPayrollRegistryPage - 1) * WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE;
+    const endIndex = Math.min(startIndex + WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE, skipped.length);
+    const visibleSkipped = skipped.slice(startIndex, endIndex);
     target.innerHTML = skipped.length
       ? `
         <div class="table-wrap">
@@ -640,25 +655,33 @@ function renderWeeklyPayrollRegistry(payload = {}) {
               <p>${Number(payload.employeesProcessed || 0)} employee(s) processed, ${Number(payload.skippedCount || skipped.length)} skipped. Review the reasons below.</p>
             </div>
           </div>
-          <table class="payroll-erp-table weekly-payroll-table">
+          <table class="payroll-erp-table weekly-payroll-table" data-no-pagination="1">
             <thead>
               <tr>
                 <th>Employee</th>
                 <th>Pay Type</th>
                 <th>Reason</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              ${skipped.map(row => `
+              ${visibleSkipped.map(row => `
                 <tr>
                   <td>${payrollEscape(row.employee_name || row.employee_code || `Employee #${row.employee_id || '-'}`)}<br><span class="muted-small">${payrollEscape(row.employee_code || '')}</span></td>
                   <td>${payrollEscape(row.pay_type || '-')}</td>
-                  <td>${payrollEscape(row.reason || 'Skipped by payroll validation.')}</td>
+                  <td>
+                    ${payrollEscape(row.reason || 'Skipped by payroll validation.')}
+                    ${row.resolution ? `<span class="payroll-skip-resolution">${payrollEscape(row.resolution)}</span>` : ''}
+                  </td>
+                  <td>${row.existing_salary_calculation_id
+                    ? `<button class="btn btn-outline btn-sm" type="button" onclick="reviewPayrollCalculation(${Number(row.existing_salary_calculation_id)})">Review</button>`
+                    : '-'}</td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
+        ${renderWeeklyPayrollRegistryPagination(skipped.length, startIndex, endIndex, totalPages)}
       `
       : '<div class="payroll-empty-state">No weekly payroll registry rows found for this selection.</div>';
     return;
@@ -731,8 +754,15 @@ function renderWeeklyPayrollRegistry(payload = {}) {
         </tfoot>
       </table>
     </div>
+    ${renderWeeklyPayrollRegistryPagination(rows.length, startIndex, endIndex, totalPages)}
+  `;
+}
+
+function renderWeeklyPayrollRegistryPagination(totalRows, startIndex, endIndex, totalPages) {
+  if (!totalRows) return '';
+  return `
     <div class="table-pagination weekly-payroll-pagination">
-      <span>Showing ${startIndex + 1}-${endIndex} of ${rows.length}</span>
+      <span>Showing ${startIndex + 1}-${endIndex} of ${totalRows}</span>
       <div class="table-pagination-actions">
         <button class="btn btn-outline btn-sm" type="button" onclick="changeWeeklyPayrollRegistryPage(-1)" ${weeklyPayrollRegistryPage <= 1 ? 'disabled' : ''}>Previous</button>
         <span>Page ${weeklyPayrollRegistryPage} of ${totalPages}</span>
@@ -745,7 +775,9 @@ function renderWeeklyPayrollRegistry(payload = {}) {
 function changeWeeklyPayrollRegistryPage(direction) {
   if (!weeklyPayrollRegistryPayload) return;
   const rows = weeklyPayrollRegistryPayload.rows || [];
-  const totalPages = Math.max(1, Math.ceil(rows.length / WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE));
+  const skipped = weeklyPayrollRegistryPayload.skipped || [];
+  const activeRows = rows.length ? rows : skipped;
+  const totalPages = Math.max(1, Math.ceil(activeRows.length / WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE));
   weeklyPayrollRegistryPage = Math.min(
     Math.max(weeklyPayrollRegistryPage + Number(direction || 0), 1),
     totalPages
@@ -791,6 +823,29 @@ function closePayrollGeneratePreviewModal() {
   document.getElementById('payroll-generate-preview-modal')?.remove();
 }
 
+function setWeeklyPayrollStatus(message, loading = false) {
+  const status = document.getElementById('weekly-payroll-result');
+  if (!status) return;
+  const text = payrollEscape(message || '');
+  status.innerHTML = loading
+    ? `<span class="payroll-loader-row"><span class="payroll-generate-loader small" aria-hidden="true"></span><span>${text}</span></span>`
+    : text;
+}
+
+function setPayrollGenerateModalLoading(loading, message = 'Generating payroll records...') {
+  const loader = document.getElementById('payroll-generate-loading');
+  const loaderText = document.getElementById('payroll-generate-loading-text');
+  const confirmButton = document.getElementById('payroll-preview-confirm-btn');
+  if (loader) loader.hidden = !loading;
+  if (loaderText) loaderText.textContent = message;
+  if (confirmButton) {
+    confirmButton.disabled = Boolean(loading);
+    confirmButton.innerHTML = loading
+      ? '<span class="payroll-loader-row"><span class="payroll-generate-loader small" aria-hidden="true"></span><span>Generating...</span></span>'
+      : 'Confirm Generate Payroll';
+  }
+}
+
 function showPayrollGeneratePreviewModal(preview, payload) {
   closePayrollGeneratePreviewModal();
   const rows = preview.rows || [];
@@ -820,6 +875,13 @@ function showPayrollGeneratePreviewModal(preview, payload) {
         <div class="payroll-preview-warning">
           Confirming will create payroll records, apply configured deductions, and mark included source records as consumed for this payroll period.
         </div>
+        <div class="payroll-generate-loading" id="payroll-generate-loading" hidden>
+          <div class="payroll-generate-loader" aria-hidden="true"></div>
+          <div>
+            <div id="payroll-generate-loading-text">Generating payroll records...</div>
+            <div class="muted-small">Please keep this window open.</div>
+          </div>
+        </div>
         <div class="table-wrap" style="margin-top:14px;">
           <table class="payroll-erp-table" data-no-pagination="1">
             <thead>
@@ -841,17 +903,17 @@ function showPayrollGeneratePreviewModal(preview, payload) {
         </div>
         ${rows.length > 8 ? `<p class="muted-small" style="margin-top:10px;">Showing first 8 of ${rows.length} processable employee(s). The full preview is shown in the register below.</p>` : ''}
         ${skipped.length ? `
-          <details class="payroll-preview-skipped">
+          <details class="payroll-preview-skipped" ${rows.length ? '' : 'open'}>
             <summary>${skipped.length} skipped employee(s)</summary>
             <ul>
-              ${skipped.slice(0, 10).map(row => `<li><strong>${payrollEscape(row.employee_name || row.employee_code || '-')}</strong>: ${payrollEscape(row.reason || 'Skipped')}</li>`).join('')}
+              ${skipped.slice(0, 20).map(row => `<li><strong>${payrollEscape(row.employee_name || row.employee_code || '-')}</strong>: ${payrollEscape(row.reason || 'Skipped')}</li>`).join('')}
             </ul>
           </details>
         ` : ''}
       </div>
       <div class="modal-footer" style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;">
         <button class="btn btn-outline" type="button" onclick="closePayrollGeneratePreviewModal()">Cancel</button>
-        <button class="btn btn-primary" id="payroll-preview-confirm-btn" type="button" ${rows.length ? '' : 'disabled'} onclick='confirmWeeklyPayrollGeneration(${JSON.stringify(payload).replace(/'/g, '&#39;')})'>Confirm Generate Payroll</button>
+        <button class="btn btn-primary" id="payroll-preview-confirm-btn" type="button" ${rows.length ? '' : 'disabled'} onclick='confirmWeeklyPayrollGeneration(${JSON.stringify(payload).replace(/'/g, '&#39;')})'>${rows.length ? 'Confirm Generate Payroll' : 'No Records to Generate'}</button>
       </div>
     </div>
   `;
@@ -870,17 +932,16 @@ async function performWeeklyPayrollGeneration(data) {
   if (submitButton?.disabled) return;
   if (submitButton) {
     submitButton.disabled = true;
-    submitButton.textContent = 'Generating...';
+    submitButton.innerHTML = '<span class="payroll-loader-row"><span class="payroll-generate-loader small" aria-hidden="true"></span><span>Generating...</span></span>';
   }
   if (confirmButton) {
-    confirmButton.disabled = true;
-    confirmButton.textContent = 'Generating...';
-  }
-  if (status) {
-    status.textContent = data.department_id
+    setPayrollGenerateModalLoading(true, data.department_id
       ? 'Processing employees in the selected department...'
-      : 'Processing all active employees. This may take longer...';
+      : 'Processing all active employees. This may take longer...');
   }
+  setWeeklyPayrollStatus(data.department_id
+    ? 'Processing employees in the selected department...'
+    : 'Processing all active employees. This may take longer...', true);
   try {
     const response = await apiFetch('/api/payroll/generate', {
       method: 'POST',
@@ -889,14 +950,14 @@ async function performWeeklyPayrollGeneration(data) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || result.message || 'Failed to generate weekly payroll.');
-    if (status) status.textContent = result.message || 'Weekly payroll generated.';
+    setWeeklyPayrollStatus(result.message || 'Weekly payroll generated.');
     closePayrollGeneratePreviewModal();
     weeklyPayrollRegistryPage = 1;
     renderWeeklyPayrollRegistry(result);
     await loadPayrollDashboard(document.getElementById('payroll-filter-month')?.value || null);
     await loadSalaryCalculations();
   } catch (error) {
-    if (status) status.textContent = error.message;
+    setWeeklyPayrollStatus(error.message);
     if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
   } finally {
     if (submitButton) {
@@ -905,7 +966,7 @@ async function performWeeklyPayrollGeneration(data) {
     }
     if (confirmButton) {
       confirmButton.disabled = false;
-      confirmButton.textContent = 'Confirm Generate Payroll';
+      setPayrollGenerateModalLoading(false);
     }
   }
 }
@@ -923,9 +984,9 @@ async function generateWeeklyPayroll(event) {
   if (submitButton?.disabled) return;
   if (submitButton) {
     submitButton.disabled = true;
-    submitButton.textContent = 'Preparing Preview...';
+    submitButton.innerHTML = '<span class="payroll-loader-row"><span class="payroll-generate-loader small" aria-hidden="true"></span><span>Preparing Preview...</span></span>';
   }
-  if (status) status.textContent = 'Checking source records and calculating a preview...';
+  setWeeklyPayrollStatus('Checking source records and calculating a preview...', true);
   try {
     const response = await apiFetch('/api/payroll/generate/preview', {
       method: 'POST',
@@ -936,10 +997,10 @@ async function generateWeeklyPayroll(event) {
     if (!response.ok) throw new Error(preview.error || preview.message || 'Failed to preview payroll.');
     weeklyPayrollRegistryPage = 1;
     renderWeeklyPayrollRegistry(preview);
-    if (status) status.textContent = preview.message || 'Preview ready. Confirm to generate payroll records.';
+    setWeeklyPayrollStatus(preview.message || 'Preview ready. Confirm to generate payroll records.');
     showPayrollGeneratePreviewModal(preview, data);
   } catch (error) {
-    if (status) status.textContent = error.message;
+    setWeeklyPayrollStatus(error.message);
     if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Preview Error', 'error');
   } finally {
     if (submitButton) {
@@ -967,7 +1028,6 @@ async function loadSalaryCalculations() {
     const data = await response.json();
     currentSalaryCalculationRecords = data.records || [];
     salaryCalculationPage = 1;
-    populatePayrollReportFilters();
     renderSalaryCalculations(currentSalaryCalculationRecords);
   } catch (err) {
     console.error('Error loading salary calculations:', err);
@@ -985,6 +1045,25 @@ async function loadSalaryCalculations() {
 }
 
 // Render salary calculation records in a table
+function payrollRecordHasAppliedDeductions(record = {}) {
+  const status = String(record.status || '').trim().toLowerCase();
+  if (Number(record.payroll_run_id || 0) > 0) return true;
+  if (['approved', 'finalized', 'released', 'locked', 'paid'].includes(status)) return true;
+  if (Number(record.total_deductions || 0) > 0) return true;
+  if (['sss_deduction', 'pagibig_deduction', 'philhealth_deduction', 'employee_deduction_total']
+    .some(key => Number(record[key] || 0) > 0)) return true;
+
+  let snapshot = {};
+  try {
+    snapshot = typeof record.validation_snapshot === 'string'
+      ? JSON.parse(record.validation_snapshot || '{}')
+      : (record.validation_snapshot || {});
+  } catch (_) {
+    snapshot = {};
+  }
+  return /applied|generated|processed/i.test(String(snapshot.deduction_status || ''));
+}
+
 function renderSalaryCalculations(records) {
   const grid = document.getElementById('salary-calculations-grid');
   if (!grid) return;
@@ -1044,7 +1123,8 @@ function renderSalaryCalculations(records) {
               ? new Date(`${r.source_date_from}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
               : `${new Date(`${r.source_date_from}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(`${r.source_date_to}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
             : '';
-          const calcDate = Number(r.payroll_run_id || 0) > 0
+          const isGeneratedPayroll = payrollRecordHasAppliedDeductions(r);
+          const calcDate = isGeneratedPayroll
             ? r.payroll_period
             : sourceDateLabel || new Date(r.calculation_date).toLocaleDateString('en-US', {
             year: 'numeric', month: 'short', day: 'numeric' 
@@ -1076,7 +1156,6 @@ function renderSalaryCalculations(records) {
           const recordJson = JSON.stringify(r).replace(/"/g, '&quot;');
           const normalizedStatus = String(r.status || 'Draft').trim();
           const normalizedStatusKey = normalizedStatus.toLowerCase();
-          const isGeneratedPayroll = Number(r.payroll_run_id || 0) > 0;
           const isFinalizedRecord = ['approved', 'finalized', 'released', 'locked', 'paid'].includes(normalizedStatusKey);
           const hasPayrollAmounts = isGeneratedPayroll || isFinalizedRecord;
           const displayDeductions = hasPayrollAmounts ? Number(r.total_deductions || 0) : 0;
@@ -1097,13 +1176,13 @@ function renderSalaryCalculations(records) {
           const recalcAction = canReviewRecalculate
             ? `<button class="payroll-menu-item" type="button" onclick="recalculateSalaryCalculation(${Number(r.id)})">Recalculate</button>`
             : '';
-          const submitAction = canReviewRecalculate && canSubmitSalaryCalculations()
+          const submitAction = canReviewRecalculate && canSubmitSalaryCalculations() && !canApproveSalaryCalculations()
             ? `<button class="payroll-menu-item primary" type="button" onclick="submitSalaryCalculationForApproval(${Number(r.id)})">Submit Payroll to Manager</button>`
             : '';
-          const approvalAction = isGeneratedPayroll && ['submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+          const approvalAction = isGeneratedPayroll && ['for review', 'submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
             ? `<button class="payroll-menu-item primary" type="button" onclick="approveSalaryCalculation(${Number(r.id)})">Approve & Finalize</button>`
             : '';
-          const blockchainRecordAction = ['approved', 'finalized'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+          const blockchainRecordAction = ['approved', 'finalized', 'released'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
             ? `<button class="payroll-menu-item primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(r.id)})">Load to Blockchain</button>`
             : '';
           const releaseAction = hasPayrollAmounts && normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
@@ -1161,7 +1240,7 @@ function renderSalaryCalculations(records) {
 function payrollRecordWorkflowGroup(record = {}) {
   const status = String(record.status || 'Draft').trim().toLowerCase();
   if (['approved', 'finalized', 'released', 'locked', 'paid'].includes(status)) return 'finalized';
-  if (Number(record.payroll_run_id || 0) > 0) return 'review';
+  if (payrollRecordHasAppliedDeductions(record)) return 'review';
   return 'source';
 }
 
@@ -1235,8 +1314,7 @@ function canApproveSalaryCalculations() {
 function canSubmitSalaryCalculations() {
   if (typeof getUser !== 'function') return false;
   const user = getUser();
-  return ['payroll_officer', 'payroll_manager'].includes(user?.role)
-    || (Array.isArray(user?.permissions) && user.permissions.includes('payroll.process'));
+  return user?.role === 'payroll_officer';
 }
 
 function findSalaryCalculationRecord(calculationId) {
@@ -1254,9 +1332,14 @@ async function reviewPayrollCalculation(calculationId) {
   if (refreshed) showCalculationBreakdown(refreshed);
 }
 
-async function updateSalaryCalculationStatus(calculationId, status, confirmText) {
+async function updateSalaryCalculationStatus(calculationId, status, confirmText, options = {}) {
   if (!Number.isInteger(Number(calculationId))) return;
-  if (confirmText && !window.confirm(confirmText)) return;
+  if (confirmText) {
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm(confirmText, 'Payroll Status', status === 'Approved' ? 'Approve' : 'Continue', 'Cancel')
+      : window.confirm(confirmText);
+    if (!confirmed) return;
+  }
 
   try {
     const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/status`, {
@@ -1267,11 +1350,22 @@ async function updateSalaryCalculationStatus(calculationId, status, confirmText)
     if (!response.ok) throw new Error(data.error || 'Payroll status update failed.');
 
     document.getElementById('calc-breakdown-modal')?.remove();
-    alert(data.blockchain_snapshot ? 'Payroll status updated and integrity snapshot refreshed.' : 'Payroll status updated.');
+    if (!options.suppressSuccessAlert && typeof showAlert === 'function') {
+      await showAlert(
+        options.successMessage || (data.blockchain_snapshot ? 'Payroll status updated and integrity snapshot refreshed.' : 'Payroll status updated.'),
+        'Payroll Updated',
+        'success'
+      );
+    } else if (!options.suppressSuccessAlert) {
+      alert(options.successMessage || (data.blockchain_snapshot ? 'Payroll status updated and integrity snapshot refreshed.' : 'Payroll status updated.'));
+    }
     await loadSalaryCalculations();
     await loadWeeklyPayrollRegistry();
+    return data;
   } catch (error) {
-    alert(error.message);
+    if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
+    else alert(error.message);
+    return null;
   }
 }
 
@@ -1284,7 +1378,27 @@ async function approveSalaryCalculation(calculationId) {
 }
 
 async function releaseSalaryCalculation(calculationId) {
-  return updateSalaryCalculationStatus(calculationId, 'Released', 'Release this payslip to the employee?');
+  const data = await updateSalaryCalculationStatus(
+    calculationId,
+    'Released',
+    'Release this payslip to the employee? The finalized payroll hash will be loaded to blockchain after release.',
+    { suppressSuccessAlert: true }
+  );
+  if (!data) return;
+
+  try {
+    const blockchain = await finalizePayrollOnBlockchain(calculationId, { confirm: false });
+    const message = blockchain?.message || 'Payslip released and payroll hash loaded to blockchain.';
+    if (typeof showAlert === 'function') await showAlert(message, 'Payslip Released', 'success');
+    else alert(message);
+    await loadSalaryCalculations();
+    if (typeof loadBlockchainRecords === 'function') await loadBlockchainRecords();
+  } catch (error) {
+    const message = `Payslip was released, but blockchain recording needs attention: ${error.message}`;
+    if (typeof showAlert === 'function') await showAlert(message, 'Blockchain Pending', 'warning');
+    else alert(message);
+    await loadSalaryCalculations();
+  }
 }
 
 async function lockSalaryCalculation(calculationId) {
@@ -1293,41 +1407,70 @@ async function lockSalaryCalculation(calculationId) {
 
 async function recalculateSalaryCalculation(calculationId) {
   if (!Number.isInteger(Number(calculationId))) return;
-  if (!window.confirm('Recalculate this employee only from approved source records?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Recalculate this employee only from approved source records?', 'Recalculate Payroll', 'Recalculate', 'Cancel')
+    : window.confirm('Recalculate this employee only from approved source records?');
+  if (!confirmed) return;
   try {
     const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/recalculate`, { method: 'POST' });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Payroll recalculation failed.');
     document.getElementById('calc-breakdown-modal')?.remove();
-    alert('Payroll recalculated.');
+    if (typeof showAlert === 'function') await showAlert('Payroll recalculated.', 'Payroll Updated', 'success');
+    else alert('Payroll recalculated.');
     await loadSalaryCalculations();
     await loadWeeklyPayrollRegistry();
   } catch (error) {
-    alert(error.message);
+    if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
+    else alert(error.message);
   }
 }
 
-async function recordApprovedPayrollOnBlockchain(calculationId) {
+async function finalizePayrollOnBlockchain(calculationId, options = {}) {
   if (!Number.isInteger(Number(calculationId))) return;
-  if (!window.confirm('Record the finalized payroll hash on Hyperledger Fabric?')) return;
+  if (options.confirm !== false) {
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm('Record the finalized payroll hash on Hyperledger Fabric?', 'Blockchain Recording', 'Record', 'Cancel')
+      : window.confirm('Record the finalized payroll hash on Hyperledger Fabric?');
+    if (!confirmed) return null;
+  }
 
+  const response = await apiFetch(`/api/blockchain/payroll/finalize/${calculationId}`, {
+    method: 'POST',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 409 && data.transaction_hash) {
+    return {
+      ...data,
+      message: 'Payroll hash is already recorded on blockchain.',
+      already_recorded: true,
+    };
+  }
+  if (!response.ok && response.status !== 202) {
+    throw new Error(data.error || 'Blockchain recording failed.');
+  }
+  return {
+    ...data,
+    message: response.status === 202
+      ? (data.message || 'Payroll was queued for blockchain anchoring.')
+      : 'Payroll hash was recorded on Hyperledger Fabric. System Administrator verification is now available.',
+  };
+}
+
+async function recordApprovedPayrollOnBlockchain(calculationId) {
   try {
-    const response = await apiFetch(`/api/blockchain/payroll/finalize/${calculationId}`, {
-      method: 'POST',
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok && response.status !== 202) {
-      throw new Error(data.error || 'Blockchain recording failed.');
-    }
+    const data = await finalizePayrollOnBlockchain(calculationId);
+    if (!data) return;
 
     document.getElementById('calc-breakdown-modal')?.remove();
-    alert(response.status === 202
-      ? (data.message || 'Payroll was queued for blockchain anchoring.')
-      : 'Payroll hash was recorded on Hyperledger Fabric. System Administrator verification is now available.');
+    const message = data.message || 'Payroll hash was recorded on Hyperledger Fabric. System Administrator verification is now available.';
+    if (typeof showAlert === 'function') await showAlert(message, 'Blockchain Recording', 'success');
+    else alert(message);
     await loadSalaryCalculations();
     if (typeof loadBlockchainRecords === 'function') await loadBlockchainRecords();
   } catch (error) {
-    alert(error.message);
+    if (typeof showAlert === 'function') await showAlert(error.message, 'Blockchain Error', 'error');
+    else alert(error.message);
   }
 }
 
@@ -1621,12 +1764,162 @@ function payslipMoney(value) {
   return amount < 0 ? `(${text})` : text;
 }
 
-function payslipLine(label, value, className = '') {
+function payslipNumber(value) {
+  return Number(value || 0);
+}
+
+function payslipAmountToWords(value) {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+  const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const chunk = number => {
+    const parts = [];
+    const hundreds = Math.floor(number / 100);
+    const rest = number % 100;
+    if (hundreds) parts.push(`${ones[hundreds]} Hundred`);
+    if (rest >= 20) {
+      parts.push([tens[Math.floor(rest / 10)], ones[rest % 10]].filter(Boolean).join(' '));
+    } else if (rest >= 10) {
+      parts.push(teens[rest - 10]);
+    } else if (rest > 0) {
+      parts.push(ones[rest]);
+    }
+    return parts.join(' ');
+  };
+  const integerWords = number => {
+    if (number === 0) return 'Zero';
+    const scales = ['', 'Thousand', 'Million', 'Billion'];
+    const parts = [];
+    let remaining = number;
+    let scale = 0;
+    while (remaining > 0) {
+      const current = remaining % 1000;
+      if (current) parts.unshift([chunk(current), scales[scale]].filter(Boolean).join(' '));
+      remaining = Math.floor(remaining / 1000);
+      scale += 1;
+    }
+    return parts.join(' ');
+  };
+  const amount = Math.abs(payslipNumber(value));
+  const pesos = Math.floor(amount);
+  const centavos = Math.round((amount - pesos) * 100);
+  return `${integerWords(pesos)} Pesos${centavos ? ` and ${String(centavos).padStart(2, '0')}/100` : ''}`;
+}
+
+function payslipWorkLabel(payslip) {
+  if (payslip.wage_type === 'Per-Piece') return 'Output Quantity';
+  if (payslip.wage_type === 'Per-Trip') return 'Trip Count';
+  if (payslipNumber(payslip.earnings?.hours_worked) > 0) return 'Worked Hours';
+  return 'Worked Days';
+}
+
+function payslipWorkValue(payslip) {
+  if (payslip.wage_type === 'Per-Piece') return payslipNumber(payslip.earnings?.quantity);
+  if (payslip.wage_type === 'Per-Trip') return payslipNumber(payslip.earnings?.trip_count);
+  if (payslipNumber(payslip.earnings?.hours_worked) > 0) return payslipNumber(payslip.earnings?.hours_worked);
+  return payslipNumber(payslip.earnings?.days_worked);
+}
+
+function payslipMinuteLabel(value) {
+  const minutes = Math.round(payslipNumber(value));
+  if (!minutes) return '0 min';
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return [
+    hours ? `${hours} hr${hours === 1 ? '' : 's'}` : '',
+    remainder ? `${remainder} min` : ''
+  ].filter(Boolean).join(' ');
+}
+
+function payslipAttendanceRows(payslip) {
+  const earnings = payslip.earnings || {};
+  const rows = [];
+  const lateMinutes = payslipNumber(earnings.late_minutes);
+  const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
+
+  if (lateMinutes > 0) rows.push({ label: 'Late', value: payslipMinuteLabel(lateMinutes) });
+  if (undertimeMinutes > 0) rows.push({ label: 'Undertime', value: payslipMinuteLabel(undertimeMinutes) });
+
+  return rows;
+}
+
+function payslipAttendanceTable(payslip) {
+  const rows = payslipAttendanceRows(payslip);
+  if (!rows.length) return '';
   return `
-    <tr class="${className}">
-      <td>${label}</td>
-      <td class="text-right">${value}</td>
-    </tr>
+    <div class="lgsv-payslip-attendance">
+      <h4>Late / UT</h4>
+      ${rows.map(row => `
+        <div class="lgsv-payslip-attendance-row">
+          <span>${payrollEscape(row.label)}</span>
+          <strong>${payrollEscape(row.value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function payslipRows(payslip) {
+  const primaryLabel = payslip.wage_type === 'Per-Piece'
+    ? 'Output Pay'
+    : payslip.wage_type === 'Per-Trip'
+      ? 'Trip Pay'
+      : 'Basic Pay';
+  const earnings = [
+    { label: primaryLabel, amount: payslipNumber(payslip.earnings?.basic_pay) }
+  ];
+  if (payslipNumber(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: payslipNumber(payslip.earnings.rot_sot) });
+  if (payslipNumber(payslip.earnings?.add) > 0) earnings.push({ label: 'Additional Pay', amount: payslipNumber(payslip.earnings.add) });
+  if (payslipNumber(payslip.earnings?.allowances) > 0) earnings.push({ label: 'Allowances', amount: payslipNumber(payslip.earnings.allowances) });
+  earnings.push({ label: 'Total Earnings', amount: payslipNumber(payslip.summary?.gross_pay), total: true });
+
+  const seen = new Set();
+  const deductions = [];
+  (Array.isArray(payslip.deductions) ? payslip.deductions : []).forEach(item => {
+    const amount = payslipNumber(item.amount);
+    if (amount <= 0 || item.key === 'tardy_ut_total') return;
+    const label = String(item.label || 'Deduction')
+      .replace(/^HDMF\s*\/\s*/i, '')
+      .replace(/^PHIC\s*\/\s*/i, '');
+    const key = label.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    deductions.push({ label, amount });
+  });
+  deductions.push({ label: 'Total Deductions', amount: payslipNumber(payslip.summary?.total_deductions), total: true });
+  deductions.push({ label: 'Net Pay', amount: payslipNumber(payslip.summary?.net_due), total: true });
+
+  return { earnings, deductions };
+}
+
+function payslipTable(title, rows) {
+  return `
+    <table class="lgsv-payslip-table">
+      <thead>
+        <tr>
+          <th>${payrollEscape(title)}</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr class="${row.total ? 'is-total' : ''}">
+            <td>${payrollEscape(row.label)}</td>
+            <td>${payrollEscape(payslipMoney(row.amount))}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function payslipDetail(label, value) {
+  return `
+    <div class="lgsv-payslip-detail">
+      <span>${payrollEscape(label)}</span>
+      <b>:</b>
+      <strong>${payrollEscape(value ?? '-')}</strong>
+    </div>
   `;
 }
 
@@ -1676,82 +1969,168 @@ async function exportPayslipPdf(calculationId, printMode = false) {
 function showPayslipPreview(payslip) {
   const modalId = 'payslip-preview-modal';
   document.getElementById(modalId)?.remove();
-  const earningsRows = [
-    ['Days Worked', payslip.earnings.days_worked || 0],
-    ['Employee Minute Rate', payslipMoney(payslip.earnings.employee_minute_rate)],
-    ['Late Minutes', payslip.earnings.late_minutes || 0],
-    ['Undertime Minutes', payslip.earnings.undertime_minutes || 0],
-    ...(payslip.wage_type === 'Per-Piece' ? [
-      ['Quantity', payslip.earnings.quantity || 0],
-      ['Piece Rate', payslipMoney(payslip.earnings.piece_rate)],
-      ['Production Amount', payslipMoney(payslip.earnings.production_amount)],
-      ...(payslip.earnings.share_percentage ? [['Share', `${payslip.earnings.share_percentage}%`]] : [])
-    ] : []),
-    ...(payslip.wage_type === 'Per-Trip' ? [
-      ['Trip Count', payslip.earnings.trip_count || 0],
-      ['Driver/Helper Rate', payslipMoney(payslip.earnings.trip_rate)]
-    ] : []),
-    ...(payslip.wage_type === 'Monthly' ? [
-      ['Monthly Salary', payslipMoney(payslip.earnings.monthly_salary)],
-      ['Conversion', payslip.earnings.monthly_conversion_method === 'daily_equivalent' ? 'Daily Equivalent' : 'Monthly / 4']
-    ] : []),
-    ['Basic Pay', payslipMoney(payslip.earnings.basic_pay)],
-    ['ROT/SOT', payslipMoney(payslip.earnings.rot_sot)],
-    ['ND', payslipMoney(payslip.earnings.nd)],
-    ['ADD', payslipMoney(payslip.earnings.add)],
-    ['Tardy/UT', payslipMoney(payslip.earnings.tardy_ut)],
-    ['Allowances', payslipMoney(payslip.earnings.allowances)],
-    ['Gross Pay', payslipMoney(payslip.earnings.gross_pay)]
-  ];
+  const rows = payslipRows(payslip);
+  const generated = payslip.generated_at ? new Date(payslip.generated_at).toLocaleString('en-PH') : '-';
 
   const modal = document.createElement('div');
   modal.id = modalId;
   modal.className = 'erp-modal-backdrop';
   modal.innerHTML = `
     <div class="erp-modal payslip-preview-modal" role="dialog" aria-modal="true">
+      <style>
+        .payslip-preview-modal { max-width: 860px; }
+        .lgsv-payslip-paper {
+          background: #ffffff;
+          color: #000000;
+          border: 1px solid #d7d7d7;
+          padding: 34px 44px 28px;
+          font-family: Arial, Helvetica, sans-serif;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+        }
+        .lgsv-payslip-title { text-align: center; margin-bottom: 42px; }
+        .lgsv-payslip-title h3 { margin: 0 0 10px; font-size: 24px; line-height: 1.1; color: #000000; }
+        .lgsv-payslip-title p { margin: 4px 0; color: #000000; font-size: 17px; }
+        .lgsv-payslip-details {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          column-gap: 54px;
+          row-gap: 12px;
+          margin-bottom: 36px;
+        }
+        .lgsv-payslip-detail {
+          display: grid;
+          grid-template-columns: 128px 12px minmax(0, 1fr);
+          align-items: baseline;
+          gap: 4px;
+          font-size: 15px;
+          line-height: 1.35;
+        }
+        .lgsv-payslip-detail strong { font-weight: 400; min-width: 0; overflow-wrap: anywhere; }
+        .lgsv-payslip-attendance {
+          border: 2px solid #111111;
+          margin: -10px 0 28px;
+        }
+        .lgsv-payslip-attendance h4 {
+          background: #d9d9d9;
+          border-bottom: 2px solid #111111;
+          margin: 0;
+          padding: 8px 10px;
+          color: #000000;
+          font-size: 16px;
+          text-align: center;
+        }
+        .lgsv-payslip-attendance-row {
+          display: grid;
+          grid-template-columns: 210px minmax(0, 1fr);
+          border-bottom: 1px solid #111111;
+          min-height: 30px;
+        }
+        .lgsv-payslip-attendance-row:last-child { border-bottom: 0; }
+        .lgsv-payslip-attendance-row span,
+        .lgsv-payslip-attendance-row strong {
+          padding: 7px 10px;
+          color: #000000;
+          font-size: 13px;
+          line-height: 1.25;
+        }
+        .lgsv-payslip-attendance-row span {
+          border-right: 1px solid #111111;
+          font-weight: 700;
+        }
+        .lgsv-payslip-attendance-row strong {
+          font-weight: 400;
+          overflow-wrap: anywhere;
+        }
+        .lgsv-payslip-table {
+          width: 100%;
+          border-collapse: collapse;
+          table-layout: fixed;
+          margin: 0 0 28px;
+          border: 2px solid #111111;
+        }
+        .lgsv-payslip-table th {
+          background: #d9d9d9;
+          border: 2px solid #111111;
+          padding: 8px 10px;
+          color: #000000;
+          font-size: 18px;
+          text-align: center;
+        }
+        .lgsv-payslip-table th:last-child,
+        .lgsv-payslip-table td:last-child { width: 160px; text-align: right; }
+        .lgsv-payslip-table td {
+          border: 2px solid #111111;
+          padding: 7px 10px;
+          color: #000000;
+          font-size: 15px;
+          line-height: 1.2;
+        }
+        .lgsv-payslip-table tr.is-total td { font-weight: 700; }
+        .lgsv-payslip-table tr.is-total td:first-child { text-align: right; }
+        .lgsv-payslip-net-words { text-align: center; margin: 42px 0 52px; font-size: 16px; color: #000000; }
+        .lgsv-payslip-net-words strong { display: block; margin-bottom: 8px; font-size: 18px; }
+        .lgsv-payslip-signatures {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 80px;
+          margin: 0 34px 38px;
+          text-align: center;
+          color: #000000;
+          font-size: 15px;
+        }
+        .lgsv-payslip-signatures span { display: block; margin-bottom: 70px; }
+        .lgsv-payslip-signatures i { display: block; border-top: 2px solid #111111; height: 1px; }
+        .lgsv-payslip-footer { text-align: center; color: #000000; font-size: 13px; }
+        .lgsv-payslip-meta { margin-top: 10px; font-size: 11px; color: #555555; }
+        @media (max-width: 760px) {
+          .lgsv-payslip-paper { padding: 24px 18px; }
+          .lgsv-payslip-details { grid-template-columns: 1fr; gap: 10px; }
+          .lgsv-payslip-detail { grid-template-columns: 118px 10px minmax(0, 1fr); font-size: 14px; }
+          .lgsv-payslip-table th { font-size: 15px; }
+          .lgsv-payslip-table td { font-size: 13px; }
+          .lgsv-payslip-table th:last-child,
+          .lgsv-payslip-table td:last-child { width: 118px; }
+          .lgsv-payslip-attendance-row { grid-template-columns: 1fr; }
+          .lgsv-payslip-attendance-row span { border-right: 0; border-bottom: 1px solid #111111; }
+          .lgsv-payslip-signatures { gap: 24px; margin-left: 0; margin-right: 0; }
+        }
+      </style>
       <div class="erp-modal-head">
         <div>
           <h2>Payslip</h2>
-          <p>${payslip.reference_no} · ${payslip.payroll_period}</p>
+          <p>${payrollEscape(payslip.reference_no)} | ${payrollEscape(payslip.payroll_period)}</p>
         </div>
         <button class="erp-modal-close" type="button" onclick="document.getElementById('${modalId}')?.remove()">×</button>
       </div>
-      <div class="payslip-paper">
-        <div class="payslip-title">
-          <h3>${payslip.company_name}</h3>
-          <span>Payroll Period: ${payslip.payroll_period}</span>
+      <div class="lgsv-payslip-paper">
+        <div class="lgsv-payslip-title">
+          <h3>Payslip</h3>
+          <p>${payrollEscape(payslip.company_name || 'Marulas Industrial Corporation')}</p>
+          <p>LGSV HR Payroll System</p>
         </div>
-        <div class="payroll-breakdown-grid">
-          <label>Employee<input value="${payslip.employee.name || '-'}" readonly /></label>
-          <label>Employee Code<input value="${payslip.employee.code || '-'}" readonly /></label>
-          <label>Department<input value="${payslip.employee.department || '-'}" readonly /></label>
-          <label>Position<input value="${payslip.employee.position || '-'}" readonly /></label>
+        <div class="lgsv-payslip-details">
+          ${payslipDetail('Date Hired', payslip.employee?.date_hired || '-')}
+          ${payslipDetail('Employee Name', payslip.employee?.name || '-')}
+          ${payslipDetail('Pay Period', payslip.payroll_period || '-')}
+          ${payslipDetail('Designation', payslip.employee?.position || '-')}
+          ${payslipDetail(payslipWorkLabel(payslip), payslipWorkValue(payslip))}
+          ${payslipDetail('Department', payslip.employee?.department || '-')}
+          ${payslipDetail('Wage Type', payslip.wage_type || '-')}
+          ${payslipDetail('Reference No.', payslip.reference_no || '-')}
         </div>
-        <div class="payslip-two-column">
-          <div>
-            <h3>Earnings</h3>
-            <table class="payroll-breakdown-table">
-              <tbody>${earningsRows.map(([label, value]) => payslipLine(label, value, label === 'Gross Pay' ? 'is-positive' : '')).join('')}</tbody>
-            </table>
-          </div>
-          <div>
-            <h3>Deductions</h3>
-            <table class="payroll-breakdown-table">
-              <tbody>
-                ${payslip.deductions.map(item => payslipLine(item.label, payslipMoney(item.amount), item.amount ? 'is-deduction' : '')).join('')}
-                ${payslipLine('Total Deductions', payslipMoney(payslip.summary.total_deductions), 'is-deduction')}
-              </tbody>
-            </table>
-          </div>
+        ${payslipAttendanceTable(payslip)}
+        ${payslipTable('Earnings', rows.earnings)}
+        ${payslipTable('Deductions', rows.deductions)}
+        <div class="lgsv-payslip-net-words">
+          <strong>${payrollEscape(payslipMoney(payslip.summary?.net_due))}</strong>
+          ${payrollEscape(payslipAmountToWords(payslip.summary?.net_due))}
         </div>
-        <table class="payroll-breakdown-table payslip-summary-table">
-          <tbody>
-            ${payslipLine('Gross Pay', payslipMoney(payslip.summary.gross_pay))}
-            ${payslipLine('Total Deductions', payslipMoney(payslip.summary.total_deductions), 'is-deduction')}
-            ${payslipLine('Net Due / Net Pay', payslipMoney(payslip.summary.net_due), 'is-net')}
-          </tbody>
-        </table>
-        <div class="payslip-foot">Generated: ${new Date(payslip.generated_at).toLocaleString()} · Prepared by: ${payslip.prepared_by || '-'}</div>
+        <div class="lgsv-payslip-signatures">
+          <div><span>Employer Signature</span><i></i></div>
+          <div><span>Employee Signature</span><i></i></div>
+        </div>
+        <div class="lgsv-payslip-footer">This is a system generated payslip</div>
+        <div class="lgsv-payslip-footer lgsv-payslip-meta">Generated: ${payrollEscape(generated)} | Prepared by: ${payrollEscape(payslip.prepared_by || '-')}</div>
       </div>
       <div class="payroll-breakdown-actions">
         <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Close</button>
@@ -1775,7 +2154,8 @@ function showCalculationBreakdown(record) {
       ? new Date(`${record.source_date_from}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       : `${new Date(`${record.source_date_from}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(`${record.source_date_to}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
     : '';
-  const calculationDate = Number(record.payroll_run_id || 0) === 0 && sourceDateLabel
+  const deductionsApplied = payrollRecordHasAppliedDeductions(record);
+  const calculationDate = !deductionsApplied && sourceDateLabel
     ? sourceDateLabel
     : record.calculation_date
       ? new Date(record.calculation_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -1783,7 +2163,6 @@ function showCalculationBreakdown(record) {
   const calcNo = `CALC-${String(record.id || '').padStart(5, '0')}`;
   const totalAllowances = number(record.total_allowances)
     || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
-  const deductionsApplied = Number(record.payroll_run_id || 0) > 0;
   const sourceEntries = Array.isArray(record.source_entries) ? record.source_entries : [];
   const sourceOutputEntries = sourceEntries.filter(entry => entry.kind !== 'attendance');
   const sourceOutputQuantity = number(record.source_output_quantity)
@@ -1947,14 +2326,14 @@ function showCalculationBreakdown(record) {
   const recalcAction = canReviewRecalculate
     ? `<button class="btn btn-outline" type="button" onclick="recalculateSalaryCalculation(${Number(record.id)})">Recalculate This Employee</button>`
     : '';
-  const submitAction = canReviewRecalculate && canSubmitSalaryCalculations()
+  const submitAction = canReviewRecalculate && canSubmitSalaryCalculations() && !canApproveSalaryCalculations()
     ? `<button class="btn btn-primary" type="button" onclick="submitSalaryCalculationForApproval(${Number(record.id)})">Submit Payroll to Manager</button>`
     : '';
-  const approvalAction = ['submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
+  const approvalAction = ['for review', 'submitted', 'for approval'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
     && deductionsApplied
     ? `<button class="btn btn-primary" type="button" onclick="approveSalaryCalculation(${Number(record.id)})">Approve & Finalize</button>`
     : '';
-  const blockchainRecordAction = normalizedStatusKey === 'approved' && canApproveSalaryCalculations()
+  const blockchainRecordAction = ['approved', 'finalized', 'released'].includes(normalizedStatusKey) && canApproveSalaryCalculations()
     && deductionsApplied
     ? `<button class="btn btn-primary" type="button" onclick="recordApprovedPayrollOnBlockchain(${Number(record.id)})">Load to Blockchain</button>`
     : '';
@@ -2061,11 +2440,6 @@ function switchPayrollTab(tab) {
   if (targetTab === 'employee-deductions') loadEmployeeDeductionAccounts('all');
   if (targetTab === 'allowances') loadPayrollSettings('allowance');
   if (targetTab === 'policies') loadPayrollPolicySettings();
-  if (targetTab === 'reports') {
-    loadPayrollAudit();
-    renderPayrollReportLibrary();
-    if (typeof prepareSwrFxrRegistry === 'function') prepareSwrFxrRegistry();
-  }
   if (targetTab === 'records') loadSalaryCalculations();
   if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
   if (targetTab === 'final-pay-approval') loadFinalPayApprovals();
@@ -2105,7 +2479,11 @@ async function loadOffboardingClearance() {
     const data = await res.json().catch(() => []);
     if (!res.ok) throw new Error(data.error || 'Failed to load offboarding clearances.');
     offboardingClearanceRows = data;
-    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => `<button class="btn btn-outline" onclick="openPayrollClearanceReview(${Number(row.offboarding_case_id)})">Review</button>`);
+    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => {
+      const caseId = payrollOffboardingCaseId(row);
+      if (!caseId) return '<button class="btn btn-outline" type="button" disabled>Review</button>';
+      return `<button class="btn btn-outline" type="button" onclick="openPayrollClearanceReview(${caseId})">Review</button>`;
+    });
   } catch (err) {
     if (grid) grid.innerHTML = `<div class="empty-state">${payrollEscape(err.message)}</div>`;
   }
@@ -2119,7 +2497,11 @@ async function loadFinalPayApprovals() {
     const data = await res.json().catch(() => []);
     if (!res.ok) throw new Error(data.error || 'Failed to load final pay approvals.');
     finalPayApprovalRows = data;
-    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => `<button class="btn btn-outline" onclick="openFinalPayReview(${Number(row.offboarding_case_id)})">Review</button>`);
+    if (grid) grid.innerHTML = payrollOffboardingTable(data, row => {
+      const caseId = payrollOffboardingCaseId(row);
+      if (!caseId) return '<button class="btn btn-outline" type="button" disabled>Review</button>';
+      return `<button class="btn btn-outline" type="button" onclick="openFinalPayReview(${caseId})">Review</button>`;
+    });
   } catch (err) {
     if (grid) grid.innerHTML = `<div class="empty-state">${payrollEscape(err.message)}</div>`;
   }
@@ -2146,15 +2528,29 @@ function payrollModal(id, title, body) {
   document.getElementById(id)?.remove();
   const modal = document.createElement('div');
   modal.id = id;
-  modal.className = 'payroll-breakdown-modal';
-  modal.innerHTML = `<div class="payroll-breakdown-card"><h2>${payrollEscape(title)}</h2>${body}</div>`;
+  modal.className = 'erp-modal-backdrop';
+  modal.innerHTML = `
+    <div class="erp-modal payroll-breakdown-modal" role="dialog" aria-modal="true" aria-labelledby="${id}-title">
+      <div class="erp-modal-head">
+        <div>
+          <h2 id="${id}-title">${payrollEscape(title)}</h2>
+        </div>
+        <button class="erp-modal-close" type="button" aria-label="Close" onclick="document.getElementById('${id}')?.remove()">&times;</button>
+      </div>
+      ${body}
+    </div>
+  `;
   modal.addEventListener('click', event => { if (event.target.id === id) modal.remove(); });
   document.body.appendChild(modal);
 }
 
 function openPayrollClearanceReview(caseId) {
   const row = offboardingClearanceRows.find(item => Number(item.offboarding_case_id) === Number(caseId));
-  if (!row) return;
+  if (!row) {
+    alert('Unable to find this offboarding clearance record. Please refresh and try again.');
+    loadOffboardingClearance();
+    return;
+  }
   payrollModal('payroll-clearance-modal', 'Payroll Clearance Review', `
     ${offboardingReadonlyBlock(row)}
     <form id="payroll-clearance-form" class="payroll-breakdown-grid" onsubmit="submitPayrollClearance(event, ${caseId})">
@@ -2188,7 +2584,11 @@ async function submitPayrollClearance(event, caseId) {
 
 function openFinalPayReview(caseId) {
   const row = finalPayApprovalRows.find(item => Number(item.offboarding_case_id) === Number(caseId));
-  if (!row) return;
+  if (!row) {
+    alert('Unable to find this final pay record. Please refresh and try again.');
+    loadFinalPayApprovals();
+    return;
+  }
   payrollModal('final-pay-modal', 'Final Pay Approval', `
     ${offboardingReadonlyBlock(row)}
     <form id="final-pay-form" class="payroll-breakdown-grid" onsubmit="submitFinalPayApproval(event, ${caseId})">
@@ -2966,83 +3366,6 @@ function togglePiecePartnerFields() {
   updateProductionPairSummary();
 }
 
-let currentSewingRegistry = null;
-
-function sewingRegistryDate(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return '-';
-  return new Date(`${date}T00:00:00`).toLocaleDateString('en-PH', { day: '2-digit', month: 'short' });
-}
-
-function renderSewingRegistry(registry) {
-  const title = registry.kind === '55' ? '55% Sewing Payroll Registry' : registry.kind === '45' ? '45% Sewing Payroll Registry' : 'Main Sewing Payroll Registry';
-  const dates = Array.isArray(registry.dates) ? registry.dates : [];
-  const dailyHeaders = dates.map(date => `<th class="sewing-registry-date"><span>${payrollEscape(sewingRegistryDate(date))}</span><small>Daily Output</small></th>`).join('');
-  const employees = registry.employees.map(employee => {
-    const body = employee.rows.map(row => `<tr><td>${payrollEscape(row.operation_type)}</td><td>${payrollEscape(row.size_range || '-')}</td><td>${money(row.rate_per_piece)}</td>${dates.map(date => `<td>${Number(row.daily?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td>`).join('')}<td>${Number(row.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.partner_roles || 'Solo')}</td></tr>`).join('');
-    const dailyTotals = dates.map(date => `<th>${Number(employee.daily_totals?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th>`).join('');
-    return `<tr class="sewing-registry-employee"><th colspan="${dates.length + 7}">${payrollEscape(employee.employee_name)}${employee.agency ? ` · ${payrollEscape(employee.agency)}` : ''}</th></tr>${body}<tr class="sewing-registry-total"><th colspan="3">Employee Daily Total</th>${dailyTotals}<th>${Number(employee.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(employee.total_amount)}</th><th></th></tr>`;
-  }).join('');
-  const grandDailyTotals = dates.map(date => `<th>${Number(registry.totals?.daily_totals?.[date] || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th>`).join('');
-  return `<div class="sewing-registry-print"><h3>${title}</h3><p>PAYROLL PERIOD: ${payrollEscape(registry.payroll_period)}</p><div class="table-wrap"><table><thead><tr><th>Sew Type</th><th>Size</th><th>Rate/Piece</th>${dailyHeaders}<th>Total Output</th><th>Amount</th><th>Partner Role</th></tr></thead><tbody>${employees || `<tr><td colspan="${dates.length + 7}">No daily sewing output was encoded for this period.</td></tr>`}</tbody><tfoot><tr><th colspan="3">Grand Daily Total</th>${grandDailyTotals}<th>${Number(registry.totals.total_output).toLocaleString('en-PH', { maximumFractionDigits: 2 })}</th><th>${money(registry.totals.total_amount)}</th><th></th></tr></tfoot></table></div></div>`;
-}
-
-async function generateSewingRegistry(kind) {
-  const period = document.getElementById('sewing-registry-period')?.value || document.getElementById('report-period')?.value;
-  const target = document.getElementById('sewing-registry');
-  if (!period) {
-    if (target) target.innerHTML = '<div class="payroll-empty-state">Select a payroll period first.</div>';
-    return null;
-  }
-  try {
-    const response = await apiFetch(`/api/payroll/sewing-registries?month_year=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind)}`);
-    const registry = await response.json();
-    if (!response.ok) throw new Error(registry.error || 'Failed to generate sewing registry.');
-    currentSewingRegistry = registry;
-    target.innerHTML = renderSewingRegistry(registry);
-    return registry;
-  } catch (error) {
-    if (target) target.innerHTML = `<div class="payroll-empty-state">${payrollEscape(error.message)}</div>`;
-    return null;
-  }
-}
-
-function printSewingRegistry() {
-  const content = document.getElementById('sewing-registry')?.innerHTML;
-  if (!currentSewingRegistry || !content) {
-    alert('Generate a sewing registry once before printing.');
-    return;
-  }
-  const popup = window.open('', '_blank', 'width=1200,height=800');
-  if (!popup) return;
-  popup.document.write(`<html><head><title>Sewing Payroll Registry</title><style>body{font-family:Arial,sans-serif;padding:18px}table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #222;padding:4px;text-align:right}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}.sewing-registry-date span,.sewing-registry-date small{display:block;line-height:1.2}.sewing-registry-date small{font-size:9px;font-weight:400}.sewing-registry-employee th{text-align:left;background:#eee}.sewing-registry-total th{background:#f7f7f7}@page{size:landscape;margin:10mm}</style></head><body>${content}</body></html>`);
-  popup.document.close(); popup.focus(); popup.print();
-}
-
-async function printPayrollRegistryReport(reportId) {
-  if (!isSewingRegistryReport(reportId)) return;
-  const kind = sewingRegistryKindFromReport(reportId);
-  const period = document.getElementById('report-period')?.value
-    || document.getElementById('sewing-registry-period')?.value
-    || document.getElementById('payroll-filter-month')?.value
-    || '';
-  if (!period) {
-    alert('Select a payroll period first.');
-    return;
-  }
-
-  const periodInput = document.getElementById('sewing-registry-period');
-  if (periodInput) periodInput.value = period;
-  const hasMatchingRegistry = currentSewingRegistry
-    && currentSewingRegistry.kind === kind
-    && currentSewingRegistry.payroll_period === period;
-
-  if (!hasMatchingRegistry) {
-    const registry = await generateSewingRegistry(kind);
-    if (!registry) return;
-  }
-  printSewingRegistry();
-}
-
 async function loadPayrollSettings(type) {
   const gridId = type === 'deduction' ? 'deduction-settings-grid' : 'allowance-settings-grid';
   const grid = document.getElementById(gridId);
@@ -3064,6 +3387,26 @@ async function loadPayrollSettings(type) {
   }
 }
 
+function calendarBasedDivisorText(schedule = '') {
+  const normalized = String(schedule || '').trim();
+  if (normalized === 'Monthly') return 'Auto divisor: 1 for monthly payroll.';
+  if (['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(normalized)) {
+    return 'Auto divisor: 2 for semi-monthly payroll.';
+  }
+  return 'Auto divisor: 4 or 5 for weekly payroll, based on the payroll start month.';
+}
+
+function renderDeductionProration(row = {}) {
+  const mode = String(row.proration_mode || 'Fixed Divisor');
+  if (mode === 'Calendar-Based Payroll Date Range') {
+    return `
+      ${payrollEscape(mode)}
+      <span class="payroll-deduction-detail">${payrollEscape(calendarBasedDivisorText(row.apply_schedule))}</span>
+    `;
+  }
+  return `${payrollEscape(mode)}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}`;
+}
+
 function renderDeductionSettings(rows) {
   return `
     <table>
@@ -3082,7 +3425,7 @@ function renderDeductionSettings(rows) {
             </td>
             <td>${payrollEscape(row.priority_order || 5)}</td>
             <td>${payrollEscape(row.apply_schedule)}</td>
-            <td>${payrollEscape(row.proration_mode || 'Fixed Divisor')}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}</td>
+            <td>${renderDeductionProration(row)}</td>
             <td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td>
             <td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td>
             <td>
@@ -3507,10 +3850,30 @@ function toggleDeductionNameField() {
   refreshSssContributionTableVisibility({ loadWhenVisible: true });
 }
 
+function canManagePayrollAttendancePolicies() {
+  const role = String(typeof getUser === 'function' ? (getUser()?.role || '') : '').toLowerCase();
+  return ['hr', 'hradmin', 'hr_admin', 'hr_manager', 'admin', 'system_admin'].includes(role);
+}
+
+function applyPayrollAttendancePolicyAccess() {
+  const canManage = canManagePayrollAttendancePolicies();
+  const card = document.getElementById('hr-payroll-policy-card');
+  if (card) card.style.display = canManage ? '' : 'none';
+  document.querySelectorAll('#payroll-policy-form input, #payroll-policy-form select, #payroll-attendance-config-form input, #payroll-attendance-config-form select').forEach(field => {
+    field.disabled = !canManage;
+  });
+  document.querySelectorAll('#payroll-policy-form button[type="submit"], #payroll-attendance-config-form button[type="submit"], #payroll-attendance-config-form button[type="reset"]').forEach(button => {
+    button.disabled = !canManage;
+    button.style.display = canManage ? '' : 'none';
+  });
+  return canManage;
+}
+
 async function loadPayrollPolicySettings() {
   const form = document.getElementById('payroll-policy-form');
   const status = document.getElementById('payroll-policy-save-status');
   if (!form) return;
+  if (!applyPayrollAttendancePolicyAccess()) return;
   if (status) {
     status.className = 'payroll-form-status';
     status.textContent = 'Loading...';
@@ -3529,6 +3892,7 @@ async function loadPayrollPolicySettings() {
       }
     });
     if (status) status.textContent = 'Loaded.';
+    await loadPayrollAttendanceConfigs();
   } catch (err) {
     if (status) {
       status.className = 'payroll-form-status error';
@@ -3544,7 +3908,14 @@ function toggleDeductionFormSections() {
   const rateGroup = rateInput?.closest('.form-group');
   const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Fixed Divisor';
   const fixedDivisorGroup = document.getElementById('deduction-fixed-divisor-group');
+  const calendarDivisorGroup = document.getElementById('deduction-calendar-divisor-group');
+  const calendarDivisorHelp = document.getElementById('deduction-calendar-divisor-help');
+  const applySchedule = document.getElementById('deduction-apply-schedule')?.value
+    || document.querySelector('#deduction-setting-form [name="apply_schedule"]')?.value
+    || '';
   if (fixedDivisorGroup) fixedDivisorGroup.style.display = prorationMode === 'Fixed Divisor' ? '' : 'none';
+  if (calendarDivisorGroup) calendarDivisorGroup.style.display = prorationMode === 'Calendar-Based Payroll Date Range' ? '' : 'none';
+  if (calendarDivisorHelp) calendarDivisorHelp.textContent = calendarBasedDivisorText(applySchedule);
   const deductionName = String(getSelectedDeductionName()).trim();
   const sssSelected = isSssDeductionSelected();
   const percentageStatutorySelected = category === 'Government' && /^(philhealth|pag-?ibig)$/i.test(deductionName);
@@ -3901,6 +4272,13 @@ async function savePayrollPolicySettings(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const status = document.getElementById('payroll-policy-save-status');
+  if (!applyPayrollAttendancePolicyAccess()) {
+    if (status) {
+      status.className = 'payroll-form-status';
+      status.textContent = '';
+    }
+    return;
+  }
   const settings = Object.fromEntries(new FormData(form).entries());
   if (status) {
     status.className = 'payroll-form-status';
@@ -3926,6 +4304,252 @@ async function savePayrollPolicySettings(event) {
     }
     if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
   }
+}
+
+function payrollDateKey(value) {
+  const match = String(value || '').match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : '';
+}
+
+function payrollSelectOptions(rows, valueKey, labelFn, placeholder) {
+  return `<option value="">${payrollEscape(placeholder || 'Select')}</option>${(rows || []).map(row => {
+    const value = row?.[valueKey];
+    return `<option value="${payrollEscape(value)}">${payrollEscape(labelFn(row))}</option>`;
+  }).join('')}`;
+}
+
+function togglePayrollAttendanceConfigScope() {
+  const scope = document.getElementById('payroll-att-config-scope')?.value || 'DEFAULT';
+  document.querySelectorAll('.payroll-att-config-scope').forEach(el => { el.style.display = 'none'; });
+  const map = {
+    DEPARTMENT: '.payroll-att-config-department',
+    EMPLOYMENT_TYPE: '.payroll-att-config-employment',
+    WAGE_TYPE: '.payroll-att-config-wage',
+    EMPLOYEE: '.payroll-att-config-employee'
+  };
+  if (map[scope]) document.querySelectorAll(map[scope]).forEach(el => { el.style.display = ''; });
+  renderPayrollAttendanceConfigOptions();
+}
+
+function renderPayrollAttendanceConfigOptions() {
+  const department = document.getElementById('payroll-att-config-department');
+  const employment = document.getElementById('payroll-att-config-employment');
+  const wageType = document.getElementById('payroll-att-config-wage-type');
+  const employee = document.getElementById('payroll-att-config-employee');
+  const selectedDepartment = department?.value || '';
+  const selectedEmployment = employment?.value || '';
+  const selectedWageType = wageType?.value || '';
+  const selectedEmployee = employee?.value || '';
+  if (department) {
+    department.innerHTML = payrollSelectOptions(payrollAttendanceConfigOptions.departments, 'id', row => row.name, 'Select department');
+    if ([...department.options].some(option => option.value === selectedDepartment)) department.value = selectedDepartment;
+  }
+  if (employment) {
+    employment.innerHTML = `<option value="">Select employment type</option>${(payrollAttendanceConfigOptions.employment_types || []).map(value => `<option value="${payrollEscape(value)}">${payrollEscape(value)}</option>`).join('')}`;
+    if ([...employment.options].some(option => option.value === selectedEmployment)) employment.value = selectedEmployment;
+  }
+  if (wageType) {
+    wageType.innerHTML = payrollSelectOptions(payrollAttendanceConfigOptions.pay_types, 'id', row => row.name, 'Select wage type');
+    if ([...wageType.options].some(option => option.value === selectedWageType)) wageType.value = selectedWageType;
+  }
+  if (employee) {
+    const scope = document.getElementById('payroll-att-config-scope')?.value || 'DEFAULT';
+    let employeeRows = payrollAttendanceConfigOptions.employees || [];
+    if (scope === 'DEPARTMENT' && department?.value) {
+      employeeRows = employeeRows.filter(row => String(row.department_id || '') === String(department.value));
+    }
+    if (scope === 'EMPLOYMENT_TYPE' && employment?.value) {
+      employeeRows = employeeRows.filter(row => String(row.employment_type || '').toLowerCase() === String(employment.value).toLowerCase());
+    }
+    if (scope === 'WAGE_TYPE' && wageType?.value) {
+      employeeRows = employeeRows.filter(row => String(row.wage_type_id || '') === String(wageType.value));
+    }
+    employee.innerHTML = payrollSelectOptions(
+      employeeRows,
+      'id',
+      row => `${row.employee_code || ''} - ${row.employee_name || row.first_name || row.last_name || 'Employee'}`,
+      'Select employee'
+    );
+    if ([...employee.options].some(option => option.value === selectedEmployee)) employee.value = selectedEmployee;
+  }
+}
+
+function payrollAttendanceConfigScopeLabel(row) {
+  const scope = row.scope_type || 'DEFAULT';
+  if (scope === 'EMPLOYEE') return `Employee: ${row.employee_code || row.employee_id || '-'}`;
+  if (scope === 'DEPARTMENT') return `Department: ${row.department_name || row.department_id || '-'}`;
+  if (scope === 'WAGE_TYPE') return `Wage Type: ${row.wage_type_name || row.wage_type_id || '-'}`;
+  if (scope === 'EMPLOYMENT_TYPE') return `Employment Type: ${row.scope_value || '-'}`;
+  return 'Default fallback';
+}
+
+function renderPayrollAttendanceConfigs() {
+  const grid = document.getElementById('payroll-attendance-config-grid');
+  if (!grid) return;
+  const canManage = canManagePayrollAttendancePolicies();
+  if (!payrollAttendanceConfigRows.length) {
+    grid.innerHTML = '<div class="empty-state">No employee or group payroll configurations yet.</div>';
+    return;
+  }
+  grid.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th><th>Scope</th><th>Schedule</th><th>Factor</th><th>Tardy Trigger</th><th>Status</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${payrollAttendanceConfigRows.map(row => `
+          <tr>
+            <td>${payrollEscape(row.config_name)}</td>
+            <td>${payrollEscape(payrollAttendanceConfigScopeLabel(row))}</td>
+            <td>${payrollEscape((row.work_start_time || '-').slice(0, 5))} - ${payrollEscape((row.work_end_time || '-').slice(0, 5))}<br><small>${payrollEscape(Number(row.daily_hours || row.standard_work_hours || 0).toFixed(2))}h/day</small></td>
+            <td>${payrollEscape(row.working_days_per_year || '-')} days/year<br><small>${payrollEscape(row.working_days_per_month || '-')} days/month</small></td>
+            <td>${payrollEscape(row.habitual_tardiness_threshold || 5)} per ${payrollEscape(String(row.habitual_tardiness_period || 'MONTHLY').toLowerCase().replace('_', ' '))}</td>
+            <td>${Number(row.is_active) === 1 ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-red">Inactive</span>'}</td>
+            <td>
+              ${canManage ? `<button class="btn btn-outline btn-sm" type="button" onclick="editPayrollAttendanceConfig(${Number(row.id)})">Edit</button>` : '<span class="muted-small">View only</span>'}
+              ${canManage && Number(row.is_active) === 1 ? `<button class="btn btn-outline btn-sm" type="button" onclick="deactivatePayrollAttendanceConfig(${Number(row.id)})">Deactivate</button>` : ''}
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+async function loadPayrollAttendanceConfigs() {
+  const status = document.getElementById('payroll-att-config-status');
+  if (!applyPayrollAttendancePolicyAccess()) return;
+  try {
+    const [optionsRes, configsRes] = await Promise.all([
+      apiFetch('/api/payroll/filter-options'),
+      apiFetch('/api/payroll/attendance-configurations')
+    ]);
+    const options = await optionsRes.json().catch(() => ({}));
+    const configs = await configsRes.json().catch(() => []);
+    if (!optionsRes.ok) throw new Error(options.error || 'Failed to load payroll options.');
+    if (!configsRes.ok) throw new Error(configs.error || 'Failed to load payroll attendance configurations.');
+    payrollAttendanceConfigOptions = options || payrollAttendanceConfigOptions;
+    payrollAttendanceConfigRows = Array.isArray(configs) ? configs : [];
+    renderPayrollAttendanceConfigOptions();
+    renderPayrollAttendanceConfigs();
+    togglePayrollAttendanceConfigScope();
+    if (status && !status.textContent) status.textContent = 'Configuration list loaded.';
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+  }
+}
+
+async function savePayrollAttendanceConfig(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('payroll-att-config-status');
+  if (!applyPayrollAttendancePolicyAccess()) {
+    if (status) {
+      status.className = 'payroll-form-status';
+      status.textContent = '';
+    }
+    return;
+  }
+  const payload = Object.fromEntries(new FormData(form).entries());
+  if (!payload.working_days_per_month && payload.working_days_per_year) {
+    payload.working_days_per_month = (Number(payload.working_days_per_year) / 12).toFixed(2);
+  }
+  if (status) {
+    status.className = 'payroll-form-status';
+    status.textContent = 'Saving...';
+  }
+  try {
+    const res = await apiFetch('/api/payroll/attendance-configurations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to save payroll attendance configuration.');
+    resetPayrollAttendanceConfigForm();
+    await loadPayrollAttendanceConfigs();
+    if (status) {
+      status.className = 'payroll-form-status success';
+      status.textContent = 'Payroll attendance configuration saved.';
+    }
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+  }
+}
+
+function editPayrollAttendanceConfig(id) {
+  if (!canManagePayrollAttendancePolicies()) return;
+  const row = payrollAttendanceConfigRows.find(item => Number(item.id) === Number(id));
+  const form = document.getElementById('payroll-attendance-config-form');
+  if (!row || !form) return;
+  Object.entries({
+    id: row.id,
+    config_name: row.config_name,
+    scope_type: row.scope_type,
+    employee_id: row.employee_id,
+    department_id: row.department_id,
+    wage_type_id: row.wage_type_id,
+    scope_value: row.scope_value,
+    work_start_time: String(row.work_start_time || '').slice(0, 5),
+    work_end_time: String(row.work_end_time || '').slice(0, 5),
+    break_start_time: String(row.break_start_time || '').slice(0, 5),
+    break_end_time: String(row.break_end_time || '').slice(0, 5),
+    daily_hours: row.daily_hours || row.standard_work_hours,
+    working_days_per_month: row.working_days_per_month,
+    working_days_per_year: row.working_days_per_year,
+    grace_period_minutes: row.grace_period_minutes,
+    habitual_tardiness_threshold: row.habitual_tardiness_threshold,
+    tardiness_alert_enabled: Number(row.tardiness_alert_enabled) === 1 ? 'true' : 'false',
+    priority: row.priority || 0,
+    effective_date: payrollDateKey(row.effective_date),
+    end_date: payrollDateKey(row.end_date),
+    is_active: Number(row.is_active) === 1 ? 'true' : 'false',
+    notes: row.notes || ''
+  }).forEach(([name, value]) => {
+    const field = form.elements[name];
+    if (field) field.value = value ?? '';
+  });
+  togglePayrollAttendanceConfigScope();
+  document.getElementById('payroll-att-config-status').textContent = 'Editing existing configuration.';
+}
+
+async function deactivatePayrollAttendanceConfig(id) {
+  if (!canManagePayrollAttendancePolicies()) return;
+  if (!window.confirm('Deactivate this payroll attendance configuration?')) return;
+  const status = document.getElementById('payroll-att-config-status');
+  try {
+    const res = await apiFetch(`/api/payroll/attendance-configurations/${Number(id)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to deactivate configuration.');
+    await loadPayrollAttendanceConfigs();
+    if (status) {
+      status.className = 'payroll-form-status success';
+      status.textContent = 'Configuration deactivated.';
+    }
+  } catch (err) {
+    if (status) {
+      status.className = 'payroll-form-status error';
+      status.textContent = err.message;
+    }
+  }
+}
+
+function resetPayrollAttendanceConfigForm() {
+  const form = document.getElementById('payroll-attendance-config-form');
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = '';
+  const today = new Date().toISOString().slice(0, 10);
+  if (form.elements.effective_date) form.elements.effective_date.value = today;
+  togglePayrollAttendanceConfigScope();
 }
 
 async function loadPayrollAudit() {
@@ -3960,230 +4584,6 @@ async function loadPayrollAudit() {
   }
 }
 
-const PAYROLL_REPORTS = [
-  { id: 'summary', name: 'Payroll Summary Report', category: 'General', description: 'Payroll totals, employee count, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'employee', name: 'Employee Payroll Report', category: 'General', description: 'Employee-level wage type, gross pay, deductions and net pay.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'monthly', name: 'Monthly Payroll Report', category: 'General', description: 'Monthly payroll records based on the selected payroll period.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'weekly-payroll-registry', name: 'Weekly Payroll Registry', category: 'General', description: 'All pay types with approved days, hours, outputs, trips, deductions and net pay.', formats: ['CSV', 'Excel'] },
-  { id: 'daily-rate-register', name: 'Daily Rate Payroll Register', category: 'Attendance', description: 'Daily-rate calculations with days worked and payroll-ready attendance validation.', formats: ['CSV', 'Excel'] },
-  { id: 'per-hour-register', name: 'Per-Hour Payroll Register', category: 'Attendance', description: 'Hourly calculations with hours worked, overtime, and attendance validation.', formats: ['CSV', 'Excel'] },
-  { id: 'attendance-payroll-validation', name: 'Attendance-to-Payroll Validation', category: 'Attendance', description: 'Validation status, excluded attendance, warnings, and blocking errors.', formats: ['CSV', 'Excel'] },
-  { id: 'sewing-registry', name: 'Main Sewing Payroll Registry', category: 'Production', description: 'Client-style daily sewing quantities, configured rates, totals, and full amounts.', formats: ['CSV', 'Excel'] },
-  { id: 'sewing-55-registry', name: '55% Sewing Registry', category: 'Production', description: 'Daily sewing register showing the sewer 55% share.', formats: ['CSV', 'Excel'] },
-  { id: 'sewing-45-registry', name: '45% Sewing Registry', category: 'Production', description: 'Daily sewing register showing the fixer 45% share.', formats: ['CSV', 'Excel'] },
-  { id: 'swr-fxr-summary', name: 'SWR-FXR Summary', category: 'Production', description: 'Sewer-fixer pairs, agency, days, split amounts, and combined totals.', formats: ['CSV', 'Excel'] },
-  { id: 'piece-production-register', name: 'Production Register', category: 'Production', description: 'Production date, sewer, fixer, quantity, rate and production amount.', formats: ['CSV', 'Excel'] },
-  { id: 'piece-sewer-register', name: 'Sewer Payroll Register', category: 'Production', description: 'Sewer production amount and payroll share.', formats: ['CSV', 'Excel'] },
-  { id: 'piece-fixer-register', name: 'Fixer Payroll Register', category: 'Production', description: 'Fixer production amount and payroll share.', formats: ['CSV', 'Excel'] },
-  { id: 'deductions', name: 'Deduction Report', category: 'Government', description: 'Configured deductions and deduction totals.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'government', name: 'Government Contribution Report', category: 'Government', description: 'SSS, PhilHealth, and Pag-IBIG summary.', formats: ['CSV', 'Excel', 'PDF'] },
-  { id: 'audit', name: 'Audit Trail', category: 'Audit', description: 'Salary calculations, approvals, releases, settings updates and report activity.', formats: ['CSV'] }
-];
-
-function getReportFavorites() {
-  try {
-    return JSON.parse(localStorage.getItem('payrollReportFavorites') || '[]');
-  } catch (_) {
-    return [];
-  }
-}
-
-function setReportFavorites(favorites) {
-  localStorage.setItem('payrollReportFavorites', JSON.stringify([...new Set(favorites)]));
-}
-
-function populateSelectOptions(selectId, values, fallback = 'All') {
-  const select = document.getElementById(selectId);
-  if (!select) return;
-  const current = select.value;
-  const unique = [...new Set(values.filter(Boolean).map(value => String(value).trim()).filter(Boolean))].sort();
-  select.innerHTML = `<option value="">${fallback}</option>${unique.map(value => `<option value="${value}">${value}</option>`).join('')}`;
-  if (unique.includes(current)) select.value = current;
-}
-
-function populatePayrollReportFilters() {
-  populateSelectOptions('report-category', PAYROLL_REPORTS.map(report => report.category));
-  populateSelectOptions('report-department', [
-    ...currentPayrollData.map(row => row.department),
-    ...currentSalaryCalculationRecords.map(row => row.department)
-  ]);
-  populateSelectOptions('report-wage-type', [
-    ...currentPayrollData.map(row => row.wage_type),
-    ...currentSalaryCalculationRecords.map(row => row.wage_type)
-  ]);
-  const period = document.getElementById('report-period');
-  const payrollPeriod = document.getElementById('payroll-filter-month')?.value;
-  if (period && payrollPeriod && !period.value) period.value = payrollPeriod;
-}
-
-function filteredPayrollReports() {
-  const search = String(document.getElementById('report-search')?.value || '').trim().toLowerCase();
-  const category = document.getElementById('report-category')?.value || '';
-  const favorites = getReportFavorites();
-  return PAYROLL_REPORTS
-    .filter(report => !category || report.category === category)
-    .filter(report => !search || `${report.name} ${report.description}`.toLowerCase().includes(search))
-    .sort((a, b) => {
-      const favDiff = Number(favorites.includes(b.id)) - Number(favorites.includes(a.id));
-      return favDiff || a.category.localeCompare(b.category) || a.name.localeCompare(b.name);
-    });
-}
-
-function renderPayrollReportLibrary() {
-  populatePayrollReportFilters();
-  const body = document.getElementById('payroll-report-library-body');
-  if (!body) return;
-  const reports = filteredPayrollReports();
-  const pageSize = 10;
-  const pages = Math.max(1, Math.ceil(reports.length / pageSize));
-  payrollReportPage = Math.min(Math.max(1, payrollReportPage), pages);
-  const pageRows = reports.slice((payrollReportPage - 1) * pageSize, payrollReportPage * pageSize);
-  const favorites = getReportFavorites();
-  body.innerHTML = pageRows.map(report => `
-    <tr>
-      <td><button class="report-star ${favorites.includes(report.id) ? 'active' : ''}" type="button" onclick="togglePayrollReportFavorite('${report.id}')" aria-label="Favorite ${report.name}">★</button></td>
-      <td>${report.name}</td>
-      <td><span class="report-category-badge">${report.category}</span></td>
-      <td>${report.description}</td>
-      <td>${report.formats.join(' | ')}</td>
-      <td>
-        <div class="button-row">
-          <button class="btn btn-outline btn-sm" type="button" onclick="openPayrollReportModal('${report.id}')">Generate</button>
-          ${isSewingRegistryReport(report.id) ? `<button class="btn btn-primary btn-sm" type="button" onclick="printPayrollRegistryReport('${report.id}')">Print</button>` : ''}
-        </div>
-      </td>
-    </tr>
-  `).join('') || '<tr><td colspan="6">No reports match your filters.</td></tr>';
-  const pagination = document.getElementById('payroll-report-pagination');
-  if (pagination) {
-    pagination.innerHTML = `
-      <span>Showing ${reports.length ? (payrollReportPage - 1) * pageSize + 1 : 0}-${Math.min(payrollReportPage * pageSize, reports.length)} of ${reports.length}</span>
-      <button class="btn btn-outline btn-sm" type="button" data-payroll-report-page-action="prev" ${payrollReportPage <= 1 ? 'disabled' : ''}>Previous</button>
-      <button class="btn btn-outline btn-sm" type="button" data-payroll-report-page-action="next" ${payrollReportPage >= pages ? 'disabled' : ''}>Next</button>
-    `;
-    pagination.querySelector('[data-payroll-report-page-action="prev"]')?.addEventListener('click', () => changePayrollReportPage(-1));
-    pagination.querySelector('[data-payroll-report-page-action="next"]')?.addEventListener('click', () => changePayrollReportPage(1));
-  }
-}
-
-function isSewingRegistryReport(reportId) {
-  return ['sewing-registry', 'sewing-55-registry', 'sewing-45-registry'].includes(reportId);
-}
-
-function sewingRegistryKindFromReport(reportId) {
-  if (reportId === 'sewing-55-registry') return '55';
-  if (reportId === 'sewing-45-registry') return '45';
-  return 'main';
-}
-
-function changePayrollReportPage(delta) {
-  const reports = filteredPayrollReports();
-  const pages = Math.max(1, Math.ceil(reports.length / 10));
-  payrollReportPage = Math.min(Math.max(payrollReportPage + delta, 1), pages);
-  renderPayrollReportLibrary();
-}
-
-function togglePayrollReportFavorite(reportId) {
-  const favorites = getReportFavorites();
-  const next = favorites.includes(reportId)
-    ? favorites.filter(id => id !== reportId)
-    : [...favorites, reportId];
-  setReportFavorites(next);
-  renderPayrollReportLibrary();
-}
-
-function resetPayrollReportFilters() {
-  ['report-search', 'report-employee'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  ['report-category', 'report-department', 'report-wage-type'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  const period = document.getElementById('report-period');
-  const payrollPeriod = document.getElementById('payroll-filter-month')?.value || '';
-  if (period) period.value = payrollPeriod;
-  payrollReportPage = 1;
-  renderPayrollReportLibrary();
-}
-
-function syncReportPeriod() {
-  const period = document.getElementById('report-period')?.value;
-  const payrollPeriod = document.getElementById('payroll-filter-month');
-  if (period && payrollPeriod) payrollPeriod.value = period;
-}
-
-function openPayrollReportModal(reportId) {
-  selectedPayrollReport = PAYROLL_REPORTS.find(report => report.id === reportId);
-  if (!selectedPayrollReport) return;
-  document.getElementById('payroll-report-export-modal')?.remove();
-  const defaultFormat = selectedPayrollReport.formats[0].toLowerCase();
-  const modal = document.createElement('div');
-  modal.id = 'payroll-report-export-modal';
-  modal.className = 'report-modal-backdrop';
-  modal.innerHTML = `
-    <div class="report-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-report-modal-title">
-      <div class="report-modal-header">
-        <div>
-          <h3 id="payroll-report-modal-title">${selectedPayrollReport.name}</h3>
-          <p>${selectedPayrollReport.description}</p>
-        </div>
-        <button type="button" class="report-modal-close" onclick="closePayrollReportModal()">×</button>
-      </div>
-      <div class="report-modal-body">
-        <label>Export Format</label>
-        <div class="report-format-list">
-          ${selectedPayrollReport.formats.map(format => {
-            const value = format.toLowerCase();
-            return `<label><input type="radio" name="payroll-report-format" value="${value}" ${value === defaultFormat ? 'checked' : ''} /> ${format}</label>`;
-          }).join('')}
-        </div>
-      </div>
-      <div class="report-modal-footer">
-        <button class="btn btn-outline" type="button" onclick="closePayrollReportModal()">Cancel</button>
-        <button class="btn btn-primary" type="button" onclick="generateSelectedPayrollReport()">Generate Report</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-}
-
-function closePayrollReportModal() {
-  document.getElementById('payroll-report-export-modal')?.remove();
-}
-
-function getPayrollReportQuery() {
-  const params = new URLSearchParams();
-  const month = document.getElementById('report-period')?.value || document.getElementById('payroll-filter-month')?.value || '';
-  const department = document.getElementById('report-department')?.value || '';
-  const wageType = document.getElementById('report-wage-type')?.value || '';
-  const employee = document.getElementById('report-employee')?.value || '';
-  if (month) params.set('month_year', month);
-  if (department) params.set('department', department);
-  if (wageType) params.set('wage_type', wageType);
-  if (employee) params.set('employee', employee);
-  return params;
-}
-
-function generateSelectedPayrollReport() {
-  if (!selectedPayrollReport) return;
-  const format = document.querySelector('input[name="payroll-report-format"]:checked')?.value || 'csv';
-  exportPayrollReport(selectedPayrollReport.id, format);
-  closePayrollReportModal();
-}
-
-function exportPayrollReport(type, format) {
-  const params = getPayrollReportQuery();
-  if (!params.has('month_year')) {
-    const month = document.getElementById('payroll-filter-month')?.value || '';
-    if (month) params.set('month_year', month);
-  }
-  const query = params.toString();
-  const url = `/api/payroll/reports/${encodeURIComponent(type)}.${encodeURIComponent(format)}${query ? `?${query}` : ''}`;
-  window.open(url, '_blank');
-}
-
 function initializePayrollModule() {
   const monthInput = document.getElementById('payroll-filter-month');
   if (monthInput && !monthInput.value) {
@@ -4203,6 +4603,8 @@ function initializePayrollModule() {
   if (splitDate && !splitDate.value) splitDate.value = today;
   if (cashAdvanceDate && !cashAdvanceDate.value) cashAdvanceDate.value = today;
   if (loanDate && !loanDate.value) loanDate.value = today;
+  const attConfigDate = document.querySelector('#payroll-attendance-config-form [name="effective_date"]');
+  if (attConfigDate && !attConfigDate.value) attConfigDate.value = today;
   const weeklyDepartment = document.getElementById('weekly-payroll-department');
   const weeklyPayType = document.getElementById('weekly-payroll-pay-type');
   const weeklyEmployee = document.getElementById('weekly-payroll-employee');
@@ -4286,17 +4688,14 @@ window.editEmployeeDeductionAccount = editEmployeeDeductionAccount;
 window.updateEmployeeDeductionStatus = updateEmployeeDeductionStatus;
 window.loadPayrollPolicySettings = loadPayrollPolicySettings;
 window.savePayrollPolicySettings = savePayrollPolicySettings;
+window.loadPayrollAttendanceConfigs = loadPayrollAttendanceConfigs;
+window.savePayrollAttendanceConfig = savePayrollAttendanceConfig;
+window.editPayrollAttendanceConfig = editPayrollAttendanceConfig;
+window.deactivatePayrollAttendanceConfig = deactivatePayrollAttendanceConfig;
+window.togglePayrollAttendanceConfigScope = togglePayrollAttendanceConfigScope;
+window.renderPayrollAttendanceConfigOptions = renderPayrollAttendanceConfigOptions;
+window.resetPayrollAttendanceConfigForm = resetPayrollAttendanceConfigForm;
 window.loadPayrollAudit = loadPayrollAudit;
-window.exportPayrollReport = exportPayrollReport;
-window.renderPayrollReportLibrary = renderPayrollReportLibrary;
-window.changePayrollReportPage = changePayrollReportPage;
-window.togglePayrollReportFavorite = togglePayrollReportFavorite;
-window.printPayrollRegistryReport = printPayrollRegistryReport;
-window.resetPayrollReportFilters = resetPayrollReportFilters;
-window.syncReportPeriod = syncReportPeriod;
-window.openPayrollReportModal = openPayrollReportModal;
-window.closePayrollReportModal = closePayrollReportModal;
-window.generateSelectedPayrollReport = generateSelectedPayrollReport;
 window.initializePayrollModule = initializePayrollModule;
 window.saveProductionSplit = saveProductionSplit;
 window.editProductionSplit = editProductionSplit;
@@ -4306,8 +4705,6 @@ window.loadWeeklyPayrollRegistry = loadWeeklyPayrollRegistry;
 window.renderWeeklyPayrollRegistry = renderWeeklyPayrollRegistry;
 window.changeWeeklyPayrollRegistryPage = changeWeeklyPayrollRegistryPage;
 window.renderWeeklyPayrollEmployeeOptions = renderWeeklyPayrollEmployeeOptions;
-window.generateSewingRegistry = generateSewingRegistry;
-window.printSewingRegistry = printSewingRegistry;
 window.togglePiecePartnerFields = togglePiecePartnerFields;
 window.switchPieceRateRecordsView = switchPieceRateRecordsView;
 window.changePieceRateRecordsPage = changePieceRateRecordsPage;
@@ -4325,8 +4722,6 @@ function initializePayroll() {
   loadWeeklyPayrollFilterOptions();
   loadPayrollDashboard();
   loadSalaryCalculations();
-  const sewingPeriod = document.getElementById('sewing-registry-period');
-  if (sewingPeriod && !sewingPeriod.value) sewingPeriod.value = new Date().toISOString().slice(0, 7);
 
   // Add filter event listeners
   document.getElementById('salary-calc-filter-date')?.addEventListener('change', loadSalaryCalculations);

@@ -6,9 +6,7 @@ const expectedKeys = [
   'late_require_hr_approval',
   'undertime_require_hr_approval',
   'late_deduction_method',
-  'late_fixed_deduction_amount',
   'undertime_deduction_method',
-  'undertime_fixed_deduction_amount',
   'working_days_per_month',
 ];
 
@@ -22,8 +20,8 @@ async function run() {
       ORDER BY policy_key`,
     expectedKeys
   );
-  assert.strictEqual(rows.length, expectedKeys.length, 'All tardy deduction settings must be stored and active.');
-  assert.deepStrictEqual(rows.map((row) => row.policy_key).sort(), [...expectedKeys].sort());
+  const uniqueKeys = [...new Set(rows.map((row) => row.policy_key))].sort();
+  assert.deepStrictEqual(uniqueKeys, [...expectedKeys].sort(), 'All mandated tardy/undertime policy settings must be stored and active.');
   console.table(rows);
   console.log('attendance_policy_settings storage validation: PASS');
 }

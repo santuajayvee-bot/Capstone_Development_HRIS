@@ -153,6 +153,10 @@ router.use(requireEmployeeOnly);
 router.get('/dashboard', async (req, res) => {
   try {
     const empId = req.user.employeeId;
+    res.set('Cache-Control', 'no-store');
+    if (!empId) {
+      return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    }
 
     // 1. Employee profile
     const [empRows] = await pool.execute(
@@ -175,9 +179,13 @@ router.get('/dashboard', async (req, res) => {
               COALESCE(sc.period_end, pr.end_date, sc.calculation_date) AS period_end,
               COALESCE(sc.payroll_period, pr.month_year) AS month_year
        FROM salary_calculations sc
+       JOIN employees e ON e.id = sc.employee_id
        LEFT JOIN payroll_runs pr ON pr.id = sc.payroll_run_id
        WHERE sc.employee_id = ?
          AND sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')
+         AND (sc.agency_name IS NULL OR TRIM(sc.agency_name) = '')
+         AND (e.agency_name IS NULL OR TRIM(e.agency_name) = '')
+         AND (e.hiring_type IS NULL OR LOWER(e.hiring_type) NOT LIKE '%agency%')
        ORDER BY COALESCE(sc.approved_at, sc.released_at, sc.updated_at, sc.created_at) DESC
        LIMIT 1`,
       [empId]
@@ -242,6 +250,10 @@ router.get('/dashboard', async (req, res) => {
 router.get('/201-file', async (req, res) => {
   try {
     const empId = req.user.employeeId;
+    res.set('Cache-Control', 'no-store');
+    if (!empId) {
+      return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    }
 
     // Get employee record with encrypted PII
     const [rows] = await pool.execute(
@@ -326,6 +338,10 @@ router.get('/201-file', async (req, res) => {
 router.get('/payslips', async (req, res) => {
   try {
     const empId = req.user.employeeId;
+    res.set('Cache-Control', 'no-store');
+    if (!empId) {
+      return res.status(400).json({ error: 'Account is not linked to an employee record.' });
+    }
 
     const [payslips] = await pool.execute(
       `SELECT sc.id,
@@ -340,6 +356,7 @@ router.get('/payslips', async (req, res) => {
               integrity.Transaction_Hash AS transaction_hash,
               integrity.Blockchain_Status AS blockchain_status
        FROM salary_calculations sc
+       JOIN employees e ON e.id = sc.employee_id
        LEFT JOIN payroll_runs pr ON pr.id = sc.payroll_run_id
        LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
        LEFT JOIN PAYROLL_RECORD integrity
@@ -347,6 +364,9 @@ router.get('/payslips', async (req, res) => {
              AND integrity.Employee_ID = sc.employee_id
        WHERE sc.employee_id = ?
          AND sc.status IN ('Finalized', 'Paid', 'Released', 'Locked')
+         AND (sc.agency_name IS NULL OR TRIM(sc.agency_name) = '')
+         AND (e.agency_name IS NULL OR TRIM(e.agency_name) = '')
+         AND (e.hiring_type IS NULL OR LOWER(e.hiring_type) NOT LIKE '%agency%')
        ORDER BY COALESCE(sc.approved_at, sc.released_at, sc.updated_at, sc.created_at) DESC`,
       [empId]
     );

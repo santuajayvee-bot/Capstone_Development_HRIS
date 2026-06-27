@@ -28,9 +28,14 @@ function isNonEmptyString(value) {
 const ROLE_ALIASES = {
   'admin': 'system_admin',
   'system_admin': 'system_admin',
+  'hr': 'hr_manager',
+  'hradmin': 'hr_manager',
   'hr_admin': 'hr_manager',
   'hr_manager': 'hr_manager',
+  'payroll': 'payroll_officer',
+  'payrollofficer': 'payroll_officer',
   'payroll_officer': 'payroll_officer',
+  'payrollmanager': 'payroll_manager',
   'payroll_manager': 'payroll_manager',
   'it_staff': 'it_staff',
   'manager': 'hr_manager',
@@ -80,7 +85,12 @@ const CLIENT_AUTHORITY_FIELDS = new Set([
 ]);
 
 function normalizeRole(role) {
-  return ROLE_ALIASES[role] || role || 'employee';
+  const key = String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const compact = key.replace(/_/g, '');
+  return ROLE_ALIASES[key] || ROLE_ALIASES[compact] || key || 'employee';
 }
 
 function normalizeAllowedRoles(allowedRoles) {

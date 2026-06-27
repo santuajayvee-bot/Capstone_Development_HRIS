@@ -59,23 +59,23 @@
     fillSelect('logistics-rate-location', activeLocations, 'id', row => `${row.location_category} - ${row.name}`, 'Select location');
   }
 
-  function actionButton(label, fn, id, kind = 'outline') {
-    return `<button class="btn btn-${kind} btn-sm" type="button" onclick="${fn}(${Number(id)})">${label}</button>`;
+  function actionButton(label, action, id, kind = 'outline') {
+    return `<button class="btn btn-${kind} btn-sm" type="button" data-logistics-action="${escapeHtml(action)}" data-logistics-id="${Number(id)}">${escapeHtml(label)}</button>`;
   }
 
   function renderTruckTypes() {
     const target = document.getElementById('logistics-truck-types-grid');
     if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Truck Type</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.truckTypes.map(row => `
-      <tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsTruckType', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateLogisticsTruckType', row.id) : ''}</td></tr>
+    target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Truck Type</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.truckTypes.map(row => `
+      <tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editTruckType', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateTruckType', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="4">No truck types configured.</td></tr>'}</tbody></table>`;
   }
 
   function renderLocations() {
     const target = document.getElementById('logistics-locations-grid');
     if (!target) return;
-    target.innerHTML = `<table><thead><tr><th>Category</th><th>Specific Location</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.locations.map(row => `
-      <tr><td>${escapeHtml(row.location_category)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsLocation', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateLogisticsLocation', row.id) : ''}</td></tr>
+    target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Category</th><th>Specific Location</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.locations.map(row => `
+      <tr><td>${escapeHtml(row.location_category)}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLocation', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateLocation', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="5">No logistics locations configured.</td></tr>'}</tbody></table>`;
   }
 
@@ -90,7 +90,7 @@
     const pageRows = state.rates.slice(start, end);
 
     target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Trip Rate</th><th>Additional</th><th>Multiplier</th><th>Trip Pay</th><th>Rule</th><th>Status</th><th>Actions</th></tr></thead><tbody>${pageRows.map(row => `
-      <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} - ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}x</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editLogisticsRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateLogisticsRate', row.id) : ''}</td></tr>
+      <tr><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_category)} - ${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${money(row.base_rate)}</td><td>${money(row.additional_rate)}</td><td>${Number(row.multiplier || 1).toFixed(2)}x</td><td>${money((Number(row.base_rate) * Number(row.multiplier)) + Number(row.additional_rate))}</td><td>${escapeHtml(row.special_rule_description || '-')}</td><td>${row.status === 'Active' ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editRate', row.id)} ${row.status === 'Active' ? actionButton('Deactivate', 'deactivateRate', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="11">No logistics rates configured.</td></tr>'}</tbody></table>`;
 
     const tableWrap = target.closest('.table-wrap');
@@ -228,17 +228,52 @@
 
   async function deactivateLogisticsTruckType(id) {
     if (!(await confirmAction('Deactivate this truck type? Existing trip history remains unchanged.', 'Deactivate Truck Type'))) return;
-    try { await request(`/api/payroll/logistics/truck-types/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
+    try {
+      const result = await request(`/api/payroll/logistics/truck-types/${Number(id)}`, { method: 'DELETE' });
+      await loadLogisticsPayrollModule();
+      await showMessage(result.message || 'Truck type deactivated.');
+    } catch (error) { await showMessage(error.message, 'error'); }
   }
 
   async function deactivateLogisticsLocation(id) {
     if (!(await confirmAction('Deactivate this location? Existing trip history remains unchanged.', 'Deactivate Location'))) return;
-    try { await request(`/api/payroll/logistics/locations/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
+    try {
+      const result = await request(`/api/payroll/logistics/locations/${Number(id)}`, { method: 'DELETE' });
+      await loadLogisticsPayrollModule();
+      await showMessage(result.message || 'Logistics location deactivated.');
+    } catch (error) { await showMessage(error.message, 'error'); }
   }
 
   async function deactivateLogisticsRate(id) {
     if (!(await confirmAction('Deactivate this rate? Existing trip history remains unchanged.', 'Deactivate Logistics Rate'))) return;
-    try { await request(`/api/payroll/logistics/rates/${Number(id)}`, { method: 'DELETE' }); await loadLogisticsPayrollModule(); } catch (error) { await showMessage(error.message, 'error'); }
+    try {
+      const result = await request(`/api/payroll/logistics/rates/${Number(id)}`, { method: 'DELETE' });
+      await loadLogisticsPayrollModule();
+      await showMessage(result.message || 'Logistics rate deactivated.');
+    } catch (error) { await showMessage(error.message, 'error'); }
+  }
+
+  async function handleLogisticsActionClick(event) {
+    const button = event.target.closest('[data-logistics-action]');
+    if (!button || !document.getElementById('payroll-tab-logistics')?.contains(button)) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const id = Number(button.dataset.logisticsId);
+    const action = button.dataset.logisticsAction;
+    if (!Number.isInteger(id) || id <= 0) return;
+
+    button.disabled = true;
+    try {
+      if (action === 'editTruckType') return editLogisticsTruckType(id);
+      if (action === 'editLocation') return editLogisticsLocation(id);
+      if (action === 'editRate') return editLogisticsRate(id);
+      if (action === 'deactivateTruckType') return await deactivateLogisticsTruckType(id);
+      if (action === 'deactivateLocation') return await deactivateLogisticsLocation(id);
+      if (action === 'deactivateRate') return await deactivateLogisticsRate(id);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function registryCell(record) {
@@ -349,6 +384,7 @@
     setDefaultDates();
   }
 
+  document.addEventListener('click', handleLogisticsActionClick);
   document.addEventListener('partialsLoaded', initialize);
   if (document.readyState !== 'loading') initialize();
 

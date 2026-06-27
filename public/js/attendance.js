@@ -15,7 +15,11 @@ let ATT_RECORDS_PAGE = 1;
 let ATT_RECORDS_FILTER_SIGNATURE = '';
 let ATT_RECORDS_LOAD_SEQUENCE = 0;
 let ATT_RECORDS_SEARCH_TIMER = null;
+let ATT_BIOMETRIC_EVENTS = [];
+let ATT_BIOMETRIC_EVENTS_PAGE = 1;
+let ATT_BIOMETRIC_EVENTS_SIGNATURE = '';
 const ATT_RECORDS_PAGE_SIZE = 10;
+const ATT_BIOMETRIC_EVENTS_PAGE_SIZE = 5;
 const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 
@@ -230,6 +234,7 @@ function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
 function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }
 function isPayrollAttendanceViewer() { return isPayrollOfficer() || isPayrollManager(); }
 function isEmployee() { return ATT_USER?.role === 'employee'; }
+function canManageAttendanceRecords() { return isHr(); }
 function canManageBiometrics() { return isHr() || isSystemAdmin(); }
 function canViewAllAttendanceRecords() { return isHr() || isPayrollAttendanceViewer(); }
 
@@ -405,6 +410,16 @@ function actionDotsIcon() {
   </svg>`;
 }
 
+function attendanceMenuIcon(name) {
+  const paths = {
+    view: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    validate: '<path d="m5 12 4 4L19 6"/>',
+    reject: '<path d="m6 6 12 12M18 6 6 18"/>',
+    correct: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  };
+  return `<svg class="att-menu-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ''}</svg>`;
+}
+
 function calculateHours(timeIn, timeOut) {
   if (!timeIn || !timeOut) return '-';
   const milliseconds = new Date(`1970-01-01T${timeOut}`) - new Date(`1970-01-01T${timeIn}`);
@@ -412,14 +427,6 @@ function calculateHours(timeIn, timeOut) {
 }
 
 function calculateDtrHours(record) {
-  const segmentHours = (start, end) => {
-    if (!start || !end) return 0;
-    const milliseconds = new Date(`1970-01-01T${end}`) - new Date(`1970-01-01T${start}`);
-    return Math.max(0, milliseconds / 3600000);
-  };
-  const dtrHours = segmentHours(record.am_time_in, record.am_time_out)
-    + segmentHours(record.pm_time_in, record.pm_time_out);
-  if (dtrHours > 0) return `${dtrHours.toFixed(1)}h`;
   return calculateHours(record.time_in, record.time_out);
 }
 
@@ -460,11 +467,11 @@ async function initAttendance() {
   setVisible('att-tab-policies', canManageBiometrics());
   setVisible('att-tab-payroll-policy', isHr() || isSystemAdmin());
   setVisible('att-tab-audit', canManageBiometrics());
-  setVisible('btn-manual-attendance', isHr());
-  setVisible('att-select-all', isHr());
+  setVisible('btn-manual-attendance', canManageAttendanceRecords());
+  setVisible('att-select-all', canManageAttendanceRecords());
   setVisible('hr-payroll-policy-card', isHr() || isSystemAdmin());
   document.querySelectorAll('.att-hr-record-action').forEach(button => {
-    button.style.display = isHr() ? '' : 'none';
+    button.style.display = canManageAttendanceRecords() ? '' : 'none';
   });
 
   const controls = document.querySelector('.att-toolbar');
@@ -524,10 +531,9 @@ async function loadClockStatus() {
     if (!data.clocked_in) {
       label.textContent = 'No attendance recorded yet today. Use the Attendance Station to scan your fingerprint.';
     } else if (!data.clocked_out) {
-      const nextPunch = data.record?.am_time_out ? 'PM time-in or PM time-out' : 'AM time-out';
-      label.textContent = `DTR started at ${data.record?.am_time_in || data.record?.pm_time_in || data.record?.time_in || '-'}. Next scan will record ${nextPunch} based on the schedule.`;
+      label.textContent = `Timed in at ${data.record?.time_in || '-'}. Your next scan will record Time Out.`;
     } else {
-      label.textContent = `Completed DTR: ${data.record?.am_time_in || '-'} / ${data.record?.am_time_out || '-'} / ${data.record?.pm_time_in || '-'} / ${data.record?.pm_time_out || data.record?.time_out || '-'}.`;
+      label.textContent = `Completed attendance: ${data.record?.time_in || '-'} to ${data.record?.time_out || '-'}.`;
     }
   } catch (err) {
     console.error('Attendance status error:', err);
@@ -644,7 +650,7 @@ async function loadAttRecords() {
     console.error(err);
     const tbody = document.getElementById('att-records-tbody');
     const mobileList = document.getElementById('att-mobile-records-list');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="att-empty">${esc(err.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="att-empty">${esc(err.message)}</td></tr>`;
     if (mobileList) mobileList.innerHTML = `<div class="att-mobile-empty">${esc(err.message)}</div>`;
     renderAttendancePagination(0, 0, 0, 0);
   }
@@ -689,10 +695,8 @@ function isPayrollReadyRecord(record) {
 
 function missingDtrPunches(record) {
   const missing = [];
-  if (!record?.am_time_in && !record?.pm_time_in && !record?.time_in) missing.push('AM/PM time in');
-  if (record?.am_time_in && !record?.am_time_out) missing.push('AM time out');
-  if ((record?.am_time_out || record?.pm_time_out || record?.time_out) && !record?.pm_time_in) missing.push('PM time in');
-  if (!record?.pm_time_out && !record?.time_out) missing.push('PM time out');
+  if (!record?.time_in) missing.push('Time in');
+  if (!record?.time_out) missing.push('Time out');
   return missing;
 }
 
@@ -714,7 +718,7 @@ function renderAttRecords() {
   const mobileList = document.getElementById('att-mobile-records-list');
   if (!tbody) return;
   if (!ATT_RECORDS.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="att-empty">No attendance records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance records found.</td></tr>';
     if (mobileList) {
       mobileList.innerHTML = '<div class="att-mobile-empty">No attendance records found.</div>';
     }
@@ -737,14 +741,14 @@ function renderAttRecords() {
     const primaryStatus = primaryAttendanceStatus(record);
     const verification = validationLabel(record.verification_status);
     const dtrMissing = isIncompleteDtr(record);
-    const actions = isHr() && attendanceId
+    const actions = canManageAttendanceRecords() && attendanceId
       ? `<div class="att-row-menu">
-           <button class="att-menu-trigger action-dots-button" onclick="toggleAttendanceActionMenu(event, ${Number(attendanceId)})" aria-label="Attendance actions">${actionDotsIcon()}</button>
-           <div class="att-menu-panel" id="att-menu-${Number(attendanceId)}">
-             <button onclick="openAttendanceDetail(${Number(attendanceId)})"><span>View</span> View Details</button>
-             ${dtrMissing ? '' : `<button onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')"><span class="status-ok">✓</span> Validate</button>`}
-             <button onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')"><span class="status-bad">×</span> Reject</button>
-             <button onclick="openOverrideModal(${Number(attendanceId)})"><span>Edit</span> Correct</button>
+           <button type="button" class="att-menu-trigger action-dots-button" onclick="toggleAttendanceActionMenu(event, ${Number(attendanceId)})" aria-label="Open attendance actions" aria-haspopup="menu" aria-expanded="false">${actionDotsIcon()}</button>
+           <div class="att-menu-panel" id="att-menu-${Number(attendanceId)}" role="menu">
+             <button type="button" class="att-menu-item" role="menuitem" onclick="openAttendanceDetail(${Number(attendanceId)})">${attendanceMenuIcon('view')}<span>View details</span></button>
+             ${dtrMissing ? '' : `<button type="button" class="att-menu-item att-menu-item-success" role="menuitem" onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')">${attendanceMenuIcon('validate')}<span>Validate</span></button>`}
+             <button type="button" class="att-menu-item att-menu-item-danger" role="menuitem" onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')">${attendanceMenuIcon('reject')}<span>Reject</span></button>
+             <button type="button" class="att-menu-item" role="menuitem" onclick="openOverrideModal(${Number(attendanceId)})">${attendanceMenuIcon('correct')}<span>Correct entry</span></button>
            </div>
          </div>`
       : attendanceId
@@ -752,14 +756,12 @@ function renderAttRecords() {
         : '-';
 
     return `<tr>
-      <td>${attendanceId && isHr() ? `<input type="checkbox" class="att-row-select" value="${Number(attendanceId)}" />` : ''}</td>
-      <td><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<br><small>${esc(record.employee_code)}</small>` : ''}</td>
+      <td>${attendanceId && canManageAttendanceRecords() ? `<input type="checkbox" class="att-row-select" value="${Number(attendanceId)}" />` : ''}</td>
+      <td class="att-employee-cell"><strong>${esc(record.employee_name || 'You')}</strong>${record.employee_code ? `<span class="att-employee-code">${esc(record.employee_code)}</span>` : ''}</td>
       <td>${esc(record.department || '-')}</td>
       <td>${esc(formatDate(record.attendance_date || record.date))}</td>
-      <td>${esc(record.am_time_in || '-')}</td>
-      <td>${esc(record.am_time_out || '-')}</td>
-      <td>${esc(record.pm_time_in || '-')}</td>
-      <td>${esc(record.pm_time_out || '-')}</td>
+      <td>${esc(record.time_in || '-')}</td>
+      <td>${esc(record.time_out || '-')}</td>
       <td>${esc(hours)}</td>
       <td class="att-summary-cell" title="${esc(summary.title)}">
         ${renderAttendanceSummaryCell(primaryStatus, summary)}
@@ -784,10 +786,8 @@ function renderAttRecords() {
             ${attendanceBadge(status)}
           </div>
           <div class="att-mobile-record-times">
-            <div><span>AM In</span><strong>${esc(record.am_time_in || '-')}</strong></div>
-            <div><span>AM Out</span><strong>${esc(record.am_time_out || '-')}</strong></div>
-            <div><span>PM In</span><strong>${esc(record.pm_time_in || '-')}</strong></div>
-            <div><span>PM Out</span><strong>${esc(record.pm_time_out || '-')}</strong></div>
+            <div><span>Time In</span><strong>${esc(record.time_in || '-')}</strong></div>
+            <div><span>Time Out</span><strong>${esc(record.time_out || '-')}</strong></div>
             <div><span>Hours</span><strong>${esc(hours)}</strong></div>
           </div>
           <div class="att-mobile-record-meta">
@@ -844,8 +844,67 @@ function setAttendanceRecordsPage(page) {
   renderAttRecords();
 }
 
+function renderBiometricEventsPagination(totalRows, start, end, totalPages) {
+  const container = document.getElementById('bio-events-pagination');
+  if (!container) return;
+  if (!totalRows || totalPages <= 1) {
+    container.innerHTML = totalRows ? `<span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>` : '';
+    container.style.display = totalRows ? 'flex' : 'none';
+    return;
+  }
+  const currentPage = Math.min(Math.max(Number(ATT_BIOMETRIC_EVENTS_PAGE || 1), 1), totalPages);
+  container.style.display = 'flex';
+  container.innerHTML = `
+    <span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
+    <div class="att-records-pagination-actions">
+      <button class="btn btn-outline btn-sm" type="button" onclick="setBiometricEventsPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="att-records-pagination-page">Page ${currentPage} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setBiometricEventsPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>
+  `;
+}
+
+function renderBiometricEvents() {
+  const tbody = document.getElementById('bio-events-tbody');
+  if (!tbody) return;
+  const rows = ATT_BIOMETRIC_EVENTS;
+  if (!rows.length) {
+    const emptyHtml = '<tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr>';
+    if (tbody.innerHTML !== emptyHtml) tbody.innerHTML = emptyHtml;
+    renderBiometricEventsPagination(0, 0, 0, 0);
+    return;
+  }
+
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / ATT_BIOMETRIC_EVENTS_PAGE_SIZE));
+  ATT_BIOMETRIC_EVENTS_PAGE = Math.min(Math.max(Number(ATT_BIOMETRIC_EVENTS_PAGE || 1), 1), totalPages);
+  const start = (ATT_BIOMETRIC_EVENTS_PAGE - 1) * ATT_BIOMETRIC_EVENTS_PAGE_SIZE;
+  const end = Math.min(start + ATT_BIOMETRIC_EVENTS_PAGE_SIZE, totalRows);
+  const pageRows = rows.slice(start, end);
+  const html = pageRows.map(row => `<tr>
+    <td class="att-employee-cell">${esc(row.employee_name || 'Unmapped')}${row.employee_code ? `<span class="att-employee-code">${esc(row.employee_code)}</span>` : ''}</td>
+    <td>${esc(formatDateTime(row.scan_timestamp || row.created_at))}</td>
+    <td>${esc((row.attendance_type || '-').replace('_', ' '))}</td>
+    <td>${badge(formalValidationStatus(row.verification_status || '-'))}</td>
+  </tr>`).join('');
+  if (tbody.innerHTML !== html) tbody.innerHTML = html;
+  renderBiometricEventsPagination(totalRows, start + 1, end, totalPages);
+}
+
+function setBiometricEventsPage(page) {
+  const totalPages = Math.max(1, Math.ceil(ATT_BIOMETRIC_EVENTS.length / ATT_BIOMETRIC_EVENTS_PAGE_SIZE));
+  ATT_BIOMETRIC_EVENTS_PAGE = Math.min(Math.max(Number(page || 1), 1), totalPages);
+  ATT_BIOMETRIC_EVENTS_SIGNATURE = '';
+  renderBiometricEvents();
+}
+
 function closeAttendanceActionMenus() {
-  document.querySelectorAll('.att-menu-panel.open').forEach(menu => menu.classList.remove('open'));
+  document.querySelectorAll('.att-menu-panel.open').forEach(menu => {
+    menu.classList.remove('open');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('top');
+    menu.closest('.att-row-menu')?.querySelector('.att-menu-trigger')?.setAttribute('aria-expanded', 'false');
+  });
 }
 
 function toggleAttendanceActionMenu(event, attendanceId) {
@@ -854,7 +913,24 @@ function toggleAttendanceActionMenu(event, attendanceId) {
   if (!menu) return;
   const isOpen = menu.classList.contains('open');
   closeAttendanceActionMenus();
-  if (!isOpen) menu.classList.add('open');
+  if (isOpen) return;
+
+  const trigger = event.currentTarget;
+  menu.classList.add('open');
+  trigger.setAttribute('aria-expanded', 'true');
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const viewportGap = 8;
+  const left = Math.min(
+    window.innerWidth - menuRect.width - viewportGap,
+    Math.max(viewportGap, triggerRect.right - menuRect.width)
+  );
+  const fitsBelow = window.innerHeight - triggerRect.bottom >= menuRect.height + viewportGap;
+  const top = fitsBelow
+    ? triggerRect.bottom + 6
+    : Math.max(viewportGap, triggerRect.top - menuRect.height - 6);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
 }
 
 function clearAttFilters() {
@@ -894,7 +970,7 @@ async function bulkValidateAttendance() {
     .map(id => ATT_RECORDS.find(record => Number(record.attendance_id) === Number(id)))
     .filter(record => record && isIncompleteDtr(record));
   if (incomplete.length) {
-    return alert('Some selected records have incomplete DTR punches. Correct AM/PM punches before marking payroll ready.');
+    return alert('Some selected records are missing Time In or Time Out. Correct them before marking payroll ready.');
   }
   for (const id of ids) await verifyAttendance(id, 'VALIDATED', { silent: true });
   alert(`${ids.length} attendance record(s) validated.`);
@@ -920,15 +996,13 @@ function bulkCorrectAttendance() {
 
 function exportAttendanceRecords() {
   if (!ATT_RECORDS.length) return alert('No attendance records to export.');
-  const headers = ['Employee', 'Department', 'Date', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours Worked', 'Late Minutes', 'Undertime Minutes', 'Overtime Minutes', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
+  const headers = ['Employee', 'Department', 'Date', 'Time In', 'Time Out', 'Hours Worked', 'Late Minutes', 'Undertime Minutes', 'Overtime Minutes', 'Attendance Status', 'Validation Status', 'Payroll Ready'];
   const rows = ATT_RECORDS.map(record => [
     record.employee_name || 'You',
     record.department || '',
     formatDate(record.attendance_date || record.date),
-    record.am_time_in || '',
-    record.am_time_out || '',
-    record.pm_time_in || '',
-    record.pm_time_out || '',
+    record.time_in || '',
+    record.time_out || '',
     Object.prototype.hasOwnProperty.call(record, 'regular_minutes') ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h` : calculateDtrHours(record),
     minuteValue(record, 'summary_late_minutes', 'late_minutes'),
     minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes'),
@@ -956,6 +1030,18 @@ function openAttendanceDetail(attendanceId) {
   ATT_SELECTED_DETAIL_ID = Number(attendanceId);
   const content = document.getElementById('attendance-detail-content');
   if (!content) return;
+  const canManage = canManageAttendanceRecords();
+  const modal = document.getElementById('attendance-detail-modal');
+  const title = modal?.querySelector('.att-card-heading h3');
+  const copy = modal?.querySelector('.att-card-heading p');
+  const actions = modal?.querySelector('.att-modal-actions');
+  if (title) title.textContent = isEmployee() ? 'My Attendance Record' : 'Attendance Details';
+  if (copy) {
+    copy.textContent = canManage
+      ? 'Employee information, biometric scan metadata, validation history, and audit history.'
+      : 'Review time in/out, hours worked, and attendance status.';
+  }
+  if (actions) actions.style.display = canManage ? '' : 'none';
   const hours = Object.prototype.hasOwnProperty.call(record, 'regular_minutes')
     ? `${(Number(record.regular_minutes || 0) / 60).toFixed(1)}h`
     : calculateDtrHours(record);
@@ -964,46 +1050,51 @@ function openAttendanceDetail(attendanceId) {
   const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
   const dtrMissing = missingDtrPunches(record);
   const detailValidateButton = document.getElementById('attendance-detail-validate-button');
-  if (detailValidateButton) detailValidateButton.style.display = dtrMissing.length ? 'none' : '';
-  content.innerHTML = `
+  if (detailValidateButton) detailValidateButton.style.display = canManage && !dtrMissing.length ? '' : 'none';
+
+  const attendanceDetailSection = `
     <section>
-      <h4>Employee Information</h4>
+      <h4>${isEmployee() ? 'Record Details' : 'Employee Information'}</h4>
       <table><tbody>
-        <tr><th>Employee</th><td>${esc(record.employee_name || 'You')}</td><th>Employee ID</th><td>${esc(record.employee_code || '-')}</td></tr>
-        <tr><th>Department</th><td>${esc(record.department || '-')}</td><th>Position</th><td>${esc(record.position || '-')}</td></tr>
+        ${isEmployee()
+          ? `<tr><th>Employee</th><td colspan="3">You</td></tr>`
+          : `<tr><th>Employee</th><td>${esc(record.employee_name || 'Employee')}</td><th>Employee ID</th><td>${esc(record.employee_code || '-')}</td></tr>
+             <tr><th>Department</th><td>${esc(record.department || '-')}</td><th>Position</th><td>${esc(record.position || '-')}</td></tr>`}
       </tbody></table>
     </section>
     <section>
       <h4>Attendance Details</h4>
       <table><tbody>
         <tr><th>Date</th><td>${esc(formatDate(record.attendance_date || record.date))}</td><th>Hours Worked</th><td>${esc(hours)}</td></tr>
-        <tr><th>AM In</th><td>${esc(record.am_time_in || '-')}</td><th>AM Out</th><td>${esc(record.am_time_out || '-')}</td></tr>
-        <tr><th>PM In</th><td>${esc(record.pm_time_in || '-')}</td><th>PM Out</th><td>${esc(record.pm_time_out || '-')}</td></tr>
+        <tr><th>Time In</th><td>${esc(record.time_in || '-')}</td><th>Time Out</th><td>${esc(record.time_out || '-')}</td></tr>
         ${dtrMissing.length ? `<tr><th>Missing DTR Punches</th><td colspan="3">${esc(dtrMissing.join(', '))}</td></tr>` : ''}
         <tr><th>Attendance Status</th><td>${attendanceFlagBadges(record)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
         <tr><th>Late Minutes</th><td>${esc(formatMinutes(lateMinutes))}</td><th>Undertime Minutes</th><td>${esc(formatMinutes(undertimeMinutes))}</td></tr>
         <tr><th>Overtime Minutes</th><td>${esc(formatMinutes(overtimeMinutes))}</td><th></th><td></td></tr>
       </tbody></table>
-    </section>
-    <section>
-      <h4>Biometric Scan Information</h4>
-      <table><tbody>
-        <tr><th>Source</th><td>${esc(record.source || '-')}</td><th>Device</th><td>${esc(record.device_id || '-')}</td></tr>
-        <tr><th>Integrity Hash</th><td colspan="3">${esc(record.integrity_hash || '-')}</td></tr>
-      </tbody></table>
-    </section>
-    <section>
-      <h4>Validation History</h4>
-      <table><tbody>
-        <tr><th>Validation Status</th><td>${badge(formalValidationStatus(record.verification_status))}</td><th>Latest Action</th><td>${esc(record.source || '-')}</td></tr>
-      </tbody></table>
-    </section>
-    <section>
-      <h4>Audit History</h4>
-      <div class="att-muted">Open the Audit Log tab for complete immutable audit entries for this attendance record.</div>
-    </section>
-  `;
-  document.getElementById('attendance-detail-modal').style.display = 'flex';
+    </section>`;
+
+  const hrSecuritySections = `
+      <section>
+        <h4>Biometric Scan Information</h4>
+        <table><tbody>
+          <tr><th>Source</th><td>${esc(record.source || '-')}</td><th>Device</th><td>${esc(record.device_id || '-')}</td></tr>
+          <tr><th>Integrity Hash</th><td colspan="3">${esc(record.integrity_hash || '-')}</td></tr>
+        </tbody></table>
+      </section>
+      <section>
+        <h4>Validation History</h4>
+        <table><tbody>
+          <tr><th>Validation Status</th><td>${badge(formalValidationStatus(record.verification_status))}</td><th>Latest Action</th><td>${esc(record.source || '-')}</td></tr>
+        </tbody></table>
+      </section>
+      <section>
+        <h4>Audit History</h4>
+        <div class="att-muted">Open the Audit Log tab for complete immutable audit entries for this attendance record.</div>
+      </section>`;
+
+  content.innerHTML = canManage ? `${attendanceDetailSection}${hrSecuritySections}` : attendanceDetailSection;
+  if (modal) modal.style.display = 'flex';
 }
 
 function closeAttendanceDetailModal() {
@@ -1012,9 +1103,10 @@ function closeAttendanceDetailModal() {
 }
 
 function detailValidateAttendance() {
+  if (!canManageAttendanceRecords()) return alert('Only HR can validate attendance records.');
   const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(ATT_SELECTED_DETAIL_ID));
   if (record && isIncompleteDtr(record)) {
-    alert('This DTR is incomplete. Correct AM/PM punches before marking payroll ready.');
+    alert('This attendance record is missing Time In or Time Out.');
     return;
   }
   if (ATT_SELECTED_DETAIL_ID) verifyAttendance(ATT_SELECTED_DETAIL_ID, 'VALIDATED');
@@ -1022,26 +1114,27 @@ function detailValidateAttendance() {
 }
 
 function detailRejectAttendance() {
+  if (!canManageAttendanceRecords()) return alert('Only HR can reject attendance records.');
   if (ATT_SELECTED_DETAIL_ID) verifyAttendance(ATT_SELECTED_DETAIL_ID, 'REJECTED');
   closeAttendanceDetailModal();
 }
 
 function detailCorrectAttendance() {
+  if (!canManageAttendanceRecords()) return alert('Only HR can correct attendance records.');
   const id = ATT_SELECTED_DETAIL_ID;
   closeAttendanceDetailModal();
   if (id) openOverrideModal(id);
 }
 
 function openOverrideModal(attendanceId) {
+  if (!canManageAttendanceRecords()) return alert('Only HR can correct attendance records.');
   closeAttendanceActionMenus();
   const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(attendanceId));
   if (!record) return;
   document.getElementById('override-att-id').value = attendanceId;
   document.getElementById('override-emp-info').textContent = `${record.employee_name || 'Employee'} - ${formatDate(record.date)}`;
-  document.getElementById('override-am-time-in').value = record.am_time_in || '';
-  document.getElementById('override-am-time-out').value = record.am_time_out || '';
-  document.getElementById('override-pm-time-in').value = record.pm_time_in || '';
-  document.getElementById('override-pm-time-out').value = record.pm_time_out || '';
+  document.getElementById('override-time-in').value = record.time_in || '';
+  document.getElementById('override-time-out').value = record.time_out || '';
   document.getElementById('override-reason').value = '';
   document.getElementById('override-modal').style.display = 'flex';
 }
@@ -1051,6 +1144,7 @@ function closeOverrideModal() {
 }
 
 async function submitOverride() {
+  if (!canManageAttendanceRecords()) return alert('Only HR can correct attendance records.');
   const attendanceId = document.getElementById('override-att-id').value;
   const reason = document.getElementById('override-reason').value.trim();
   if (reason.length < 8) {
@@ -1058,10 +1152,8 @@ async function submitOverride() {
     return;
   }
   const body = {
-    am_time_in: document.getElementById('override-am-time-in').value,
-    am_time_out: document.getElementById('override-am-time-out').value,
-    pm_time_in: document.getElementById('override-pm-time-in').value,
-    pm_time_out: document.getElementById('override-pm-time-out').value,
+    time_in: document.getElementById('override-time-in').value,
+    time_out: document.getElementById('override-time-out').value,
     reason,
   };
   try {
@@ -1078,6 +1170,7 @@ async function submitOverride() {
 }
 
 async function verifyAttendance(attendanceId, verificationStatus, options = {}) {
+  if (!canManageAttendanceRecords()) return alert('Only HR can validate attendance records.');
   closeAttendanceActionMenus();
   let reason = options.reason || '';
   if (verificationStatus !== 'VALIDATED') {
@@ -1321,10 +1414,8 @@ async function submitManualAttendance() {
   const body = {
     employee_id: manualAttendanceEl('manual-employee').value,
     date: manualAttendanceEl('manual-date').value,
-    am_time_in: manualAttendanceEl('manual-am-time-in').value,
-    am_time_out: manualAttendanceEl('manual-am-time-out').value,
-    pm_time_in: manualAttendanceEl('manual-pm-time-in').value,
-    pm_time_out: manualAttendanceEl('manual-pm-time-out').value,
+    time_in: manualAttendanceEl('manual-time-in').value,
+    time_out: manualAttendanceEl('manual-time-out').value,
     reason: manualAttendanceEl('manual-reason').value,
   };
   if (!body.employee_id || !body.date || body.reason.trim().length < 8) {
@@ -1521,14 +1612,24 @@ async function loadBiometricEvents() {
     const res = await apiFetch('/api/attendance/biometric/events');
     if (!res?.ok) return;
     const rows = await res.json();
-    const tbody = document.getElementById('bio-events-tbody');
-    if (!tbody) return;
-    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
-      <td>${esc(row.employee_name || 'Unmapped')}<br><small>${esc(row.employee_code || '')}</small></td>
-      <td>${esc(formatDateTime(row.scan_timestamp || row.created_at))}</td>
-      <td>${esc((row.attendance_type || '-').replace('_', ' '))}</td>
-      <td>${badge(formalValidationStatus(row.verification_status || '-'))}</td>
-    </tr>`).join('') : '<tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr>';
+    const nextRows = Array.isArray(rows) ? rows : [];
+    const nextSignature = JSON.stringify(nextRows.map(row => [
+      row.id || row.event_id || row.attendance_id || '',
+      row.employee_code || '',
+      row.employee_name || '',
+      row.scan_timestamp || row.created_at || '',
+      row.attendance_type || '',
+      row.verification_status || ''
+    ]));
+    if (nextSignature !== ATT_BIOMETRIC_EVENTS_SIGNATURE) {
+      ATT_BIOMETRIC_EVENTS = nextRows;
+      ATT_BIOMETRIC_EVENTS_PAGE = Math.min(
+        Math.max(Number(ATT_BIOMETRIC_EVENTS_PAGE || 1), 1),
+        Math.max(1, Math.ceil(ATT_BIOMETRIC_EVENTS.length / ATT_BIOMETRIC_EVENTS_PAGE_SIZE))
+      );
+      ATT_BIOMETRIC_EVENTS_SIGNATURE = nextSignature;
+      renderBiometricEvents();
+    }
   } catch (err) {
     console.error(err);
   }
@@ -1917,6 +2018,7 @@ window.loadBiometricExceptions = loadBiometricExceptions;
 window.loadBiometricHealth = loadBiometricHealth;
 window.loadBiometricWorkspace = loadBiometricWorkspace;
 window.loadBiometricEvents = loadBiometricEvents;
+window.setBiometricEventsPage = setBiometricEventsPage;
 window.runBiometricDiagnostics = runBiometricDiagnostics;
 window.createLocalBiometricDevice = createLocalBiometricDevice;
 window.updateFingerprintEnrollmentView = updateFingerprintEnrollmentView;
@@ -1934,3 +2036,5 @@ window.loadAttendancePolicies = loadAttendancePolicies;
 window.saveAttendancePolicies = saveAttendancePolicies;
 window.switchAttendancePolicyTab = switchAttendancePolicyTab;
 document.addEventListener('click', closeAttendanceActionMenus);
+window.addEventListener('resize', closeAttendanceActionMenus);
+window.addEventListener('scroll', closeAttendanceActionMenus, true);

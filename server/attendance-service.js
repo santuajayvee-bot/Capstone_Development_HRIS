@@ -17,6 +17,8 @@ const {
   computeAttendanceMetrics,
   getInitialVerificationStatus,
 } = require('./attendance-policy-engine');
+const { classifyDtrPunch, dtrUpdateValues, hasRequiredDtrPunches } = require('./dtr-punch');
+const { recordTardinessPolicyAlert } = require('./tardiness-policy');
 
 const GENESIS_HASH = '0'.repeat(64);
 const VALID_TYPES = new Set(['TIME_IN', 'TIME_OUT', 'AUTO']);
@@ -278,7 +280,8 @@ async function findEmployee(conn, deviceId, event) {
 
 async function refreshSummary(conn, attendanceId) {
   const [rows] = await conn.execute(
-    `SELECT attendance_id, employee_id, date, time_in, time_out, overtime_hours,
+    `SELECT attendance_id, employee_id, date, time_in, time_out,
+            am_time_in, am_time_out, pm_time_in, pm_time_out, overtime_hours,
             status, verification_status, integrity_hash
        FROM attendance_log
       WHERE attendance_id = ?`,
@@ -289,13 +292,13 @@ async function refreshSummary(conn, attendanceId) {
   await ensureAttendanceSummaryPolicyColumns(conn);
   await ensureAttendanceLogMetricColumns(conn);
 
-  const policy = await getActiveAttendancePolicy(conn, row.date);
+  const policy = await getActiveAttendancePolicy(conn, row.date, { employee_id: row.employee_id });
   const metrics = computeAttendanceMetrics(row, policy);
   const { regularMinutes, overtimeMinutes, lateMinutes, undertimeMinutes, attendanceStatus } = metrics;
   const statusReady = policy.payroll_attendance_source === 'validated'
     ? PAYROLL_READY_STATUSES.has(row.verification_status)
     : row.verification_status === 'PAYROLL_READY';
-  const payrollEligible = statusReady && !!row.time_in && !!row.time_out ? 1 : 0;
+  const payrollEligible = statusReady && !!row.time_in && !!row.time_out && hasRequiredDtrPunches(row) ? 1 : 0;
   const policySnapshot = JSON.stringify({
     work_start_time: policy.work_start_time,
     work_end_time: policy.work_end_time,
@@ -307,6 +310,12 @@ async function refreshSummary(conn, attendanceId) {
     overtime_approval_required: policy.overtime_approval_required,
     payroll_attendance_source: policy.payroll_attendance_source,
     missing_timeout_handling: policy.missing_timeout_handling,
+    payroll_config_id: policy.payroll_config_id || null,
+    payroll_config_name: policy.payroll_config_name || null,
+    payroll_config_scope_type: policy.payroll_config_scope_type || null,
+    working_days_per_month: policy.working_days_per_month || null,
+    working_days_per_year: policy.working_days_per_year || null,
+    habitual_tardiness_threshold: policy.habitual_tardiness_threshold || null,
     holiday: {
       enabled: policy.enable_holiday_rules,
       regular_multiplier: policy.regular_holiday_multiplier,
@@ -356,6 +365,9 @@ async function refreshSummary(conn, attendanceId) {
       policySnapshot,
     ]
   );
+  if (lateMinutes > 0) {
+    await recordTardinessPolicyAlert(conn, row, policy);
+  }
 }
 
 async function appendIntegrityEntry(conn, attendanceId, eventType) {
@@ -364,7 +376,8 @@ async function appendIntegrityEntry(conn, attendanceId, eventType) {
 
   try {
     const [records] = await conn.execute(
-      `SELECT attendance_id, employee_id, date, time_in, time_out, overtime_hours,
+      `SELECT attendance_id, employee_id, date, time_in, time_out,
+              am_time_in, am_time_out, pm_time_in, pm_time_out, overtime_hours,
               absences, status, biometric_user_hash, device_id, verification_status,
               source, first_scan_at, last_scan_at
          FROM attendance_log
@@ -417,7 +430,7 @@ async function updateScanEvent(conn, scanEventId, values) {
 
 async function processMappedEvent(conn, device, event, match, scanEventId) {
   const manila = getManilaParts(event.timestamp);
-  const policy = await getActiveAttendancePolicy(conn, manila.date);
+  const policy = await getActiveAttendancePolicy(conn, manila.date, { employee_id: match.employeeId });
   const encryptedBiometricId = event.biometricUserId ? encryptAES256(event.biometricUserId) : null;
   if (policy.duplicate_scan_window_seconds > 0) {
     const [recent] = await conn.execute(
@@ -447,80 +460,50 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
     [match.employeeId, manila.date]
   );
   let record = rows[0] || null;
-  let attendanceType = event.attendanceType;
-  let isAutoTimeOutUpdate = false;
+  const punch = classifyDtrPunch(record, manila.time, policy, event.attendanceType);
+  const attendanceType = punch.attendanceType || event.attendanceType;
 
-  if (attendanceType === 'AUTO') {
-    if (!record?.time_in) {
-      attendanceType = 'TIME_IN';
-    } else if (!record.time_out) {
-      if (!isAutoTimeOutEligible(manila.time, policy)) {
-        await updateScanEvent(conn, scanEventId, {
-          ...match,
-          biometricUserIdEncrypted: encryptedBiometricId,
-          verificationStatus: 'VALIDATED',
-          attendanceId: record.attendance_id,
-          errorMessage: 'Intermediate biometric scan before scheduled time-out; attendance unchanged.',
-        });
-        return { status: 'intermediate', attendanceId: record.attendance_id };
-      }
-      attendanceType = 'TIME_OUT';
-    } else if (isAutoTimeOutEligible(manila.time, policy) && isLaterTime(manila.time, record.time_out)) {
-      attendanceType = 'TIME_OUT';
-      isAutoTimeOutUpdate = true;
-    } else {
-      attendanceType = 'DUPLICATE';
-    }
+  if (punch.status === 'intermediate') {
+    await updateScanEvent(conn, scanEventId, {
+      ...match,
+      biometricUserIdEncrypted: encryptedBiometricId,
+      verificationStatus: 'VALIDATED',
+      attendanceId: record?.attendance_id,
+      errorMessage: 'Intermediate biometric scan; DTR attendance unchanged.',
+    });
+    return { status: 'intermediate', attendanceId: record?.attendance_id };
   }
 
-  if (attendanceType === 'DUPLICATE') {
+  if (punch.status === 'duplicate') {
     await updateScanEvent(conn, scanEventId, {
       ...match,
       biometricUserIdEncrypted: encryptedBiometricId,
       verificationStatus: 'DUPLICATE',
       attendanceId: record?.attendance_id,
-      errorMessage: 'Attendance already has a current time-in/time-out for this employee and date.',
+      errorMessage: 'DTR punch already exists for this employee and date.',
     });
     return { status: 'duplicate', attendanceId: record?.attendance_id };
   }
 
-  if (attendanceType === 'TIME_IN' && record?.time_in) {
-    await updateScanEvent(conn, scanEventId, {
-      ...match,
-      biometricUserIdEncrypted: encryptedBiometricId,
-      verificationStatus: 'DUPLICATE',
-      attendanceId: record.attendance_id,
-      errorMessage: 'A time-in punch already exists for this employee and date.',
-    });
-    return { status: 'duplicate', attendanceId: record.attendance_id };
-  }
-
-  if (attendanceType === 'TIME_OUT' && record?.time_out && !isAutoTimeOutUpdate) {
-    await updateScanEvent(conn, scanEventId, {
-      ...match,
-      biometricUserIdEncrypted: encryptedBiometricId,
-      verificationStatus: 'DUPLICATE',
-      attendanceId: record.attendance_id,
-      errorMessage: 'A time-out punch already exists for this employee and date.',
-    });
-    return { status: 'duplicate', attendanceId: record.attendance_id };
-  }
-
   if (!record) {
-    const isTimeIn = attendanceType === 'TIME_IN';
-    const status = isTimeIn ? getAttendanceStatusForTimeIn(manila.time, policy) : 'Incomplete';
-    const verificationStatus = getInitialVerificationStatus(attendanceType, policy, { missingTimeIn: attendanceType === 'TIME_OUT' });
+    const next = dtrUpdateValues(null, punch.slot, manila.time);
+    const status = next.time_in ? getAttendanceStatusForTimeIn(next.time_in, policy) : 'Incomplete';
+    const verificationStatus = getInitialVerificationStatus(attendanceType, policy, { missingTimeIn: !next.time_in });
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
-         (employee_id, date, time_in, time_out, status, biometric_user_hash,
+         (employee_id, date, time_in, time_out, am_time_in, am_time_out, pm_time_in, pm_time_out, status, biometric_user_hash,
           biometric_user_id_encrypted, device_id, verification_status, source,
           first_scan_at, last_scan_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'BIOMETRIC_API', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BIOMETRIC_API', ?, ?)`,
       [
         match.employeeId,
         manila.date,
-        isTimeIn ? manila.time : null,
-        isTimeIn ? null : manila.time,
+        next.time_in,
+        next.time_out,
+        next.am_time_in,
+        next.am_time_out,
+        next.pm_time_in,
+        next.pm_time_out,
         status,
         match.biometricUserHash,
         encryptedBiometricId,
@@ -531,17 +514,25 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
       ]
     );
     record = { attendance_id: result.insertId };
-  } else if (attendanceType === 'TIME_IN') {
+  } else {
+    const next = dtrUpdateValues(record, punch.slot, manila.time);
     await conn.execute(
       `UPDATE attendance_log
-          SET time_in = ?, status = ?, biometric_user_hash = ?,
+          SET time_in = ?, time_out = ?,
+              am_time_in = ?, am_time_out = ?, pm_time_in = ?, pm_time_out = ?,
+              status = ?, biometric_user_hash = ?,
               biometric_user_id_encrypted = ?, device_id = ?, source = 'BIOMETRIC_API',
               verification_status = ?,
               first_scan_at = COALESCE(first_scan_at, ?), last_scan_at = ?
         WHERE attendance_id = ?`,
       [
-        manila.time,
-        getAttendanceStatusForTimeIn(manila.time, policy),
+        next.time_in,
+        next.time_out,
+        next.am_time_in,
+        next.am_time_out,
+        next.pm_time_in,
+        next.pm_time_out,
+        next.time_in ? getAttendanceStatusForTimeIn(next.time_in, policy) : 'Incomplete',
         match.biometricUserHash,
         encryptedBiometricId,
         device.device_id,
@@ -550,16 +541,6 @@ async function processMappedEvent(conn, device, event, match, scanEventId) {
         manila.dateTime,
         record.attendance_id,
       ]
-    );
-  } else {
-    await conn.execute(
-      `UPDATE attendance_log
-          SET time_out = ?, device_id = ?, source = 'BIOMETRIC_API',
-              verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE ? END,
-              status = CASE WHEN time_in IS NULL THEN 'Incomplete' ELSE status END,
-              last_scan_at = ?
-        WHERE attendance_id = ?`,
-      [manila.time, device.device_id, getInitialVerificationStatus(attendanceType, policy), manila.dateTime, record.attendance_id]
     );
   }
 
@@ -731,6 +712,7 @@ module.exports = {
   ensureAttendanceLogMetricColumns,
   ensureAttendanceSummaryPolicyColumns,
   pullDeviceLogs,
+  recordTardinessPolicyAlert,
   refreshSummary,
   sha256,
   timingSafeEqualText,

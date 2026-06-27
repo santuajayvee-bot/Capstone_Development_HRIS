@@ -65,6 +65,51 @@
       <label>Date Hired<input id="self-date-hired" readonly></label>
       <label>Civil Status<input id="self-civil-status" readonly></label>
     </div>
+    <div class="erp-section-title self-sensitive-title">Government, tax, and bank information</div>
+    <div class="erp-form-grid self-sensitive-grid">
+      <label>SSS Number
+        <span class="self-sensitive-field">
+          <input id="self-sss-number" readonly data-self-sensitive-input="sss_number">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="sss_number" aria-label="Show SSS number"></button>
+        </span>
+      </label>
+      <label>PhilHealth Number
+        <span class="self-sensitive-field">
+          <input id="self-philhealth-number" readonly data-self-sensitive-input="philhealth_number">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="philhealth_number" aria-label="Show PhilHealth number"></button>
+        </span>
+      </label>
+      <label>Pag-IBIG Number
+        <span class="self-sensitive-field">
+          <input id="self-pagibig-number" readonly data-self-sensitive-input="pagibig_number">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="pagibig_number" aria-label="Show Pag-IBIG number"></button>
+        </span>
+      </label>
+      <label>TIN
+        <span class="self-sensitive-field">
+          <input id="self-tin" readonly data-self-sensitive-input="tin">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="tin" aria-label="Show TIN"></button>
+        </span>
+      </label>
+      <label>Tax Status
+        <span class="self-sensitive-field">
+          <input id="self-tax-status" readonly data-self-sensitive-input="tax_status">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="tax_status" aria-label="Show tax status"></button>
+        </span>
+      </label>
+      <label>Bank Name
+        <span class="self-sensitive-field">
+          <input id="self-bank-name" readonly data-self-sensitive-input="bank_name">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="bank_name" aria-label="Show bank name"></button>
+        </span>
+      </label>
+      <label>Bank Account
+        <span class="self-sensitive-field">
+          <input id="self-bank-account-number" readonly data-self-sensitive-input="bank_account_number">
+          <button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="bank_account_number" aria-label="Show bank account number"></button>
+        </span>
+      </label>
+    </div>
     <p class="form-note">For legal name, civil status, government numbers, or bank details, submit a change request for HR review.</p>
   </form>
 

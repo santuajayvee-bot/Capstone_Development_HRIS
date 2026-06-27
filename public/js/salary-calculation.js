@@ -15,6 +15,7 @@ let salaryPayrollValidation = null;
 let salaryAgencyList = [];
 let currentSalaryDraftId = null;
 let salaryDepartmentFilterListenerAttached = false;
+let salaryPiecePartnerFilterListenerAttached = false;
 let salaryDepartmentLookups = [];
 
 function salaryLocalDateValue(date = new Date()) {
@@ -499,6 +500,7 @@ async function fetchSalaryEmpList() {
     await fetchSalaryAgencies();
     populateSalaryAgencyOptions();
     populateSalaryDepartmentFilter();
+    populateSalaryPiecePartnerDepartmentFilter();
     attachSearchListener();
     attachPartnerSearchListener();
   } catch (e) {
@@ -536,6 +538,10 @@ function salaryEmployeeDepartmentKey(emp) {
 
 function selectedSalaryDepartmentKey() {
   return String(document.getElementById('salary-department-filter')?.value || '').trim();
+}
+
+function selectedSalaryPiecePartnerDepartmentKey() {
+  return String(document.getElementById('salary-piece-partner-department-filter')?.value || '').trim();
 }
 
 function getDepartmentFilteredSalaryEmployees() {
@@ -581,6 +587,47 @@ function populateSalaryDepartmentFilter() {
       }
       if (dropdown && search === document.activeElement) showDropdownList(filterSalaryEmployees(search.value));
       else if (dropdown) dropdown.style.display = 'none';
+    });
+  }
+}
+
+function populateSalaryPiecePartnerDepartmentFilter() {
+  const select = document.getElementById('salary-piece-partner-department-filter');
+  if (!select) return;
+
+  const current = select.value || '';
+  const setupDepartments = (salaryDepartmentLookups || [])
+    .map(dept => [String(dept.id || '').trim(), String(dept.name || '').trim()])
+    .filter(([key, label]) => key && label);
+  const employeeDepartments = (salaryEmpList || [])
+    .map(emp => {
+      const key = salaryEmployeeDepartmentKey(emp);
+      const label = String(emp.department || '').trim();
+      return key && label ? [key, label] : null;
+    })
+    .filter(Boolean);
+  const departments = [...new Map([...setupDepartments, ...employeeDepartments])]
+    .sort((a, b) => a[1].localeCompare(b[1]));
+
+  select.innerHTML = '<option value="">All departments</option>' + departments
+    .map(([key, label]) => `<option value="${salaryEscape(key)}">${salaryEscape(label)}</option>`)
+    .join('');
+
+  if (departments.some(([key]) => key === current)) select.value = current;
+
+  if (!salaryPiecePartnerFilterListenerAttached) {
+    salaryPiecePartnerFilterListenerAttached = true;
+    select.addEventListener('change', () => {
+      const search = document.getElementById('salary-piece-partner-search');
+      const dropdown = document.getElementById('salary-piece-partner-dropdown');
+      const selectedPartner = selectedSalaryPiecePartner();
+      const departmentKey = selectedSalaryPiecePartnerDepartmentKey();
+      if (selectedPartner && departmentKey && salaryEmployeeDepartmentKey(selectedPartner) !== departmentKey) {
+        clearSalaryPiecePartner();
+      }
+      if (dropdown && search === document.activeElement) showPartnerDropdown(filterPiecePartnerEmployees(search.value));
+      else if (dropdown) dropdown.style.display = 'none';
+      calculateSalaryNow();
     });
   }
 }
@@ -758,9 +805,11 @@ function requiredPiecePartnerRole() {
 
 function filterPiecePartnerEmployees(term = '') {
   const requiredRole = requiredPiecePartnerRole();
+  const departmentKey = selectedSalaryPiecePartnerDepartmentKey();
   return (salaryEmpList || [])
     .filter(emp => String(emp.id) !== String(currentSalaryEmployee?.id || ''))
     .filter(emp => !requiredRole || salaryProductionKind(emp.position) === requiredRole)
+    .filter(emp => !departmentKey || salaryEmployeeDepartmentKey(emp) === departmentKey)
     .filter(emp => employeeMatchesTerm(emp, term));
 }
 
@@ -794,6 +843,8 @@ function updatePiecePartnerControls() {
   }
   const selectedPartner = (salaryEmpList || []).find(emp => String(emp.id) === String(document.getElementById('salary-piece-partner')?.value || ''));
   if (selectedPartner && role && salaryProductionKind(selectedPartner.position) !== role) clearSalaryPiecePartner();
+  const partnerDepartmentKey = selectedSalaryPiecePartnerDepartmentKey();
+  if (selectedPartner && partnerDepartmentKey && salaryEmployeeDepartmentKey(selectedPartner) !== partnerDepartmentKey) clearSalaryPiecePartner();
 }
 
 function showPartnerDropdown(empList) {
@@ -1104,8 +1155,10 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
   document.getElementById('salary-employee-search').value = `${code} - ${first} ${last}`;
   const partnerSearch = document.getElementById('salary-piece-partner-search');
   const partnerInput = document.getElementById('salary-piece-partner');
+  const partnerDepartmentFilter = document.getElementById('salary-piece-partner-department-filter');
   if (partnerSearch) partnerSearch.value = '';
   if (partnerInput) partnerInput.value = '';
+  if (partnerDepartmentFilter) partnerDepartmentFilter.value = '';
   
   // Show basic info
   document.getElementById('salary-dept').textContent = dept || '—';
@@ -2002,8 +2055,8 @@ async function saveSalaryRecord(status = 'Submitted') {
     payload.sunday_incentive = currentSalaryEmployee.piecePreview?.sunday_incentive || 0;
     payload.special_incentive = currentSalaryEmployee.piecePreview?.special_incentive || 0;
 
-    // Encoding creates source output only. Generate Payroll creates the
-    // calculation after the output has been validated and made payroll-ready.
+    // Encoding creates payroll-ready source output. Generate Payroll creates the
+    // final calculation and applies configured deductions.
     const dailyRows = currentSalaryEmployee.piecePreview?.rows || [];
     const savedOutputs = [];
     for (const [index, row] of dailyRows.entries()) {
@@ -2034,7 +2087,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     if (typeof loadSalaryCalculations === 'function') await loadSalaryCalculations();
     const submitted = status !== 'Draft';
     const savedMessage = submitted
-      ? `${savedOutputs.length} daily per-piece output${savedOutputs.length === 1 ? '' : 's'} submitted for validation. After approval, the output will be included when you Generate Payroll.`
+      ? `${savedOutputs.length} daily per-piece output${savedOutputs.length === 1 ? '' : 's'} encoded and ready for Generate Payroll.`
       : `${savedOutputs.length} daily per-piece output draft${savedOutputs.length === 1 ? '' : 's'} saved. No payroll calculation was created yet.`;
     setSalarySaveStatus(savedMessage, 'success');
     await showAlert(

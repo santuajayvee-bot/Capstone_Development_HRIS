@@ -57,13 +57,24 @@ const CHANGE_REQUEST_FIELDS = {
   full_legal_name: { label: 'Full legal name correction' },
   civil_status: { column: 'marital_status', label: 'Civil status' },
   permanent_address: { column: 'residential_address', label: 'Permanent/residential address' },
-  sss_number: { column: 'sss', label: 'SSS number' },
-  philhealth_number: { column: 'philhealth', label: 'PhilHealth number' },
-  pagibig_number: { column: 'pagibig', label: 'Pag-IBIG number' },
+  sss_number: { column: 'sss_number', label: 'SSS number' },
+  philhealth_number: { column: 'philhealth_number', label: 'PhilHealth number' },
+  pagibig_number: { column: 'pagibig_number', label: 'Pag-IBIG number' },
   tin: { column: 'tin', label: 'TIN' },
-  bank_account_number: { column: 'bank_account_number', label: 'Bank account number' },
+  tax_status: { column: 'tax_status', label: 'Tax status' },
+  bank_account_number: { column: 'bank_account', label: 'Bank account number' },
   bank_name: { column: 'bank_name', label: 'Bank name' }
 };
+
+const REVEALABLE_RESTRICTED_FIELDS = new Set([
+  'sss_number',
+  'philhealth_number',
+  'pagibig_number',
+  'tin',
+  'tax_status',
+  'bank_name',
+  'bank_account_number'
+]);
 
 const SELF_SERVICE_FORBIDDEN_FIELDS = new Set([
   'department_id', 'wage_type', 'wage_type_id', 'base_rate', 'allowance', 'allowances',
@@ -79,8 +90,13 @@ const SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS = new Set([
   'email', 'work_email', 'contact_number', 'current_address',
   'current_address_region', 'current_address_province', 'current_address_city_municipality',
   'current_address_barangay', 'current_address_street_address', 'current_address_full_address',
-  'current_address_place_id', 'marital_status', 'residential_address',
-  'bank_name', 'first_name', 'middle_name', 'last_name', 'suffix'
+  'current_address_place_id', 'mailing_address', 'mailing_address_region',
+  'mailing_address_province', 'mailing_address_city_municipality',
+  'mailing_address_barangay', 'mailing_address_street_address',
+  'mailing_address_full_address', 'mailing_address_place_id',
+  'marital_status', 'residential_address', 'sss_number', 'philhealth_number',
+  'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account',
+  'first_name', 'middle_name', 'last_name', 'suffix'
 ]);
 
 let schemaReady;
@@ -316,6 +332,18 @@ function maskSensitive(value) {
   return `${'*'.repeat(Math.max(text.length - 4, 4))}${text.slice(-4)}`;
 }
 
+function maskRestrictedProfileField(field, value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (field === 'bank_name' || field === 'tax_status') return 'On file';
+  return maskSensitive(text);
+}
+
+function selfProfileText(value) {
+  const text = String(value || '').trim();
+  return /^[0-9a-f]{48,}$/i.test(text) ? '' : text;
+}
+
 function employeeFullName(row) {
   return [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ');
 }
@@ -393,46 +421,47 @@ function safeProfilePayload(row) {
       trip_rate: row.trip_rate != null ? row.trip_rate : null
     },
     editable: {
-      email: row.email || row.account_email || '',
-      work_email: row.work_email || '',
-      contact_number: row.contact_number || '',
-      current_address: row.current_address || '',
+      email: selfProfileText(row.email) || selfProfileText(row.account_email),
+      work_email: selfProfileText(row.work_email),
+      contact_number: selfProfileText(row.contact_number),
+      current_address: selfProfileText(row.current_address),
       current_address_region: row.current_address_region || '',
       current_address_province: row.current_address_province || '',
       current_address_city_municipality: row.current_address_city_municipality || '',
       current_address_barangay: row.current_address_barangay || '',
       current_address_street_address: row.current_address_street_address || '',
-      current_address_full_address: row.current_address_full_address || '',
+      current_address_full_address: selfProfileText(row.current_address_full_address),
       current_address_place_id: row.current_address_place_id || '',
       current_address_lat: row.current_address_lat || '',
       current_address_lng: row.current_address_lng || '',
       current_address_same_as_home: Number(row.current_address_same_as_home || 0) === 1,
-      mailing_address: row.mailing_address || '',
+      mailing_address: selfProfileText(row.mailing_address),
       mailing_address_region: row.mailing_address_region || '',
       mailing_address_province: row.mailing_address_province || '',
       mailing_address_city_municipality: row.mailing_address_city_municipality || '',
       mailing_address_barangay: row.mailing_address_barangay || '',
       mailing_address_street_address: row.mailing_address_street_address || '',
-      mailing_address_full_address: row.mailing_address_full_address || '',
+      mailing_address_full_address: selfProfileText(row.mailing_address_full_address),
       mailing_address_place_id: row.mailing_address_place_id || '',
       mailing_address_lat: row.mailing_address_lat || '',
       mailing_address_lng: row.mailing_address_lng || '',
       mailing_address_same_as_home: Number(row.mailing_address_same_as_home || 0) === 1,
-      emergency_contact_name: row.emergency_contact_name || '',
-      emergency_contact_relationship: row.emergency_contact_relationship || '',
-      emergency_contact_num: row.emergency_contact_num || '',
-      emergency_contact_email: row.emergency_contact_email || '',
+      emergency_contact_name: selfProfileText(row.emergency_contact_name),
+      emergency_contact_relationship: selfProfileText(row.emergency_contact_relationship),
+      emergency_contact_num: selfProfileText(row.emergency_contact_num),
+      emergency_contact_email: selfProfileText(row.emergency_contact_email),
       photo_url: profilePhotoUrl(row.id, row.photo_id)
     },
     restricted: {
       civil_status: row.marital_status || '',
       permanent_address: row.residential_address || '',
-      sss_number: maskSensitive(row.sss),
-      philhealth_number: maskSensitive(row.philhealth),
-      pagibig_number: maskSensitive(row.pagibig),
-      tin: maskSensitive(row.tin),
-      bank_account_number: maskSensitive(row.bank_account_number),
-      bank_name: row.bank_name ? 'On file' : ''
+      sss_number: maskRestrictedProfileField('sss_number', row.sss_number),
+      philhealth_number: maskRestrictedProfileField('philhealth_number', row.philhealth_number),
+      pagibig_number: maskRestrictedProfileField('pagibig_number', row.pagibig_number),
+      tin: maskRestrictedProfileField('tin', row.tin),
+      tax_status: maskRestrictedProfileField('tax_status', row.tax_status),
+      bank_account_number: maskRestrictedProfileField('bank_account_number', row.bank_account),
+      bank_name: maskRestrictedProfileField('bank_name', row.bank_name)
     }
   };
 }
@@ -457,6 +486,31 @@ router.get('/self-service/profile', async (req, res) => {
   } catch (error) {
     console.error('[self-service/profile:get]', error.message);
     res.status(500).json({ error: 'Failed to load profile.' });
+  }
+});
+
+router.post('/self-service/restricted-fields/:field/reveal', async (req, res) => {
+  try {
+    const field = String(req.params.field || '').trim();
+    const config = CHANGE_REQUEST_FIELDS[field];
+    if (!config || !REVEALABLE_RESTRICTED_FIELDS.has(field)) {
+      return res.status(404).json({ error: 'Restricted profile field not found.' });
+    }
+    const employeeId = currentEmployeeId(req);
+    if (!employeeId) return res.status(403).json({ error: 'No linked employee profile found for this account.' });
+    const profile = await loadOwnProfile(employeeId, currentUserId(req));
+    if (!profile) return res.status(404).json({ error: 'Profile not found.' });
+    const value = selfProfileText(profile[config.column]);
+    await auditProfile(req, pool, 'Sensitive profile field viewed', field, null, value ? 'revealed' : 'empty');
+    res.json({
+      field,
+      label: config.label,
+      value,
+      masked: maskRestrictedProfileField(field, value)
+    });
+  } catch (error) {
+    console.error('[self-service/restricted-fields:get]', error.message);
+    res.status(500).json({ error: 'Failed to load restricted profile field.' });
   }
 });
 

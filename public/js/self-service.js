@@ -3,10 +3,21 @@ let selfServiceState = {
   originalEmail: '',
   initialized: false,
   previewUrl: null,
-  savedPhotoUrl: null
+  savedPhotoUrl: null,
+  sensitiveValues: {},
+  sensitiveVisible: {}
 };
 
 const SELF_HR_ROLES = new Set(['hr_manager', 'hr_admin', 'system_admin', 'admin']);
+const SELF_SENSITIVE_FIELDS = [
+  'sss_number',
+  'philhealth_number',
+  'pagibig_number',
+  'tin',
+  'tax_status',
+  'bank_name',
+  'bank_account_number'
+];
 
 function escapeHTML(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -36,6 +47,63 @@ function setSelfValue(id, value) {
 function setSelfText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value || '-';
+}
+
+function selfSensitiveIcon(visible) {
+  return visible
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 3.8 4.2 2.6l17.2 17.2-1.2 1.2-3.1-3.1A11.8 11.8 0 0 1 12 19C6.7 19 2.7 15.9 1 12c.8-1.9 2.2-3.6 4-4.8L3 3.8Zm6.1 6.1A3.7 3.7 0 0 0 12 15.7c.8 0 1.5-.2 2.1-.7l-5-5.1ZM12 5c5.3 0 9.3 3.1 11 7-.5 1.2-1.3 2.4-2.3 3.4l-3-3A5.7 5.7 0 0 0 10.5 6c.5-.1 1-.1 1.5-.1Z"></path></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5c5.3 0 9.3 3.1 11 7-1.7 3.9-5.7 7-11 7S2.7 15.9 1 12c1.7-3.9 5.7-7 11-7Zm0 2C8 7 4.8 9 3.3 12 4.8 15 8 17 12 17s7.2-2 8.7-5C19.2 9 16 7 12 7Zm0 2.2A2.8 2.8 0 1 1 12 14.8 2.8 2.8 0 0 1 12 9.2Z"></path></svg>`;
+}
+
+function setSelfSensitiveField(field, value, visible = false) {
+  const input = document.querySelector(`[data-self-sensitive-input="${field}"]`);
+  const button = document.querySelector(`[data-self-sensitive-toggle="${field}"]`);
+  if (input) input.value = value || '-';
+  if (button) {
+    button.innerHTML = selfSensitiveIcon(visible);
+    button.setAttribute('aria-label', `${visible ? 'Hide' : 'Show'} ${button.dataset.selfSensitiveLabel || field.replace(/_/g, ' ')}`);
+    button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    button.classList.toggle('is-visible', visible);
+  }
+}
+
+function resetSelfSensitiveFields(restricted = {}) {
+  selfServiceState.sensitiveValues = {};
+  selfServiceState.sensitiveVisible = {};
+  SELF_SENSITIVE_FIELDS.forEach(field => {
+    setSelfSensitiveField(field, restricted[field] || '', false);
+  });
+}
+
+async function toggleSelfSensitiveField(field) {
+  if (!SELF_SENSITIVE_FIELDS.includes(field)) return;
+  if (selfServiceState.sensitiveVisible[field]) {
+    selfServiceState.sensitiveVisible[field] = false;
+    const masked = selfServiceState.profile?.restricted?.[field] || '';
+    setSelfSensitiveField(field, masked, false);
+    return;
+  }
+
+  const button = document.querySelector(`[data-self-sensitive-toggle="${field}"]`);
+  if (button) button.disabled = true;
+  try {
+    if (!Object.prototype.hasOwnProperty.call(selfServiceState.sensitiveValues, field)) {
+      const res = await apiFetch(`/api/self-service/restricted-fields/${encodeURIComponent(field)}/reveal`, {
+        method: 'POST',
+        body: '{}'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to load restricted field.');
+      selfServiceState.sensitiveValues[field] = data.value || '';
+      if (selfServiceState.profile?.restricted) selfServiceState.profile.restricted[field] = data.masked || selfServiceState.profile.restricted[field] || '';
+    }
+    selfServiceState.sensitiveVisible[field] = true;
+    setSelfSensitiveField(field, selfServiceState.sensitiveValues[field] || '-', true);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function revokeSelfPicturePreview() {
@@ -142,6 +210,7 @@ function fillSelfServiceProfile(profile) {
   setSelfValue('self-emergency-relationship', editable.emergency_contact_relationship);
   setSelfValue('self-emergency-number', editable.emergency_contact_num);
   setSelfValue('self-emergency-email', editable.emergency_contact_email);
+  resetSelfSensitiveFields(restricted);
 
   const displayName = ro.full_name || '-';
   const initial = displayName.trim().charAt(0).toUpperCase() || '-';
@@ -424,6 +493,10 @@ function wireSelfServiceEvents() {
   document.getElementById('self-service-refresh')?.addEventListener('click', initSelfServiceProfile);
   document.querySelectorAll('[data-self-save]').forEach(button => {
     button.addEventListener('click', () => saveSelfProfileSection(button.dataset.selfSave));
+  });
+  document.querySelectorAll('[data-self-sensitive-toggle]').forEach(button => {
+    button.dataset.selfSensitiveLabel = button.getAttribute('aria-label')?.replace(/^Show\s+/i, '') || '';
+    button.addEventListener('click', () => toggleSelfSensitiveField(button.dataset.selfSensitiveToggle));
   });
   document.getElementById('self-password-save')?.addEventListener('click', changeSelfPassword);
   document.getElementById('self-picture-form')?.addEventListener('submit', uploadSelfPicture);

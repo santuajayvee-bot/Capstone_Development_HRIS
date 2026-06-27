@@ -39,6 +39,7 @@ const {
   multerFileFilter,
   randomSafeFilename,
   rejectForbiddenFields,
+  requireSameOriginForBrowserWrites,
   secureUploadedFile,
 }                                             = require('./server/security-controls');
 
@@ -56,7 +57,7 @@ const AUTH_RATE_LIMIT = createRateLimiter({
   keyGenerator: req => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.body?.username || req.body?.email || '').toLowerCase()}`,
   auditAction: 'blocked_auth_rate_limit_exceeded',
 });
-const EMPLOYEE_ID_ADMIN_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
+const EMPLOYEE_ID_ADMIN_ROLES = ROLES.staff_management;
 const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'role',
   'role_id',
@@ -483,6 +484,7 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(encryptedCommunicationMiddleware);
+app.use('/api', requireSameOriginForBrowserWrites);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
@@ -934,6 +936,30 @@ function employeeHasRole(req, roles) {
   return roles.includes(req.user?.role);
 }
 
+function employeeReferencePayload(employee, options = {}) {
+  const includePayrollFields = Boolean(options.includePayrollFields);
+  return {
+    id: employee.id,
+    employee_code: employee.employee_code,
+    first_name: employee.first_name,
+    middle_name: employee.middle_name || null,
+    last_name: employee.last_name,
+    suffix: employee.suffix || null,
+    status: employee.status,
+    employment_status: employee.employment_status || employee.status,
+    department_id: employee.department_id || null,
+    department: employee.department || null,
+    position: employee.position || null,
+    current_system_role: employee.current_system_role || null,
+    ...(includePayrollFields ? {
+      employment_type: employee.employment_type || null,
+      wage_type_id: employee.wage_type_id || null,
+      wage_type: employee.wage_type || null,
+      basic_salary: employee.basic_salary ?? null,
+    } : {}),
+  };
+}
+
 function normalizeBlank(value) {
   if (value === undefined) return undefined;
   if (value === null) return null;
@@ -1036,16 +1062,11 @@ async function reactivateLinkedUserAccounts(pool, employeeId, req) {
 }
 
 function canCreateOffboarding(req) {
-  return employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any])
-    || hasPermission(req, 'employee:offboard:create')
-    || hasPermission(req, 'employee:offboard:approve');
+  return employeeHasRole(req, ROLES.staff_management);
 }
 
 function canCreateReonboarding(req) {
-  return employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any])
-    || hasPermission(req, 'employee:reboard:create')
-    || hasPermission(req, 'employee:reboard:approve')
-    || hasPermission(req, 'user_account:reactivate');
+  return employeeHasRole(req, ROLES.staff_management);
 }
 
 function canUpdateItOffboarding(req) {
@@ -1556,9 +1577,12 @@ function canAccessEmployeeRecord(req, targetEmployeeId, { allowPayroll = false, 
   const employeeId = Number(targetEmployeeId);
   if (!Number.isFinite(employeeId) || employeeId <= 0) return false;
   if (Number(req.user?.employeeId) === employeeId) return true;
-  if ([...ROLES.staff_management, ...ROLES.admin_any].includes(req.user?.role)) return true;
+  if (ROLES.staff_management.includes(req.user?.role)) return true;
   if (allowPayroll && ROLES.payroll_any.includes(req.user?.role)) return true;
-  return allowPermission && hasPermission(req, 'employee:read') && req.user?.role !== 'employee';
+  return allowPermission
+    && !ROLES.admin_any.includes(req.user?.role)
+    && hasPermission(req, 'employee:read')
+    && req.user?.role !== 'employee';
 }
 
 async function rejectEmployeeIdor(req, res, targetEmployeeId, action = 'blocked_employee_idor_attempt') {
@@ -2109,7 +2133,7 @@ async function writeEmployeeLifecycleAudit(executor, req, action, targetEmployee
 }
 
 // Employees
-app.get('/api/employees/next-code', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (_req, res) => {
+app.get('/api/employees/next-code', requireAuth, requireRole(ROLES.staff_management), async (_req, res) => {
   try {
     const pool = require('./config/db');
     const config = await getEmployeeIdConfig(pool);
@@ -2627,7 +2651,7 @@ app.get('/api/employee-setup/lookups', requireAuth, requireRole(ROLES.any), asyn
   }
 });
 
-app.post('/api/employee-setup/departments', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.post('/api/employee-setup/departments', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     if (await rejectUnsupportedRouteFields(req, res, DEPARTMENT_SETUP_ALLOWED_FIELDS, { module: 'EMPLOYEE_SETUP_SECURITY' })) return;
@@ -2650,7 +2674,7 @@ app.post('/api/employee-setup/departments', requireAuth, requireRole([...ROLES.s
   }
 });
 
-app.put('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.put('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -2671,7 +2695,7 @@ app.put('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLE
   }
 });
 
-app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -2687,7 +2711,7 @@ app.delete('/api/employee-setup/departments/:id', requireAuth, requireRole([...R
   }
 });
 
-app.post('/api/employee-setup/positions', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.post('/api/employee-setup/positions', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -2722,7 +2746,7 @@ app.post('/api/employee-setup/positions', requireAuth, requireRole([...ROLES.sta
   }
 });
 
-app.put('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.put('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -2755,7 +2779,7 @@ app.put('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.
   }
 });
 
-app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), async (req, res) => {
+app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     await ensureEmployeeSetupSchema(pool);
@@ -2876,7 +2900,14 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     }
     
     if (req.user.role === 'employee') return res.json(employees.filter(r => r.id === req.user.employeeId));
-    res.json(employees);
+    if (employeeHasRole(req, ROLES.staff_management)) return res.json(employees);
+    if (employeeHasRole(req, ROLES.payroll_any)) {
+      return res.json(employees.map(employee => employeeReferencePayload(employee, { includePayrollFields: true })));
+    }
+    if (employeeHasRole(req, ROLES.admin_any)) {
+      return res.json(employees.map(employee => employeeReferencePayload(employee)));
+    }
+    return res.status(403).json({ error: 'Access denied.' });
   } catch (err) {
     console.error('Error fetching employees:', err);
     res.status(500).json({ error: 'Failed to fetch employees.' }); 
@@ -2884,7 +2915,7 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
 });
 
 // Add new employee
-app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
+app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -3305,7 +3336,7 @@ app.post('/api/employees', requireAuth, requireRole([...ROLES.staff_management, 
 });
 
 // Update Employee
-app.put('/api/employees/:id', requireAuth, requireRole([...ROLES.staff_management, ...ROLES.admin_any]), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
+app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, async (req, res) => {
   try {
     res.setHeader('Content-Type', 'application/json');
     
@@ -3711,10 +3742,14 @@ app.post('/api/employees/:id/offboard', requireAuth, requireRole(ROLES.any), EMP
       account_deactivated: accountDeactivated > 0,
     });
 
+    const safeEmployeeName = employeeDisplayName(decryptEmployeeStrictPii({ ...employee })) || employee.employee_code;
+
     await connection.commit();
     return res.status(200).json({
-      message: `Offboarding request created for ${employeeDisplayName(employee) || employee.employee_code}.`,
+      message: `Offboarding request created for ${safeEmployeeName}.`,
       offboarding_case_id: caseResult.insertId,
+      employee_name: safeEmployeeName,
+      employee_code: employee.employee_code,
       status: employee.status,
       request_status: offboardingStatus,
       clearance_status: clearanceStatus,
@@ -5178,12 +5213,12 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
 });
 
 const LEAVE_PERMISSION_ROLES = {
-  'leave.request.create': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.request.create': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
   'leave.request.view_own': ['employee', 'hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
-  'leave.manual.create': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
-  'leave.request.approve': ROLES.hr_final_approval,
+  'leave.manual.create': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
+  'leave.request.approve': [...ROLES.hr_final_approval, 'payroll_officer', 'payroll_manager'],
   'leave.request.view_all': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
-  'leave.balance.manage': ['hr_admin', 'hr_manager', 'admin', 'system_admin'],
+  'leave.balance.manage': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
   'leave.report.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager'],
   'leave.audit.view': ['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager']
 };

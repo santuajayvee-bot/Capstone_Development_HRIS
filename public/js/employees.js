@@ -1011,6 +1011,77 @@ function lifecycleReadonly(label, value) {
   return `<label><span>${employeeSetupEscape(label)}</span><input type="text" value="${employeeSetupEscape(value || '-')}" readonly></label>`;
 }
 
+function lifecycleEmployeeInitials(employee) {
+  const first = String(employee?.first_name || '').trim().charAt(0);
+  const last = String(employee?.last_name || '').trim().charAt(0);
+  return `${first}${last}`.toUpperCase() || 'EP';
+}
+
+function lifecycleEmployeePhotoCard(employee) {
+  const employeeId = Number(employee?.id || 0);
+  const initials = lifecycleEmployeeInitials(employee);
+  return `
+    <div class="offboarding-employee-photo-card">
+      <div class="offboarding-employee-photo" data-lifecycle-employee-photo="${employeeId}" data-initials="${employeeSetupEscape(initials)}">
+        ${employeeSetupEscape(initials)}
+      </div>
+      <div>
+        <strong>${employeeSetupEscape(fullEmployeeName(employee) || employee?.employee_code || 'Employee')}</strong>
+        <span>${employeeSetupEscape(employee?.employee_code || '-')}</span>
+      </div>
+    </div>
+  `;
+}
+
+async function hydrateLifecycleEmployeePhoto(employeeId) {
+  const id = Number(employeeId || 0);
+  const target = document.querySelector(`[data-lifecycle-employee-photo="${id}"]`);
+  if (!id || !target) return;
+  const initials = target.dataset.initials || 'EP';
+  const applyPhoto = url => {
+    target.innerHTML = `<img src="${url}" alt="Employee photo">`;
+  };
+  if (EMPLOYEE_PHOTO_URLS.has(id)) {
+    applyPhoto(EMPLOYEE_PHOTO_URLS.get(id));
+    return;
+  }
+  try {
+    const response = await apiFetch(`/api/employees/${id}/photo`);
+    if (!response.ok) throw new Error('No photo');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    EMPLOYEE_PHOTO_URLS.set(id, url);
+    applyPhoto(url);
+  } catch (_error) {
+    target.textContent = initials;
+  }
+}
+
+function setupOffboardingAccountActionCalendar() {
+  const form = document.getElementById('employee-lifecycle-form');
+  if (!form) return;
+  const action = form.querySelector('[name="account_action"]');
+  const effectiveDate = form.querySelector('[name="effective_date"]');
+  const scheduledWrap = form.querySelector('[data-account-disable-date-wrap]');
+  const scheduledDate = form.querySelector('[name="account_disable_effective_date_display"]');
+  if (!action || !effectiveDate || !scheduledWrap || !scheduledDate) return;
+  const sync = () => {
+    const scheduled = action.value === 'Disable on Effective Date';
+    scheduledWrap.hidden = !scheduled;
+    scheduledDate.disabled = !scheduled;
+    scheduledDate.required = scheduled;
+    if (scheduled && !scheduledDate.value) scheduledDate.value = effectiveDate.value || employeeTodayIsoDate();
+  };
+  effectiveDate.addEventListener('change', () => {
+    if (action.value === 'Disable on Effective Date') scheduledDate.value = effectiveDate.value || '';
+  });
+  scheduledDate.addEventListener('change', () => {
+    if (action.value === 'Disable on Effective Date' && scheduledDate.value) effectiveDate.value = scheduledDate.value;
+  });
+  action.addEventListener('change', sync);
+  sync();
+}
+
 function normalizeOffboardingClearanceItems(items = []) {
   const byKey = new Map((Array.isArray(items) ? items : []).map(item => [item.item_key || item.key, item]));
   return OFFBOARDING_CLEARANCE_ITEMS.map(([itemKey, itemLabel]) => ({
@@ -1283,6 +1354,20 @@ function fullEmployeeName(employee) {
   return `${employee?.first_name || ''} ${employee?.middle_name || ''} ${employee?.last_name || ''}`.replace(/\s+/g, ' ').trim();
 }
 
+function employeeLooksEncryptedText(value) {
+  return /[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{24,}/i.test(String(value || ''));
+}
+
+function lifecycleSuccessMessage(data = {}, fallbackMessage = 'Request submitted.') {
+  const message = data.message || fallbackMessage;
+  if (!employeeLooksEncryptedText(message)) return message;
+  if (data.employee_name && !employeeLooksEncryptedText(data.employee_name)) {
+    if (data.offboarding_case_id) return `Offboarding request created for ${data.employee_name}.`;
+    if (data.reonboarding_case_id) return `Re-onboarding request created for ${data.employee_name}.`;
+  }
+  return fallbackMessage;
+}
+
 function openOffboardingDrawer(employeeId) {
   closeEmployeeActionMenus();
   const employee = getDirectoryEmployee(employeeId);
@@ -1291,6 +1376,7 @@ function openOffboardingDrawer(employeeId) {
   lifecycleFormShell('Offboard Employee', `
     <fieldset>
       <legend>Employee Information</legend>
+      ${lifecycleEmployeePhotoCard(employee)}
       ${lifecycleReadonly('Employee ID', employee.employee_code)}
       ${lifecycleReadonly('Name', fullEmployeeName(employee))}
       ${lifecycleReadonly('Current Position', employee.position)}
@@ -1305,6 +1391,7 @@ function openOffboardingDrawer(employeeId) {
       <label><span>Last Working Day</span><input name="last_working_day" type="date" required value="${employeeTodayIsoDate()}"></label>
       <label style="grid-column:1/-1;"><span>Reason</span><textarea name="reason" required rows="3"></textarea></label>
       <label><span>Account Action</span><select name="account_action" required><option>Disable Immediately</option><option>Disable on Effective Date</option></select></label>
+      <label data-account-disable-date-wrap hidden><span>Disable Account On</span><input name="account_disable_effective_date_display" type="date" value="${employeeTodayIsoDate()}" disabled></label>
       <label style="grid-column:1/-1;"><span>Remarks</span><textarea name="remarks" rows="3"></textarea></label>
     </fieldset>
     <fieldset>
@@ -1340,6 +1427,8 @@ function openOffboardingDrawer(employeeId) {
       <label><span>Completed Date</span><input name="completed_at" type="datetime-local" disabled></label>
     </fieldset>
   `, async event => submitLifecycleForm(event, `/api/employees/${employeeId}/offboard`, 'Employee offboarding request submitted.'));
+  hydrateLifecycleEmployeePhoto(employeeId);
+  setupOffboardingAccountActionCalendar();
 }
 
 function openReonboardingDrawer(employeeId) {
@@ -1414,7 +1503,7 @@ async function submitLifecycleForm(event, endpoint, fallbackMessage) {
         : ` ${result.uploaded} document(s) attached.`;
     }
     closeLifecycleDrawer();
-    await showAlert(`${data.message || fallbackMessage}${documentNote}`, 'Success', 'success');
+    await showAlert(`${lifecycleSuccessMessage(data, fallbackMessage)}${documentNote}`, 'Success', 'success');
     await fetchEmployees();
   } catch (error) {
     console.error('Lifecycle request error:', error);
@@ -2759,6 +2848,11 @@ function setText(id, value) {
   if (el) el.textContent = formatValue(value);
 }
 
+function setDateText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = formatDisplayDate(value);
+}
+
 function formatValue(value) {
   if (value === null || value === undefined || value === '') return '-';
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
@@ -2769,6 +2863,20 @@ function formatValue(value) {
     if (isoDate) return isoDate[1];
   }
   return String(value);
+}
+
+function formatDisplayDate(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  const text = String(value).trim();
+  if (!text) return '-';
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (!match) return text;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 function escapeHtml(value) {
@@ -2787,6 +2895,23 @@ function field(label, value) {
       <span class="profile-value">${escapeHtml(value)}</span>
     </div>
   `;
+}
+
+function dateField(label, value) {
+  return field(label, formatDisplayDate(value));
+}
+
+function employeeProfileAddress(employee, prefix, fallbackKey = prefix) {
+  const fullAddress = employee[`${prefix}_full_address`] || employee[fallbackKey];
+  if (fullAddress) return fullAddress;
+  return [
+    employee[`${prefix}_street_address`],
+    employee[`${prefix}_barangay`],
+    employee[`${prefix}_city_municipality`],
+    employee[`${prefix}_province`],
+    employee[`${prefix}_region`],
+    employee[`${prefix}_barangay`] || employee[`${prefix}_city_municipality`] || employee[`${prefix}_province`] || employee[`${prefix}_region`] ? 'Philippines' : ''
+  ].filter(Boolean).join(', ');
 }
 
 function renderProfileEmpty(message) {
@@ -2810,10 +2935,10 @@ function renderProfileSummary(employee) {
   setText('profile-title-name', employeeName);
   setText('profile-company', 'Marulas Industrial Corp');
   setText('profile-emp-id', employee.employee_code || employee.id);
-  setText('profile-dob', employee.date_of_birth);
+  setDateText('profile-dob', employee.date_of_birth);
   setText('profile-email', employee.email);
   setText('profile-phone', employee.contact_number);
-  setText('profile-joined', employee.date_hired);
+  setDateText('profile-joined', employee.date_hired);
 
   const pageTitle = document.getElementById('page-title');
   if (pageTitle) pageTitle.textContent = 'Employee Profile';
@@ -2838,15 +2963,15 @@ function renderProfileTabs(employee) {
           ${field('Middle Name', employee.middle_name)}
           ${field('Last Name', employee.last_name)}
           ${field('Suffix', employee.suffix)}
-          ${field('Date of Birth', employee.date_of_birth)}
+          ${dateField('Date of Birth', employee.date_of_birth)}
           ${field('Place of Birth', employee.place_of_birth)}
           ${field('Gender', employee.gender)}
           ${field('Nationality', employee.nationality || 'Filipino')}
           ${field('Civil Status', employee.marital_status)}
           ${field('Blood Type', employee.blood_type)}
           ${field('Religion', employee.religion)}
-          ${field('Home Address', employee.residential_address)}
-          ${field('Current Address', employee.current_address)}
+          ${field('Home Address', employeeProfileAddress(employee, 'residential_address'))}
+          ${field('Current Address', employeeProfileAddress(employee, 'current_address'))}
         </div>
       </section>
     `;
@@ -2866,10 +2991,10 @@ function renderProfileTabs(employee) {
           ${field('Agency Contact Person', employee.agency_contact_person)}
           ${field('Agency Contact Number', employee.agency_contact_number)}
           ${field('Deployment Status', employee.deployment_status)}
-          ${field('Contract Start', employee.contract_start_date)}
-          ${field('Contract End', employee.contract_end_date || employee.end_of_contract)}
-          ${field('Date Hired', employee.date_hired)}
-          ${field('End of Contract', employee.end_of_contract)}
+          ${dateField('Contract Start', employee.contract_start_date)}
+          ${dateField('Contract End', employee.contract_end_date || employee.end_of_contract)}
+          ${dateField('Date Hired', employee.date_hired)}
+          ${dateField('End of Contract', employee.end_of_contract)}
           ${field('Immediate Supervisor', employee.supervisor)}
           ${field('Work Location', employee.work_location)}
           ${field('Shift Schedule', employee.shift_schedule)}
@@ -2886,8 +3011,9 @@ function renderProfileTabs(employee) {
         <h2 class="profile-section-title">Primary Contact Info</h2>
         <div class="profile-field-grid">
           ${field('Full Legal Name', getEmployeeFullName(employee))}
-          ${field('Permanent Home Address', employee.residential_address)}
-          ${field('Mailing Address', employee.mailing_address || employee.residential_address)}
+          ${field('Permanent Home Address', employeeProfileAddress(employee, 'residential_address'))}
+          ${field('Current Address', employeeProfileAddress(employee, 'current_address'))}
+          ${field('Mailing Address', employeeProfileAddress(employee, 'mailing_address') || employeeProfileAddress(employee, 'residential_address'))}
           ${field('Personal Mobile Number', employee.contact_number)}
           ${field('Personal Email Address', employee.email)}
           ${field('Work Email Address', employee.work_email)}
@@ -3186,8 +3312,8 @@ function renderCertificationsTable() {
       <td><button class="profile-family-delete" type="button" onclick="deleteCertification(${item.id})">Delete</button></td>
       <td>${escapeHtml(item.certification_name)}</td>
       <td>${escapeHtml(item.issuing_organization)}</td>
-      <td>${escapeHtml(item.issue_date)}</td>
-      <td>${escapeHtml(item.expiry_date)}</td>
+      <td>${escapeHtml(formatDisplayDate(item.issue_date))}</td>
+      <td>${escapeHtml(formatDisplayDate(item.expiry_date))}</td>
       <td>${item.certificate_file_path ? `<a href="${escapeHtml(item.certificate_file_path)}" target="_blank" rel="noopener">View</a>` : '-'}</td>
     </tr>
   `).join('');
@@ -3207,8 +3333,8 @@ function renderTrainingsTable() {
       <td><button class="profile-family-delete" type="button" onclick="deleteTraining(${item.id})">Delete</button></td>
       <td>${escapeHtml(item.training_name)}</td>
       <td>${escapeHtml(item.provider)}</td>
-      <td>${escapeHtml(item.date_from)}</td>
-      <td>${escapeHtml(item.date_to)}</td>
+      <td>${escapeHtml(formatDisplayDate(item.date_from))}</td>
+      <td>${escapeHtml(formatDisplayDate(item.date_to))}</td>
       <td>${escapeHtml(item.training_hours)}</td>
     </tr>
   `).join('');
@@ -3383,7 +3509,7 @@ function renderFamilyMembersTable() {
       </td>
       <td>${escapeHtml(getFamilyFullName(member))}</td>
       <td>${escapeHtml(member.relationship_type)}</td>
-      <td>${escapeHtml(member.date_of_birth)}</td>
+      <td>${escapeHtml(formatDisplayDate(member.date_of_birth))}</td>
       <td>${member.deceased ? 'Yes' : 'No'}</td>
     </tr>
   `).join('');
@@ -3528,8 +3654,8 @@ function renderWorkExperiencesTable() {
       <td>${escapeHtml(item.company_name)}</td>
       <td>${escapeHtml(item.position_title)}</td>
       <td>${escapeHtml(item.employment_type)}</td>
-      <td>${escapeHtml(item.date_from)}</td>
-      <td>${escapeHtml(item.date_to)}</td>
+      <td>${escapeHtml(formatDisplayDate(item.date_from))}</td>
+      <td>${escapeHtml(formatDisplayDate(item.date_to))}</td>
     </tr>
   `).join('');
 
@@ -3638,8 +3764,11 @@ function populateProfileEditForm(employee) {
     'profile-edit-marital-status': employee.marital_status,
     'profile-edit-blood-type': employee.blood_type,
     'profile-edit-religion': employee.religion,
+    'profile-edit-address-line': employee.residential_address_street_address,
     'profile-edit-address': employee.residential_address,
+    'profile-edit-current-address-line': employee.current_address_street_address,
     'profile-edit-current-address': employee.current_address,
+    'profile-edit-mailing-address-line': employee.mailing_address_street_address,
     'profile-edit-mailing-address': employee.mailing_address,
     'profile-edit-department': employee.department,
     'profile-edit-position': employee.position,
@@ -4133,7 +4262,7 @@ async function loadProfileDocuments(employee) {
             <div class="profile-label">${escapeHtml(doc.document_type || 'Document')}</div>
           </div>
         </div>
-        <span class="profile-label">${escapeHtml(doc.uploaded_date || doc.uploaded_at || doc.created_at)}</span>
+        <span class="profile-label">${escapeHtml(formatDisplayDate(doc.uploaded_date || doc.uploaded_at || doc.created_at))}</span>
       </div>
     `).join(''));
   } catch {
@@ -4190,7 +4319,7 @@ async function loadProfileLeaveHistory(employee) {
       <div class="profile-leave-row">
         <div>
           <div class="profile-value">${escapeHtml(row.type || 'Leave')}</div>
-          <div class="profile-label">${escapeHtml(row.date_from)}${row.date_to ? ' to ' + escapeHtml(row.date_to) : ''}</div>
+          <div class="profile-label">${escapeHtml(formatDisplayDate(row.date_from))}${row.date_to ? ' to ' + escapeHtml(formatDisplayDate(row.date_to)) : ''}</div>
         </div>
         <div style="text-align:right;">
           <div class="profile-value">${escapeHtml(row.days || 1)} days</div>

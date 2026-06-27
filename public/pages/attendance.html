@@ -112,13 +112,13 @@
         <tr>
           <th><input type="checkbox" id="att-select-all" onchange="toggleAllAttendanceRows(this.checked)" /></th>
           <th>Employee</th><th>Department</th><th>Date</th>
-          <th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th>
+          <th>Time In</th><th>Time Out</th>
           <th>Hours</th><th>Attendance Summary</th><th>Validation</th>
           <th id="att-action-col">Actions</th>
         </tr>
       </thead>
       <tbody id="att-records-tbody">
-        <tr><td colspan="12" class="att-empty">Loading...</td></tr>
+        <tr><td colspan="10" class="att-empty">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -191,11 +191,12 @@
       <button class="btn btn-outline btn-sm" onclick="loadBiometricEvents()">Refresh</button>
     </div>
     <div class="table-wrap">
-      <table>
+      <table id="bio-events-table" data-no-pagination="1">
         <thead><tr><th>Employee</th><th>Time</th><th>Attendance Type</th><th>Result</th></tr></thead>
         <tbody id="bio-events-tbody"><tr><td colspan="4" class="att-empty">No recent fingerprint activity.</td></tr></tbody>
       </table>
     </div>
+    <div class="att-records-pagination bio-events-pagination" id="bio-events-pagination" aria-live="polite"></div>
   </div>
 </div>
 
@@ -333,10 +334,8 @@
     <input type="hidden" id="override-att-id" />
     <div id="override-emp-info" class="att-note"></div>
     <div class="att-form-grid">
-      <div><label>AM In</label><input type="time" id="override-am-time-in" /></div>
-      <div><label>AM Out</label><input type="time" id="override-am-time-out" /></div>
-      <div><label>PM In</label><input type="time" id="override-pm-time-in" /></div>
-      <div><label>PM Out</label><input type="time" id="override-pm-time-out" /></div>
+      <div><label>Time In</label><input type="time" id="override-time-in" /></div>
+      <div><label>Time Out</label><input type="time" id="override-time-out" /></div>
     </div>
     <div><label>Correction Reason</label><textarea id="override-reason" rows="3" placeholder="Describe the device issue, missing punch, or approved adjustment."></textarea></div>
     <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeOverrideModal()">Cancel</button><button class="btn btn-primary" onclick="submitOverride()">Save Correction</button></div>
@@ -355,10 +354,8 @@
         <small id="manual-employee-status" class="att-muted"></small>
       </div>
       <div><label>Date</label><input type="date" id="manual-date" /></div>
-      <div><label>AM In</label><input type="time" id="manual-am-time-in" /></div>
-      <div><label>AM Out</label><input type="time" id="manual-am-time-out" /></div>
-      <div><label>PM In</label><input type="time" id="manual-pm-time-in" /></div>
-      <div><label>PM Out</label><input type="time" id="manual-pm-time-out" /></div>
+      <div><label>Time In</label><input type="time" id="manual-time-in" /></div>
+      <div><label>Time Out</label><input type="time" id="manual-time-out" /></div>
     </div>
     <div><label>Reason</label><textarea id="manual-reason" rows="3" placeholder="Document the outage or approved manual adjustment."></textarea></div>
     <div class="att-modal-actions"><button class="btn btn-outline" onclick="closeManualModal()">Cancel</button><button class="btn btn-primary" onclick="submitManualAttendance()">Create Audited Record</button></div>

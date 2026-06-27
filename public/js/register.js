@@ -443,9 +443,9 @@ const ADDRESS_FORM_CONFIGS = {
     mailing: { input: 'emp-mailing-address', line: 'emp-mailing-address-line', same: 'emp-mailing-same-home' }
   },
   profile: {
-    home: { input: 'profile-edit-address' },
-    current: { input: 'profile-edit-current-address', same: 'profile-current-same-home' },
-    mailing: { input: 'profile-edit-mailing-address', same: 'profile-mailing-same-home' }
+    home: { input: 'profile-edit-address', line: 'profile-edit-address-line' },
+    current: { input: 'profile-edit-current-address', line: 'profile-edit-current-address-line', same: 'profile-current-same-home' },
+    mailing: { input: 'profile-edit-mailing-address', line: 'profile-edit-mailing-address-line', same: 'profile-mailing-same-home' }
   },
   onboarding: {
     home: { input: 'onb-home-address' },

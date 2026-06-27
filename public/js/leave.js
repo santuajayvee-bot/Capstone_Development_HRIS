@@ -4,8 +4,8 @@
 
 let CURRENT_USER = null;
 let LEAVE_TYPES = [];
-const LEAVE_MANAGER_ROLES = new Set(['hr_admin', 'hr_manager', 'admin', 'system_admin']);
-const LEAVE_APPROVER_ROLES = new Set(['hr_admin', 'hr_manager']);
+const LEAVE_MANAGER_ROLES = new Set(['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager']);
+const LEAVE_APPROVER_ROLES = new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']);
 
 function normalizeLeaveRole(role) {
   if (typeof normalizeClientRole === 'function') return normalizeClientRole(role);

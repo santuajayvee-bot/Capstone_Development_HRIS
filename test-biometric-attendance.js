@@ -100,17 +100,17 @@ async function run() {
     headers: webhookHeaders,
     body: JSON.stringify({
       events: [
-        { id: 'TEST-IN', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T08:05:00+08:00`, attendance_type: 'TIME_IN' },
-        { id: 'TEST-OUT', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T17:10:00+08:00`, attendance_type: 'TIME_OUT' },
+        { id: 'TEST-TIME-IN', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T08:05:00+08:00`, attendance_type: 'TIME_IN' },
+        { id: 'TEST-TIME-OUT', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T17:10:00+08:00`, attendance_type: 'TIME_OUT' },
       ]
     })
   });
-  check('Mapped webhook punches are accepted', result.status === 200 && result.data.accepted === 2);
+  check('Mapped two-punch webhook attendance is accepted', result.status === 200 && result.data.accepted === 2);
 
   result = await api(`/api/attendance/biometric/webhook/${deviceReference}`, {
     method: 'POST',
     headers: webhookHeaders,
-    body: JSON.stringify({ id: 'TEST-IN', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T08:05:00+08:00`, attendance_type: 'TIME_IN' })
+    body: JSON.stringify({ id: 'TEST-TIME-IN', biometric_user_id: biometricUserId, scan_timestamp: `${testDate}T08:05:00+08:00`, attendance_type: 'TIME_IN' })
   });
   check('Repeated scan is deduplicated', result.status === 200 && result.data.duplicates === 1);
 
@@ -126,11 +126,21 @@ async function run() {
     [employee.employee_id, testDate]
   );
   attendanceId = records[0]?.attendance_id;
-  check('Validated daily aggregate exists', records.length === 1 && records[0].verification_status === 'VALIDATED');
+  check(
+    'Complete two-punch attendance awaits HR validation',
+    records.length === 1
+      && records[0].time_in
+      && records[0].time_out
+      && records[0].am_time_in
+      && !records[0].am_time_out
+      && !records[0].pm_time_in
+      && records[0].pm_time_out
+      && records[0].verification_status === 'PENDING_VALIDATION'
+  );
   check('Biometric reference is encrypted', !records[0].biometric_user_id_encrypted.includes(biometricUserId));
 
-  const [summaries] = await pool.execute('SELECT * FROM attendance_summary WHERE attendance_id = ?', [attendanceId]);
-  check('Payroll summary is eligible', summaries.length === 1 && summaries[0].payroll_eligible === 1);
+  let [summaries] = await pool.execute('SELECT * FROM attendance_summary WHERE attendance_id = ?', [attendanceId]);
+  check('Pending DTR is not payroll eligible', summaries.length === 1 && summaries[0].payroll_eligible === 0);
 
   const [malformed] = await pool.execute(
     `SELECT * FROM biometric_scan_event WHERE device_id = ? AND verification_status = 'MALFORMED'`,
@@ -145,6 +155,21 @@ async function run() {
     manager: issueToken(manager),
     employee: issueToken(employee),
   };
+
+  result = await api(`/api/attendance/${attendanceId}/verify`, {
+    method: 'PATCH',
+    headers: bearer(tokens.hrAdmin),
+    body: JSON.stringify({ verification_status: 'VALIDATED', reason: 'Controlled biometric integration test.' })
+  });
+  check('HR validation marks complete attendance payroll ready', result.status === 200);
+
+  [summaries] = await pool.execute('SELECT * FROM attendance_summary WHERE attendance_id = ?', [attendanceId]);
+  check(
+    'Validated two-punch attendance becomes payroll eligible',
+    summaries.length === 1
+      && summaries[0].verification_status === 'PAYROLL_READY'
+      && summaries[0].payroll_eligible === 1
+  );
 
   result = await api('/api/attendance/my-records', { headers: bearer(tokens.employee) });
   check('Employee can view own attendance', result.status === 200 && result.data.some(row => Number(row.attendance_id) === Number(attendanceId)));
@@ -167,13 +192,13 @@ async function run() {
   check('Payroll manager can review summaries', result.status === 200);
 
   result = await api('/api/attendance/all', { headers: bearer(tokens.manager) });
-  check('Payroll manager cannot read raw attendance route', result.status === 403);
+  check('Payroll manager can review attendance records', result.status === 200);
 
   result = await api('/api/attendance/biometric/health', { headers: bearer(tokens.sysAdmin) });
   check('System admin can view device health', result.status === 200);
 
   result = await api('/api/attendance/biometric/health', { headers: bearer(tokens.hrAdmin) });
-  check('HR manager cannot manage device health', result.status === 403);
+  check('HR manager can monitor biometric device health', result.status === 200);
 
   result = await api(`/api/attendance/integrity/${attendanceId}`, { headers: bearer(tokens.employee) });
   check('Employee integrity verification passes', result.status === 200 && result.data.chain_valid === true);

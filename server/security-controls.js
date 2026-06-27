@@ -46,6 +46,8 @@ const COMPUTED_PAYROLL_FIELDS = new Set([
   'payroll_status',
 ]);
 
+const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 function requestIp(req) {
   return req.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
     || req.socket?.remoteAddress
@@ -133,6 +135,58 @@ function createRateLimiter({
       result: 'blocked',
     });
   };
+}
+
+function normalizeOrigin(value) {
+  try {
+    return new URL(String(value || '').trim()).origin;
+  } catch (_) {
+    return null;
+  }
+}
+
+function allowedRequestOrigins(req) {
+  const allowed = new Set();
+  const forwardedProto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || req.protocol || (req.secure ? 'https' : 'http');
+  const host = String(req.headers?.host || '').trim();
+  if (host) allowed.add(`${protocol}://${host}`);
+
+  for (const configured of [
+    process.env.APP_PUBLIC_URL,
+    ...String(process.env.CSRF_ALLOWED_ORIGINS || '').split(','),
+  ]) {
+    const origin = normalizeOrigin(configured);
+    if (origin) allowed.add(origin);
+  }
+  return allowed;
+}
+
+function requireSameOriginForBrowserWrites(req, res, next) {
+  if (CSRF_SAFE_METHODS.has(String(req.method || 'GET').toUpperCase())) return next();
+
+  const fetchSite = String(req.headers?.['sec-fetch-site'] || '').trim().toLowerCase();
+  const originHeader = req.headers?.origin;
+  const requestOrigin = normalizeOrigin(originHeader);
+  const allowedOrigins = allowedRequestOrigins(req);
+  const isCrossSiteFetch = fetchSite === 'cross-site';
+  const hasInvalidOrigin = Boolean(originHeader) && (!requestOrigin || !allowedOrigins.has(requestOrigin));
+
+  // Browser writes must be same-origin. Requests without browser origin
+  // headers remain available to trusted server-to-server and device clients.
+  if (!isCrossSiteFetch && !hasInvalidOrigin) return next();
+
+  return rejectWithAudit(req, res, 403, 'Cross-site request blocked.', {
+    action: 'blocked_cross_site_request',
+    module: 'CSRF_PROTECTION',
+    targetTable: req.originalUrl || null,
+    newValue: {
+      method: req.method,
+      origin: requestOrigin || 'invalid-or-missing',
+      fetchSite: fetchSite || null,
+    },
+    result: 'blocked',
+  });
 }
 
 function findForbiddenBodyFields(body, forbiddenFields = COMPUTED_PAYROLL_FIELDS) {
@@ -235,6 +289,7 @@ module.exports = {
   randomSafeFilename,
   rejectForbiddenFields,
   rejectWithAudit,
+  requireSameOriginForBrowserWrites,
   secureUploadedFile,
   uploadExtensionError,
   validateStoredUpload,

@@ -4,7 +4,7 @@
 
 .dashboard-shell {
   display: grid;
-  gap: 18px;
+  gap: 22px;
 }
 
 .dashboard-header {
@@ -116,6 +116,75 @@
   overflow: hidden;
 }
 
+.dashboard-summary {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-section-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dashboard-count-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(108px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.dashboard-count-item {
+  --count-color: #b42318;
+  --count-soft: #fff1f0;
+  display: grid;
+  grid-template-rows: 112px minmax(34px, auto);
+  justify-items: center;
+  gap: 9px;
+  min-width: 0;
+  text-align: center;
+}
+
+.dashboard-count-item-2 { --count-color: #067647; --count-soft: #ecfdf3; }
+.dashboard-count-item-3 { --count-color: #175cd3; --count-soft: #eff8ff; }
+.dashboard-count-item-4 { --count-color: #b54708; --count-soft: #fffaeb; }
+.dashboard-count-item-5 { --count-color: #0e7090; --count-soft: #ecfdff; }
+.dashboard-count-item-6 { --count-color: #6941c6; --count-soft: #f4f3ff; }
+.dashboard-count-item-7 { --count-color: #344054; --count-soft: #f2f4f7; }
+
+.dashboard-count-circle {
+  width: 112px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--count-color);
+  border-radius: 50% !important;
+  background: var(--count-soft);
+  color: var(--count-color);
+}
+
+.dashboard-count-circle strong {
+  max-width: 88px;
+  overflow: hidden;
+  color: inherit;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-count-label {
+  max-width: 138px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .dashboard-list-item {
   display: grid;
   gap: 4px;
@@ -145,7 +214,39 @@
 }
 
 @media (max-width: 1050px) {
+  .dashboard-count-grid {
+    grid-template-columns: repeat(4, minmax(108px, 1fr));
+  }
+
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .dashboard-header {
+    align-items: center;
+  }
+
+  .dashboard-summary {
+    padding: 16px 0;
+  }
+
+  .dashboard-count-grid {
+    grid-template-columns: repeat(2, minmax(108px, 1fr));
+    gap: 18px 12px;
+  }
+
+  .dashboard-count-item {
+    grid-template-rows: 104px minmax(34px, auto);
+  }
+
+  .dashboard-count-circle {
+    width: 104px;
+    height: 104px;
+  }
+
+  .dashboard-panel {
+    padding: 14px;
   }
 }

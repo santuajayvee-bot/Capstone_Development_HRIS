@@ -5,10 +5,8 @@ function toNumber(value, fallback = 0) {
 
 function normalizeDeductionMethod(value) {
   const text = String(value || 'auto_compute').trim().toLowerCase().replace(/[_-]+/g, ' ');
-  if (text.includes('auto')) return 'Auto-compute from employee rate';
-  if (text.includes('minute')) return 'Fixed amount per minute';
-  if (text.includes('hour')) return 'Fixed amount per hour';
-  return 'No deduction';
+  if (text.includes('none') || text.includes('no deduction')) return 'No deduction';
+  return 'Mandated minute-rate deduction';
 }
 
 function deriveHourlyRate({ wageType, rate, standardHoursPerDay }) {
@@ -26,16 +24,12 @@ function minutesFromClock(value) {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
-function computeTimeDeduction({ deductionMethod, fixedAmount, minutes, hourlyRate }) {
+function computeTimeDeduction({ deductionMethod, minutes, hourlyRate }) {
   const method = normalizeDeductionMethod(deductionMethod);
   const minuteCount = Math.max(0, toNumber(minutes));
-  const rate = Math.max(0, toNumber(fixedAmount));
   const employeeHourlyRate = Math.max(0, toNumber(hourlyRate));
   if (!minuteCount || method === 'No deduction') return 0;
-  if (method === 'Auto-compute from employee rate') return (employeeHourlyRate / 60) * minuteCount;
-  if (method === 'Fixed amount per hour') return rate * (minuteCount / 60);
-  if (method === 'Fixed amount per minute') return rate * minuteCount;
-  return 0;
+  return (employeeHourlyRate / 60) * minuteCount;
 }
 
 function computeLateUndertimeDeductions({ attendanceRows, policy, wageType, rate }) {
@@ -72,7 +66,6 @@ function computeLateUndertimeDeductions({ attendanceRows, policy, wageType, rate
   const lateDeduction = countLate
     ? computeTimeDeduction({
       deductionMethod: policy?.late_deduction_method,
-      fixedAmount: policy?.late_fixed_deduction_amount,
       minutes: deductibleLateMinutes,
       hourlyRate
     })
@@ -80,7 +73,6 @@ function computeLateUndertimeDeductions({ attendanceRows, policy, wageType, rate
   const undertimeDeduction = countUndertime
     ? computeTimeDeduction({
       deductionMethod: policy?.undertime_deduction_method,
-      fixedAmount: policy?.undertime_fixed_deduction_amount,
       minutes: undertimeMinutes,
       hourlyRate
     })

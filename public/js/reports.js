@@ -6,7 +6,7 @@ const REPORT_OUTPUTS = [
   {
     id: 'daily-attendance',
     name: 'Attendance DTR',
-    description: 'Daily time record with time in, time out, hours, late, undertime, and payroll-ready status.',
+    description: 'Daily time record for one selected employee and one selected date.',
     formats: ['pdf']
   },
   {
@@ -96,23 +96,34 @@ function resetReportFilters() {
 }
 
 async function loadReportDependencies() {
-  if (reportState.dependenciesLoaded) return;
-  const [employees, periods, setup] = await Promise.all([
-    fetchReportRows('/api/employees', employeesPayload),
-    fetchReportRows('/api/payroll/runs', rowsPayload),
-    fetchReportRows('/api/employee-setup/lookups', data => data.departments || [])
-  ]);
-  reportState.employees = employees;
-  reportState.payrollPeriods = periods;
-  reportState.departments = setup;
+  if (
+    reportState.dependenciesLoaded
+    && reportState.employees.length
+    && reportState.payrollPeriods.length
+  ) return;
+  const filters = await fetchReportRows('/api/reports/filters', data => data || null);
+  if (filters) {
+    reportState.employees = employeesPayload(filters.employees || []);
+    reportState.payrollPeriods = rowsPayload(filters.payroll_periods || filters.periods || []);
+    reportState.departments = filters.departments || [];
+  }
+  if (!reportState.employees.length) {
+    reportState.employees = await fetchReportRows('/api/attendance/employees', employeesPayload);
+  }
+  if (!reportState.payrollPeriods.length) {
+    reportState.payrollPeriods = await fetchReportRows('/api/payroll/runs', rowsPayload);
+  }
+  if (!reportState.departments.length) {
+    reportState.departments = uniqueReportDepartments(reportState.employees);
+  }
   populateReportPayrollPeriodSelect();
-  reportState.dependenciesLoaded = true;
+  reportState.dependenciesLoaded = Boolean(reportState.employees.length || reportState.payrollPeriods.length || reportState.departments.length);
 }
 
 async function fetchReportRows(url, extractRows) {
   try {
     const res = await apiFetch(url);
-    if (!res || !res.ok) return [];
+    if (!res || !res.ok) throw new Error(`HTTP ${res?.status || 'request failed'}`);
     const data = await res.json();
     return extractRows(data);
   } catch (err) {
@@ -143,6 +154,15 @@ function employeesPayload(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.rows)) return data.rows;
   return [];
+}
+
+function uniqueReportDepartments(employees) {
+  return [...new Set((employees || [])
+    .map(employee => employee.department || employee.department_name || '')
+    .map(value => String(value || '').trim())
+    .filter(Boolean))]
+    .sort()
+    .map(name => ({ name }));
 }
 
 function rowsPayload(data) {
@@ -179,10 +199,20 @@ function renderReportOutputs() {
 }
 
 async function generateReportOutput(reportId, trigger = null) {
+  await loadReportDependencies();
+  if (!reportState.employees.length || !reportState.payrollPeriods.length) {
+    reportState.dependenciesLoaded = false;
+    await loadReportDependencies();
+  }
   openReportOptionsModal(reportId, 'generate', trigger);
 }
 
 async function printReportOutput(reportId, trigger = null) {
+  await loadReportDependencies();
+  if (!reportState.employees.length || !reportState.payrollPeriods.length) {
+    reportState.dependenciesLoaded = false;
+    await loadReportDependencies();
+  }
   openReportOptionsModal(reportId, 'print', trigger);
 }
 
@@ -205,7 +235,7 @@ async function loadReportOutput(reportId, trigger = null, loadingText = 'Loading
       return null;
     }
   }
-  if (output.id === 'payroll-register' && !/^\d{4}-\d{2}/.test(filters.payroll_period || '')) {
+  if (output.id === 'payroll-register' && !registryMonthFromPeriod(filters.payroll_period)) {
     alert('Select a monthly payroll period before generating a payroll registry.');
     return null;
   }
@@ -279,6 +309,11 @@ function reportPeriodLabel(run) {
   return value;
 }
 
+function registryMonthFromPeriod(period) {
+  const match = String(period || '').match(/^(\d{4}-\d{2})/);
+  return match ? match[1] : '';
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -314,8 +349,8 @@ function departmentOptions() {
 
 function employeeOptions(department = '') {
   return reportState.employees
-    .filter(emp => !department || (emp.department || emp.department_name || '') === department)
-    .map(emp => ({ value: emp.id, label: employeeOptionLabel(emp) }))
+    .filter(emp => !department || String(emp.department || emp.department_name || '').trim() === department)
+    .map(emp => ({ value: emp.id || emp.employee_id, label: employeeOptionLabel(emp) }))
     .filter(option => option.value);
 }
 
@@ -336,7 +371,9 @@ function openReportOptionsModal(reportId, action, trigger = null) {
     .map(run => ({ value: run.month_year || run.payroll_period || run.id, label: reportPeriodLabel(run) }))
     .filter(option => option.value);
   const requiresEmployee = ['daily-attendance', 'employee-payslip'].includes(reportId);
+  const isAttendanceDtr = reportId === 'daily-attendance';
   const showRegistry = reportId === 'payroll-register';
+  const dtrDate = dateFrom || dateTo || new Date().toISOString().slice(0, 10);
 
   const modal = document.createElement('div');
   modal.id = 'report-options-modal';
@@ -352,28 +389,34 @@ function openReportOptionsModal(reportId, action, trigger = null) {
       </div>
       <div class="report-modal-body">
         <div class="report-options-grid">
-          <label>Date From
-            <input id="report-modal-date-from" class="search-input" type="date" value="${escapeAttr(dateFrom)}">
-          </label>
-          <label>Date To
-            <input id="report-modal-date-to" class="search-input" type="date" value="${escapeAttr(dateTo)}">
-          </label>
+          ${isAttendanceDtr ? `
+            <label>DTR Date
+              <input id="report-modal-dtr-date" class="search-input" type="date" value="${escapeAttr(dtrDate)}">
+            </label>
+          ` : `
+            <label>Date From
+              <input id="report-modal-date-from" class="search-input" type="date" value="${escapeAttr(dateFrom)}">
+            </label>
+            <label>Date To
+              <input id="report-modal-date-to" class="search-input" type="date" value="${escapeAttr(dateTo)}">
+            </label>
+          `}
           <label>Payroll Period
             <select id="report-modal-payroll-period" class="filter-select">
               <option value="all">All periods</option>
               ${periodOptions.map(option => `<option value="${escapeAttr(option.value)}" ${String(option.value) === payrollPeriod ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
             </select>
           </label>
-          <label>Department
-            <select id="report-modal-department" class="filter-select" onchange="renderReportModalEmployeeOptions()">
-              <option value="all">All departments</option>
-              ${deptOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
-            </select>
-          </label>
           <label class="span-2">Employee${requiresEmployee ? ' *' : ''}
             <select id="report-modal-employee" class="filter-select">
               <option value="all">All employees</option>
               ${empOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="span-2">Department
+            <select id="report-modal-department" class="filter-select" onchange="renderReportModalEmployeeOptions()">
+              <option value="all">All departments</option>
+              ${deptOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
             </select>
           </label>
           ${showRegistry ? `
@@ -416,8 +459,9 @@ function renderReportModalEmployeeOptions() {
 }
 
 function reportModalFilters(extra = {}) {
-  const dateFrom = valueOf('report-modal-date-from');
-  const dateTo = valueOf('report-modal-date-to');
+  const dtrDate = valueOf('report-modal-dtr-date');
+  const dateFrom = dtrDate || valueOf('report-modal-date-from');
+  const dateTo = dtrDate || valueOf('report-modal-date-to');
   return {
     date_from: dateFrom,
     date_to: dateTo,
@@ -445,11 +489,15 @@ async function confirmReportOptionsModal() {
       : 'Select one employee before generating a payslip.');
     return;
   }
+  if (reportId === 'daily-attendance' && !/^\d{4}-\d{2}-\d{2}$/.test(filters.date_from || '')) {
+    alert('Select one DTR date before generating an attendance DTR.');
+    return;
+  }
   if (reportId === 'employee-payslip' && !filters.payroll_period) {
     alert('Select a payroll period before generating a payslip.');
     return;
   }
-  if (reportId === 'payroll-register' && !/^\d{4}-\d{2}/.test(filters.payroll_period || '')) {
+  if (reportId === 'payroll-register' && !registryMonthFromPeriod(filters.payroll_period)) {
     alert('Select a monthly payroll period before generating a payroll registry.');
     return;
   }
@@ -457,7 +505,7 @@ async function confirmReportOptionsModal() {
   closeReportOptionsModal();
 
   if (reportId === 'payroll-register' && ['main', '55', '45'].includes(registryType) && action === 'print') {
-    await printSewingRegistryHtml(registryType, trigger, filters.payroll_period);
+    await printSewingRegistryHtml(registryType, trigger, registryMonthFromPeriod(filters.payroll_period));
     return;
   }
   const result = await loadReportOutput(reportId, trigger, action === 'print' ? 'Preparing...' : 'Generating...', {
@@ -472,7 +520,7 @@ async function confirmReportOptionsModal() {
 async function printSewingRegistryHtml(kind, trigger = null, payrollPeriodOverride = '') {
   const dateFrom = valueOf('report-date-from');
   const dateTo = valueOf('report-date-to');
-  const payrollPeriod = payrollPeriodOverride || normalizedPayrollPeriod(dateFrom, dateTo);
+  const payrollPeriod = registryMonthFromPeriod(payrollPeriodOverride || normalizedPayrollPeriod(dateFrom, dateTo));
   if (!/^\d{4}-\d{2}$/.test(payrollPeriod || '')) {
     alert('Select a monthly payroll period before printing a payroll registry.');
     return;

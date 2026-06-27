@@ -69,8 +69,9 @@
   .profile-section-title { margin: 0 0 16px; color: var(--text); font: 800 13px 'DM Sans', sans-serif; }
   .profile-record-list { display: grid; gap: 12px; }
   .profile-record { border: 1px solid var(--form-line); border-radius: 8px; padding: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; background: var(--bg); }
-  .profile-form-grid label { color: var(--muted); font-size: 12px; font-weight: 700; display: grid; gap: 7px; }
+  .profile-form-grid label { color: var(--muted); font-size: 12px; font-weight: 700; display: grid; gap: 7px; position: relative; padding-bottom: 20px; }
   .profile-address-field { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+  .profile-address-field.full { grid-column: 1 / -1; }
   .profile-address-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 18px; }
   .profile-page .address-same-check { margin: 0; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; line-height: 1.2; text-transform: none; }
   .profile-page .address-same-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); flex: 0 0 auto; }
@@ -121,7 +122,18 @@
   .profile-family-dialog { width: min(980px, 96vw); max-height: 92vh; overflow: auto; background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 20px; box-shadow: 0 24px 80px rgba(0,0,0,0.35); }
   .profile-family-dialog h2 { margin: -20px -20px 18px; padding: 16px 20px; background: var(--card2); color: var(--text); border-bottom: 1px solid var(--border); font-size: 18px; }
   .profile-family-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-  .profile-family-form label { display: grid; gap: 7px; font-weight: 800; font-size: 13px; }
+  .profile-family-form label { display: grid; gap: 7px; font-weight: 800; font-size: 13px; position: relative; padding-bottom: 20px; }
+  .profile-form-grid .field-validation-message,
+  .profile-family-form .field-validation-message {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin-top: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .profile-family-modal-actions { display: flex; justify-content: space-between; margin-top: 22px; }
   .profile-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .profile-stat { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg); }
@@ -210,27 +222,33 @@
             <label>Email<input id="profile-edit-email" type="email"></label>
             <label>Work Email<input id="profile-edit-work-email" type="email"></label>
             <label>Contact No<input id="profile-edit-phone" type="tel" inputmode="tel" placeholder="+63 9XX XXX XXXX"></label>
-            <label>Home Address
+            <div class="profile-address-field full">
+              <div class="profile-address-label-row">
+                <span>Home Address</span>
+              </div>
+              <input id="profile-edit-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off">
               <div class="address-autocomplete" data-address-field="profile-home">
                 <input id="profile-edit-address" type="text" autocomplete="off">
                 <div class="address-suggestions" id="profile-edit-address-suggestions"></div>
               </div>
-            </label>
-            <div class="profile-address-field">
+            </div>
+            <div class="profile-address-field full">
               <div class="profile-address-label-row">
                 <span>Current Address</span>
                 <label class="address-same-check"><input id="profile-current-same-home" type="checkbox"> Same as Home Address</label>
               </div>
+              <input id="profile-edit-current-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off">
               <div class="address-autocomplete" data-address-field="profile-current">
                 <input id="profile-edit-current-address" type="text" autocomplete="off">
                 <div class="address-suggestions" id="profile-edit-current-address-suggestions"></div>
               </div>
             </div>
-            <div class="profile-address-field">
+            <div class="profile-address-field full">
               <div class="profile-address-label-row">
                 <span>Mailing Address</span>
                 <label class="address-same-check"><input id="profile-mailing-same-home" type="checkbox"> Same as Home Address</label>
               </div>
+              <input id="profile-edit-mailing-address-line" data-ph-address-line placeholder="House no., street, subdivision, unit" autocomplete="off">
               <div class="address-autocomplete" data-address-field="profile-mailing">
                 <input id="profile-edit-mailing-address" type="text" autocomplete="off">
                 <div class="address-suggestions" id="profile-edit-mailing-address-suggestions"></div>

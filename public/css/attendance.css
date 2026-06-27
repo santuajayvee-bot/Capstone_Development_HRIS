@@ -131,7 +131,8 @@
 #att-records-table td:nth-child(9) { width: 110px; }
 #att-records-table th:nth-child(10),
 #att-records-table td:nth-child(10) { width: 100px; }
-#att-records .att-records-pagination {
+#att-records .att-records-pagination,
+#att-biometric .bio-events-pagination {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -147,11 +148,14 @@
   font-size: 12px;
 }
 #att-records .att-records-pagination-summary,
-#att-records .att-records-pagination-page {
+#att-records .att-records-pagination-page,
+#att-biometric .att-records-pagination-summary,
+#att-biometric .att-records-pagination-page {
   min-width: max-content;
   color: var(--muted);
 }
-#att-records .att-records-pagination-actions {
+#att-records .att-records-pagination-actions,
+#att-biometric .att-records-pagination-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -159,9 +163,38 @@
   gap: 8px;
   min-width: 0;
 }
-#att-records .att-records-pagination-actions .btn {
+#att-records .att-records-pagination-actions .btn,
+#att-biometric .att-records-pagination-actions .btn {
   min-width: 72px;
   white-space: nowrap;
+}
+.att-employee-cell {
+  min-width: 0;
+  line-height: 1.35;
+}
+.att-employee-cell strong {
+  display: block;
+  overflow: hidden;
+  color: #f8fbff;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-employee-code {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  min-height: 20px;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border: 1px solid rgba(37, 99, 235, .25);
+  border-radius: 4px;
+  background: rgba(37, 99, 235, .08);
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 #att-records .att-summary-cell {
   min-width: 150px;
@@ -280,13 +313,13 @@
 #att-biometric table th { color:#b9c7ee; }
 #att-biometric table td { color:#f8fbff; }
 #att-biometric small { color:#b9c7ee; }
-.bio-status-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:14px; margin-top:16px; }
+.bio-status-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; margin-top:16px; }
 .bio-status-grid > div, .bio-steps { padding:12px; border:1px solid var(--border); border-radius:8px; background:rgba(11,18,32,.45); }
 .bio-status-grid label { display:block; margin-bottom:6px; color:#b9c7ee; font-size:11px; letter-spacing:.03em; text-transform:uppercase; }
 .att-biometric-diagnostics { margin-bottom:20px; }
 .bio-diagnostic-grid {
   display:grid;
-  grid-template-columns:repeat(4, minmax(0, 1fr));
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
   gap:14px;
   margin-top:16px;
 }
@@ -319,9 +352,29 @@
 .bio-pill { display:inline-flex; align-items:center; min-height:30px; padding:6px 10px; border-radius:999px; font-size:12px; border:1px solid transparent; }
 .bio-diagnostic-item .bio-pill {
   width:max-content;
+  max-width:100%;
   min-height:32px;
   padding:7px 11px;
   font-weight:800;
+  white-space:normal;
+}
+#bio-events-table {
+  table-layout: fixed;
+  min-width: 760px;
+}
+#bio-events-table th:nth-child(1),
+#bio-events-table td:nth-child(1) { width: 280px; }
+#bio-events-table th:nth-child(2),
+#bio-events-table td:nth-child(2) { width: 260px; }
+#bio-events-table th:nth-child(3),
+#bio-events-table td:nth-child(3) { width: 200px; }
+#bio-events-table th:nth-child(4),
+#bio-events-table td:nth-child(4) { width: 180px; }
+#bio-events-table tbody tr {
+  height: 60px;
+}
+#bio-events-table td {
+  vertical-align: middle;
 }
 .bio-success { color:#047857; border-color:#bbf7d0; background:#ecfdf5; }
 .bio-warning { color:#92400e; border-color:#fde68a; background:#fffbeb; }
@@ -353,48 +406,63 @@
 .att-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
 .att-row-menu { position:relative; display:inline-flex; justify-content:center; }
 .att-menu-trigger {
-  min-width:34px;
-  height:30px;
+  display:inline-grid;
+  place-items:center;
+  width:32px;
+  min-width:32px;
+  height:32px;
+  padding:0;
   border:1px solid var(--border);
-  border-radius:7px;
+  border-radius:6px;
   background:#171b2d;
   color:#f8fbff;
-  font-size:18px;
   line-height:1;
   cursor:pointer;
 }
+.att-menu-trigger svg { display:block; width:16px; height:16px; }
 .att-menu-trigger:hover { border-color:var(--accent); }
 .att-menu-panel {
   display:none;
-  position:absolute;
-  right:0;
-  top:34px;
-  min-width:142px;
-  z-index:30;
+  position:fixed;
+  width:184px;
+  z-index:15000;
   padding:6px;
   border:1px solid var(--border);
   border-radius:8px;
   background:#111827;
-  box-shadow:0 12px 30px rgba(0,0,0,.35);
+  box-shadow:0 16px 36px rgba(15,23,42,.2);
 }
-.att-menu-panel.open { display:block; }
-.att-menu-panel button {
-  display:flex;
+.att-menu-panel.open { display:grid; gap:2px; }
+.att-menu-panel .att-menu-item {
+  display:grid;
+  grid-template-columns:20px minmax(0, 1fr);
   align-items:center;
-  gap:9px;
+  gap:10px;
   width:100%;
-  min-height:34px;
+  min-height:38px;
   border:0;
-  border-radius:6px;
+  border-radius:5px;
   background:transparent;
   color:#f8fbff;
-  font:500 12px Poppins, Arial, sans-serif;
+  font:500 12px/1.2 Poppins, Arial, sans-serif;
   text-align:left;
   cursor:pointer;
-  padding:7px 9px;
+  padding:8px 10px;
+  white-space:nowrap;
 }
-.att-menu-panel button:hover { background:rgba(79,124,255,.12); }
-.att-menu-panel span { min-width:18px; text-align:center; }
+.att-menu-panel .att-menu-item:hover { background:rgba(79,124,255,.12); }
+.att-menu-panel .att-menu-item:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.att-menu-panel .att-menu-icon {
+  width:17px;
+  height:17px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.att-menu-panel .att-menu-item-success .att-menu-icon { color:#15803d; }
+.att-menu-panel .att-menu-item-danger .att-menu-icon { color:#dc2626; }
 #att-payroll-policy .policy-management-card,
 #att-payroll-policy .policy-management-card .payroll-collapsible,
 #att-payroll-policy .policy-management-card .table-wrap,
@@ -422,21 +490,29 @@
     align-items: stretch;
     padding: 10px;
   }
-  #att-records .att-records-pagination-summary {
+  #att-biometric .bio-events-pagination {
+    align-items: stretch;
+    padding: 10px;
+  }
+  #att-records .att-records-pagination-summary,
+  #att-biometric .att-records-pagination-summary {
     width: 100%;
     text-align: center;
   }
-  #att-records .att-records-pagination-actions {
+  #att-records .att-records-pagination-actions,
+  #att-biometric .att-records-pagination-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
-  #att-records .att-records-pagination-page {
+  #att-records .att-records-pagination-page,
+  #att-biometric .att-records-pagination-page {
     grid-column: 1 / -1;
     order: -1;
     text-align: center;
   }
-  #att-records .att-records-pagination-actions .btn {
+  #att-records .att-records-pagination-actions .btn,
+  #att-biometric .att-records-pagination-actions .btn {
     min-width: 0;
     width: 100%;
   }

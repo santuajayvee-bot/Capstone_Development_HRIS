@@ -58,13 +58,20 @@
   .org-setup-field input,
   .org-setup-field select {
     width: 100%;
-    min-height: 42px;
+    min-height: 40px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--input-bg, rgba(255,255,255,0.02));
     color: var(--text);
-    padding: 10px 12px;
-    font: inherit;
+    padding: 9px 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+
+  .org-setup-field input::placeholder {
+    font-size: 13px;
   }
 
   .org-setup-actions {
@@ -157,7 +164,10 @@
     background: var(--input-bg, rgba(255,255,255,0.02));
     color: var(--text);
     padding: 8px 10px;
-    font: inherit;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.25;
     text-transform: none;
     letter-spacing: 0;
   }
@@ -199,6 +209,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
     gap: 12px;
     padding: 12px 16px;
     border-top: 1px solid var(--border);
@@ -206,26 +217,35 @@
   }
 
   .org-setup-pagination-info {
+    flex: 1 1 220px;
+    min-width: 0;
     font-size: 12px;
     color: var(--muted);
+    overflow-wrap: anywhere;
   }
 
   .org-setup-pagination-actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    flex: 0 1 auto;
+    min-width: 0;
     gap: 8px;
   }
 
   .org-setup-pagination-actions button {
-    min-width: 84px;
+    min-width: 76px;
     min-height: 36px;
+    padding-inline: 12px;
   }
 
   .org-setup-pagination-page {
+    flex: 0 0 auto;
     font-size: 12px;
     color: var(--muted);
-    min-width: 84px;
+    min-width: 76px;
     text-align: center;
+    white-space: nowrap;
   }
 
   .org-setup-row-actions {
@@ -274,6 +294,37 @@
 
     .org-setup-pagination-actions {
       justify-content: space-between;
+      width: 100%;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .org-setup-pagination {
+      padding: 10px 12px;
+      gap: 10px;
+    }
+
+    .org-setup-pagination-info {
+      flex-basis: auto;
+      text-align: center;
+    }
+
+    .org-setup-pagination-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+    }
+
+    .org-setup-pagination-actions button {
+      min-width: 0;
+      width: 100%;
+      padding-inline: 8px;
+    }
+
+    .org-setup-pagination-page {
+      min-width: 74px;
+      font-size: 11px;
     }
   }
 </style>

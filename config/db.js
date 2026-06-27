@@ -6,6 +6,13 @@ const mysql  = require('mysql2/promise');
 const fs     = require('fs');
 require('dotenv').config();
 
+function requiredDatabaseSetting(name) {
+  const value = String(process.env[name] || '').trim();
+  if (value) return value;
+  if (process.env.NODE_ENV === 'test') return name === 'DB_PASSWORD' ? 'test-only' : 'test';
+  throw new Error(`${name} must be configured.`);
+}
+
 function readOptionalFile(filePath) {
   return filePath ? fs.readFileSync(filePath) : undefined;
 }
@@ -24,9 +31,9 @@ function getSslConfig() {
 const pool = mysql.createPool({
   host:               process.env.DB_HOST     || 'localhost',
   port:               process.env.DB_PORT     || 3306,
-  user:               process.env.DB_USER     || 'root',
-  password:           process.env.DB_PASSWORD || '',
-  database:           process.env.DB_NAME     || 'lgsv_hr_db',
+  user:               requiredDatabaseSetting('DB_USER'),
+  password:           requiredDatabaseSetting('DB_PASSWORD'),
+  database:           requiredDatabaseSetting('DB_NAME'),
   waitForConnections: true,
   connectionLimit:    10,
   queueLimit:         0,

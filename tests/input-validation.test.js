@@ -20,6 +20,12 @@ function validate(body) {
   return { req, response, nextCalled };
 }
 
+function assertFieldError(result, field, message) {
+  assert.strictEqual(result.response.code, 400);
+  assert.strictEqual(result.response.payload.errors[0].field, field);
+  assert.ok(result.response.payload.message.includes(message));
+}
+
 const accepted = validate({
   first_name: ' Anne-Marie ',
   middle_name: "O'Connor",
@@ -54,17 +60,16 @@ assert.strictEqual(authenticationSecret.nextCalled, true);
 assert.strictEqual(authenticationSecret.req.body.password, '  Exact password value  ');
 
 const invalidName = validate({ first_name: 'Juan123' });
-assert.strictEqual(invalidName.response.code, 400);
-assert.strictEqual(invalidName.response.payload.message, NAME_MESSAGE);
+assertFieldError(invalidName, 'first_name', NAME_MESSAGE);
 
 const invalidNumber = validate({ sss_number: '12ABC' });
-assert.strictEqual(invalidNumber.response.payload.message, NUMERIC_MESSAGE);
+assertFieldError(invalidNumber, 'sss_number', NUMERIC_MESSAGE);
 
 const invalidDecimal = validate({ overtime_hours: 'eight' });
-assert.strictEqual(invalidDecimal.response.payload.message, NUMERIC_MESSAGE);
+assertFieldError(invalidDecimal, 'overtime_hours', NUMERIC_MESSAGE);
 
 const invalidEmail = validate({ work_email: 'not-an-email' });
-assert.strictEqual(invalidEmail.response.payload.message, EMAIL_MESSAGE);
+assertFieldError(invalidEmail, 'work_email', EMAIL_MESSAGE);
 
 const unsafe = validate({ emergency_contact_name: '<script>alert(1)</script>' });
 assert.strictEqual(unsafe.response.payload.message, UNSAFE_INPUT_MESSAGE);
@@ -84,7 +89,7 @@ const unsafeEventHandler = validate({ residential_address: '<img src=x onerror=a
 assert.strictEqual(unsafeEventHandler.response.payload.message, UNSAFE_INPUT_MESSAGE);
 
 const invalidInfinity = validate({ base_rate: 'Infinity' });
-assert.strictEqual(invalidInfinity.response.payload.message, NUMERIC_MESSAGE);
+assertFieldError(invalidInfinity, 'base_rate', NUMERIC_MESSAGE);
 
 const excessivePayrollAmount = validate({ gross_pay: '999999999999' });
 assert.strictEqual(excessivePayrollAmount.response.code, 400);

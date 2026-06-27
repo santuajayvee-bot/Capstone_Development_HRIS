@@ -152,7 +152,7 @@ function encryptedSensitiveDataParams(body) {
 async function logAccessLog(employeeId, userId, action, resourceType, resourceId, details) {
   try {
     await pool.execute(
-      `INSERT INTO employee_201_file_access_log 
+      `INSERT INTO employee_201_file_access_audit
        (employee_id, accessed_by, action, resource_type, resource_id, details)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [employeeId, userId, action, resourceType, resourceId, JSON.stringify(details) || null]
@@ -605,7 +605,7 @@ router.get('/:employeeId/access-log', requireRole(HR_DOCUMENT_ROLES), async (req
         resource_type,
         resource_id,
         details
-      FROM employee_201_file_access_log
+      FROM employee_201_file_access_audit
       WHERE employee_id = ?
       ORDER BY accessed_at DESC
       LIMIT 100

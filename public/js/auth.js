@@ -5,8 +5,7 @@
 
 const ROLE_PERMISSIONS = {
   admin: [
-    'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'payroll', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
+    'dashboard', 'system-admin', 'attendance', 'blockchain', 'self-service',
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
@@ -17,7 +16,7 @@ const ROLE_PERMISSIONS = {
     'attendance', 'reports', 'onboarding', 'employee-profile', 'self-service',
   ],
   system_admin: [
-    'dashboard', 'system-admin', 'organization-setup', 'attendance', 'blockchain', 'self-service',
+    'dashboard', 'system-admin', 'attendance', 'blockchain', 'self-service',
   ],
   payroll_officer: [
     'dashboard', 'attendance', 'leave', 'payroll', 'blockchain', 'self-service',
@@ -36,12 +35,8 @@ const ROLE_PERMISSIONS = {
 const NAV_CONFIG = {
   admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
-    { page: 'employees', icon: 'EM', label: 'Employees' },
-    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
-    { page: 'leave', icon: 'LV', label: 'Leave Management' },
+    { page: 'system-admin', icon: 'SA', label: 'System Admin' },
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
-    { page: 'payroll', icon: 'PR', label: 'Payroll' },
-    { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
     { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   hr_admin: [
@@ -64,7 +59,6 @@ const NAV_CONFIG = {
   ],
   system_admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
-    { page: 'organization-setup', icon: 'OS', label: 'Organization Setup' },
     { page: 'system-admin', icon: 'SA', label: 'System Admin' },
     { page: 'attendance', icon: 'AT', label: 'Attendance Sync' },
     { page: 'blockchain', icon: 'BC', label: 'Audit Log' },
@@ -107,6 +101,11 @@ const EMPLOYEE_ALLOWED_PAGES = new Set([
 ]);
 
 const PAGE_ROLE_ALLOWLIST = {
+  employees: new Set(['hr_admin', 'hr_manager']),
+  'employee-profile': new Set(['hr_admin', 'hr_manager']),
+  'organization-setup': new Set(['hr_admin', 'hr_manager']),
+  register: new Set(['hr_admin', 'hr_manager']),
+  onboarding: new Set(['hr_admin', 'hr_manager']),
   attendance: new Set(['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager', 'manager', 'employee']),
   payroll: new Set(['payroll_officer', 'payroll_manager']),
   reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),

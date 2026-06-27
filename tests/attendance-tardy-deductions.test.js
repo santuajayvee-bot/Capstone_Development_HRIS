@@ -9,10 +9,8 @@ const policy = {
   count_late_for_payroll: true,
   count_undertime_for_payroll: true,
   late_deduction_method: 'auto_compute',
-  late_fixed_deduction_amount: 0,
   late_apply_grace_period: true,
   undertime_deduction_method: 'auto_compute',
-  undertime_fixed_deduction_amount: 0,
 };
 
 function clockMinutes(value) {
@@ -98,20 +96,18 @@ assert.strictEqual(Number(minuteRate.toFixed(4)), 2.0833);
 assert.strictEqual(dailyRateDeduction.late_deduction, 41.67);
 assert.strictEqual(dailyRateDeduction.undertime_deduction, 62.5);
 
-const fixedMethod = computeLateUndertimeDeductions({
+const fixedMethodIgnored = computeLateUndertimeDeductions({
   attendanceRows: [{ time_in: '08:30', late_minutes: 20, undertime_minutes: 30 }],
   policy: {
     ...policy,
     late_deduction_method: 'fixed_per_minute',
-    late_fixed_deduction_amount: 3,
     undertime_deduction_method: 'fixed_per_hour',
-    undertime_fixed_deduction_amount: 180,
   },
   wageType: 'Hourly',
   rate: HOURLY_RATE,
 });
-assert.strictEqual(fixedMethod.late_deduction, 60);
-assert.strictEqual(fixedMethod.undertime_deduction, 90);
+assert.strictEqual(fixedMethodIgnored.late_deduction, 40);
+assert.strictEqual(fixedMethodIgnored.undertime_deduction, 60);
 
 const eligibleRecords = [
   { verification_status: 'PAYROLL_READY', payroll_eligible: 1 },
@@ -136,4 +132,4 @@ console.table(results.map((item) => ({
 console.log('Toggle validation: PASS');
 console.log('PAYROLL_READY exclusion validation: PASS');
 console.log('Monthly-to-daily-to-hour-to-minute deduction hierarchy: PASS');
-console.log('Optional fixed deduction methods: PASS');
+console.log('Fixed tardy/UT override ignored in favor of mandated minute-rate: PASS');

@@ -36,6 +36,7 @@ const {
   getAttendanceStatusForTimeIn,
   saveAttendancePolicyValues,
 } = require('./attendance-policy-engine');
+const { missingDtrPunches } = require('./dtr-punch');
 
 const router = express.Router();
 
@@ -43,6 +44,7 @@ const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
 const SYSTEM_ADMIN_ROLES = ['system_admin', 'admin'];
 const PAYROLL_OFFICER_ROLES = ['payroll_officer'];
 const PAYROLL_MANAGER_ROLES = ['payroll_manager'];
+const ATTENDANCE_RECORD_VIEW_ROLES = [...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES];
 const BIOMETRIC_ADMIN_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
 const SUMMARY_ROLES = [...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES];
 const AUDIT_ROLES = [...HR_ROLES, ...SYSTEM_ADMIN_ROLES];
@@ -52,17 +54,17 @@ const BIOMETRIC_DEVICE_ALLOWED_FIELDS = new Set([
 ]);
 const BIOMETRIC_MAPPING_ALLOWED_FIELDS = new Set(['device_id', 'employee_id', 'biometric_user_id']);
 const ATTENDANCE_POLICY_ALLOWED_FIELDS = new Set([
-  'work_schedule', 'work_start_time', 'work_end_time', 'grace_period_minutes',
+  'effective_date', 'work_schedule', 'work_start_time', 'work_end_time',
+  'break_start_time', 'break_end_time', 'standard_work_hours', 'grace_period_minutes',
   'duplicate_scan_window_seconds', 'hr_validation_required', 'require_hr_validation',
+  'auto_payroll_ready',
   'overtime_threshold_hours', 'overtime_threshold_minutes', 'missing_timeout_handling',
-  'payroll_attendance_source', 'payroll_ready_rules', 'late_deduction_method',
-  'late_fixed_deduction_amount', 'undertime_deduction_method',
-  'undertime_fixed_deduction_amount', 'allow_manual_attendance',
+  'payroll_attendance_source', 'payroll_ready_rules', 'allow_manual_attendance',
   'allow_hr_correction', 'enable_overtime', 'minimum_overtime_minutes',
   'multiple_scan_handling', 'overtime_handling',
 ]);
-const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_in', 'time_out', 'reason']);
-const ATTENDANCE_OVERRIDE_ALLOWED_FIELDS = new Set(['time_in', 'time_out', 'reason']);
+const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
+const ATTENDANCE_OVERRIDE_ALLOWED_FIELDS = new Set(['time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
 const ATTENDANCE_VERIFY_ALLOWED_FIELDS = new Set(['verification_status', 'reason']);
 const ATTENDANCE_OVERTIME_ALLOWED_FIELDS = new Set(['overtime_hours', 'reason']);
 const GEOFENCE_ALLOWED_FIELDS = new Set(['site_name', 'latitude', 'longitude', 'radius_meters', 'is_active']);
@@ -87,6 +89,21 @@ function withAttendanceEmployeeName(row) {
     last_name: undefined,
     employee_name: attendanceEmployeeName(row),
   };
+}
+
+function removeAttendanceSecurityMetadata(record) {
+  const {
+    source,
+    integrity_hash,
+    device_id,
+    ...safeRecord
+  } = record || {};
+  return safeRecord;
+}
+
+function attendanceRecordForRole(req, row) {
+  const record = withAttendanceEmployeeName(row);
+  return includesRole(HR_ROLES, req) ? record : removeAttendanceSecurityMetadata(record);
 }
 
 function rejectUnsupportedFields(req, res, allowedFields, module = 'ATTENDANCE_SECURITY') {
@@ -127,6 +144,33 @@ function isTime(value) {
 
 function isDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function normalizeDtrTimes(body, fallback = {}) {
+  const cleanTime = (field, aliases = []) => {
+    if (body[field] !== undefined) return cleanText(body[field], 8) || null;
+    for (const alias of aliases) {
+      if (body[alias] !== undefined) return cleanText(body[alias], 8) || null;
+    }
+    return fallback[field] || null;
+  };
+  const timeIn = cleanTime('time_in', ['am_time_in', 'pm_time_in'])
+    || fallback.am_time_in
+    || fallback.pm_time_in
+    || null;
+  const timeOut = cleanTime('time_out', ['pm_time_out', 'am_time_out'])
+    || fallback.pm_time_out
+    || fallback.am_time_out
+    || null;
+
+  return {
+    time_in: timeIn,
+    time_out: timeOut,
+    am_time_in: timeIn,
+    am_time_out: null,
+    pm_time_in: null,
+    pm_time_out: timeOut,
+  };
 }
 
 function requestBool(value, fallback = false) {
@@ -201,7 +245,8 @@ async function writeAuditLog(userId, employeeId, action, oldValue, newValue, req
 async function emitAttendanceRealtimeById(attendanceId, scanType = 'AUTO') {
   try {
     const [rows] = await pool.execute(
-      `SELECT al.employee_id, al.date, al.time_in, al.time_out, al.verification_status,
+      `SELECT al.employee_id, al.date, al.time_in, al.time_out,
+              al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out, al.verification_status,
               al.device_id, ats.payroll_eligible,
               e.employee_code, e.department_id, e.first_name, e.middle_name, e.last_name,
               bd.device_reference
@@ -603,9 +648,10 @@ router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) 
     await ensureAttendanceLogMetricColumns(pool);
     await ensureAttendanceSummaryPolicyColumns(pool);
     const [rows] = await pool.execute(
-      `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out, al.overtime_hours,
+      `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
+              al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out, al.overtime_hours,
               al.late_minutes, al.undertime_minutes, al.overtime_minutes,
-              al.absences, al.status, al.verification_status, al.source, al.integrity_hash,
+              al.absences, al.status, al.verification_status,
               ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
               ats.late_minutes AS summary_late_minutes,
               ats.undertime_minutes AS summary_undertime_minutes,
@@ -617,7 +663,7 @@ router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) 
         LIMIT 200`,
       [req.user.employeeId]
     );
-    res.json(rows);
+    res.json(rows.map(removeAttendanceSecurityMetadata));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch personal attendance records.' });
   }
@@ -659,7 +705,8 @@ router.get('/status', requireAuth, requireRole(ROLES.any), async (req, res) => {
     if (!req.user.employeeId) return res.json({ clocked_in: false, clocked_out: false });
     const today = new Date().toISOString().slice(0, 10);
     const [rows] = await pool.execute(
-      `SELECT attendance_id, date, time_in, time_out, status, verification_status, source
+      `SELECT attendance_id, date, time_in, time_out, am_time_in, am_time_out, pm_time_in, pm_time_out,
+              status, verification_status
          FROM attendance_log
         WHERE employee_id = ? AND date = ?`,
       [req.user.employeeId, today]
@@ -698,7 +745,7 @@ router.get('/employees', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFIC
   }
 });
 
-router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROLES, ...PAYROLL_MANAGER_ROLES]), async (req, res) => {
+router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async (req, res) => {
   try {
     await ensureAttendanceLogMetricColumns(pool);
     await ensureAttendanceSummaryPolicyColumns(pool);
@@ -761,6 +808,7 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
 
     const [rows] = await pool.execute(
       `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
+              al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out,
               al.overtime_hours, al.late_minutes, al.undertime_minutes, al.overtime_minutes,
               al.absences, al.status, al.verification_status,
               al.source, al.integrity_hash, al.device_id,
@@ -779,7 +827,7 @@ router.get('/all', requireAuth, requireRole([...HR_ROLES, ...PAYROLL_OFFICER_ROL
         LIMIT 500`,
       values
     );
-    res.json(rows.map(withAttendanceEmployeeName));
+    res.json(rows.map(row => attendanceRecordForRole(req, row)));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch attendance records.' });
   }
@@ -800,17 +848,8 @@ router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
     if (rejectUnsupportedFields(req, res, ATTENDANCE_POLICY_ALLOWED_FIELDS)) return;
     await ensureAttendancePolicySettings(pool);
     const body = req.body || {};
-    const allowedDeductionMethods = new Set(['auto_compute', 'fixed_per_minute', 'fixed_per_hour', 'none']);
-    const lateDeductionMethod = cleanText(body.late_deduction_method || 'auto_compute', 30);
-    const undertimeDeductionMethod = cleanText(body.undertime_deduction_method || 'auto_compute', 30);
-    const lateFixedAmount = Number(body.late_fixed_deduction_amount || 0);
-    const undertimeFixedAmount = Number(body.undertime_fixed_deduction_amount || 0);
-    if (!allowedDeductionMethods.has(lateDeductionMethod) || !allowedDeductionMethods.has(undertimeDeductionMethod)) {
-      return res.status(400).json({ error: 'Deduction method is invalid.' });
-    }
-    if (!Number.isFinite(lateFixedAmount) || lateFixedAmount < 0 || !Number.isFinite(undertimeFixedAmount) || undertimeFixedAmount < 0) {
-      return res.status(400).json({ error: 'Fixed late and undertime deduction amounts must be zero or greater.' });
-    }
+    const lateDeductionMethod = 'auto_compute';
+    const undertimeDeductionMethod = 'auto_compute';
     const [startTime, endTime] = cleanText(body.work_schedule, 50).split('-');
     const normalized = {
       ...body,
@@ -823,9 +862,7 @@ router.put('/policies', requireAuth, requireRole([...HR_ROLES, ...SYSTEM_ADMIN_R
       missing_timeout_handling: cleanText(body.missing_timeout_handling, 80) || 'Needs Review',
       payroll_attendance_source: body.payroll_attendance_source || (String(body.payroll_ready_rules || '').toLowerCase().includes('validated') ? 'validated' : 'payroll_ready'),
       late_deduction_method: lateDeductionMethod,
-      late_fixed_deduction_amount: String(lateFixedAmount),
       undertime_deduction_method: undertimeDeductionMethod,
-      undertime_fixed_deduction_amount: String(undertimeFixedAmount),
     };
     const { changes, policy } = await saveAttendancePolicyValues(pool, normalized, req.user.id);
     await writeAuditLog(
@@ -938,19 +975,21 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     if (rejectUnsupportedFields(req, res, MANUAL_ATTENDANCE_ALLOWED_FIELDS)) return;
-    const policy = await getActiveAttendancePolicy(pool, req.body.date || null);
+    const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
+    const date = cleanText(req.body.date, 10);
+    const policy = await getActiveAttendancePolicy(pool, date || null, { employee_id: employeeId });
     if (!policy.allow_manual_attendance) {
       return res.status(403).json({ error: 'Manual attendance is disabled by the active attendance policy.' });
     }
-    const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
-    const date = cleanText(req.body.date, 10);
-    const timeIn = cleanText(req.body.time_in, 8) || null;
-    const timeOut = cleanText(req.body.time_out, 8) || null;
+    const dtrTimes = normalizeDtrTimes(req.body);
+    const timeIn = dtrTimes.time_in;
+    const timeOut = dtrTimes.time_out;
     const reason = requireReason(req.body.reason);
-    if (!isDate(date) || (timeIn && !isTime(timeIn)) || (timeOut && !isTime(timeOut))) {
+    const suppliedTimes = [timeIn, timeOut].filter(Boolean);
+    if (!isDate(date) || suppliedTimes.some(value => !isTime(value))) {
       return res.status(400).json({ error: 'Valid date and time values are required.' });
     }
-    if (!timeIn && !timeOut) return res.status(400).json({ error: 'At least one manual punch is required.' });
+    if (!suppliedTimes.length) return res.status(400).json({ error: 'At least one manual punch is required.' });
     const [employeeRows] = await pool.execute('SELECT status FROM employees WHERE id = ? LIMIT 1', [employeeId]);
     if (!employeeRows.length || String(employeeRows[0].status || 'Active') !== 'Active') {
       return res.status(400).json({ error: 'Attendance can only be recorded for active employees.' });
@@ -967,16 +1006,27 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
     const status = timeIn && timeOut ? getAttendanceStatusForTimeIn(timeIn, policy) : 'Incomplete';
     const [result] = await conn.execute(
       `INSERT INTO attendance_log
-         (employee_id, date, time_in, time_out, status, verification_status, source)
-       VALUES (?, ?, ?, ?, ?, ?, 'HR_MANUAL_ADJUSTMENT')`,
-      [employeeId, date, timeIn, timeOut, status, verificationStatus]
+         (employee_id, date, time_in, time_out, am_time_in, am_time_out, pm_time_in, pm_time_out, status, verification_status, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'HR_MANUAL_ADJUSTMENT')`,
+      [
+        employeeId,
+        date,
+        timeIn,
+        timeOut,
+        dtrTimes.am_time_in,
+        dtrTimes.am_time_out,
+        dtrTimes.pm_time_in,
+        dtrTimes.pm_time_out,
+        status,
+        verificationStatus,
+      ]
     );
     await conn.execute(
       `INSERT INTO attendance_adjustment
          (attendance_id, employee_id, adjustment_type, reason, new_value,
           requested_by, approved_by, approved_at)
        VALUES (?, ?, 'MANUAL_ATTENDANCE', ?, ?, ?, ?, NOW())`,
-      [result.insertId, employeeId, reason, safeJson({ date, time_in: timeIn, time_out: timeOut }), req.user.id, req.user.id]
+      [result.insertId, employeeId, reason, safeJson({ date, ...dtrTimes }), req.user.id, req.user.id]
     );
     await appendIntegrityEntry(conn, result.insertId, 'HR_MANUAL_ATTENDANCE');
     await conn.commit();
@@ -995,18 +1045,11 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
   const conn = await pool.getConnection();
   try {
     if (rejectUnsupportedFields(req, res, ATTENDANCE_OVERRIDE_ALLOWED_FIELDS)) return;
-    const policy = await getActiveAttendancePolicy(pool);
-    if (!policy.allow_hr_correction) {
-      return res.status(403).json({ error: 'HR attendance correction is disabled by the active attendance policy.' });
-    }
     const attendanceId = positiveInteger(req.params.id, 'id');
     const reason = requireReason(req.body.reason);
-    const timeIn = req.body.time_in ? cleanText(req.body.time_in, 8) : null;
-    const timeOut = req.body.time_out ? cleanText(req.body.time_out, 8) : null;
-    if (!timeIn && !timeOut) return res.status(400).json({ error: 'Provide time_in or time_out to correct.' });
-    if ((timeIn && !isTime(timeIn)) || (timeOut && !isTime(timeOut))) {
-      return res.status(400).json({ error: 'Times must use HH:MM or HH:MM:SS format.' });
-    }
+    const hasTimeChange = ['time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out']
+      .some(field => Object.prototype.hasOwnProperty.call(req.body || {}, field));
+    if (!hasTimeChange) return res.status(400).json({ error: 'Provide at least one DTR time to correct.' });
 
     await conn.beginTransaction();
     const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);
@@ -1015,20 +1058,54 @@ router.patch('/:id/override', requireAuth, requireRole(HR_ROLES), async (req, re
       return res.status(404).json({ error: 'Attendance record not found.' });
     }
     const record = rows[0];
-    const oldValue = { time_in: record.time_in, time_out: record.time_out, status: record.status, verification_status: record.verification_status };
-    const newTimeIn = timeIn || record.time_in;
-    const newTimeOut = timeOut || record.time_out;
-    const status = newTimeIn && newTimeOut && record.status === 'Incomplete' ? 'Present' : record.status;
+    const policy = await getActiveAttendancePolicy(pool, record.date || null, { employee_id: record.employee_id });
+    if (!policy.allow_hr_correction) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'HR attendance correction is disabled by the active attendance policy.' });
+    }
+    const dtrTimes = normalizeDtrTimes(req.body, record);
+    const suppliedTimes = [dtrTimes.time_in, dtrTimes.time_out].filter(Boolean);
+    if (suppliedTimes.some(value => !isTime(value))) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Times must use HH:MM or HH:MM:SS format.' });
+    }
+    const oldValue = {
+      time_in: record.time_in,
+      time_out: record.time_out,
+      am_time_in: record.am_time_in,
+      am_time_out: record.am_time_out,
+      pm_time_in: record.pm_time_in,
+      pm_time_out: record.pm_time_out,
+      status: record.status,
+      verification_status: record.verification_status,
+    };
+    const newTimeIn = dtrTimes.time_in;
+    const newTimeOut = dtrTimes.time_out;
+    const status = newTimeIn && newTimeOut
+      ? getAttendanceStatusForTimeIn(newTimeIn, policy)
+      : 'Incomplete';
     const verificationStatus = newTimeIn && newTimeOut ? 'CORRECTED_BY_HR' : 'NEEDS_REVIEW';
 
     await conn.execute(
       `UPDATE attendance_log
-          SET time_in = ?, time_out = ?, status = ?, verification_status = ?,
+          SET time_in = ?, time_out = ?,
+              am_time_in = ?, am_time_out = ?, pm_time_in = ?, pm_time_out = ?,
+              status = ?, verification_status = ?,
               source = 'HR_MANUAL_ADJUSTMENT'
         WHERE attendance_id = ?`,
-      [newTimeIn, newTimeOut, status, verificationStatus, attendanceId]
+      [
+        newTimeIn,
+        newTimeOut,
+        dtrTimes.am_time_in,
+        dtrTimes.am_time_out,
+        dtrTimes.pm_time_in,
+        dtrTimes.pm_time_out,
+        status,
+        verificationStatus,
+        attendanceId,
+      ]
     );
-    const newValue = { time_in: newTimeIn, time_out: newTimeOut, status, verification_status: verificationStatus };
+    const newValue = { ...dtrTimes, status, verification_status: verificationStatus };
     await conn.execute(
       `INSERT INTO attendance_adjustment
          (attendance_id, employee_id, adjustment_type, reason, old_value, new_value,
@@ -1058,10 +1135,6 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     if (!['VALIDATED', 'PAYROLL_READY', 'REJECTED', 'NEEDS_REVIEW'].includes(requestedStatus)) {
       return res.status(400).json({ error: 'verification_status must be PAYROLL_READY, REJECTED, or NEEDS_REVIEW.' });
     }
-    const policy = await getActiveAttendancePolicy(pool);
-    if (!policy.require_hr_validation && requestedStatus !== 'REJECTED' && requestedStatus !== 'NEEDS_REVIEW') {
-      return res.status(400).json({ error: 'HR validation is not required by the active attendance policy.' });
-    }
     const verificationStatus = requestedStatus === 'VALIDATED' ? 'PAYROLL_READY' : requestedStatus;
     const reason = verificationStatus === 'PAYROLL_READY'
       ? (cleanText(req.body.reason, 500) || 'Attendance validated by HR.')
@@ -1074,9 +1147,18 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
       return res.status(404).json({ error: 'Attendance record not found.' });
     }
     const record = rows[0];
-    if (verificationStatus === 'PAYROLL_READY' && (!record.time_in || !record.time_out)) {
+    const policy = await getActiveAttendancePolicy(pool, record.date || null, { employee_id: record.employee_id });
+    if (!policy.require_hr_validation && verificationStatus !== 'REJECTED' && verificationStatus !== 'NEEDS_REVIEW') {
       await conn.rollback();
-      return res.status(400).json({ error: 'Incomplete attendance cannot be validated until both punches exist.' });
+      return res.status(400).json({ error: 'HR validation is not required by the active attendance policy.' });
+    }
+    const missingPunches = missingDtrPunches(record);
+    if (verificationStatus === 'PAYROLL_READY' && (!record.time_in || !record.time_out || missingPunches.length)) {
+      await conn.rollback();
+      return res.status(400).json({
+        error: 'Incomplete DTR cannot be marked payroll ready until HR correction is completed.',
+        missing_punches: missingPunches,
+      });
     }
     await conn.execute('UPDATE attendance_log SET verification_status = ? WHERE attendance_id = ?', [verificationStatus, attendanceId]);
     await conn.execute(
@@ -1103,10 +1185,6 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
   const conn = await pool.getConnection();
   try {
     if (rejectUnsupportedFields(req, res, ATTENDANCE_OVERTIME_ALLOWED_FIELDS)) return;
-    const policy = await getActiveAttendancePolicy(pool);
-    if (!policy.enable_overtime) {
-      return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
-    }
     const attendanceId = positiveInteger(req.params.id, 'id');
     const hours = Number(req.body.overtime_hours);
     const reason = requireReason(req.body.reason);
@@ -1123,6 +1201,11 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
       return res.status(404).json({ error: 'Attendance record not found.' });
     }
     const record = rows[0];
+    const policy = await getActiveAttendancePolicy(pool, record.date || null, { employee_id: record.employee_id });
+    if (!policy.enable_overtime) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
+    }
     await conn.execute('UPDATE attendance_log SET overtime_hours = ? WHERE attendance_id = ?', [hours, attendanceId]);
     await conn.execute(
       `INSERT INTO attendance_adjustment
@@ -1149,13 +1232,16 @@ router.get('/audit-log', requireAuth, requireRole(AUDIT_ROLES), async (_req, res
       `SELECT sal.*, u.username AS performed_by,
               e.employee_code, e.first_name, e.middle_name, e.last_name
          FROM system_audit_log sal
-         JOIN users u ON u.id = sal.user_id
-         LEFT JOIN employees e ON e.id = sal.target_employee_id
+         LEFT JOIN users u ON u.id = sal.user_id
+         LEFT JOIN employees e ON e.id = COALESCE(sal.target_employee_id, sal.employee_id)
         WHERE sal.module = 'ATTENDANCE'
         ORDER BY sal.timestamp DESC
         LIMIT 250`
     );
-    res.json(rows.map(withAttendanceEmployeeName));
+    res.json(rows.map(row => ({
+      ...withAttendanceEmployeeName(row),
+      performed_by: row.performed_by || 'System',
+    })));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch attendance audit log.' });
   }
@@ -1165,14 +1251,11 @@ router.get('/audit-log', requireAuth, requireRole(AUDIT_ROLES), async (_req, res
    Integrity verification and permissioned-ledger anchor queue
    ============================================================ */
 
-router.get('/integrity/:attendanceId', requireAuth, requireRole([...ROLES.any]), async (req, res) => {
+router.get('/integrity/:attendanceId', requireAuth, requireRole(AUDIT_ROLES), async (req, res) => {
   try {
     const attendanceId = positiveInteger(req.params.attendanceId, 'attendanceId');
     const [records] = await pool.execute('SELECT employee_id, integrity_hash FROM attendance_log WHERE attendance_id = ?', [attendanceId]);
     if (!records.length) return res.status(404).json({ error: 'Attendance record not found.' });
-    if (req.user.role === 'employee' && records[0].employee_id !== req.user.employeeId) {
-      return res.status(403).json({ error: 'You can verify only your own attendance records.' });
-    }
 
     const [chain] = await pool.execute(
       'SELECT * FROM attendance_integrity_chain WHERE attendance_id = ? ORDER BY chain_id',

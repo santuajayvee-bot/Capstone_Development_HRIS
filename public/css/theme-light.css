@@ -716,6 +716,17 @@ td,
   border-color: var(--border) !important;
 }
 
+#page-attendance .att-employee-cell strong,
+#page-attendance .att-employee-cell {
+  color: #111827 !important;
+}
+
+#page-attendance .att-employee-code {
+  background: #eef4ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
 tr:hover td,
 .leave-table tbody tr:hover td,
 .dashboard-table tbody tr:hover td,
@@ -909,6 +920,39 @@ tr:hover td,
 .att-menu-panel button:hover {
   background: #fff1f1 !important;
   color: #b91c1c !important;
+}
+
+#page-attendance .att-menu-trigger {
+  border-radius: 6px !important;
+}
+
+#page-attendance .att-menu-panel {
+  border-radius: 8px !important;
+}
+
+#page-attendance .att-menu-panel .att-menu-item {
+  border-radius: 5px !important;
+}
+
+#page-attendance .att-menu-panel .att-menu-item:hover {
+  background: #f3f4f6 !important;
+  color: #1f2937 !important;
+}
+
+#page-attendance .att-menu-panel .att-menu-item-danger:hover {
+  background: #fff1f1 !important;
+  color: #b91c1c !important;
+}
+
+#page-dashboard .dashboard-count-circle {
+  border-radius: 50% !important;
+}
+
+#page-dashboard .dashboard-grid,
+#page-dashboard .dashboard-main,
+#page-dashboard .dashboard-side,
+#page-dashboard .dashboard-shell {
+  gap: 18px !important;
 }
 
 .report-star.active {

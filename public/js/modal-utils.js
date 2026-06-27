@@ -16,6 +16,18 @@ const nativeConfirm = window.confirm.bind(window);
 let modalPromiseResolve = null;
 let bootstrapModal = null;
 
+function elevateUniversalModalLayer() {
+  if (modalElement) modalElement.style.zIndex = '40010';
+  const liftBackdrops = () => {
+    document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+      backdrop.style.zIndex = '40000';
+    });
+  };
+  liftBackdrops();
+  requestAnimationFrame(liftBackdrops);
+  setTimeout(liftBackdrops, 0);
+}
+
 function getBootstrapModal() {
   if (!modalElement || !window.bootstrap?.Modal) return null;
   if (!bootstrapModal) {
@@ -67,9 +79,13 @@ function openModal() {
   const modal = getBootstrapModal();
   if (modal) {
     modal.show();
+    elevateUniversalModalLayer();
     return;
   }
-  if (modalElement) modalElement.style.display = 'block';
+  if (modalElement) {
+    modalElement.style.display = 'block';
+    elevateUniversalModalLayer();
+  }
 }
 
 function prepareModal(message, title, type) {
@@ -88,15 +104,19 @@ modalConfirmBtn?.addEventListener('click', () => {
 
 modalCancelBtn?.addEventListener('click', () => {
   resolveModal(false);
+  closeModal();
 });
 
 modalCloseBtn?.addEventListener('click', () => {
   resolveModal(false);
+  closeModal();
 });
 
 modalElement?.addEventListener('hidden.bs.modal', () => {
   resolveModal(false);
 });
+
+modalElement?.addEventListener('shown.bs.modal', elevateUniversalModalLayer);
 
 async function showAlert(message, title = 'Alert', type = 'info') {
   if (!modalElement || !modalTitle || !modalMessage || !modalConfirmBtn || !modalCancelBtn || !modalIcon) {

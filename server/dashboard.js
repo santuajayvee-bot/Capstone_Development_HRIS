@@ -18,8 +18,8 @@ const FALLBACK_PERMISSIONS = {
   admin: ['employee.view', 'employee.manage', 'attendance.view', 'leave.request.view_all', 'leave.request.approve', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'report.view', 'settings.manage'],
   hr_admin: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
   hr_manager: ['employee.view', 'employee.manage', 'attendance.view', 'attendance.manage', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'report.view'],
-  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
-  payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view', 'attendance.view', 'leave.request.view_all', 'leave.report.view', 'leave.audit.view'],
+  payroll_officer: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.report.view', 'employee.view', 'attendance.view', 'leave.request.create', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'leave.balance.manage', 'leave.report.view', 'leave.audit.view'],
+  payroll_manager: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve', 'payroll.report.view', 'report.view', 'attendance.view', 'leave.request.create', 'leave.request.view_all', 'leave.request.approve', 'leave.manual.create', 'leave.balance.manage', 'leave.report.view', 'leave.audit.view'],
   manager: ['attendance.view', 'leave.request.approve', 'report.view'],
   employee: ['attendance.view', 'leave.request.create', 'leave.request.view_own', 'document.view'],
 };
@@ -283,8 +283,6 @@ async function hrDashboard(profile, permissions) {
     pendingOnboarding,
     pendingAttendanceValidation,
     leaveRows,
-    newHireRows,
-    onboardingRows,
     attendanceRows,
   ] = await Promise.all([
     scalar('SELECT COUNT(*) FROM employees'),
@@ -302,19 +300,6 @@ async function hrDashboard(profile, permissions) {
         LIMIT 5`
     ),
     rows(
-      `SELECT employee_code, first_name, last_name, position, date_hired
-         FROM employees
-        ORDER BY created_at DESC
-        LIMIT 5`
-    ),
-    rows(
-      `SELECT employee_code, first_name, last_name, onboarding_status, date_hired
-         FROM employees
-        WHERE onboarding_status = 'active'
-        ORDER BY date_hired DESC
-        LIMIT 5`
-    ),
-    rows(
       `SELECT e.first_name, e.last_name,
               e.employee_code, al.date, al.time_in, al.time_out, al.status, al.verification_status
          FROM attendance_log al
@@ -328,7 +313,7 @@ async function hrDashboard(profile, permissions) {
   const stats = [
     card('Total Employees', totalEmployees),
     card('Active Employees', activeEmployees),
-    card('New Hires', newHires, 'Last 30 days'),
+    card('New Hires', newHires),
     card('Employees On Leave', employeesOnLeave),
     card('Pending Leave Requests', pendingLeaveRequests),
     card('Pending Onboarding', pendingOnboarding),
@@ -340,8 +325,6 @@ async function hrDashboard(profile, permissions) {
     tables: [
       table('Attendance Validation Queue', ['Employee', 'Date', 'Time In', 'Time Out', 'Attendance', 'Validation'], attendanceRows.map(r => [employeeName(r), dateLabel(r.date), r.time_in || '-', r.time_out || '-', r.status || '-', r.verification_status || '-'])),
       table('Recent Leave Requests', ['Employee', 'Type', 'Dates', 'Status'], leaveRows.map(r => [employeeName(r), r.type, `${dateLabel(r.date_from)} - ${dateLabel(r.date_to)}`, r.status])),
-      table('New Employee Registrations', ['Employee ID', 'Employee', 'Position', 'Date Hired'], newHireRows.map(r => [r.employee_code, employeeName(r), r.position || '-', dateLabel(r.date_hired)])),
-      table('Pending Onboarding Tracking', ['Employee ID', 'Employee', 'Status', 'Date Hired'], onboardingRows.map(r => [r.employee_code, employeeName(r), r.onboarding_status || '-', dateLabel(r.date_hired)])),
     ],
     actions: [
       action('Add Employee', 'register', 'Register a new employee record'),

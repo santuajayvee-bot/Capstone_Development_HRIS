@@ -24,3 +24,6 @@ out/
 # Generated LGSV HR Hyperledger Fabric identities and channel artifacts.
 fabric-network/organizations/
 fabric-network/channel-artifacts/
+
+# Generated biometric UAT account exports may contain temporary credentials.
+artifacts/biometric-survey/*.csv

@@ -492,6 +492,14 @@ tr:hover td { background: rgba(79,124,255,0.04); }
   font-family: var(--font-main);
 }
 
+.modal-backdrop {
+  z-index: 30000 !important;
+}
+
+.lgsv-modal {
+  z-index: 30010 !important;
+}
+
 .lgsv-modal .modal-content {
   background: var(--card);
   color: var(--text);
@@ -1133,11 +1141,15 @@ input.lgsv-date-native[type="date"] {
   background: rgba(0, 0, 0, .62);
 }
 .report-modal {
-  width: min(520px, 100%);
+  width: min(640px, 100%);
+  max-height: min(92vh, 760px);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--card);
   color: var(--text);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .report-modal-header,
 .report-modal-body,
@@ -1149,6 +1161,13 @@ input.lgsv-date-native[type="date"] {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+  flex: 0 0 auto;
+}
+.report-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .report-modal-header h3 {
   margin: 0;
@@ -1174,7 +1193,7 @@ input.lgsv-date-native[type="date"] {
 .report-options-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px 18px;
 }
 .report-options-grid label {
   display: grid;
@@ -1187,6 +1206,12 @@ input.lgsv-date-native[type="date"] {
 }
 .report-options-grid .span-2 {
   grid-column: 1 / -1;
+}
+.report-options-grid input,
+.report-options-grid select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .report-choice-block {
   border: 1px solid var(--border);
@@ -1205,6 +1230,7 @@ input.lgsv-date-native[type="date"] {
   justify-content: flex-end;
   gap: 10px;
   border-bottom: 0;
+  flex: 0 0 auto;
 }
 @media (max-width: 1100px) {
   .report-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4240,6 +4266,49 @@ tr:hover td,
   background: var(--card2);
 }
 
+.self-service-page .self-sensitive-title {
+  margin-top: 18px;
+}
+
+.self-sensitive-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: stretch;
+}
+
+.self-sensitive-field input {
+  border-right: 0;
+}
+
+.self-sensitive-toggle {
+  width: 42px;
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--input-bg, var(--bg));
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.self-sensitive-toggle:hover,
+.self-sensitive-toggle.is-visible {
+  color: var(--accent);
+  background: #fff1f1;
+}
+
+.self-sensitive-toggle:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.self-sensitive-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
 .self-service-page .erp-actions {
   display: flex;
   justify-content: flex-end;
@@ -4898,8 +4967,32 @@ tr:hover td,
 }
 
 .weekly-payroll-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   border: 1px solid #d8dee8;
   border-top: 0;
+}
+
+.weekly-payroll-pagination .table-pagination-actions {
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(90px, auto) minmax(70px, auto);
+  align-items: center;
+  gap: 8px;
+}
+
+.weekly-payroll-pagination .btn {
+  min-width: 0;
+  width: 100%;
+  justify-content: center;
+}
+
+.payroll-skip-resolution {
+  display: block;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .payroll-preview-summary {
@@ -4947,6 +5040,55 @@ tr:hover td,
   font-size: 12px;
 }
 
+.payroll-generate-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.payroll-generate-loading[hidden] {
+  display: none;
+}
+
+.payroll-loader-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.payroll-generate-loader {
+  width: 50px;
+  --b: 8px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #514b82;
+  -webkit-mask:
+    repeating-conic-gradient(#0000 0deg,#000 1deg 70deg,#0000 71deg 90deg),
+    radial-gradient(farthest-side,#0000 calc(100% - var(--b) - 1px),#000 calc(100% - var(--b)));
+  -webkit-mask-composite: destination-in;
+          mask-composite: intersect;
+  animation: l5 1s infinite;
+}
+
+.payroll-generate-loader.small {
+  width: 22px;
+  --b: 4px;
+  flex: 0 0 22px;
+}
+
+@keyframes l5 {
+  to { transform: rotate(.5turn); }
+}
+
 .payroll-preview-skipped {
   margin-top: 12px;
   color: #475467;
@@ -4987,6 +5129,7 @@ tr:hover td,
 
   .weekly-payroll-pagination .table-pagination-actions {
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    width: 100%;
   }
 }
 

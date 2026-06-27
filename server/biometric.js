@@ -19,6 +19,7 @@ const {
   getAttendanceStatusForTimeIn,
   getInitialVerificationStatus,
 } = require('./attendance-policy-engine');
+const { classifyDtrPunch, dtrUpdateValues } = require('./dtr-punch');
 
 const router = express.Router();
 
@@ -123,6 +124,10 @@ async function ensureBiometricAttendanceSchema() {
       date DATE NOT NULL,
       time_in TIME NULL,
       time_out TIME NULL,
+      am_time_in TIME NULL,
+      am_time_out TIME NULL,
+      pm_time_in TIME NULL,
+      pm_time_out TIME NULL,
       overtime_hours DECIMAL(10,2) DEFAULT 0.00,
       late_minutes INT NOT NULL DEFAULT 0,
       undertime_minutes INT NOT NULL DEFAULT 0,
@@ -288,6 +293,10 @@ async function ensureBiometricAttendanceSchema() {
 
   await ensureAttendanceLogColumn('biometric_user_hash', 'CHAR(64) NULL');
   await ensureAttendanceLogColumn('biometric_user_id_encrypted', 'TEXT NULL');
+  await ensureAttendanceLogColumn('am_time_in', 'TIME NULL');
+  await ensureAttendanceLogColumn('am_time_out', 'TIME NULL');
+  await ensureAttendanceLogColumn('pm_time_in', 'TIME NULL');
+  await ensureAttendanceLogColumn('pm_time_out', 'TIME NULL');
   await ensureAttendanceLogColumn('device_id', 'INT NULL');
   await ensureAttendanceLogColumn(
     'verification_status',
@@ -504,7 +513,7 @@ async function recordBiometricAttendance(req, res, options = {}) {
     }
     const mapping = mappings[0];
 
-    const attendancePolicy = await getActiveAttendancePolicy(pool, scan.date);
+    const attendancePolicy = await getActiveAttendancePolicy(pool, scan.date, { employee_id: employeeId });
     const duplicateWindowSeconds = attendancePolicy.duplicate_scan_window_seconds;
     const [recent] = await pool.execute(
       `SELECT scan_event_id
@@ -533,126 +542,107 @@ async function recordBiometricAttendance(req, res, options = {}) {
       [employeeId, scan.date]
     );
     const record = records[0] || null;
-    let isAutoTimeOutUpdate = false;
-
-    if (scanType === 'AUTO') {
-      if (!record?.time_in) {
-        scanType = 'TIME_IN';
-      } else if (!record.time_out) {
-        if (!isAutoTimeOutEligible(scan.time, attendancePolicy)) {
-          const attendanceId = record.attendance_id;
-          const payload = {
-            employee_id: employeeId,
-            device_id: deviceReference,
-            scan_type: 'AUTO',
-            scan_time: scan.dateTime,
-            verification_score: score,
-          };
-          const payloadHash = sha256(canonicalJson(payload));
-          const idempotencyKey = sha256(`${device.device_id}:${employeeId}:${scan.dateTime}:AUTO:${payloadHash}`);
-          await conn.execute(
-            `INSERT INTO biometric_scan_event
-               (external_event_id, idempotency_key, device_id, employee_id, biometric_user_hash,
-                biometric_user_id_encrypted, scan_timestamp, attendance_type, verification_score,
-                verification_status, attendance_id, payload_hash, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, 'VALIDATED', ?, ?, ?)`,
-            [
-              cleanText(req.body.external_event_id, 190) || null,
-              idempotencyKey,
-              device.device_id,
-              employeeId,
-              mapping.biometric_user_hash,
-              mapping.biometric_user_id_encrypted,
-              scan.dateTime,
-              score,
-              attendanceId,
-              payloadHash,
-              'Intermediate biometric scan before scheduled time-out; attendance unchanged.',
-            ]
-          );
-          await conn.execute(
-            `UPDATE biometric_device
-                SET last_sync_at = NOW(), last_success_at = NOW(), last_error_message = NULL
-              WHERE device_id = ?`,
-            [device.device_id]
-          );
-          await conn.commit();
-          biometricStep(5, 'Intermediate AUTO scan accepted without changing attendance', {
-            employeeId,
-            attendanceId,
-            scanTime: scan.dateTime,
-            workEndTime: attendancePolicy.work_end_time,
-          });
-          await writeBiometricAudit(req, employeeId, 'INTERMEDIATE BIOMETRIC SCAN IGNORED', null, {
-            scanType: 'AUTO',
-            scanTime: scan.dateTime,
-            deviceReference,
-            attendanceId,
-            reason: 'Scan occurred before configured work_end_time.',
-          });
-          return res.json({
-            message: 'Intermediate biometric scan recorded; attendance time-out unchanged.',
-            action: 'INTERMEDIATE_SCAN',
-            attendance_id: attendanceId,
-            employee: {
-              id: employee.id,
-              employee_code: employee.employee_code,
-              name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
-            },
-            device_id: deviceReference,
-            scan_time: scan.dateTime,
-            verification_score: score,
-            result: record.verification_status || 'PENDING_VALIDATION',
-          });
-        }
-        scanType = 'TIME_OUT';
-      } else if (isAutoTimeOutEligible(scan.time, attendancePolicy) && isLaterTime(scan.time, record.time_out)) {
-        scanType = 'TIME_OUT';
-        isAutoTimeOutUpdate = true;
-      } else {
-        scanType = 'DUPLICATE';
-      }
-    }
+    const punch = classifyDtrPunch(record, scan.time, attendancePolicy, scanType);
+    scanType = punch.attendanceType || scanType;
     let attendanceId = record?.attendance_id || null;
     biometricStep(5, 'Attendance action determined', {
       employeeId,
       attendanceId: attendanceId || null,
       scanType,
       existingRecord: !!record,
-      isAutoTimeOutUpdate,
+      dtrSlot: punch.slot || null,
+      punchStatus: punch.status,
     });
 
-    if (scanType === 'DUPLICATE') {
-      await conn.rollback();
-      biometricStep(5, 'Duplicate attendance rejected after completed time-in/time-out', { employeeId, attendanceId: record?.attendance_id });
-      await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC SCAN REJECTED', null, { scanTime: scan.dateTime, reason: 'Attendance already has time-in and time-out.' });
-      return res.status(409).json({ error: 'Attendance already has time-in and time-out for today.' });
+    if (punch.status === 'intermediate') {
+      const payload = {
+        employee_id: employeeId,
+        device_id: deviceReference,
+        scan_type: 'AUTO',
+        scan_time: scan.dateTime,
+        verification_score: score,
+      };
+      const payloadHash = sha256(canonicalJson(payload));
+      const idempotencyKey = sha256(`${device.device_id}:${employeeId}:${scan.dateTime}:AUTO:${payloadHash}`);
+      await conn.execute(
+        `INSERT INTO biometric_scan_event
+           (external_event_id, idempotency_key, device_id, employee_id, biometric_user_hash,
+            biometric_user_id_encrypted, scan_timestamp, attendance_type, verification_score,
+            verification_status, attendance_id, payload_hash, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'AUTO', ?, 'VALIDATED', ?, ?, ?)`,
+        [
+          cleanText(req.body.external_event_id, 190) || null,
+          idempotencyKey,
+          device.device_id,
+          employeeId,
+          mapping.biometric_user_hash,
+          mapping.biometric_user_id_encrypted,
+          scan.dateTime,
+          score,
+          attendanceId,
+          payloadHash,
+          'Intermediate biometric scan; DTR attendance unchanged.',
+        ]
+      );
+      await conn.execute(
+        `UPDATE biometric_device
+            SET last_sync_at = NOW(), last_success_at = NOW(), last_error_message = NULL
+          WHERE device_id = ?`,
+        [device.device_id]
+      );
+      await conn.commit();
+      biometricStep(5, 'Intermediate AUTO scan accepted without changing attendance', {
+        employeeId,
+        attendanceId,
+        scanTime: scan.dateTime,
+      });
+      await writeBiometricAudit(req, employeeId, 'INTERMEDIATE BIOMETRIC SCAN IGNORED', null, {
+        scanType: 'AUTO',
+        scanTime: scan.dateTime,
+        deviceReference,
+        attendanceId,
+      });
+      return res.json({
+        message: 'Intermediate biometric scan recorded; DTR unchanged.',
+        action: 'INTERMEDIATE_SCAN',
+        attendance_id: attendanceId,
+        employee: {
+          id: employee.id,
+          employee_code: employee.employee_code,
+          name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+        },
+        device_id: deviceReference,
+        scan_time: scan.dateTime,
+        verification_score: score,
+        result: record?.verification_status || 'PENDING_VALIDATION',
+      });
     }
 
-    if (scanType === 'TIME_IN' && record?.time_in) {
+    if (punch.status === 'duplicate') {
       await conn.rollback();
-      await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC TIME_IN REJECTED', null, { scanTime: scan.dateTime });
-      return res.status(409).json({ error: 'A TIME_IN record already exists for this shift.' });
-    }
-    if (scanType === 'TIME_OUT' && record?.time_out && !isAutoTimeOutUpdate) {
-      await conn.rollback();
-      await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC TIME_OUT REJECTED', null, { scanTime: scan.dateTime });
-      return res.status(409).json({ error: 'A TIME_OUT record already exists for this shift.' });
+      biometricStep(5, 'Duplicate DTR punch rejected', { employeeId, attendanceId: record?.attendance_id, slot: punch.slot });
+      await writeBiometricAudit(req, employeeId, 'DUPLICATE BIOMETRIC SCAN REJECTED', null, { scanTime: scan.dateTime, reason: 'DTR punch already exists.', slot: punch.slot });
+      return res.status(409).json({ error: 'DTR punch already exists for this employee today.' });
     }
 
     if (!record) {
-      const status = scanType === 'TIME_IN' ? getAttendanceStatusForTimeIn(scan.time, attendancePolicy) : 'Incomplete';
-      const verificationStatus = getInitialVerificationStatus(scanType, attendancePolicy, { missingTimeIn: scanType === 'TIME_OUT' });
+      const next = dtrUpdateValues(null, punch.slot, scan.time);
+      const status = next.time_in ? getAttendanceStatusForTimeIn(next.time_in, attendancePolicy) : 'Incomplete';
+      const verificationStatus = getInitialVerificationStatus(scanType, attendancePolicy, { missingTimeIn: !next.time_in });
       const [created] = await conn.execute(
         `INSERT INTO attendance_log
-           (employee_id, date, time_in, time_out, status, biometric_user_hash,
+           (employee_id, date, time_in, time_out, am_time_in, am_time_out, pm_time_in, pm_time_out, status, biometric_user_hash,
             biometric_user_id_encrypted, device_id, verification_status, source, first_scan_at, last_scan_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'BIOMETRIC_API', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BIOMETRIC_API', ?, ?)`,
         [
           employeeId,
           scan.date,
-          scanType === 'TIME_IN' ? scan.time : null,
-          scanType === 'TIME_OUT' ? scan.time : null,
+          next.time_in,
+          next.time_out,
+          next.am_time_in,
+          next.am_time_out,
+          next.pm_time_in,
+          next.pm_time_out,
           status,
           mapping.biometric_user_hash,
           mapping.biometric_user_id_encrypted,
@@ -663,42 +653,30 @@ async function recordBiometricAttendance(req, res, options = {}) {
         ]
       );
       attendanceId = created.insertId;
-    } else if (scanType === 'TIME_IN') {
+    } else {
+      const next = dtrUpdateValues(record, punch.slot, scan.time);
       await conn.execute(
         `UPDATE attendance_log
-            SET time_in = ?, status = ?, biometric_user_hash = ?,
+            SET time_in = ?, time_out = ?,
+                am_time_in = ?, am_time_out = ?, pm_time_in = ?, pm_time_out = ?,
+                status = ?, biometric_user_hash = ?,
                 biometric_user_id_encrypted = ?, device_id = ?, source = 'BIOMETRIC_API',
                 verification_status = ?,
                 first_scan_at = COALESCE(first_scan_at, ?), last_scan_at = ?
           WHERE attendance_id = ?`,
         [
-          scan.time,
-          getAttendanceStatusForTimeIn(scan.time, attendancePolicy),
+          next.time_in,
+          next.time_out,
+          next.am_time_in,
+          next.am_time_out,
+          next.pm_time_in,
+          next.pm_time_out,
+          next.time_in ? getAttendanceStatusForTimeIn(next.time_in, attendancePolicy) : 'Incomplete',
           mapping.biometric_user_hash,
           mapping.biometric_user_id_encrypted,
           device.device_id,
           getInitialVerificationStatus(scanType, attendancePolicy),
           scan.dateTime,
-          scan.dateTime,
-          attendanceId,
-        ]
-      );
-    } else {
-      await conn.execute(
-        `UPDATE attendance_log
-            SET time_out = ?, biometric_user_hash = COALESCE(biometric_user_hash, ?),
-                biometric_user_id_encrypted = COALESCE(biometric_user_id_encrypted, ?),
-                device_id = ?, source = 'BIOMETRIC_API',
-                verification_status = CASE WHEN time_in IS NULL THEN 'NEEDS_REVIEW' ELSE ? END,
-                status = CASE WHEN time_in IS NULL THEN 'Incomplete' ELSE status END,
-                last_scan_at = ?
-          WHERE attendance_id = ?`,
-        [
-          scan.time,
-          mapping.biometric_user_hash,
-          mapping.biometric_user_id_encrypted,
-          device.device_id,
-          getInitialVerificationStatus(scanType, attendancePolicy),
           scan.dateTime,
           attendanceId,
         ]
