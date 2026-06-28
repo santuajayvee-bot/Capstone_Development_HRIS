@@ -21,6 +21,7 @@ function normalizePerformanceBatchSize(value) {
 function operationLabel(operationName) {
   const labels = {
     payroll_generation: 'Payroll generation',
+    payroll_generation_preview: 'Payroll generation preview',
     salary_calculation_save: 'Salary calculation save',
     salary_calculation_submit: 'Salary calculation submit',
     salary_calculation_submit_for_approval: 'Salary calculation submit for approval',

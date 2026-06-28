@@ -1516,7 +1516,7 @@ function payrollDate(value, label = 'Date') {
 function weeklyPayrollKey(startDate, endDate) {
   const start = payrollDate(startDate, 'Payroll start date');
   const end = payrollDate(endDate, 'Payroll end date');
-  return `${start.slice(0, 7)}-W${payrollWeekFromDate(end)}`;
+  return `${start.slice(0, 7)}-W${payrollWeekFromDate(start)}`;
 }
 
 function payrollPeriodFromRequest(body = {}) {
@@ -7545,6 +7545,7 @@ async function payrollGenerationEmployeeRows(pool, body, payTypeFilter) {
 
   const [employees] = await pool.execute(`
     SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position, e.department_id,
+           e.employment_type,
            e.hiring_type,
            COALESCE(NULLIF(e.agency_name, ''), NULL) AS agency_name,
            e.wage_type_id, w.name AS wage_type, d.name AS department
@@ -7555,6 +7556,281 @@ async function payrollGenerationEmployeeRows(pool, body, payTypeFilter) {
     ORDER BY e.employee_code, e.id
   `, employeeParams);
   return employees;
+}
+
+function payrollPreviewResponse({ period, employees, rows, skipped }) {
+  return {
+    preview: true,
+    payroll_period: period.month_year,
+    period_start: period.start,
+    period_end: period.end,
+    totalEmployees: employees.length,
+    employeesProcessable: rows.length,
+    skippedCount: skipped.length,
+    skipped,
+    rows,
+    totals: {
+      employees: rows.length,
+      gross_pay: roundMoney(rows.reduce((sum, row) => sum + numeric(row.gross_pay), 0)),
+      allowances: roundMoney(rows.reduce((sum, row) => sum + numeric(row.allowances), 0)),
+      deductions: roundMoney(rows.reduce((sum, row) => sum + numeric(row.deductions), 0)),
+      net_pay: roundMoney(rows.reduce((sum, row) => sum + numeric(row.net_pay), 0))
+    },
+    message: `Preview ready for ${period.period_label}. ${rows.length} employee(s) processable, ${skipped.length} skipped.`
+  };
+}
+
+function payrollInPlaceholders(values) {
+  return values.map(() => '?').join(', ');
+}
+
+async function loadPreviewDuplicateMap(pool, payrollRunId, payrollRunStatus, employeeIds) {
+  if (!payrollRunId || !employeeIds.length) return new Map();
+  const [rows] = await pool.execute(`
+    SELECT employee_id, id, status
+      FROM salary_calculations
+     WHERE payroll_run_id = ?
+       AND employee_id IN (${payrollInPlaceholders(employeeIds)})
+       AND status <> 'Superseded'
+  `, [payrollRunId, ...employeeIds]);
+  const duplicates = new Map();
+  for (const row of rows) {
+    const isLocked = ['Approved', 'Finalized', 'Paid', 'Released', 'Locked'].includes(row.status)
+      || ['Approved', 'Finalized', 'Paid', 'Released', 'Locked'].includes(payrollRunStatus);
+    duplicates.set(Number(row.employee_id), {
+      existing_salary_calculation_id: row.id,
+      existing_payroll_status: row.status || null,
+      existing_payroll_run_status: payrollRunStatus,
+      reason: `Payroll record already exists for this period (${row.status || 'Existing'}).`,
+      resolution: isLocked
+        ? 'New HR-validated source records remain unconsumed. Use the authorized payroll correction or adjustment flow.'
+        : 'Open the existing Payroll Record and recalculate it while it is still Draft or For Review.'
+    });
+  }
+  return duplicates;
+}
+
+function addPiecePreviewSource(sourceMap, employeeId, grossPay, quantity, pieceRate) {
+  const id = Number(employeeId);
+  if (!id) return;
+  const current = sourceMap.get(id) || { total: 0, quantity: 0, productionValue: 0, records: 0 };
+  current.total += numeric(grossPay);
+  current.quantity += numeric(quantity);
+  current.productionValue += numeric(quantity) * numeric(pieceRate);
+  current.records += 1;
+  sourceMap.set(id, current);
+}
+
+async function loadPerPiecePreviewSources(pool, employeeIds, period) {
+  const sourceMap = new Map();
+  if (!employeeIds.length) return sourceMap;
+  const placeholders = payrollInPlaceholders(employeeIds);
+
+  const [outputs] = await pool.execute(`
+    SELECT employee_id, quantity_produced, piece_rate, final_gross_pay
+      FROM payroll_production_outputs
+     WHERE employee_id IN (${placeholders})
+       AND output_date BETWEEN ? AND ?
+       AND status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
+       AND payroll_run_id IS NULL
+  `, [...employeeIds, period.start, period.end]);
+  for (const row of outputs) {
+    addPiecePreviewSource(sourceMap, row.employee_id, row.final_gross_pay, row.quantity_produced, row.piece_rate);
+  }
+
+  const [pairs] = await pool.execute(`
+    SELECT worker1_employee_id, worker2_employee_id, quantity_produced, piece_rate,
+           worker1_earnings, worker2_earnings
+      FROM payroll_production_pairs
+     WHERE (worker1_employee_id IN (${placeholders}) OR worker2_employee_id IN (${placeholders}))
+       AND production_date BETWEEN ? AND ?
+       AND status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
+       AND payroll_run_id IS NULL
+  `, [...employeeIds, ...employeeIds, period.start, period.end]);
+  for (const row of pairs) {
+    if (employeeIds.includes(Number(row.worker1_employee_id))) {
+      addPiecePreviewSource(sourceMap, row.worker1_employee_id, row.worker1_earnings, row.quantity_produced, row.piece_rate);
+    }
+    if (employeeIds.includes(Number(row.worker2_employee_id))) {
+      addPiecePreviewSource(sourceMap, row.worker2_employee_id, row.worker2_earnings, row.quantity_produced, row.piece_rate);
+    }
+  }
+
+  const [dailyOutputs] = await pool.execute(`
+    SELECT s.employee_id, o.quantity_produced, o.rate_per_piece, s.share_amount
+      FROM piece_rate_outputs o
+      JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+     WHERE s.employee_id IN (${placeholders})
+       AND o.output_date BETWEEN ? AND ?
+       AND o.status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
+       AND o.payroll_run_id IS NULL
+  `, [...employeeIds, period.start, period.end]);
+  for (const row of dailyOutputs) {
+    addPiecePreviewSource(sourceMap, row.employee_id, row.share_amount, row.quantity_produced, row.rate_per_piece);
+  }
+
+  for (const value of sourceMap.values()) {
+    value.total = roundMoney(value.total);
+    value.average_rate = value.quantity > 0 ? roundMoney(value.productionValue / value.quantity) : 0;
+  }
+  return sourceMap;
+}
+
+async function loadEmployeesWithActiveDeductions(pool, employeeIds, calculationDate) {
+  if (!employeeIds.length) return new Set();
+  const tableExists = await payrollTableExists(pool, 'employee_deduction_accounts');
+  if (!tableExists) return new Set();
+  const [rows] = await pool.execute(`
+    SELECT DISTINCT employee_id
+      FROM employee_deduction_accounts
+     WHERE employee_id IN (${payrollInPlaceholders(employeeIds)})
+       AND status = 'Active'
+       AND remaining_balance > 0
+       AND start_date <= ?
+       AND (end_date IS NULL OR end_date >= ?)
+  `, [...employeeIds, calculationDate, calculationDate]);
+  return new Set(rows.map(row => Number(row.employee_id)));
+}
+
+async function hasSelectedEmployeeDeductionSettings(pool, calculationDate) {
+  const tableExists = await payrollTableExists(pool, 'payroll_deduction_settings');
+  if (!tableExists) return false;
+  const [rows] = await pool.execute(`
+    SELECT id
+      FROM payroll_deduction_settings
+     WHERE is_active = 1
+       AND effective_date <= ?
+       AND applicability_scope = 'Selected Employee'
+     LIMIT 1
+  `, [calculationDate]);
+  return rows.length > 0;
+}
+
+function previewDeductionCacheKey(emp, grossPay, deductionContext, includeEmployeeId) {
+  const context = payrollDeductionContext(deductionContext);
+  return [
+    includeEmployeeId ? emp.id : 'shared',
+    emp.department_id || '',
+    String(emp.employment_type || '').toLowerCase(),
+    normalizePayrollWageType(emp.wage_type),
+    roundMoney(grossPay),
+    context.payroll_period || '',
+    context.payroll_frequency || '',
+    context.payroll_start_date || '',
+    context.payroll_end_date || '',
+    context.calculation_date || '',
+    roundMoney(context.statutory_base_pay || grossPay)
+  ].join('|');
+}
+
+async function computePreviewPayrollDeductions(pool, cache, emp, grossPay, deductionContext, options = {}) {
+  const includeEmployeeId = options.employeesWithActiveDeductions?.has(Number(emp.id))
+    || options.hasSelectedEmployeeDeductionSettings;
+  const key = previewDeductionCacheKey(emp, grossPay, deductionContext, includeEmployeeId);
+  if (cache.has(key)) return cache.get(key);
+  const value = await computePayrollDeductions(pool, emp.id, grossPay, deductionContext);
+  cache.set(key, value);
+  return value;
+}
+
+async function buildPerPiecePayrollGenerationPreview(pool, {
+  employees,
+  period,
+  deductionContext,
+  payrollRunId,
+  payrollRunStatus
+}) {
+  const employeeIds = employees.map(emp => Number(emp.id)).filter(Boolean);
+  const [
+    duplicateMap,
+    pieceSourceMap,
+    employeesWithActiveDeductions,
+    selectedEmployeeDeductionSettings
+  ] = await Promise.all([
+    loadPreviewDuplicateMap(pool, payrollRunId, payrollRunStatus, employeeIds),
+    loadPerPiecePreviewSources(pool, employeeIds, period),
+    loadEmployeesWithActiveDeductions(pool, employeeIds, deductionContext.calculation_date || period.end),
+    hasSelectedEmployeeDeductionSettings(pool, deductionContext.calculation_date || period.end)
+  ]);
+  const rows = [];
+  const skipped = [];
+  const deductionCache = new Map();
+  const allowanceCache = new Map();
+
+  for (const emp of employees) {
+    const normalizedWageType = normalizePayrollWageType(emp.wage_type);
+    const skipEmployee = (reason, details = {}) => {
+      skipped.push({
+        employee_id: emp.id,
+        employee_code: emp.employee_code,
+        employee_name: payrollEmployeeDisplayName(emp),
+        department: emp.department || '-',
+        pay_type: normalizedWageType || emp.wage_type || '-',
+        reason,
+        ...details
+      });
+    };
+
+    const duplicate = duplicateMap.get(Number(emp.id));
+    if (duplicate) {
+      skipEmployee(duplicate.reason, {
+        existing_salary_calculation_id: duplicate.existing_salary_calculation_id,
+        existing_payroll_status: duplicate.existing_payroll_status,
+        existing_payroll_run_status: duplicate.existing_payroll_run_status,
+        resolution: duplicate.resolution
+      });
+      continue;
+    }
+
+    const piecePayroll = pieceSourceMap.get(Number(emp.id));
+    if (!piecePayroll?.records) {
+      skipEmployee('No approved unpaid piece-rate output exists for this payroll period.');
+      continue;
+    }
+
+    const allowanceKey = `${roundMoney(piecePayroll.total)}|${period.end}`;
+    let allowances = allowanceCache.get(allowanceKey);
+    if (!allowances) {
+      allowances = await computeConfiguredAllowances(pool, piecePayroll.total, period.end);
+      allowanceCache.set(allowanceKey, allowances);
+    }
+
+    const totalEarning = piecePayroll.total + allowances.total;
+    const payrollDeductions = await computePreviewPayrollDeductions(pool, deductionCache, emp, totalEarning, {
+      ...deductionContext,
+      payroll_type: normalizedWageType,
+      statutory_base_pay: totalEarning
+    }, {
+      employeesWithActiveDeductions,
+      hasSelectedEmployeeDeductionSettings: selectedEmployeeDeductionSettings
+    });
+    const totalDeduction = payrollDeductions.total;
+
+    rows.push({
+      employee_id: emp.id,
+      employee_code: emp.employee_code,
+      employee_name: payrollEmployeeDisplayName(emp),
+      department: emp.department,
+      pay_type: normalizedWageType,
+      payroll_period: period.period_label,
+      approved_days_worked: 0,
+      approved_hours_worked: 0,
+      approved_output_quantity: piecePayroll.quantity,
+      approved_logistics_trips: 0,
+      gross_pay: roundMoney(totalEarning),
+      allowances: roundMoney(allowances.total),
+      bonuses: 0,
+      deductions: roundMoney(totalDeduction),
+      statutory_deductions: roundMoney(payrollDeductions.total),
+      attendance_deductions: 0,
+      net_pay: roundMoney(totalEarning - totalDeduction),
+      payroll_status: 'Preview',
+      processed_by: '-',
+      date_processed: null
+    });
+  }
+
+  return payrollPreviewResponse({ period, employees, rows, skipped });
 }
 
 async function buildPayrollGenerationPreview(pool, body = {}) {
@@ -7577,14 +7853,28 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
   const deductionContext = payrollDeductionContextFromPeriod(period, {
     payroll_frequency: body.payroll_frequency || body.frequency
   });
+  const performanceBatchSize = normalizePerformanceBatchSize(body.performance_batch_size || body.benchmark_employee_limit);
   const payrollPolicy = await getPayrollPolicy(pool);
-  const employees = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
+  const employeeRows = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
+  const employees = performanceBatchSize ? employeeRows.slice(0, performanceBatchSize) : employeeRows;
   const [existingRuns] = await pool.execute('SELECT id, status FROM payroll_runs WHERE month_year = ? LIMIT 1', [period.month_year]);
   const payrollRunId = existingRuns[0]?.id || null;
   const payrollRunStatus = existingRuns[0]?.status || null;
 
   const rows = [];
   const skipped = [];
+  const allPerPiece = employees.length > 0
+    && employees.every(emp => normalizePayrollWageType(emp.wage_type) === 'Per-Piece');
+  if (allPerPiece) {
+    const fastPreview = await buildPerPiecePayrollGenerationPreview(pool, {
+      employees,
+      period,
+      deductionContext,
+      payrollRunId,
+      payrollRunStatus
+    });
+    return fastPreview;
+  }
   for (const emp of employees) {
     const normalizedWageType = normalizePayrollWageType(emp.wage_type);
     const skipEmployee = (reason, details = {}) => {
@@ -7725,34 +8015,46 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
     });
   }
 
-  return {
-    preview: true,
-    payroll_period: period.month_year,
-    period_start: period.start,
-    period_end: period.end,
-    totalEmployees: employees.length,
-    employeesProcessable: rows.length,
-    skippedCount: skipped.length,
-    skipped,
-    rows,
-    totals: {
-      employees: rows.length,
-      gross_pay: roundMoney(rows.reduce((sum, row) => sum + numeric(row.gross_pay), 0)),
-      allowances: roundMoney(rows.reduce((sum, row) => sum + numeric(row.allowances), 0)),
-      deductions: roundMoney(rows.reduce((sum, row) => sum + numeric(row.deductions), 0)),
-      net_pay: roundMoney(rows.reduce((sum, row) => sum + numeric(row.net_pay), 0))
-    },
-    message: `Preview ready for ${period.period_label}. ${rows.length} employee(s) processable, ${skipped.length} skipped.`
-  };
+  return payrollPreviewResponse({ period, employees, rows, skipped });
 }
 
 router.post('/generate/preview', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
+  const pool = require('../config/db');
+  const payrollPerformance = startPerformanceTimer('payroll_generation_preview', {
+    payrollPeriod: req.body?.payroll_period || req.body?.month_year || req.body?.period || null,
+  });
+  let employeeCountForPerformance = 0;
+  let payrollPeriodForPerformance = req.body?.payroll_period || req.body?.month_year || req.body?.period || null;
   try {
-    const pool = require('../config/db');
     const preview = await buildPayrollGenerationPreview(pool, req.body || {});
+    employeeCountForPerformance = preview.totalEmployees || 0;
+    payrollPeriodForPerformance = preview.payroll_period || payrollPeriodForPerformance;
+    const performanceResult = await completePerformanceLog(pool, payrollPerformance, {
+      employeesProcessed: employeeCountForPerformance,
+      payrollPeriod: payrollPeriodForPerformance,
+      status: 'success',
+      metadata: {
+        processable_employees: preview.employeesProcessable || 0,
+        skipped_employees: preview.skippedCount || 0,
+      },
+    });
+    preview.performance = performanceResult ? {
+      operation_name: performanceResult.operationName,
+      employees_processed: performanceResult.employeesProcessed,
+      payroll_period: performanceResult.payrollPeriod,
+      start_time: performanceResult.startTime.toISOString(),
+      end_time: performanceResult.endTime.toISOString(),
+      duration_ms: performanceResult.durationMs,
+      status: performanceResult.status,
+    } : null;
     res.json(preview);
   } catch (err) {
     console.error('Error previewing payroll generation:', err);
+    await completePerformanceLog(pool, payrollPerformance, {
+      employeesProcessed: employeeCountForPerformance,
+      payrollPeriod: payrollPeriodForPerformance,
+      status: 'failed',
+    });
     const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
     res.status(status).json({ error: status === 400 ? err.message : 'Failed to preview payroll generation.' });
   }

@@ -29,7 +29,7 @@ async function run() {
               status,
               metadata_json
          FROM performance_logs
-        WHERE operation_name = 'payroll_generation'
+        WHERE operation_name IN ('payroll_generation', 'payroll_generation_preview')
           AND (? = '' OR payroll_period = ?)
         ORDER BY performance_log_id DESC
         LIMIT ${limit}`,
