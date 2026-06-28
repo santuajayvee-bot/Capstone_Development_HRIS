@@ -6,7 +6,7 @@ const REPORT_OUTPUTS = [
   {
     id: 'daily-attendance',
     name: 'Attendance DTR',
-    description: 'Daily time record for one selected employee and one selected date.',
+    description: 'Daily time record for one selected employee and selected date range.',
     formats: ['pdf']
   },
   {
@@ -373,7 +373,8 @@ function openReportOptionsModal(reportId, action, trigger = null) {
   const requiresEmployee = ['daily-attendance', 'employee-payslip'].includes(reportId);
   const isAttendanceDtr = reportId === 'daily-attendance';
   const showRegistry = reportId === 'payroll-register';
-  const dtrDate = dateFrom || dateTo || new Date().toISOString().slice(0, 10);
+  const dtrDateFrom = dateFrom || new Date().toISOString().slice(0, 10);
+  const dtrDateTo = dateTo || dtrDateFrom;
 
   const modal = document.createElement('div');
   modal.id = 'report-options-modal';
@@ -390,8 +391,11 @@ function openReportOptionsModal(reportId, action, trigger = null) {
       <div class="report-modal-body">
         <div class="report-options-grid">
           ${isAttendanceDtr ? `
-            <label>DTR Date
-              <input id="report-modal-dtr-date" class="search-input" type="date" value="${escapeAttr(dtrDate)}">
+            <label>DTR Date From
+              <input id="report-modal-date-from" class="search-input" type="date" value="${escapeAttr(dtrDateFrom)}">
+            </label>
+            <label>DTR Date To
+              <input id="report-modal-date-to" class="search-input" type="date" value="${escapeAttr(dtrDateTo)}">
             </label>
           ` : `
             <label>Date From
@@ -459,9 +463,8 @@ function renderReportModalEmployeeOptions() {
 }
 
 function reportModalFilters(extra = {}) {
-  const dtrDate = valueOf('report-modal-dtr-date');
-  const dateFrom = dtrDate || valueOf('report-modal-date-from');
-  const dateTo = dtrDate || valueOf('report-modal-date-to');
+  const dateFrom = valueOf('report-modal-date-from');
+  const dateTo = valueOf('report-modal-date-to');
   return {
     date_from: dateFrom,
     date_to: dateTo,
@@ -489,8 +492,12 @@ async function confirmReportOptionsModal() {
       : 'Select one employee before generating a payslip.');
     return;
   }
-  if (reportId === 'daily-attendance' && !/^\d{4}-\d{2}-\d{2}$/.test(filters.date_from || '')) {
-    alert('Select one DTR date before generating an attendance DTR.');
+  if (reportId === 'daily-attendance' && (!/^\d{4}-\d{2}-\d{2}$/.test(filters.date_from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(filters.date_to || ''))) {
+    alert('Select a DTR date range before generating an attendance DTR.');
+    return;
+  }
+  if (reportId === 'daily-attendance' && filters.date_from > filters.date_to) {
+    alert('DTR Date From must be before or equal to DTR Date To.');
     return;
   }
   if (reportId === 'employee-payslip' && !filters.payroll_period) {
