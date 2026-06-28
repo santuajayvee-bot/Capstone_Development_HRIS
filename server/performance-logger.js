@@ -9,15 +9,6 @@ function startPerformanceTimer(operationName, initial = {}) {
   };
 }
 
-function normalizePerformanceBatchSize(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const size = Number(value);
-  if (![10, 50, 100].includes(size)) {
-    throw new Error('performance_batch_size must be one of 10, 50, or 100.');
-  }
-  return size;
-}
-
 function operationLabel(operationName) {
   const labels = {
     payroll_generation: 'Payroll generation',
@@ -91,6 +82,5 @@ async function completePerformanceLog(db, timer, details = {}) {
 
 module.exports = {
   completePerformanceLog,
-  normalizePerformanceBatchSize,
   startPerformanceTimer,
 };

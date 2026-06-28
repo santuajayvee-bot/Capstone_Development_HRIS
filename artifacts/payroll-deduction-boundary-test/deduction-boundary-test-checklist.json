@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-24T09:30:47.415Z",
+  "generated_at": "2026-06-28T05:35:55.583Z",
   "test_mark": "DEDUCTION_BOUNDARY_TEST_20260624",
   "department": "TEST Deduction Boundary QA",
   "period": {
@@ -36,33 +36,33 @@
       "schedule": "Every Payroll",
       "proration_mode": "Calendar-Based Payroll Date Range",
       "fixed_divisor": null,
-      "effective_date": "2026-06-23"
+      "effective_date": "2026-05-31"
     },
     {
-      "id": 18,
+      "id": 23,
       "name": "Pag-IBIG",
       "type": "Percentage",
-      "rate": 0,
-      "floor": 0,
-      "ceiling": 0,
+      "rate": 2,
+      "floor": 1500,
+      "ceiling": 10000,
       "cap": 200,
       "schedule": "Every Payroll",
-      "proration_mode": "Fixed Divisor",
-      "fixed_divisor": 4,
-      "effective_date": "2026-06-23"
+      "proration_mode": "Calendar-Based Payroll Date Range",
+      "fixed_divisor": 0,
+      "effective_date": "2026-05-31"
     },
     {
-      "id": 17,
+      "id": 21,
       "name": "PhilHealth",
       "type": "Percentage",
-      "rate": 0,
-      "floor": 0,
-      "ceiling": 0,
-      "cap": 0,
+      "rate": 2.5,
+      "floor": 10000,
+      "ceiling": 100000,
+      "cap": 2500,
       "schedule": "Every Payroll",
-      "proration_mode": "Fixed Divisor",
-      "fixed_divisor": 4,
-      "effective_date": "2026-06-23"
+      "proration_mode": "Calendar-Based Payroll Date Range",
+      "fixed_divisor": 0,
+      "effective_date": "2026-05-31"
     },
     {
       "id": 4,
@@ -81,15 +81,15 @@
   "boundary_profile": {
     "divisor": 4,
     "floor": 10000,
-    "ceiling": 80000,
-    "floor_source": "fallback reference because active floor is zero/unset",
-    "ceiling_source": "fallback reference because active ceiling is zero/unset",
+    "ceiling": 100000,
+    "floor_source": "active deduction settings",
+    "ceiling_source": "active deduction settings",
     "weeklyTargets": {
       "below_floor": 1500,
       "above_floor": 3125,
       "above_floor_high": 5000,
-      "near_ceiling": 17000,
-      "above_ceiling": 25000
+      "near_ceiling": 21250,
+      "above_ceiling": 31250
     }
   },
   "employees": [
@@ -103,20 +103,24 @@
       "late_minutes": 0,
       "undertime_minutes": 0,
       "expected_attendance_deduction_preview": 0,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
           "monthlyBase": 6000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 120,
+          "payrollDeduction": 30
         },
         {
           "name": "PhilHealth",
-          "monthlyBase": 6000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 250,
+          "payrollDeduction": 62.5
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -131,20 +135,24 @@
       "late_minutes": 0,
       "undertime_minutes": 0,
       "expected_attendance_deduction_preview": 0,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 12500,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 12500,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 312.5,
+          "payrollDeduction": 78.13
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -159,20 +167,24 @@
       "late_minutes": 0,
       "undertime_minutes": 0,
       "expected_attendance_deduction_preview": 0,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 20000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 20000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 500,
+          "payrollDeduction": 125
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -181,26 +193,30 @@
       "employee_code": "EMP-DB04",
       "segment": "Near ceiling",
       "attendance_case": "Present",
-      "daily_rate": 3400,
-      "weekly_gross_before_deductions": 17000,
-      "projected_monthly_base_at_profile_divisor": 68000,
+      "daily_rate": 4250,
+      "weekly_gross_before_deductions": 21250,
+      "projected_monthly_base_at_profile_divisor": 85000,
       "late_minutes": 0,
       "undertime_minutes": 0,
       "expected_attendance_deduction_preview": 0,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 68000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
-          "monthlyBase": 68000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 85000,
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 2125,
+          "payrollDeduction": 531.25
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -209,26 +225,30 @@
       "employee_code": "EMP-DB05",
       "segment": "Above ceiling",
       "attendance_case": "Present",
-      "daily_rate": 5000,
-      "weekly_gross_before_deductions": 25000,
-      "projected_monthly_base_at_profile_divisor": 100000,
+      "daily_rate": 6250,
+      "weekly_gross_before_deductions": 31250,
+      "projected_monthly_base_at_profile_divisor": 125000,
       "late_minutes": 0,
       "undertime_minutes": 0,
       "expected_attendance_deduction_preview": 0,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 100000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 100000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 2500,
+          "payrollDeduction": 625
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -242,21 +262,25 @@
       "projected_monthly_base_at_profile_divisor": 6000,
       "late_minutes": 30,
       "undertime_minutes": 0,
-      "expected_attendance_deduction_preview": 9.38,
+      "expected_attendance_deduction_preview": 12.5,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
           "monthlyBase": 6000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 120,
+          "payrollDeduction": 30
         },
         {
           "name": "PhilHealth",
-          "monthlyBase": 6000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 250,
+          "payrollDeduction": 62.5
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -270,21 +294,25 @@
       "projected_monthly_base_at_profile_divisor": 12500,
       "late_minutes": 45,
       "undertime_minutes": 30,
-      "expected_attendance_deduction_preview": 78.13,
+      "expected_attendance_deduction_preview": 84.64,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 12500,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 12500,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 312.5,
+          "payrollDeduction": 78.13
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -298,21 +326,25 @@
       "projected_monthly_base_at_profile_divisor": 20000,
       "late_minutes": 60,
       "undertime_minutes": 60,
-      "expected_attendance_deduction_preview": 218.75,
+      "expected_attendance_deduction_preview": 229.17,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 20000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 20000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 500,
+          "payrollDeduction": 125
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -321,26 +353,30 @@
       "employee_code": "EMP-DU04",
       "segment": "Near ceiling",
       "attendance_case": "Late + UT",
-      "daily_rate": 3400,
-      "weekly_gross_before_deductions": 17000,
-      "projected_monthly_base_at_profile_divisor": 68000,
+      "daily_rate": 4250,
+      "weekly_gross_before_deductions": 21250,
+      "projected_monthly_base_at_profile_divisor": 85000,
       "late_minutes": 90,
       "undertime_minutes": 45,
-      "expected_attendance_deduction_preview": 850,
+      "expected_attendance_deduction_preview": 1106.77,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 68000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
-          "monthlyBase": 68000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 85000,
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 2125,
+          "payrollDeduction": 531.25
         }
       ],
       "payroll_status_before_processing": "Source Ready"
@@ -349,26 +385,30 @@
       "employee_code": "EMP-DU05",
       "segment": "Above ceiling",
       "attendance_case": "Late + UT",
-      "daily_rate": 5000,
-      "weekly_gross_before_deductions": 25000,
-      "projected_monthly_base_at_profile_divisor": 100000,
+      "daily_rate": 6250,
+      "weekly_gross_before_deductions": 31250,
+      "projected_monthly_base_at_profile_divisor": 125000,
       "late_minutes": 120,
       "undertime_minutes": 60,
-      "expected_attendance_deduction_preview": 1718.75,
+      "expected_attendance_deduction_preview": 2213.54,
+      "attendance_policy_used": {
+        "grace_period_minutes": 10,
+        "late_apply_grace_period": true
+      },
       "percentage_deduction_preview_from_current_config": [
         {
           "name": "Pag-IBIG",
-          "monthlyBase": 100000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "monthlyBase": 10000,
+          "employeeShareRate": 2,
+          "monthlyAmountBeforeCap": 200,
+          "payrollDeduction": 50
         },
         {
           "name": "PhilHealth",
           "monthlyBase": 100000,
-          "employeeShareRate": 0,
-          "monthlyAmountBeforeCap": 0,
-          "payrollDeduction": 0
+          "employeeShareRate": 2.5,
+          "monthlyAmountBeforeCap": 2500,
+          "payrollDeduction": 625
         }
       ],
       "payroll_status_before_processing": "Source Ready"

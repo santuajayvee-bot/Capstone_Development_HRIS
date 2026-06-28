@@ -26,7 +26,6 @@ const { computePayrollHash } = require('./utils/payrollHash');
 const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 const {
   completePerformanceLog,
-  normalizePerformanceBatchSize,
   startPerformanceTimer,
 } = require('./performance-logger');
 const {
@@ -7853,10 +7852,8 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
   const deductionContext = payrollDeductionContextFromPeriod(period, {
     payroll_frequency: body.payroll_frequency || body.frequency
   });
-  const performanceBatchSize = normalizePerformanceBatchSize(body.performance_batch_size || body.benchmark_employee_limit);
   const payrollPolicy = await getPayrollPolicy(pool);
-  const employeeRows = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
-  const employees = performanceBatchSize ? employeeRows.slice(0, performanceBatchSize) : employeeRows;
+  const employees = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
   const [existingRuns] = await pool.execute('SELECT id, status FROM payroll_runs WHERE month_year = ? LIMIT 1', [period.month_year]);
   const payrollRunId = existingRuns[0]?.id || null;
   const payrollRunStatus = existingRuns[0]?.status || null;
@@ -8129,12 +8126,10 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
   let processedCount = 0;
   let selectedEmployeeCount = 0;
   let payrollPeriodForPerformance = req.body?.payroll_period || req.body?.month_year || req.body?.period || null;
-  let performanceBatchSize = null;
   try {
     connection = await pool.getConnection();
     await connection.beginTransaction();
     await ensurePieceRatePayrollSchema(connection);
-    performanceBatchSize = normalizePerformanceBatchSize(req.body.performance_batch_size || req.body.benchmark_employee_limit);
     const payTypeFilter = String(req.body.pay_type || req.body.payroll_type || '').trim();
     const period = {
       ...payrollPeriodFromRequest(req.body),
@@ -8200,7 +8195,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       WHERE ${employeeWhere.join(' AND ')}
       ORDER BY e.employee_code, e.id
     `, employeeParams);
-    const employees = performanceBatchSize ? employeeRows.slice(0, performanceBatchSize) : employeeRows;
+    const employees = employeeRows;
     selectedEmployeeCount = employees.length;
 
     let skippedCount = 0;
@@ -8528,7 +8523,6 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
         generated_employees: processedCount,
         selected_employees: selectedEmployeeCount,
         skipped_employees: skippedCount,
-        performance_batch_size: performanceBatchSize,
       },
     });
 
@@ -8565,7 +8559,6 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       metadata: {
         generated_employees: processedCount,
         selected_employees: selectedEmployeeCount,
-        performance_batch_size: performanceBatchSize,
       },
     });
     const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;

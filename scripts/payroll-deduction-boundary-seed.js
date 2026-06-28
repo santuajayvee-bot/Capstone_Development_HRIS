@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const argon2 = require('argon2');
 const pool = require('../config/db');
+const { getActiveAttendancePolicy } = require('../server/attendance-policy-engine');
 const { computeLateUndertimeDeductions } = require('../server/payroll-attendance-deductions');
 
 const PERIOD = {
@@ -366,22 +367,15 @@ async function seedAttendance(connection, employeeId, { late = 0, undertime = 0 
   return attendanceRows;
 }
 
-function attendanceDeductionPreview(attendanceRows, dailyRate) {
-  return computeLateUndertimeDeductions({
+async function attendanceDeductionPreview(connection, employeeId, attendanceRows, dailyRate) {
+  const policy = await getActiveAttendancePolicy(connection, PERIOD.end, { employee_id: employeeId });
+  const computed = computeLateUndertimeDeductions({
     attendanceRows,
     wageType: 'Daily',
     rate: dailyRate,
-    policy: {
-      standard_hours_per_day: PERIOD.standardHours,
-      grace_period_minutes: 15,
-      late_apply_grace_period: true,
-      count_late_for_payroll: true,
-      count_undertime_for_payroll: true,
-      late_deduction_method: 'auto_compute',
-      undertime_deduction_method: 'auto_compute',
-      work_start_time: '08:00:00',
-    },
+    policy,
   });
+  return { ...computed, policy };
 }
 
 function expectedPercentageDeduction(setting, weeklyGross, divisor) {
@@ -458,7 +452,7 @@ async function main() {
       });
       await createWageRate(connection, employeeId, wageTypeId, dailyRate);
       const attendanceRows = await seedAttendance(connection, employeeId, row);
-      const attendancePreview = attendanceDeductionPreview(attendanceRows, dailyRate);
+      const attendancePreview = await attendanceDeductionPreview(connection, employeeId, attendanceRows, dailyRate);
       const projectedMonthlyBase = money(weeklyGross * profile.divisor);
       const percentagePreviews = settings
         .filter(setting => String(setting.computation_type || '') === 'Percentage')
@@ -476,6 +470,10 @@ async function main() {
         late_minutes: Number(row.late || 0),
         undertime_minutes: Number(row.undertime || 0),
         expected_attendance_deduction_preview: attendancePreview.tardy_ut_deduction,
+        attendance_policy_used: {
+          grace_period_minutes: attendancePreview.policy?.grace_period_minutes,
+          late_apply_grace_period: attendancePreview.policy?.late_apply_grace_period,
+        },
         percentage_deduction_preview_from_current_config: percentagePreviews,
         payroll_status_before_processing: 'Source Ready',
       });
