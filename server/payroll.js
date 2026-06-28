@@ -24,6 +24,7 @@ const {
 const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
 const { computePayrollHash } = require('./utils/payrollHash');
 const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
+const { maskSensitiveValue } = require('./privacy-protection');
 const {
   completePerformanceLog,
   startPerformanceTimer,
@@ -300,6 +301,9 @@ function withPayrollEmployeeDisplay(row, options = {}) {
 
 async function logPayrollAudit(pool, req, action, options = {}) {
   try {
+    const safeMetadata = options.metadata
+      ? { fields: Object.keys(options.metadata), result: options.result || 'success' }
+      : null;
     await pool.execute(`
       INSERT INTO payroll_audit_trail
         (user_id, user_role, employee_id, payroll_run_id, salary_calculation_id, action, remarks, metadata, ip_address, result)
@@ -311,8 +315,8 @@ async function logPayrollAudit(pool, req, action, options = {}) {
       options.payroll_run_id || null,
       options.salary_calculation_id || null,
       action,
-      options.remarks || null,
-      options.metadata ? JSON.stringify(options.metadata) : null,
+      null,
+      safeMetadata ? JSON.stringify(safeMetadata) : null,
       currentRequestIp(req),
       options.result || 'success'
     ]);
@@ -329,8 +333,8 @@ async function logPayrollAudit(pool, req, action, options = {}) {
           options.payroll_run_id || null,
           options.salary_calculation_id || null,
           action,
-          options.remarks || null,
-          options.metadata ? JSON.stringify({ ...options.metadata, result: options.result || 'success', role: req.user?.role || null, ip: currentRequestIp(req) }) : null
+          null,
+          safeMetadata ? JSON.stringify({ ...safeMetadata, role: req.user?.role || null }) : null
         ]);
         return;
       } catch (fallbackErr) {
@@ -5164,7 +5168,6 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       console.log('✅ Inferred wage type from rates:', wageTypeToReturn);
     }
 
-    console.log('✅ Final response - wage_type:', wageTypeToReturn, '| current_rate:', currentRate);
 
     res.json({
       // Return fields at top level for frontend compatibility
@@ -5236,7 +5239,6 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
 
     // Add new rates
     for (const rate of rates) {
-      console.log('Adding rate:', rate);
       const baseRate = usesBaseRate ? (rate.base_rate || rate.rate || null) : null;
       const [insertRes] = await pool.execute(`
         INSERT INTO employee_wage_rates 
@@ -5263,7 +5265,6 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
     );
     
     console.log('✅ Verification - Active rates count:', verifyRates.length);
-    console.log('✅ Verification - First rate:', verifyRates[0]);
 
     res.json({ success: true, message: 'Wage configuration updated', ratesSaved: verifyRates.length });
   } catch (err) {
@@ -8982,10 +8983,10 @@ router.get('/employees/:id/government-contributions', requireAuth, requireRole(R
     res.json({
       employee_id: empRows[0].id,
       government_ids: {
-        sss_number: empRows[0].sss_number || 'Not provided',
-        philhealth_number: empRows[0].philhealth_number || 'Not provided',
-        pagibig_number: empRows[0].pagibig_number || 'Not provided',
-        tin: empRows[0].tin || 'Not provided'
+        sss_number: maskSensitiveValue(decryptColumnValue(empRows[0].sss_number)) || 'Not provided',
+        philhealth_number: maskSensitiveValue(decryptColumnValue(empRows[0].philhealth_number)) || 'Not provided',
+        pagibig_number: maskSensitiveValue(decryptColumnValue(empRows[0].pagibig_number)) || 'Not provided',
+        tin: maskSensitiveValue(decryptColumnValue(empRows[0].tin)) || 'Not provided'
       },
       deductions: deductions || []
     });
@@ -9188,9 +9189,9 @@ router.get('/employees/:id/monthly-summary/:monthYear', requireAuth, requireRole
         position: emp.position,
         wageType: emp.wage_type,
         governmentIds: {
-          sss: emp.sss_number || 'Not provided',
-          philhealth: emp.philhealth_number || 'Not provided',
-          pagibig: emp.pagibig_number || 'Not provided'
+          sss: maskSensitiveValue(decryptColumnValue(emp.sss_number)) || 'Not provided',
+          philhealth: maskSensitiveValue(decryptColumnValue(emp.philhealth_number)) || 'Not provided',
+          pagibig: maskSensitiveValue(decryptColumnValue(emp.pagibig_number)) || 'Not provided'
         }
       },
       earnings,
@@ -9989,7 +9990,13 @@ router.get('/employee-deductions', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       ORDER BY eda.status = 'Active' DESC, eda.start_date DESC, eda.id DESC
       LIMIT 300
     `, params);
-    res.json(rows.map(row => withPayrollEmployeeDisplay(row)));
+    res.json(rows.map(row => {
+      const employee = withPayrollEmployeeDisplay(row);
+      const hasRemarks = !!(employee.remarks_encrypted || employee.remarks);
+      delete employee.remarks;
+      delete employee.remarks_encrypted;
+      return { ...employee, remarks_available: hasRemarks };
+    }));
   } catch (err) {
     console.error('Error fetching employee deductions:', err);
     res.status(500).json({ error: 'Failed to fetch employee deductions' });
@@ -10042,7 +10049,8 @@ async function saveEmployeeDeduction(req, res, moduleType) {
             start_date = ?,
             end_date = ?,
             status = ?,
-            remarks = ?,
+            remarks = NULL,
+            remarks_encrypted = ?,
             updated_by = ?
         WHERE id = ? AND module_type = ?
       `, [
@@ -10054,7 +10062,7 @@ async function saveEmployeeDeduction(req, res, moduleType) {
         start_date,
         end_date || null,
         status || 'Active',
-        remarks || null,
+        encryptColumnValue(remarks),
         currentUserId(req),
         id,
         moduleType
@@ -10062,7 +10070,7 @@ async function saveEmployeeDeduction(req, res, moduleType) {
       await logPayrollAudit(pool, req, 'employee_deduction_updated', {
         employee_id,
         remarks: `Updated ${moduleType}: ${deduction_name}`,
-        metadata: req.body
+        metadata: { id, employee_id, module_type: moduleType, fields: Object.keys(req.body || {}) }
       });
       return res.json({ success: true, id });
     }
@@ -10070,8 +10078,8 @@ async function saveEmployeeDeduction(req, res, moduleType) {
     const [result] = await pool.execute(`
       INSERT INTO employee_deduction_accounts
         (employee_id, module_type, deduction_name, loan_type, original_amount, remaining_balance,
-         installment_amount, start_date, end_date, status, remarks, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         installment_amount, start_date, end_date, status, remarks, remarks_encrypted, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
     `, [
       employee_id,
       moduleType,
@@ -10083,7 +10091,7 @@ async function saveEmployeeDeduction(req, res, moduleType) {
       start_date,
       end_date || null,
       status || 'Active',
-      remarks || null,
+      encryptColumnValue(remarks),
       currentUserId(req),
       currentUserId(req)
     ]);
@@ -10091,7 +10099,7 @@ async function saveEmployeeDeduction(req, res, moduleType) {
     await logPayrollAudit(pool, req, 'employee_deduction_created', {
       employee_id,
       remarks: `Created ${moduleType}: ${deduction_name}`,
-      metadata: req.body
+      metadata: { id: result.insertId, employee_id, module_type: moduleType, fields: Object.keys(req.body || {}) }
     });
     res.json({ success: true, id: result.insertId });
   } catch (err) {
@@ -10431,6 +10439,51 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
       });
     }
     if (connection) connection.release();
+  }
+});
+
+router.post('/employees/:id/government-contributions/reveal', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [[employee]] = await pool.execute(
+      'SELECT id, sss_number, philhealth_number, pagibig_number, tin FROM employees WHERE id = ? LIMIT 1',
+      [req.params.id]
+    );
+    if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+    await logPayrollAudit(pool, req, 'government_identifiers_revealed', {
+      employee_id: employee.id,
+      metadata: { employee_id: employee.id, fields: ['sss_number', 'philhealth_number', 'pagibig_number', 'tin'] },
+    });
+    return res.json({
+      employee_id: employee.id,
+      government_ids: {
+        sss_number: decryptColumnValue(employee.sss_number),
+        philhealth_number: decryptColumnValue(employee.philhealth_number),
+        pagibig_number: decryptColumnValue(employee.pagibig_number),
+        tin: decryptColumnValue(employee.tin),
+      },
+    });
+  } catch (err) {
+    console.error('Error revealing government identifiers:', err.message);
+    return res.status(500).json({ error: 'Failed to reveal government identifiers.' });
+  }
+});
+
+router.post('/employee-deductions/:id/reveal-remarks', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const [[deduction]] = await pool.execute(
+      'SELECT remarks, remarks_encrypted FROM employee_deduction_accounts WHERE id = ? LIMIT 1',
+      [req.params.id]
+    );
+    if (!deduction) return res.status(404).json({ error: 'Employee deduction not found.' });
+    await logPayrollAudit(pool, req, 'employee_deduction_remarks_revealed', {
+      metadata: { deduction_id: req.params.id },
+    });
+    return res.json({ remarks: decryptColumnValue(deduction.remarks_encrypted || deduction.remarks) });
+  } catch (err) {
+    console.error('Error revealing employee deduction remarks:', err.message);
+    return res.status(500).json({ error: 'Failed to reveal deduction remarks.' });
   }
 });
 

@@ -538,8 +538,6 @@ async function fetchEmployees() {
     });
     
     console.log('✅ Fetched', EMPLOYEES.length, 'employees from API');
-    console.log('📊 First employee:', EMPLOYEES[0]);
-    console.log('📊 API raw data first employee:', EMPLOYEES_RAW[0]);
     
     renderEmployees(EMPLOYEES);
     return EMPLOYEES; // Return the fetched data
@@ -638,19 +636,8 @@ function renderEmployees(list) {
   }).join('');
   
   tbody.innerHTML = renderedRows || '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px;">No employees found.</td></tr>';
-  hydrateEmployeeDirectoryPhotos(tbody);
   
   console.log('✅ Rendered', list.length, 'employees in table');
-  if (list.length > 0) {
-    console.log('📊 First employee:', {
-      name: list[0].name,
-      id: list[0].id,
-      empCode: list[0].empCode,
-      email: list[0].email,
-      dept: list[0].dept
-    });
-  }
-
   const countEl = document.getElementById('emp-count');
   if (countEl) countEl.textContent = totalEmployees
     ? `Showing ${startIndex + 1}-${endIndex} of ${totalEmployees} employees`
@@ -830,7 +817,6 @@ function openEmployeeDetail(employeeId) {
 }
 
 function prefillEmployeeForm(employee) {
-  console.log('Prefilling form with employee data:', employee);
   
   // Set EDIT_MODE when prefilling with existing employee data
   if (typeof resetEditMode !== 'function') {
@@ -1655,7 +1641,6 @@ async function viewLifecycleRequest(employeeId, type) {
 async function editEmployeeFromManage(employeeId) {
   console.log('Editing employee ID:', employeeId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(employeeId));
-  console.log('Found employee:', employee);
   if (!employee) {
     await showAlert('Employee not found', 'Error', 'error');
     return;
@@ -1945,7 +1930,6 @@ function switchEditTab(tabName) {
 async function editEmployee(empId) {
   console.log('Editing employee ID:', empId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
-  console.log('Found employee:', employee);
   if (!employee) {
     await showAlert('Employee not found', 'Error', 'error');
     return;
@@ -2090,7 +2074,6 @@ async function saveEditedEmployee() {
         });
       }
     });
-    console.log('Collected sewing rates:', sewingRates);
   }
 
   const isAddingNew = !currentEditingEmployeeId;
@@ -2195,7 +2178,6 @@ function renderEditPayrollSewingTypes() {
 function editEmployeeOld(empId) {
   console.log('Editing employee ID:', empId);
   const employee = EMPLOYEES_RAW.find(e => e.id === parseInt(empId));
-  console.log('Found employee:', employee);
   if (!employee) {
     alert('Employee not found');
     return;
@@ -2300,7 +2282,6 @@ async function openEmployeeDetailModal(employeeId) {
   console.log('🔍 Opening employee detail modal');
   console.log('   Employee ID:', employeeId);
   console.log('   Employee Code:', employee.employee_code);
-  console.log('   Full Employee:', employee);
   
   // Populate personal info
   document.getElementById('emp-detail-empid').textContent = employee.employee_code || '—';
@@ -2507,7 +2488,6 @@ async function saveEmpPayrollConfig() {
     return;
   }
   
-  console.log('✅ Employee found:', currentEmployeeForModal.first_name, currentEmployeeForModal.last_name);
   
   const wageTypeSelect = document.getElementById('emp-payroll-wage-select');
   if (!wageTypeSelect) {
@@ -2603,7 +2583,6 @@ async function saveEmpPayrollConfig() {
       await showAlert('❌ For ' + (wageTypeName || 'selected wage type') + ': Please enter a VALID rate (must be greater than 0)', 'Validation Error', 'warning');
       return;
     }
-    console.log('   ✅ Base salary is valid:', primaryRate);
     rates.push({
       rate: primaryRate,
       base_rate: primaryRate,
@@ -2625,10 +2604,7 @@ async function saveEmpPayrollConfig() {
   console.log('💾 SAVING PAYROLL CONFIG');
   console.log('───────────────────────────────────────────────────────────');
   console.log('Employee ID:', currentEmployeeForModal.id);
-  console.log('Employee: ' + currentEmployeeForModal.first_name + ' ' + currentEmployeeForModal.last_name);
   console.log('Wage Type ID:', wageTypeId);
-  console.log('Rates to save:', rates);
-  console.log('Payload:', JSON.stringify(payload, null, 2));
   console.log('═══════════════════════════════════════════════════════════');
   
   try {
@@ -2782,6 +2758,7 @@ async function deleteEmployeePhoto() {
 // ============================================================
 
 let currentProfileEmployee = null;
+let currentProfileSensitiveRevealed = false;
 let currentProfileTab = 'personal';
 let currentProfilePhotoUrl = null;
 let currentProfileFamilyMembers = [];
@@ -2815,11 +2792,13 @@ async function loadEmployeeProfilePage(params = {}) {
     return;
   }
 
-  if (!EMPLOYEES_RAW.length) {
-    await fetchEmployees();
+  const detailResponse = await apiFetch(`/api/employees/${encodeURIComponent(employeeId)}`);
+  if (!detailResponse?.ok) {
+    renderProfileEmpty('Employee profile not found or access was denied.');
+    return;
   }
-
-  currentProfileEmployee = EMPLOYEES_RAW.find(emp => String(emp.id) === String(employeeId));
+  currentProfileEmployee = await detailResponse.json();
+  currentProfileSensitiveRevealed = currentProfileEmployee?.sensitive_fields_masked === false;
   window.currentProfileEmployee = currentProfileEmployee;
 
   if (!currentProfileEmployee) {
@@ -2829,14 +2808,49 @@ async function loadEmployeeProfilePage(params = {}) {
 
   renderProfileSummary(currentProfileEmployee);
   renderProfileTabs(currentProfileEmployee);
-  populateProfileEditForm(currentProfileEmployee);
-  loadProfilePhoto(currentProfileEmployee.id);
+  clearProfileSensitiveEditFields();
+  hideProfilePhoto();
   loadProfileFamilyMembers(currentProfileEmployee.id);
   loadProfileWorkExperiences(currentProfileEmployee.id);
   loadProfileEducationTraining(currentProfileEmployee.id);
   loadProfileDocuments(currentProfileEmployee);
   loadProfileLeaveHistory(currentProfileEmployee);
   switchProfileTab(selectedTab);
+}
+
+function clearProfileSensitiveEditFields() {
+  document.querySelectorAll('[id^="profile-edit-"]').forEach(input => {
+    if (input.matches('input, textarea')) input.value = '';
+  });
+}
+
+function profileSensitiveAction() {
+  if (currentProfileEmployee?.sensitive_fields_masked === false) return '';
+  return `<button class="btn btn-outline" type="button" onclick="toggleEmployeeSensitiveDetails()">${currentProfileSensitiveRevealed ? 'Hide sensitive details' : 'Show sensitive details'}</button>`;
+}
+
+async function toggleEmployeeSensitiveDetails() {
+  if (!currentProfileEmployee?.id) return;
+  if (currentProfileSensitiveRevealed) {
+    await loadEmployeeProfilePage({ employeeId: currentProfileEmployee.id, tab: currentProfileTab });
+    return;
+  }
+  const response = await apiFetch(`/api/employees/${currentProfileEmployee.id}/reveal-sensitive`, {
+    method: 'POST',
+    body: '{}'
+  });
+  const data = await response?.json().catch(() => ({}));
+  if (!response?.ok) {
+    if (typeof showModal === 'function') showModal('Error', data.error || 'Failed to reveal employee details.');
+    return;
+  }
+  Object.assign(currentProfileEmployee, data.fields || {});
+  currentProfileSensitiveRevealed = true;
+  window.currentProfileEmployee = currentProfileEmployee;
+  renderProfileSummary(currentProfileEmployee);
+  renderProfileTabs(currentProfileEmployee);
+  populateProfileEditForm(currentProfileEmployee);
+  switchProfileTab(currentProfileTab);
 }
 
 function normalizeProfileTab(tabName) {
@@ -2958,6 +2972,7 @@ function renderProfileTabs(employee) {
   if (personal) {
     personal.innerHTML = `
       <section class="profile-section">
+        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <div class="profile-field-grid">
           ${field('First Name', employee.first_name)}
           ${field('Middle Name', employee.middle_name)}
@@ -3009,6 +3024,7 @@ function renderProfileTabs(employee) {
     contact.innerHTML = `
       <section class="profile-section">
         <h2 class="profile-section-title">Primary Contact Info</h2>
+        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <div class="profile-field-grid">
           ${field('Full Legal Name', getEmployeeFullName(employee))}
           ${field('Permanent Home Address', employeeProfileAddress(employee, 'residential_address'))}
@@ -3221,6 +3237,7 @@ function renderProfileTabs(employee) {
   if (bankTax) {
     bankTax.innerHTML = `
       <section class="profile-section">
+        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <h2 class="profile-section-title">Salary Configuration</h2>
         <div class="profile-field-grid">
           ${field('Wage Type', employee.wage_type)}
@@ -3995,6 +4012,10 @@ function focusProfileEditField(field) {
 
 async function saveProfilePageChanges() {
   if (!currentProfileEmployee) return;
+  if (!currentProfileSensitiveRevealed) {
+    await showAlert('Show the sensitive details before editing this profile. This prevents masked placeholders from being saved as employee data.', 'Reveal Required', 'warning');
+    return;
+  }
 
   const editRoot = document.getElementById('profile-edit-root');
   if (window.LGSVValidation && editRoot && !window.LGSVValidation.validateScope(editRoot)) {
@@ -4160,6 +4181,22 @@ async function loadProfilePhoto(employeeId) {
     img.style.display = 'none';
     initials.style.display = 'inline';
   }
+}
+
+function hideProfilePhoto() {
+  const img = document.getElementById('profile-photo-img');
+  const initials = document.getElementById('profile-initials');
+  if (currentProfilePhotoUrl) URL.revokeObjectURL(currentProfilePhotoUrl);
+  currentProfilePhotoUrl = null;
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (initials) initials.style.display = 'inline';
+}
+
+async function revealProfilePhoto() {
+  if (currentProfileEmployee?.id) await loadProfilePhoto(currentProfileEmployee.id);
 }
 
 async function uploadProfilePhoto(event) {
@@ -4368,6 +4405,8 @@ window.deleteEmployeePhoto = deleteEmployeePhoto;
 window.loadEmployeePhotoPreview = loadEmployeePhotoPreview;
 window.openEmployeeProfile = openEmployeeProfile;
 window.loadEmployeeProfilePage = loadEmployeeProfilePage;
+window.toggleEmployeeSensitiveDetails = toggleEmployeeSensitiveDetails;
+window.revealProfilePhoto = revealProfilePhoto;
 window.switchProfileTab = switchProfileTab;
 window.toggleProfileEditMode = toggleProfileEditMode;
 window.saveProfilePageChanges = saveProfilePageChanges;

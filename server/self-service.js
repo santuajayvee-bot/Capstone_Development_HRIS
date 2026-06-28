@@ -6,7 +6,9 @@ const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const { ALLOWED_UPLOAD_TYPES, auditSecurityEvent } = require('./security-controls');
-const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
+const { decryptColumnValue, encryptColumnValue, hashNullable } = require('./data-protection');
+const { decryptAuditValue, encryptAuditValue, maskSensitiveValue } = require('./privacy-protection');
+const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./encrypted-file-vault');
 
 const router = express.Router();
 const HR_REVIEW_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
@@ -66,14 +68,30 @@ const CHANGE_REQUEST_FIELDS = {
   bank_name: { column: 'bank_name', label: 'Bank name' }
 };
 
+const RESTRICTED_FIELD_CONFIG = {
+  ...CHANGE_REQUEST_FIELDS,
+  email: { column: 'email', label: 'Email address' },
+  work_email: { column: 'work_email', label: 'Work email' },
+  contact_number: { column: 'contact_number', label: 'Contact number' },
+  current_address: { column: 'current_address', label: 'Current address' },
+  mailing_address: { column: 'mailing_address', label: 'Mailing address' },
+  emergency_contact_name: { column: 'emergency_contact_name', label: 'Emergency contact name' },
+  emergency_contact_relationship: { column: 'emergency_contact_relationship', label: 'Emergency contact relationship' },
+  emergency_contact_num: { column: 'emergency_contact_num', label: 'Emergency contact number' },
+  emergency_contact_email: { column: 'emergency_contact_email', label: 'Emergency contact email' },
+};
+
 const REVEALABLE_RESTRICTED_FIELDS = new Set([
+  'civil_status', 'permanent_address',
   'sss_number',
   'philhealth_number',
   'pagibig_number',
   'tin',
   'tax_status',
   'bank_name',
-  'bank_account_number'
+  'bank_account_number',
+  'email', 'work_email', 'contact_number', 'current_address', 'mailing_address',
+  'emergency_contact_name', 'emergency_contact_relationship', 'emergency_contact_num', 'emergency_contact_email'
 ]);
 
 const SELF_SERVICE_FORBIDDEN_FIELDS = new Set([
@@ -166,7 +184,7 @@ async function auditSelfServiceBlocked(req, field, value) {
     module: 'EMPLOYEE_SELF_SERVICE_SECURITY',
     targetTable: 'employees',
     targetRecord: currentEmployeeId(req),
-    newValue: { field, value, path: req.originalUrl },
+    newValue: { field, value_present: value !== undefined && value !== null, path: req.originalUrl },
     result: 'blocked',
   });
 }
@@ -247,12 +265,19 @@ async function ensureSelfServiceSchema() {
           INDEX idx_profile_audit_user (user_id)
         )
       `);
+      for (const column of ['old_value', 'new_value']) {
+        await ensureColumn(connection, 'user_profile_audit_logs', `${column}_encrypted`, 'TEXT NULL');
+      }
+      for (const column of ['old_value', 'requested_value', 'reason', 'rejection_reason']) {
+        await ensureColumn(connection, 'user_profile_change_requests', `${column}_encrypted`, 'TEXT NULL');
+      }
       if (!(await tableExists(connection, 'employee_photos'))) {
         await connection.query(`
           CREATE TABLE employee_photos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             employee_id INT NOT NULL UNIQUE,
-            photo_data LONGBLOB NOT NULL,
+            photo_data LONGBLOB NULL,
+            photo_data_encrypted LONGTEXT NULL,
             photo_mime_type VARCHAR(50) DEFAULT 'image/jpeg',
             photo_size INT,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -261,6 +286,9 @@ async function ensureSelfServiceSchema() {
           )
         `);
       }
+      await ensureColumn(connection, 'employee_photos', 'photo_data_encrypted', 'LONGTEXT NULL');
+      await ensureColumn(connection, 'employee_photos', 'photo_encrypted_path', 'VARCHAR(500) NULL');
+      await connection.query('ALTER TABLE employee_photos MODIFY COLUMN photo_data LONGBLOB NULL').catch(() => {});
       await ensureColumn(connection, 'employees', 'photo_id', 'INT NULL');
       await ensureColumn(connection, 'employees', 'email', 'VARCHAR(255) NULL');
       await ensureColumn(connection, 'employees', 'work_email', 'VARCHAR(255) NULL');
@@ -275,6 +303,8 @@ async function ensureSelfServiceSchema() {
       await ensureColumn(connection, 'employees', 'current_address_place_id', 'VARCHAR(255) NULL');
       await ensureColumn(connection, 'employees', 'current_address_lat', 'DECIMAL(10,7) NULL');
       await ensureColumn(connection, 'employees', 'current_address_lng', 'DECIMAL(10,7) NULL');
+      await ensureColumn(connection, 'employees', 'current_address_lat_encrypted', 'TEXT NULL');
+      await ensureColumn(connection, 'employees', 'current_address_lng_encrypted', 'TEXT NULL');
       await ensureColumn(connection, 'employees', 'current_address_same_as_home', 'TINYINT(1) NOT NULL DEFAULT 0');
       await ensureColumn(connection, 'employees', 'mailing_address', 'TEXT NULL');
       await ensureColumn(connection, 'employees', 'mailing_address_region', 'VARCHAR(120) NULL');
@@ -286,6 +316,8 @@ async function ensureSelfServiceSchema() {
       await ensureColumn(connection, 'employees', 'mailing_address_place_id', 'VARCHAR(255) NULL');
       await ensureColumn(connection, 'employees', 'mailing_address_lat', 'DECIMAL(10,7) NULL');
       await ensureColumn(connection, 'employees', 'mailing_address_lng', 'DECIMAL(10,7) NULL');
+      await ensureColumn(connection, 'employees', 'mailing_address_lat_encrypted', 'TEXT NULL');
+      await ensureColumn(connection, 'employees', 'mailing_address_lng_encrypted', 'TEXT NULL');
       await ensureColumn(connection, 'employees', 'mailing_address_same_as_home', 'TINYINT(1) NOT NULL DEFAULT 0');
       await ensureColumn(connection, 'employees', 'emergency_contact_name', 'VARCHAR(180) NULL');
       await ensureColumn(connection, 'employees', 'emergency_contact_num', 'VARCHAR(50) NULL');
@@ -301,15 +333,16 @@ async function ensureSelfServiceSchema() {
 async function auditProfile(req, connection, action, field, oldValue, newValue, employeeId = currentEmployeeId(req)) {
   await connection.execute(
     `INSERT INTO user_profile_audit_logs
-       (user_id, employee_id, action, field_changed, old_value, new_value, ip_address, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (user_id, employee_id, action, field_changed, old_value, new_value,
+        old_value_encrypted, new_value_encrypted, ip_address, user_agent)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
     [
       currentUserId(req),
       employeeId,
       action,
       field || null,
-      oldValue == null ? null : String(oldValue),
-      newValue == null ? null : String(newValue),
+      encryptAuditValue(oldValue),
+      encryptAuditValue(newValue),
       req.ip || null,
       String(req.headers['user-agent'] || '').slice(0, 255) || null
     ]
@@ -403,6 +436,11 @@ async function loadOwnProfile(employeeId, userId) {
       profile[column] = decryptColumnValue(profile[column]);
     }
   }
+  for (const field of ['current_address_lat', 'current_address_lng', 'mailing_address_lat', 'mailing_address_lng']) {
+    const encryptedField = `${field}_encrypted`;
+    if (profile[encryptedField]) profile[field] = decryptColumnValue(profile[encryptedField]);
+    delete profile[encryptedField];
+  }
   return profile;
 }
 
@@ -423,47 +461,56 @@ function safeProfilePayload(row) {
       trip_rate: row.trip_rate != null ? row.trip_rate : null
     },
     editable: {
-      email: selfProfileText(row.email) || selfProfileText(row.account_email),
-      work_email: selfProfileText(row.work_email),
-      contact_number: selfProfileText(row.contact_number),
-      current_address: selfProfileText(row.current_address),
-      current_address_region: row.current_address_region || '',
-      current_address_province: row.current_address_province || '',
-      current_address_city_municipality: row.current_address_city_municipality || '',
-      current_address_barangay: row.current_address_barangay || '',
-      current_address_street_address: row.current_address_street_address || '',
-      current_address_full_address: selfProfileText(row.current_address_full_address),
-      current_address_place_id: row.current_address_place_id || '',
-      current_address_lat: row.current_address_lat || '',
-      current_address_lng: row.current_address_lng || '',
+      email: maskSensitiveValue(selfProfileText(row.email) || selfProfileText(row.account_email), 3),
+      work_email: maskSensitiveValue(selfProfileText(row.work_email), 3),
+      contact_number: maskSensitiveValue(selfProfileText(row.contact_number), 4),
+      current_address: row.current_address ? 'On file' : '',
+      current_address_region: '',
+      current_address_province: '',
+      current_address_city_municipality: '',
+      current_address_barangay: '',
+      current_address_street_address: '',
+      current_address_full_address: row.current_address_full_address ? 'On file' : '',
+      current_address_place_id: '',
+      current_address_lat: '',
+      current_address_lng: '',
       current_address_same_as_home: Number(row.current_address_same_as_home || 0) === 1,
-      mailing_address: selfProfileText(row.mailing_address),
-      mailing_address_region: row.mailing_address_region || '',
-      mailing_address_province: row.mailing_address_province || '',
-      mailing_address_city_municipality: row.mailing_address_city_municipality || '',
-      mailing_address_barangay: row.mailing_address_barangay || '',
-      mailing_address_street_address: row.mailing_address_street_address || '',
-      mailing_address_full_address: selfProfileText(row.mailing_address_full_address),
-      mailing_address_place_id: row.mailing_address_place_id || '',
-      mailing_address_lat: row.mailing_address_lat || '',
-      mailing_address_lng: row.mailing_address_lng || '',
+      mailing_address: row.mailing_address ? 'On file' : '',
+      mailing_address_region: '',
+      mailing_address_province: '',
+      mailing_address_city_municipality: '',
+      mailing_address_barangay: '',
+      mailing_address_street_address: '',
+      mailing_address_full_address: row.mailing_address_full_address ? 'On file' : '',
+      mailing_address_place_id: '',
+      mailing_address_lat: '',
+      mailing_address_lng: '',
       mailing_address_same_as_home: Number(row.mailing_address_same_as_home || 0) === 1,
-      emergency_contact_name: selfProfileText(row.emergency_contact_name),
-      emergency_contact_relationship: selfProfileText(row.emergency_contact_relationship),
-      emergency_contact_num: selfProfileText(row.emergency_contact_num),
-      emergency_contact_email: selfProfileText(row.emergency_contact_email),
+      emergency_contact_name: row.emergency_contact_name ? 'On file' : '',
+      emergency_contact_relationship: row.emergency_contact_relationship ? 'On file' : '',
+      emergency_contact_num: maskSensitiveValue(row.emergency_contact_num, 4),
+      emergency_contact_email: maskSensitiveValue(row.emergency_contact_email, 3),
       photo_url: profilePhotoUrl(row.id, row.photo_id)
     },
     restricted: {
-      civil_status: row.marital_status || '',
-      permanent_address: row.residential_address || '',
+      civil_status: row.marital_status ? 'On file' : '',
+      permanent_address: row.residential_address ? 'On file' : '',
       sss_number: maskRestrictedProfileField('sss_number', row.sss_number),
       philhealth_number: maskRestrictedProfileField('philhealth_number', row.philhealth_number),
       pagibig_number: maskRestrictedProfileField('pagibig_number', row.pagibig_number),
       tin: maskRestrictedProfileField('tin', row.tin),
       tax_status: maskRestrictedProfileField('tax_status', row.tax_status),
       bank_account_number: maskRestrictedProfileField('bank_account_number', row.bank_account),
-      bank_name: maskRestrictedProfileField('bank_name', row.bank_name)
+      bank_name: maskRestrictedProfileField('bank_name', row.bank_name),
+      email: maskSensitiveValue(row.email || row.account_email, 3),
+      work_email: maskSensitiveValue(row.work_email, 3),
+      contact_number: maskSensitiveValue(row.contact_number, 4),
+      current_address: row.current_address ? 'On file' : '',
+      mailing_address: row.mailing_address ? 'On file' : '',
+      emergency_contact_name: row.emergency_contact_name ? 'On file' : '',
+      emergency_contact_relationship: row.emergency_contact_relationship ? 'On file' : '',
+      emergency_contact_num: maskSensitiveValue(row.emergency_contact_num, 4),
+      emergency_contact_email: maskSensitiveValue(row.emergency_contact_email, 3)
     }
   };
 }
@@ -494,7 +541,7 @@ router.get('/self-service/profile', async (req, res) => {
 router.post('/self-service/restricted-fields/:field/reveal', async (req, res) => {
   try {
     const field = String(req.params.field || '').trim();
-    const config = CHANGE_REQUEST_FIELDS[field];
+    const config = RESTRICTED_FIELD_CONFIG[field];
     if (!config || !REVEALABLE_RESTRICTED_FIELDS.has(field)) {
       return res.status(404).json({ error: 'Restricted profile field not found.' });
     }
@@ -561,7 +608,10 @@ router.put('/self-service/profile', async (req, res) => {
     params.push(employeeId);
     await connection.execute(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`, params);
     if (emailChange) {
-      await connection.execute('UPDATE users SET email = ? WHERE id = ?', [emailChange.newValue, userId]);
+      await connection.execute(
+        'UPDATE users SET email = NULL, email_hash = ?, email_encrypted = ? WHERE id = ?',
+        [hashNullable(emailChange.newValue), encryptColumnValue(emailChange.newValue), userId]
+      );
     }
     for (const item of changed) {
       await auditProfile(req, connection, item.field === 'email' ? 'Email changed' : 'Profile updated', item.field, item.oldValue, item.newValue);
@@ -593,6 +643,8 @@ router.post('/self-service/profile-picture', (req, res, next) => {
   });
 }, async (req, res) => {
   const connection = await pool.getConnection();
+  let pendingPhotoPath = null;
+  let previousPhotoPath = null;
   try {
     if (!req.file) return res.status(400).json({ error: 'Profile picture is required.' });
     const employeeId = currentEmployeeId(req);
@@ -616,25 +668,39 @@ router.post('/self-service/profile-picture', (req, res, next) => {
       return res.status(400).json({ error: 'Profile picture content must be a valid JPG or PNG image.' });
     }
 
+    const [[previousPhoto]] = await connection.execute(
+      'SELECT photo_encrypted_path FROM employee_photos WHERE employee_id = ? LIMIT 1',
+      [employeeId]
+    );
+    previousPhotoPath = previousPhoto?.photo_encrypted_path || null;
+    pendingPhotoPath = await storeEncryptedBuffer('employee-photos', req.file.buffer);
     await connection.beginTransaction();
     await connection.execute(
-      `INSERT INTO employee_photos (employee_id, photo_data, photo_mime_type, photo_size)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO employee_photos (employee_id, photo_data, photo_data_encrypted, photo_encrypted_path, photo_mime_type, photo_size)
+       VALUES (?, NULL, NULL, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
-         photo_data = VALUES(photo_data),
+         photo_data = NULL,
+         photo_data_encrypted = NULL,
+         photo_encrypted_path = VALUES(photo_encrypted_path),
          photo_mime_type = VALUES(photo_mime_type),
          photo_size = VALUES(photo_size),
          updated_at = CURRENT_TIMESTAMP`,
-      [employeeId, req.file.buffer, req.file.mimetype, req.file.size]
+      [employeeId, pendingPhotoPath, req.file.mimetype, req.file.size]
     );
     const [photoRows] = await connection.execute('SELECT id FROM employee_photos WHERE employee_id = ? LIMIT 1', [employeeId]);
     const photoId = photoRows[0]?.id || null;
     if (photoId) await connection.execute('UPDATE employees SET photo_id = ? WHERE id = ?', [photoId, employeeId]);
     await auditProfile(req, connection, 'Profile picture changed', 'profile_picture', null, photoId);
     await connection.commit();
+    const committedPhotoPath = pendingPhotoPath;
+    pendingPhotoPath = null;
+    if (previousPhotoPath && previousPhotoPath !== committedPhotoPath) {
+      await deleteEncryptedFile(previousPhotoPath).catch(() => {});
+    }
     res.json({ message: 'Profile picture updated.', photo_url: profilePhotoUrl(employeeId, photoId) });
   } catch (error) {
     await connection.rollback();
+    if (pendingPhotoPath) await deleteEncryptedFile(pendingPhotoPath).catch(() => {});
     console.error('[self-service/profile-picture]', error.message);
     res.status(500).json({ error: 'Failed to update profile picture.' });
   } finally {
@@ -650,13 +716,16 @@ router.get('/self-service/profile-picture', async (req, res) => {
       return res.status(403).json({ error: 'You can only view your own profile picture.' });
     }
     const [rows] = await pool.execute(
-      'SELECT photo_data, photo_mime_type FROM employee_photos WHERE employee_id = ? LIMIT 1',
+      'SELECT photo_data_encrypted, photo_encrypted_path, photo_mime_type FROM employee_photos WHERE employee_id = ? LIMIT 1',
       [requestedEmployeeId]
     );
     if (!rows.length) return res.status(404).end();
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Type', rows[0].photo_mime_type || 'image/jpeg');
-    res.send(rows[0].photo_data);
+    const photoBuffer = rows[0].photo_encrypted_path
+      ? await readEncryptedBuffer(rows[0].photo_encrypted_path)
+      : Buffer.from(decryptColumnValue(rows[0].photo_data_encrypted), 'base64');
+    res.send(photoBuffer);
   } catch (error) {
     console.error('[self-service/profile-picture:get]', error.message);
     res.status(500).end();
@@ -667,14 +736,20 @@ router.get('/self-service/change-requests', async (req, res) => {
   try {
     const employeeId = currentEmployeeId(req);
     const [rows] = await pool.execute(
-      `SELECT id, field_name, old_value, requested_value, reason, status, reviewed_at,
-              rejection_reason, created_at, updated_at
+      `SELECT id, field_name, status, reviewed_at, created_at, updated_at,
+              requested_value_encrypted IS NOT NULL AS has_requested_value,
+              rejection_reason_encrypted IS NOT NULL AS has_rejection_reason
          FROM user_profile_change_requests
         WHERE employee_id = ?
         ORDER BY created_at DESC`,
       [employeeId]
     );
-    res.json(rows);
+    res.json(rows.map(row => ({
+      ...row,
+      requested_value: row.has_requested_value ? 'On file' : '',
+      reason: row.has_requested_value ? 'On file' : '',
+      rejection_reason: row.has_rejection_reason ? 'On file' : '',
+    })));
   } catch (error) {
     console.error('[self-service/change-requests:get]', error.message);
     res.status(500).json({ error: 'Failed to load change requests.' });
@@ -700,9 +775,10 @@ router.post('/self-service/change-requests', async (req, res) => {
     await connection.beginTransaction();
     const [result] = await connection.execute(
       `INSERT INTO user_profile_change_requests
-         (user_id, employee_id, field_name, old_value, requested_value, reason)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [userId, employeeId, fieldName, oldValue == null ? null : String(oldValue), requestedValue, reason]
+         (user_id, employee_id, field_name, old_value, requested_value, reason,
+          old_value_encrypted, requested_value_encrypted, reason_encrypted)
+       VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+      [userId, employeeId, fieldName, encryptAuditValue(oldValue), encryptAuditValue(requestedValue), encryptAuditValue(reason)]
     );
     await auditProfile(req, connection, 'Change request submitted', fieldName, oldValue, requestedValue);
     await connection.commit();
@@ -736,16 +812,51 @@ router.get('/self-service/activity-log', async (req, res) => {
 router.get('/hr/profile-change-requests', requireRole(HR_REVIEW_ROLES), async (_req, res) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT cr.*, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, u.username AS requested_by
+      `SELECT cr.id, cr.user_id, cr.employee_id, cr.field_name, cr.status, cr.reviewed_by,
+              cr.reviewed_at, cr.created_at, cr.updated_at,
+              cr.requested_value_encrypted IS NOT NULL AS has_requested_value,
+              cr.rejection_reason_encrypted IS NOT NULL AS has_rejection_reason,
+              e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, u.username AS requested_by
          FROM user_profile_change_requests cr
          JOIN employees e ON e.id = cr.employee_id
          LEFT JOIN users u ON u.id = cr.user_id
         ORDER BY FIELD(cr.status, 'Pending', 'Approved', 'Rejected'), cr.created_at DESC`
     );
-    res.json(rows.map(row => ({ ...row, employee_name: employeeFullName(row) })));
+    res.json(rows.map(row => {
+      for (const field of ['first_name', 'middle_name', 'last_name', 'suffix']) row[field] = decryptColumnValue(row[field]);
+      return {
+        ...row,
+        requested_value: row.has_requested_value ? 'On file' : '',
+        rejection_reason: row.has_rejection_reason ? 'On file' : '',
+        employee_name: employeeFullName(row),
+      };
+    }));
   } catch (error) {
     console.error('[hr/profile-change-requests:get]', error.message);
     res.status(500).json({ error: 'Failed to load profile change requests.' });
+  }
+});
+
+router.post('/self-service/change-requests/:id/reveal', async (req, res) => {
+  try {
+    const requestId = Number(req.params.id);
+    const [rows] = await pool.execute('SELECT * FROM user_profile_change_requests WHERE id = ? LIMIT 1', [requestId]);
+    const request = rows[0];
+    if (!request) return res.status(404).json({ error: 'Change request not found.' });
+    const isOwner = Number(request.employee_id) === currentEmployeeId(req);
+    const isReviewer = HR_REVIEW_ROLES.includes(req.user.role);
+    if (!isOwner && !isReviewer) return res.status(403).json({ error: 'Access denied.' });
+    await auditProfile(req, pool, 'Change request details revealed', request.field_name, null, 'revealed', request.employee_id);
+    res.json({
+      id: request.id,
+      old_value: decryptAuditValue(request.old_value_encrypted),
+      requested_value: decryptAuditValue(request.requested_value_encrypted),
+      reason: decryptAuditValue(request.reason_encrypted),
+      rejection_reason: decryptAuditValue(request.rejection_reason_encrypted),
+    });
+  } catch (error) {
+    console.error('[profile-change-request:reveal]', error.message);
+    res.status(500).json({ error: 'Failed to reveal change request details.' });
   }
 });
 
@@ -777,14 +888,16 @@ router.post('/hr/profile-change-requests/:id/approve', requireRole(HR_REVIEW_ROL
     if (!request) return res.status(404).json({ error: 'Change request not found.' });
     if (request.status !== 'Pending') return res.status(400).json({ error: 'Only pending requests can be approved.' });
 
-    await applyApprovedChange(connection, request.employee_id, request.field_name, request.requested_value);
+    const requestedValue = decryptAuditValue(request.requested_value_encrypted);
+    const oldValue = decryptAuditValue(request.old_value_encrypted);
+    await applyApprovedChange(connection, request.employee_id, request.field_name, requestedValue);
     await connection.execute(
       `UPDATE user_profile_change_requests
           SET status = 'Approved', reviewed_by = ?, reviewed_at = NOW(), rejection_reason = NULL
         WHERE id = ?`,
       [currentUserId(req), requestId]
     );
-    await auditProfile(req, connection, 'Change request approved', request.field_name, request.old_value, request.requested_value, request.employee_id);
+    await auditProfile(req, connection, 'Change request approved', request.field_name, oldValue, 'approved', request.employee_id);
     await connection.commit();
     res.json({ message: 'Change request approved.' });
   } catch (error) {
@@ -809,11 +922,12 @@ router.post('/hr/profile-change-requests/:id/reject', requireRole(HR_REVIEW_ROLE
     if (request.status !== 'Pending') return res.status(400).json({ error: 'Only pending requests can be rejected.' });
     await connection.execute(
       `UPDATE user_profile_change_requests
-          SET status = 'Rejected', reviewed_by = ?, reviewed_at = NOW(), rejection_reason = ?
+          SET status = 'Rejected', reviewed_by = ?, reviewed_at = NOW(),
+              rejection_reason = NULL, rejection_reason_encrypted = ?
         WHERE id = ?`,
-      [currentUserId(req), rejectionReason, requestId]
+      [currentUserId(req), encryptAuditValue(rejectionReason), requestId]
     );
-    await auditProfile(req, connection, 'Change request rejected', request.field_name, request.requested_value, rejectionReason, request.employee_id);
+    await auditProfile(req, connection, 'Change request rejected', request.field_name, 'pending', 'rejected', request.employee_id);
     await connection.commit();
     res.json({ message: 'Change request rejected.' });
   } catch (error) {

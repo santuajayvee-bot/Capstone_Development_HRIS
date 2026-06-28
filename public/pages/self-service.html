@@ -63,7 +63,9 @@
       <label>Wage Type<input id="self-wage-type" readonly></label>
       <label>Employment Status<input id="self-employment-status" readonly></label>
       <label>Date Hired<input id="self-date-hired" readonly></label>
-      <label>Civil Status<input id="self-civil-status" readonly></label>
+      <label>Civil Status
+        <span class="self-sensitive-field"><input id="self-civil-status" readonly data-self-sensitive-input="civil_status"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="civil_status" aria-label="Show civil status"></button></span>
+      </label>
     </div>
     <div class="erp-section-title self-sensitive-title">Government, tax, and bank information</div>
     <div class="erp-form-grid self-sensitive-grid">
@@ -116,9 +118,15 @@
   <form class="erp-panel self-tab-panel" id="self-tab-contact">
     <div class="erp-section-title">Editable contact information</div>
     <div class="erp-form-grid">
-      <label>Email address<input type="email" id="self-email"></label>
-      <label>Work email<input type="email" id="self-work-email"></label>
-      <label>Contact number<input id="self-contact-number"></label>
+      <label>Email address
+        <span class="self-sensitive-field"><input type="email" id="self-email" data-self-sensitive-input="email"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="email" aria-label="Show email address"></button></span>
+      </label>
+      <label>Work email
+        <span class="self-sensitive-field"><input type="email" id="self-work-email" data-self-sensitive-input="work_email"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="work_email" aria-label="Show work email"></button></span>
+      </label>
+      <label>Contact number
+        <span class="self-sensitive-field"><input id="self-contact-number" data-self-sensitive-input="contact_number"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="contact_number" aria-label="Show contact number"></button></span>
+      </label>
       <label class="self-email-password">Password confirmation<input type="password" id="self-email-password" autocomplete="current-password" placeholder="Required only when changing email"></label>
     </div>
     <div class="erp-actions">
@@ -129,9 +137,15 @@
   <form class="erp-panel self-tab-panel" id="self-tab-address">
     <div class="erp-section-title">Editable address information</div>
     <div class="erp-form-grid">
-      <label>Current address<textarea id="self-current-address" rows="3"></textarea></label>
-      <label>Mailing address<textarea id="self-mailing-address" rows="3"></textarea></label>
-      <label>Permanent/residential address<input id="self-permanent-address" readonly></label>
+      <label>Current address
+        <span class="self-sensitive-field"><textarea id="self-current-address" rows="3" data-self-sensitive-input="current_address"></textarea><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="current_address" aria-label="Show current address"></button></span>
+      </label>
+      <label>Mailing address
+        <span class="self-sensitive-field"><textarea id="self-mailing-address" rows="3" data-self-sensitive-input="mailing_address"></textarea><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="mailing_address" aria-label="Show mailing address"></button></span>
+      </label>
+      <label>Permanent/residential address
+        <span class="self-sensitive-field"><input id="self-permanent-address" readonly data-self-sensitive-input="permanent_address"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="permanent_address" aria-label="Show permanent address"></button></span>
+      </label>
     </div>
     <div class="erp-actions">
       <button type="button" class="btn btn-primary" data-self-save="address">Save Address</button>
@@ -141,10 +155,18 @@
   <form class="erp-panel self-tab-panel" id="self-tab-emergency">
     <div class="erp-section-title">Editable emergency contact</div>
     <div class="erp-form-grid">
-      <label>Contact name<input id="self-emergency-name"></label>
-      <label>Relationship<input id="self-emergency-relationship"></label>
-      <label>Contact number<input id="self-emergency-number"></label>
-      <label>Contact email<input type="email" id="self-emergency-email"></label>
+      <label>Contact name
+        <span class="self-sensitive-field"><input id="self-emergency-name" data-self-sensitive-input="emergency_contact_name"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="emergency_contact_name" aria-label="Show emergency contact name"></button></span>
+      </label>
+      <label>Relationship
+        <span class="self-sensitive-field"><input id="self-emergency-relationship" data-self-sensitive-input="emergency_contact_relationship"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="emergency_contact_relationship" aria-label="Show emergency contact relationship"></button></span>
+      </label>
+      <label>Contact number
+        <span class="self-sensitive-field"><input id="self-emergency-number" data-self-sensitive-input="emergency_contact_num"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="emergency_contact_num" aria-label="Show emergency contact number"></button></span>
+      </label>
+      <label>Contact email
+        <span class="self-sensitive-field"><input type="email" id="self-emergency-email" data-self-sensitive-input="emergency_contact_email"><button type="button" class="self-sensitive-toggle" data-self-sensitive-toggle="emergency_contact_email" aria-label="Show emergency contact email"></button></span>
+      </label>
     </div>
     <div class="erp-actions">
       <button type="button" class="btn btn-primary" data-self-save="emergency">Save Emergency Contact</button>

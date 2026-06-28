@@ -10,6 +10,17 @@ let selfServiceState = {
 
 const SELF_HR_ROLES = new Set(['hr_manager', 'hr_admin', 'system_admin', 'admin']);
 const SELF_SENSITIVE_FIELDS = [
+  'civil_status',
+  'permanent_address',
+  'email',
+  'work_email',
+  'contact_number',
+  'current_address',
+  'mailing_address',
+  'emergency_contact_name',
+  'emergency_contact_relationship',
+  'emergency_contact_num',
+  'emergency_contact_email',
   'sss_number',
   'philhealth_number',
   'pagibig_number',
@@ -95,6 +106,7 @@ async function toggleSelfSensitiveField(field) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to load restricted field.');
       selfServiceState.sensitiveValues[field] = data.value || '';
+      if (field === 'email') selfServiceState.originalEmail = data.value || '';
       if (selfServiceState.profile?.restricted) selfServiceState.profile.restricted[field] = data.masked || selfServiceState.profile.restricted[field] || '';
     }
     selfServiceState.sensitiveVisible[field] = true;
@@ -190,7 +202,7 @@ function fillSelfServiceProfile(profile) {
   const editable = profile.editable || {};
   const restricted = profile.restricted || {};
   selfServiceState.profile = profile;
-  selfServiceState.originalEmail = editable.email || '';
+  selfServiceState.originalEmail = '';
 
   setSelfValue('self-employee-code', ro.employee_code);
   setSelfValue('self-full-name', ro.full_name);
@@ -199,17 +211,6 @@ function fillSelfServiceProfile(profile) {
   setSelfValue('self-wage-type', ro.wage_type);
   setSelfValue('self-employment-status', ro.employment_status);
   setSelfValue('self-date-hired', formatSelfDate(ro.date_hired));
-  setSelfValue('self-civil-status', restricted.civil_status);
-  setSelfValue('self-email', editable.email);
-  setSelfValue('self-work-email', editable.work_email);
-  setSelfValue('self-contact-number', editable.contact_number);
-  setSelfValue('self-current-address', editable.current_address || editable.current_address_full_address);
-  setSelfValue('self-mailing-address', editable.mailing_address || editable.mailing_address_full_address);
-  setSelfValue('self-permanent-address', restricted.permanent_address);
-  setSelfValue('self-emergency-name', editable.emergency_contact_name);
-  setSelfValue('self-emergency-relationship', editable.emergency_contact_relationship);
-  setSelfValue('self-emergency-number', editable.emergency_contact_num);
-  setSelfValue('self-emergency-email', editable.emergency_contact_email);
   resetSelfSensitiveFields(restricted);
 
   const displayName = ro.full_name || '-';
@@ -287,6 +288,15 @@ function buildSelfProfilePayload(section) {
 
 async function saveSelfProfileSection(section) {
   try {
+    const requiredReveals = {
+      contact: ['email', 'work_email', 'contact_number'],
+      address: ['current_address', 'mailing_address'],
+      emergency: ['emergency_contact_name', 'emergency_contact_relationship', 'emergency_contact_num', 'emergency_contact_email']
+    }[section] || [];
+    if (requiredReveals.some(field => !selfServiceState.sensitiveVisible[field])) {
+      selfServiceNotify('Reveal all fields in this section before saving changes.', 'error');
+      return;
+    }
     if (section === 'contact' && selfValue('self-email') !== selfServiceState.originalEmail && !selfValue('self-email-password')) {
       selfServiceNotify('Password confirmation is required when changing email.', 'error');
       return;

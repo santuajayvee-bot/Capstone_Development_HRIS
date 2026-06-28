@@ -1193,7 +1193,6 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     console.log('\n📊 === Wage Config Response ===');
     console.log('Full config object:', config);
     console.log('  - wage_type:', config.wage_type, `(type: ${typeof config.wage_type})`);
-    console.log('  - current_rate:', config.current_rate, `(type: ${typeof config.current_rate})`);
     console.log('  - wage_type_id:', config.wage_type_id);
     console.log('  - rates array length:', config.rates?.length);
     
@@ -1224,7 +1223,6 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     loadSalaryLogisticsCrewConfig();
     refreshLogisticsConfiguredRates();
     
-    console.log('✅ Current salary employee set:', currentSalaryEmployee);
     
     // Update display
     document.getElementById('salary-dept').textContent = dept || '-';
@@ -1701,7 +1699,6 @@ async function saveSalaryAsDraft() {
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('💾 SAVING SALARY CALCULATION AS DRAFT');
   console.log('───────────────────────────────────────────────────────────');
-  console.log('Employee:', currentSalaryEmployee.code, '-', currentSalaryEmployee.first);
   console.log('Wage Type:', currentSalaryEmployee.wageType);
   
   // Collect calculation data
@@ -1773,7 +1770,6 @@ async function saveCalculation() {
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('💾 SAVING SALARY CALCULATION');
   console.log('───────────────────────────────────────────────────────────');
-  console.log('Employee:', currentSalaryEmployee.code, '-', currentSalaryEmployee.first);
   console.log('Wage Type:', currentSalaryEmployee.wageType);
   
   setSalarySaveBusy(true, 'submit');
@@ -1811,7 +1807,6 @@ async function saveProductionTransaction() {
     transaction_date: workDate
   };
   
-  console.log('📤 Sending payload:', payload);
   
   const res = await apiFetch('/api/payroll/transactions/production', {
     method: 'POST',
@@ -1856,7 +1851,6 @@ async function saveLogisticsTransaction() {
     transaction_date: workDate
   };
   
-  console.log('📤 Sending payload:', payload);
   
   const res = await apiFetch('/api/payroll/transactions/logistics', {
     method: 'POST',
@@ -2098,7 +2092,6 @@ async function saveSalaryRecord(status = 'Submitted') {
     return;
   }
   
-  console.log('📤 Sending payload to API:', payload);
   
   const res = await apiFetch('/api/payroll/salary-calculation', {
     method: 'POST',

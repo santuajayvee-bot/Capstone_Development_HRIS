@@ -276,7 +276,6 @@ async function saveCompensation() {
   console.log('💾 SAVING COMPENSATION');
   console.log('───────────────────────────────────────────────────────────');
   console.log('Employee ID:', selectedCompEmployee.id);
-  console.log('Employee: ' + selectedCompEmployee.first_name + ' ' + selectedCompEmployee.last_name);
   console.log('Wage Type ID:', wageTypeId);
   
   try {

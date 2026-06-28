@@ -13,7 +13,8 @@ const multer = require('multer');
 const argon2 = require('argon2');
 const pool = require('../config/db');
 const { encryptAES256, decryptAES256, encryptPII } = require('./crypto');
-const { encryptColumnValue } = require('./data-protection');
+const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
+const { decryptAuditValue, encryptAuditValue } = require('./privacy-protection');
 const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
 
@@ -216,6 +217,15 @@ function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim().slice(0, 45);
 }
 
+function hydrateApplicantNames(row) {
+  if (!row) return row;
+  for (const field of ['first_name', 'middle_name', 'last_name', 'suffix']) {
+    row[field] = decryptColumnValue(row[`${field}_encrypted`] || row[field]);
+    delete row[`${field}_encrypted`];
+  }
+  return row;
+}
+
 function publicApplicant(row) {
   return {
     applicant_id: row.applicant_id,
@@ -265,8 +275,8 @@ async function writeModuleAudit(connection, req, action, oldValue = null, newVal
       req.user.employeeId || null,
       targetEmployeeId,
       action,
-      oldValue == null ? null : JSON.stringify(oldValue),
-      newValue == null ? null : JSON.stringify(newValue),
+      null,
+      null,
       clientIp(req),
       cleanText(req.headers['user-agent'], 500),
     ]
@@ -321,15 +331,16 @@ async function appendIntegrityHash(connection, activityId, applicantId, action, 
 async function writeActivity(connection, req, applicantId, action, reason = null, oldValue = null, newValue = null) {
   const [activity] = await connection.execute(
     `INSERT INTO onboarding_applicant_activity
-       (applicant_id, actor_user_id, action, reason, old_value, new_value)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (applicant_id, actor_user_id, action, reason, old_value, new_value,
+        reason_encrypted, old_value_encrypted, new_value_encrypted)
+     VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
     [
       applicantId,
       req.user.id,
       action,
-      reason,
-      oldValue == null ? null : JSON.stringify(oldValue),
-      newValue == null ? null : JSON.stringify(newValue),
+      encryptAuditValue(reason),
+      encryptAuditValue(oldValue),
+      encryptAuditValue(newValue),
     ]
   );
   await appendIntegrityHash(connection, activity.insertId, applicantId, action, reason, oldValue, newValue);
@@ -350,7 +361,7 @@ async function getApplicant(connection, applicantId, forUpdate = false) {
       ${forUpdate ? 'FOR UPDATE' : ''}`,
     [applicantId]
   );
-  return rows[0] || null;
+  return hydrateApplicantNames(rows[0] || null);
 }
 
 async function getPositionRoute(connection, position) {
@@ -577,15 +588,18 @@ async function createOnboardingApplicantRecord(connection, req, rawBody, options
 
   const [result] = await connection.execute(
     `INSERT INTO onboarding_applicant
-       (applicant_code, intended_employee_code, source_module, first_name, middle_name, last_name, suffix, email_hash,
+       (applicant_code, intended_employee_code, source_module, first_name, middle_name, last_name, suffix,
+        first_name_encrypted, middle_name_encrypted, last_name_encrypted, suffix_encrypted, email_hash,
         email_encrypted, pii_encrypted, hiring_type, agency_name, deployment_status,
         contract_start_date, contract_end_date, applied_position, department_id, branch,
         expected_wage_type_id, expected_base_rate, requires_onboarding, requires_training,
         workflow_status, screening_status, training_status, biometric_device_id,
         biometric_reference_hash, biometric_reference_encrypted, created_by, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      applicantCode, intendedEmployeeCode, sourceModule, firstName, middleName, lastName, suffix, sha256(email), encryptAES256(email),
+      applicantCode, intendedEmployeeCode, sourceModule,
+      encryptColumnValue(firstName), encryptColumnValue(middleName), encryptColumnValue(lastName), encryptColumnValue(suffix),
+      sha256(email), encryptAES256(email),
       encryptAES256(JSON.stringify(pii)), hiringType, agencyName, deploymentStatus,
       contractStart, contractEnd, position, departmentId, branch, wageTypeId, baseRate,
       requiresOnboarding, requiresTraining, workflowStatus, screeningStatus, trainingStatus,
@@ -812,10 +826,6 @@ router.get('/applicants', async (req, res) => {
     const search = cleanText(req.query.search, 80);
     const values = [];
     const conditions = ['oa.deleted_at IS NULL'];
-    if (search) {
-      conditions.push("(oa.applicant_code LIKE ? OR CONCAT(oa.first_name, ' ', oa.last_name) LIKE ? OR oa.applied_position LIKE ?)");
-      values.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
     if (req.query.workflow_status) {
       conditions.push('oa.workflow_status = ?');
       values.push(cleanText(req.query.workflow_status, 40));
@@ -833,7 +843,18 @@ router.get('/applicants', async (req, res) => {
         LIMIT 500`,
       values
     );
-    res.json(rows.map(publicApplicant));
+    let applicants = rows.map(hydrateApplicantNames);
+    if (search) {
+      const needle = search.toLowerCase();
+      applicants = applicants.filter(row => [
+        row.applicant_code,
+        row.first_name,
+        row.middle_name,
+        row.last_name,
+        row.applied_position,
+      ].some(value => String(value || '').toLowerCase().includes(needle)));
+    }
+    res.json(applicants.map(publicApplicant));
   } catch (error) {
     res.status(500).json({ error: 'Failed to load onboarding applicants.' });
   }
@@ -844,6 +865,12 @@ router.get('/applicants/:applicantId', async (req, res) => {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     const applicant = await getApplicant(pool, applicantId);
     if (!applicant) return res.status(404).json({ error: 'Applicant not found.' });
+    return res.json({
+      ...publicApplicant(applicant),
+      sensitive_details_available: !!(applicant.email_encrypted || applicant.pii_encrypted),
+      sensitive_fields_masked: true,
+    });
+    /* istanbul ignore next -- legacy payload retained below only for migration rollback compatibility */
     const pii = decryptApplicantPii(applicant);
     res.json({
       ...publicApplicant(applicant),
@@ -916,6 +943,26 @@ router.get('/applicants/:applicantId', async (req, res) => {
       return encryptedDataAuthErrorResponse(res);
     }
     res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/applicants/:applicantId/reveal-sensitive', async (req, res) => {
+  try {
+    const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
+    const applicant = await getApplicant(pool, applicantId);
+    if (!applicant) return res.status(404).json({ error: 'Applicant not found.' });
+    const pii = decryptApplicantPii(applicant);
+    await writeModuleAudit(pool, req, `APPLICANT_SENSITIVE_DETAILS_REVEALED [APPLICANT:${applicantId}]`);
+    return res.json({
+      email: decryptAES256(applicant.email_encrypted),
+      ...pii,
+      biometric_reference: applicant.biometric_reference_encrypted
+        ? decryptAES256(applicant.biometric_reference_encrypted)
+        : '',
+    });
+  } catch (error) {
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
+    return res.status(400).json({ error: error.message || 'Failed to reveal applicant details.' });
   }
 });
 
@@ -1399,7 +1446,7 @@ router.get('/applicants/:applicantId/integrity', async (req, res) => {
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     const [rows] = await pool.execute(
-      `SELECT oic.*, oaa.action, oaa.reason, oaa.old_value, oaa.new_value
+      `SELECT oic.*, oaa.action, oaa.reason_encrypted, oaa.old_value_encrypted, oaa.new_value_encrypted
          FROM onboarding_integrity_chain oic
          JOIN onboarding_applicant_activity oaa ON oaa.activity_id = oic.activity_id
         ORDER BY oic.chain_id`
@@ -1407,7 +1454,15 @@ router.get('/applicants/:applicantId/integrity', async (req, res) => {
     let chainValid = true;
     let previousHash = null;
     for (const row of rows) {
-      const expectedHash = hashActivity(row.activity_id, row.applicant_id, row.action, row.reason, row.old_value, row.new_value, previousHash);
+      const expectedHash = hashActivity(
+        row.activity_id,
+        row.applicant_id,
+        row.action,
+        decryptAuditValue(row.reason_encrypted),
+        decryptAuditValue(row.old_value_encrypted),
+        decryptAuditValue(row.new_value_encrypted),
+        previousHash
+      );
       if (row.previous_hash !== previousHash || row.chain_hash !== expectedHash) chainValid = false;
       previousHash = row.chain_hash;
     }
@@ -1443,7 +1498,17 @@ router.get('/applicants/:applicantId/audit', async (req, res) => {
         ORDER BY oaa.created_at DESC, oaa.activity_id DESC`,
       [applicantId]
     );
-    res.json(rows);
+    res.json(rows.map(row => ({
+      activity_id: row.activity_id,
+      applicant_id: row.applicant_id,
+      action: row.action,
+      actor: row.actor,
+      chain_hash: row.chain_hash,
+      anchor_status: row.anchor_status,
+      created_at: row.created_at,
+      reason_available: !!(row.reason_encrypted || row.reason),
+      change_details_available: !!(row.old_value_encrypted || row.new_value_encrypted || row.old_value || row.new_value),
+    })));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

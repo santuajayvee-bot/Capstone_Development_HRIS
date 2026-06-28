@@ -39,7 +39,10 @@
     </div>
 
     <div id="sensitive-data-section" style="margin-top:20px;">
-      <h4 style="margin-bottom:16px;">🔒 Sensitive Data</h4>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;">
+        <h4 style="margin:0;">Sensitive Data</h4>
+        <button class="btn btn-outline" type="button" onclick="reveal201SensitiveData()">Show sensitive values</button>
+      </div>
       <form id="sensitive-data-form" onsubmit="return updateSensitiveData()" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:rgba(255,255,255,0.02);padding:16px;border-radius:8px;border:1px solid var(--border);">
         <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:500;color:var(--text2);">
           <span>SSN / TIN</span>

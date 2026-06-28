@@ -68,6 +68,21 @@ function safeJson(value) {
   }
 }
 
+const SENSITIVE_AUDIT_KEY = /(name|email|phone|contact|address|reason|remark|note|birth|gender|religion|blood|sss|philhealth|pagibig|tin|bank|account|latitude|longitude|\blat\b|\blng\b|password|token|secret|photo|file_path|old_value|new_value|requested_value)/i;
+
+function redactSensitiveAuditData(value, key = '') {
+  if (value === null || value === undefined) return value;
+  if (SENSITIVE_AUDIT_KEY.test(key)) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map(item => redactSensitiveAuditData(item));
+  if (typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([entryKey, entryValue]) => [
+      entryKey,
+      redactSensitiveAuditData(entryValue, entryKey),
+    ])
+  );
+}
+
 async function auditSecurityEvent(req, {
   action,
   module = 'SECURITY_CONTROL',
@@ -89,8 +104,8 @@ async function auditSecurityEvent(req, {
         targetRecord || null,
         `${result.toUpperCase()}: ${action}`,
         module,
-        safeJson(oldValue),
-        safeJson({ targetTable, targetRecord, role: req.user?.role || 'anonymous', ...newValue }),
+        safeJson(redactSensitiveAuditData(oldValue)),
+        safeJson(redactSensitiveAuditData({ targetTable, targetRecord, role: req.user?.role || 'anonymous', ...newValue })),
         requestIp(req),
         req.headers?.['user-agent'] || 'unknown',
       ]
@@ -255,6 +270,18 @@ function validateStoredUpload(file) {
   return { ok: true };
 }
 
+function validateUploadedBuffer(file) {
+  if (!file?.buffer) return { ok: false, error: 'No file uploaded.' };
+  const extensionError = uploadExtensionError(file.originalname);
+  if (extensionError) return { ok: false, error: extensionError };
+  const extension = path.extname(file.originalname).toLowerCase();
+  const allowed = ALLOWED_UPLOAD_TYPES[extension];
+  if (!allowed?.matches(file.buffer)) {
+    return { ok: false, error: 'File content does not match its extension.' };
+  }
+  return { ok: true };
+}
+
 function deleteUploadedFile(file) {
   if (file?.path && fs.existsSync(file.path)) {
     fs.unlinkSync(file.path);
@@ -292,5 +319,6 @@ module.exports = {
   requireSameOriginForBrowserWrites,
   secureUploadedFile,
   uploadExtensionError,
+  validateUploadedBuffer,
   validateStoredUpload,
 };

@@ -3,7 +3,7 @@
    ============================================================ */
 
 const pool = require('../config/db');
-const { decryptNullable } = require('./data-protection');
+const { decryptColumnValue, decryptNullable } = require('./data-protection');
 
 /**
  * Find a user by username, joining their role name.
@@ -98,8 +98,9 @@ async function getUserProfile(userId) {
        e.employee_code,
        e.first_name,
        e.last_name,
-       COALESCE(u.email, e.email) AS email,
+       u.email AS legacy_user_email,
        u.email_encrypted,
+       e.email AS employee_email_encrypted,
        e.position,
        d.name        AS department
      FROM users u
@@ -111,8 +112,16 @@ async function getUserProfile(userId) {
     [userId]
   );
   const row = rows[0] || null;
-  if (row?.email_encrypted && !row.email) row.email = decryptNullable(row.email_encrypted);
-  if (row) delete row.email_encrypted;
+  if (row) {
+    row.first_name = decryptColumnValue(row.first_name);
+    row.last_name = decryptColumnValue(row.last_name);
+    row.email = row.email_encrypted
+      ? decryptNullable(row.email_encrypted)
+      : decryptColumnValue(row.legacy_user_email || row.employee_email_encrypted);
+    delete row.legacy_user_email;
+    delete row.email_encrypted;
+    delete row.employee_email_encrypted;
+  }
   return row;
 }
 

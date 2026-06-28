@@ -7,6 +7,7 @@
 require('dotenv').config();
 const pool = require('../config/db');
 const argon2 = require('argon2');
+const { encryptColumnValue, hashNullable } = require('../server/data-protection');
 
 const ARGON2ID_OPTIONS = {
   type: argon2.argon2id,
@@ -93,9 +94,8 @@ async function findEmployee(connection, user) {
     `SELECT id
        FROM employees
       WHERE employee_code = ?
-         OR LOWER(email) = LOWER(?)
       LIMIT 1`,
-    [employee.employee_code, employee.email]
+    [employee.employee_code]
   );
 
   return rows[0]?.id || null;
@@ -112,7 +112,7 @@ async function resetEmployeeAuth(connection, employeeId, passwordHash, employees
             Failed_Login_Attempts = 0,
             Locked_Until = NULL
       WHERE id = ?`,
-    [employee.contact_number, passwordHash, employeeId]
+    [encryptColumnValue(employee.contact_number), passwordHash, employeeId]
   );
 
   if (employeesHasForcePasswordChange) {
@@ -134,16 +134,17 @@ async function ensureEmployee(connection, user, passwordHash, employeesHasForceP
   const employee = employeeDefaults(user);
   const [result] = await connection.execute(
     `INSERT INTO employees
-       (employee_code, first_name, last_name, email, contact_number, position, employment_type,
+       (employee_code, first_name, last_name, email, email_hash, contact_number, position, employment_type,
         status, Password_Hash, Password_Changed_At, Failed_Login_Attempts,
         Locked_Until)
-     VALUES (?, ?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'Full-time', 'Active', ?, NOW(), 0, NULL)`,
     [
       employee.employee_code,
-      employee.first_name,
-      employee.last_name,
-      employee.email,
-      employee.contact_number,
+      encryptColumnValue(employee.first_name),
+      encryptColumnValue(employee.last_name),
+      encryptColumnValue(employee.email),
+      hashNullable(employee.email),
+      encryptColumnValue(employee.contact_number),
       employee.position,
       passwordHash,
     ]
@@ -168,6 +169,8 @@ async function seedUsers() {
     const [roles] = await conn.execute('SELECT id, name FROM roles');
     const roleIdByName = new Map(roles.map(role => [role.name, role.id]));
     const usersHasEmail = await hasColumn(conn, 'users', 'email');
+    const usersHasEmailHash = await hasColumn(conn, 'users', 'email_hash');
+    const usersHasEmailEncrypted = await hasColumn(conn, 'users', 'email_encrypted');
     const usersHasAccountStatus = await hasColumn(conn, 'users', 'account_status');
     const usersHasPasswordChangedAt = await hasColumn(conn, 'users', 'password_changed_at');
     const usersHasForcePasswordChange = await hasColumn(conn, 'users', 'force_password_change');
@@ -191,8 +194,18 @@ async function seedUsers() {
 
       if (usersHasEmail) {
         columns.push('email');
-        values.push(user.email);
-        updates.push('email = VALUES(email)');
+        values.push(null);
+        updates.push('email = NULL');
+      }
+      if (usersHasEmailHash) {
+        columns.push('email_hash');
+        values.push(hashNullable(user.email));
+        updates.push('email_hash = VALUES(email_hash)');
+      }
+      if (usersHasEmailEncrypted) {
+        columns.push('email_encrypted');
+        values.push(encryptColumnValue(user.email));
+        updates.push('email_encrypted = VALUES(email_encrypted)');
       }
 
       columns.push('password_hash', 'role_id', 'employee_id', 'is_active');

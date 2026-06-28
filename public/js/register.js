@@ -996,9 +996,6 @@ function loadEmployeeData() {
   EDIT_EMPLOYEE_NUMERIC_ID = emp.id;  // Store the numeric ID for API calls
   
   console.log('✅ loadEmployeeData called');
-  console.log('Loading employee data for:', emp.employee_code, emp.first_name, emp.last_name);
-  console.log('   Numeric ID:', emp.id);
-  console.log('Employee from DB - Department:', emp.department, '| Position:', emp.position, '| Supervisor:', emp.supervisor);
   
   // Populate Personal Info
   const empCodeInput = document.getElementById('emp-id');
@@ -1759,19 +1756,6 @@ async function saveEmployee() {
   const departmentName = document.querySelector('#form-employment select#emp-dept')?.value || 'HR';
   const departmentId = getDepartmentId(departmentName);
   
-  // DEBUG: Log what we're reading from the employment fields
-  console.log('=== EMPLOYMENT FIELDS DEBUG ===');
-  console.log('emp-dept value:', document.querySelector('#form-employment select#emp-dept')?.value);
-  console.log('emp-position value:', document.querySelector('#form-employment select#emp-position')?.value);
-  console.log('emp-hiring-type value:', document.querySelector('#form-employment select#emp-hiring-type')?.value);
-  console.log('emp-type value:', document.querySelector('#form-employment select#emp-type')?.value);
-  console.log('emp-status-field value:', document.querySelector('#form-employment select#emp-status-field')?.value);
-  console.log('emp-hired-date value:', document.querySelector('#form-employment input#emp-hired-date')?.value);
-  console.log('emp-end-contract value:', document.querySelector('#form-employment input#emp-end-contract')?.value);
-  console.log('emp-supervisor value:', document.querySelector('#form-employment input#emp-supervisor')?.value);
-  console.log('emp-location value:', document.querySelector('#form-employment input#emp-location')?.value);
-  console.log('Department name:', departmentName, '-> ID:', departmentId);
-
   const addressResult = collectEmployeeAddressPayload('emp');
   if (addressResult.errors.length) {
     IS_SAVING = false;
@@ -1871,17 +1855,6 @@ async function saveEmployee() {
     return;
   }
 
-  console.log('Saving employee:', formData);
-  console.log('Is editing:', isEditing);
-  console.log('Sending employment data to server:', {
-    department_id: formData.department_id,
-    position: formData.position,
-    employment_type: formData.employment_type,
-    date_hired: formData.date_hired,
-    supervisor: formData.supervisor,
-    work_location: formData.work_location
-  });
-
   // Determine if this is a new employee or update
   const method = isEditing ? 'PUT' : 'POST';
   const endpoint = isEditing ? `/api/employees/${EDIT_EMPLOYEE_NUMERIC_ID || empId}` : '/api/employees';
@@ -1975,13 +1948,8 @@ async function saveEmployee() {
           const currentEmp = freshData?.find(e => e.id === empId);
           if (currentEmp) {
             console.log('✅ Current employee fresh data verified:', {
-              name: currentEmp.name,
-              email: currentEmp.email,
-              phone: currentEmp.phone,
-              city: currentEmp.city,
               dept: currentEmp.dept,
               position: currentEmp.position,
-              supervisor: currentEmp.supervisor,
               status: currentEmp.status
             });
           } else {
@@ -2072,7 +2040,6 @@ async function loadExistingWageConfiguration(employeeCode) {
     }
     
     const config = await res.json();
-    console.log('✅ Existing wage config found:', config);
     
     // Set the wage type dropdown
     const wageTypeDropdown = document.getElementById('emp-wage-type');
@@ -2090,7 +2057,6 @@ async function loadExistingWageConfiguration(employeeCode) {
         const baseSalaryInput = document.getElementById('emp-salary');
         if (baseSalaryInput && config.rates[0]) {
           baseSalaryInput.value = config.rates[0].rate || config.rates[0].base_rate || '';
-          console.log('✅ Loaded base salary:', baseSalaryInput.value);
         }
       } else if (config.wage_type === 'Hourly') {
         const hourlyInput = document.getElementById('emp-hourly-rate');
@@ -2098,11 +2064,9 @@ async function loadExistingWageConfiguration(employeeCode) {
         if (config.rates[0]) {
           if (hourlyInput) {
             hourlyInput.value = config.rates[0].hourly_rate || '';
-            console.log('✅ Loaded hourly rate:', hourlyInput.value);
           }
           if (overtimeInput) {
             overtimeInput.value = config.rates[0].overtime_rate || '';
-            console.log('✅ Loaded overtime rate:', overtimeInput.value);
           }
         }
       } else if (config.wage_type === 'Per-Piece') {
@@ -2112,7 +2076,6 @@ async function loadExistingWageConfiguration(employeeCode) {
             const input = document.getElementById(`sewing-${rate.sewing_type_id}`);
             if (input) {
               input.value = rate.rate || '';
-              console.log(`✅ Loaded sewing type ${rate.sewing_type_id} rate:`, input.value);
             }
           }
         });
@@ -2123,7 +2086,6 @@ async function loadExistingWageConfiguration(employeeCode) {
             const input = document.getElementById(`logistics-${rate.logistics_region_id}`);
             if (input) {
               input.value = rate.rate || '';
-              console.log(`✅ Loaded logistics region ${rate.logistics_region_id} rate:`, input.value);
             }
           }
         });
@@ -2154,7 +2116,6 @@ async function saveWageConfiguration(employeeCode, wageTypeId) {
       const salary = salaryInput ? parseFloat(salaryInput.value) : 0;
       
       if (salary > 0) {
-        console.log('   ✅ Salary:', salary);
         rates.push({
           rate: salary,
           base_rate: salary,
@@ -2238,7 +2199,6 @@ async function saveWageConfiguration(employeeCode, wageTypeId) {
     
     if (rates.length > 0) {
       console.log('📤 SENDING WAGE CONFIG API REQUEST...');
-      console.log('   Payload:', { wage_type_id: wageTypeId, rates: rates });
       
       const res = await apiFetch(`/api/payroll/employees/${employeeCode}/wage-config`, {
         method: 'POST',
@@ -2632,10 +2592,31 @@ async function loadEmployeeDocuments(employeeId) {
     }
     
     const documents = await response.json();
-    console.log('Loaded documents:', documents);
     displayDocuments(documents);
   } catch (err) {
     console.warn('Error loading documents:', err);
+  }
+}
+
+function escapeRegisterHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+async function downloadEmployeeDocument(docId) {
+  if (!EDIT_EMPLOYEE_ID || !docId) return;
+  try {
+    const response = await apiFetch(`/api/employees/${EDIT_EMPLOYEE_ID}/documents/${docId}/view`);
+    if (!response?.ok) throw new Error('Failed to download document.');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'document';
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    alert(error.message || 'Failed to download document.');
   }
 }
 
@@ -2649,7 +2630,7 @@ function displayDocuments(documents) {
   }
   
   listEl.innerHTML = documents.map(doc => {
-    const docTypeLabel = doc.document_type.replace('_', ' ');
+    const docTypeLabel = escapeRegisterHtml(String(doc.document_type || 'Document').replace('_', ' '));
     const uploadedDate = new Date(doc.uploaded_date).toLocaleDateString();
     
     return `
@@ -2658,12 +2639,12 @@ function displayDocuments(documents) {
           <div style="font-size:20px;">📄</div>
           <div style="flex:1;">
             <div style="font-weight:500;font-size:13px;">${docTypeLabel}</div>
-            <div style="font-size:11px;color:var(--muted);">${doc.file_name} • ${uploadedDate}</div>
+            <div style="font-size:11px;color:var(--muted);">${escapeRegisterHtml(doc.file_name || 'Document')} • ${escapeRegisterHtml(uploadedDate)}</div>
           </div>
         </div>
         <div style="display:flex;gap:8px;">
-          <a href="${doc.file_path}" target="_blank" download style="color:#007bff;text-decoration:none;font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #007bff;cursor:pointer;">Download</a>
-          <button onclick="deleteDocument(${doc.id})" style="color:#dc3545;background:#fff;border:1px solid #dc3545;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Delete</button>
+          <button type="button" onclick="downloadEmployeeDocument(${Number(doc.id)})" style="color:#007bff;background:#fff;font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #007bff;cursor:pointer;">Download</button>
+          <button onclick="deleteDocument(${Number(doc.id)})" style="color:#dc3545;background:#fff;border:1px solid #dc3545;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Delete</button>
         </div>
       </div>
     `;

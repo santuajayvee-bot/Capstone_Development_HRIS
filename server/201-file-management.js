@@ -5,8 +5,6 @@
 
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const router = express.Router();
 const pool = require('../config/db');
 const { requireRole, ROLES } = require('./middleware');
@@ -21,8 +19,10 @@ const {
   multerFileFilter,
   randomSafeFilename,
   rejectForbiddenFields,
-  secureUploadedFile,
+  validateUploadedBuffer,
 } = require('./security-controls');
+const { maskSensitiveValue } = require('./privacy-protection');
+const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./encrypted-file-vault');
 
 const DOCUMENT_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'role',
@@ -64,27 +64,19 @@ function rejectUnsupportedFields(req, res, allowedFields, module = 'DOCUMENT_SEC
   return true;
 }
 
-const uploadsDir = path.join(__dirname, '..', 'public', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    cb(null, randomSafeFilename(file.originalname));
-  }
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: multerFileFilter
 });
 
 function uploadDocument(req, res, next) {
   upload.single('file')(req, res, (err) => {
-    if (!err) return secureUploadedFile(req, res, next);
+    if (!err) {
+      const validation = validateUploadedBuffer(req.file);
+      if (validation.ok) return next();
+      return res.status(400).json({ error: validation.error });
+    }
     const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
       ? 'File is too large. Maximum size is 5MB.'
       : err.message || 'File upload failed.';
@@ -188,7 +180,14 @@ router.get('/list', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
       const middle = decryptColumnValue(employee.middle_name) || '';
       const last = decryptColumnValue(employee.last_name) || '';
       return {
-        ...employee,
+        id: employee.id,
+        employee_code: employee.employee_code,
+        email: maskSensitiveValue(decryptColumnValue(employee.email)),
+        position: employee.position,
+        department: employee.department,
+        status: employee.status,
+        document_count: employee.document_count,
+        verified_documents: employee.verified_documents,
         first_name: undefined,
         middle_name: undefined,
         last_name: undefined,
@@ -243,7 +242,8 @@ router.get('/:employeeId', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
         employee_id,
         document_type,
         file_name,
-        file_path,
+        file_name_encrypted,
+        encrypted_file_path,
         uploaded_date,
         verification_status,
         verified_by,
@@ -278,22 +278,34 @@ router.get('/:employeeId', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
       WHERE employee_id = ?
     `, [employeeId]);
 
+    const safeDocuments = documents.map(document => ({
+      id: document.id,
+      employee_id: document.employee_id,
+      document_type: document.document_type,
+      file_name: decryptColumnValue(document.file_name_encrypted || document.file_name) || 'Document',
+      uploaded_date: document.uploaded_date,
+      verification_status: document.verification_status,
+      verified_by: document.verified_by,
+      verified_at: document.verified_at,
+      verified_by_name: document.verified_by_name,
+      rejection_reason_available: !!document.rejection_reason,
+      download_url: `/api/201-files/${employeeId}/documents/${document.id}/download`,
+    }));
+    const firstName = decryptColumnValue(employee.first_name);
+    const middleName = decryptColumnValue(employee.middle_name);
+    const lastName = decryptColumnValue(employee.last_name);
+
     res.json({
       employee: {
         id: employee.id,
         code: employee.employee_code,
-        firstName: employee.first_name,
-        middleName: employee.middle_name,
-        lastName: employee.last_name,
-        suffix: employee.suffix,
-        email: employee.email,
-        contactNumber: employee.contact_number,
-        nationality: employee.nationality,
-        dateOfBirth: employee.date_of_birth,
-        gender: employee.gender,
-        residentialAddress: employee.residential_address,
-        emergencyContactName: employee.emergency_contact_name,
-        emergencyContactNum: employee.emergency_contact_num,
+        name: [firstName, middleName, lastName].filter(Boolean).join(' '),
+        email: maskSensitiveValue(decryptColumnValue(employee.email)),
+        contactNumber: maskSensitiveValue(decryptColumnValue(employee.contact_number)),
+        dateOfBirth: employee.date_of_birth ? 'On file' : 'Not set',
+        residentialAddress: employee.residential_address ? 'On file' : 'Not set',
+        emergencyContactName: employee.emergency_contact_name ? 'On file' : 'Not set',
+        emergencyContactNum: employee.emergency_contact_num ? 'On file' : 'Not set',
         department: employee.department,
         position: employee.position,
         employmentType: employee.employment_type,
@@ -303,8 +315,12 @@ router.get('/:employeeId', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
         status: employee.status,
         createdAt: employee.created_at,
       },
-      documents,
-      sensitiveData: sensitiveDataResponse(sensitiveData),
+      documents: safeDocuments,
+      sensitiveData: sensitiveData ? {
+        ssn_status: present(sensitiveData, 'ssn_encrypted', 'ssn'),
+        tax_id_status: present(sensitiveData, 'tax_id_encrypted', 'tax_id'),
+        bank_status: present(sensitiveData, 'bank_account_number_encrypted', 'bank_account_number'),
+      } : null,
     });
   } catch (err) {
     console.error('Error fetching 201-file:', err);
@@ -357,6 +373,36 @@ router.get('/:employeeId/sensitive-data', requireRole(HR_DOCUMENT_ROLES), async 
   } catch (err) {
     console.error('Error fetching sensitive data:', err);
     res.status(500).json({ error: 'Failed to fetch sensitive data.' });
+  }
+});
+
+// Explicit reveal for the personal fields shown masked in the default 201-file response.
+router.post('/:employeeId/reveal-employee-sensitive', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const [[employee]] = await pool.execute(
+      `SELECT email, contact_number, date_of_birth, nationality, gender,
+              residential_address, emergency_contact_name, emergency_contact_num
+         FROM employees WHERE id = ? LIMIT 1`,
+      [employeeId]
+    );
+    if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+    await logAccessLog(employeeId, req.user.id, 'sensitive_data_view', 'employee_info', employeeId, {
+      action: 'revealed_employee_sensitive_fields',
+    });
+    return res.json({
+      email: decryptColumnValue(employee.email),
+      contactNumber: decryptColumnValue(employee.contact_number),
+      dateOfBirth: decryptColumnValue(employee.date_of_birth),
+      nationality: decryptColumnValue(employee.nationality),
+      gender: decryptColumnValue(employee.gender),
+      residentialAddress: decryptColumnValue(employee.residential_address),
+      emergencyContactName: decryptColumnValue(employee.emergency_contact_name),
+      emergencyContactNum: decryptColumnValue(employee.emergency_contact_num),
+    });
+  } catch (err) {
+    console.error('Error revealing 201-file employee fields:', err.message);
+    return res.status(500).json({ error: 'Failed to reveal employee information.' });
   }
 });
 
@@ -459,15 +505,13 @@ router.put('/:employeeId/sensitive-data', requireRole(HR_DOCUMENT_ROLES), DOCUME
 
 // POST /api/201-files/:employeeId/documents → Upload a document to the 201-file
 router.post('/:employeeId/documents', requireRole(HR_DOCUMENT_ROLES), DOCUMENT_PARAMETER_TAMPER_GUARD, uploadDocument, async (req, res) => {
+  let pendingEncryptedPath = null;
   try {
     const { employeeId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
     const { document_type } = req.body;
-    if (rejectUnsupportedFields(req, res, new Set(['document_type']))) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      return;
-    }
+    if (rejectUnsupportedFields(req, res, new Set(['document_type']))) return;
 
     // Permission check: Only HR document roles can upload documents
     const isHrAdmin = isHrDocumentRole(userRole);
@@ -480,28 +524,59 @@ router.post('/:employeeId/documents', requireRole(HR_DOCUMENT_ROLES), DOCUMENT_P
     }
 
     const fileName = req.file.originalname;
-    const filePath = `/uploads/${req.file.filename}`;
 
     if (!DOCUMENT_TYPE_VALUES.has(document_type || 'Other')) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid document type.' });
     }
 
-    const [result] = await pool.execute(`
-      INSERT INTO documents (employee_id, document_type, file_name, file_path)
-      VALUES (?, ?, ?, ?)
-    `, [employeeId, document_type || 'Other', fileName, filePath]);
+    pendingEncryptedPath = await storeEncryptedBuffer('employee-documents', req.file.buffer);
 
+    const [result] = await pool.execute(`
+      INSERT INTO documents
+        (employee_id, document_type, file_name, file_path, file_name_encrypted,
+         encrypted_file_path, file_mime_type, file_size_bytes)
+      VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
+    `, [
+      employeeId,
+      document_type || 'Other',
+      encryptNullable(fileName),
+      pendingEncryptedPath,
+      req.file.mimetype,
+      req.file.size,
+    ]);
+
+    pendingEncryptedPath = null;
     await logAccessLog(employeeId, userId, 'document_upload', 'document', result.insertId, {
       action: 'uploaded_document',
-      file_name: fileName,
       document_type,
     });
 
     res.json({ message: 'Document uploaded successfully.', id: result.insertId });
   } catch (err) {
+    if (pendingEncryptedPath) await deleteEncryptedFile(pendingEncryptedPath).catch(() => {});
     console.error('Error uploading document:', err);
     res.status(500).json({ error: 'Failed to upload document.' });
+  }
+});
+
+router.get('/:employeeId/documents/:docId/download', requireRole(HR_DOCUMENT_ROLES), async (req, res) => {
+  try {
+    const { employeeId, docId } = req.params;
+    const [[document]] = await pool.execute(
+      `SELECT file_name, file_name_encrypted, encrypted_file_path, file_mime_type
+         FROM documents WHERE id = ? AND employee_id = ? LIMIT 1`,
+      [docId, employeeId]
+    );
+    if (!document?.encrypted_file_path) return res.status(404).json({ error: 'Document file not found.' });
+    const buffer = await readEncryptedBuffer(document.encrypted_file_path);
+    const fileName = decryptColumnValue(document.file_name_encrypted || document.file_name) || 'document.bin';
+    await logAccessLog(employeeId, req.user.id, 'document_download', 'document', docId, { action: 'downloaded_document' });
+    res.setHeader('Content-Type', document.file_mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\r\n]/g, '_')}"`);
+    return res.send(buffer);
+  } catch (err) {
+    console.error('Error downloading document:', err.message);
+    return res.status(500).json({ error: 'Failed to download document.' });
   }
 });
 
@@ -530,16 +605,10 @@ router.delete('/:employeeId/documents/:docId', requireRole(HR_DOCUMENT_ROLES), a
       DELETE FROM documents WHERE id = ? AND employee_id = ?
     `, [docId, employeeId]);
 
-    if (existingDoc.file_path) {
-      const absPath = path.join(__dirname, '..', 'public', existingDoc.file_path);
-      fs.unlink(absPath, err => {
-        if (err) console.warn('Could not delete file from disk:', err.message);
-      });
-    }
+    await deleteEncryptedFile(existingDoc.encrypted_file_path);
 
     await logAccessLog(employeeId, userId, 'document_delete', 'document', docId, {
       action: 'deleted_document',
-      file_name: existingDoc.file_name,
       document_type: existingDoc.document_type,
     });
 
@@ -581,7 +650,7 @@ router.put('/:employeeId/verify-document/:docId', requireRole(HR_DOCUMENT_ROLES)
     await logAccessLog(employeeId, userId, 'document_verify', 'document', docId, { 
       action: 'verified_document',
       status: verification_status,
-      reason: rejection_reason
+      reason_provided: !!rejection_reason
     });
 
     res.json({ message: `Document ${verification_status.toLowerCase()} successfully.` });

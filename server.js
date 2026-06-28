@@ -28,7 +28,7 @@ const adminRbacRoutes                        = require('./server/admin-rbac');
 const accountCreationRequestRoutes           = require('./server/account-creation-requests');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
-const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson } = require('./server/data-protection');
+const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson, hashNullable } = require('./server/data-protection');
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
@@ -36,6 +36,8 @@ const { clientErrorResponse }                = require('./server/error-response'
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
+const { encryptAuditValue, maskSensitiveValue, preventStorageCiphertextResponses } = require('./server/privacy-protection');
+const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./server/encrypted-file-vault');
 const {
   auditSecurityEvent,
   createRateLimiter,
@@ -44,6 +46,7 @@ const {
   rejectForbiddenFields,
   requireSameOriginForBrowserWrites,
   secureUploadedFile,
+  validateUploadedBuffer,
 }                                             = require('./server/security-controls');
 
 const app  = express();
@@ -374,6 +377,12 @@ const upload = multer({
   fileFilter: multerFileFilter
 });
 
+const sensitiveUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: multerFileFilter,
+});
+
 function uploadSingle(fieldName) {
   return (req, res, next) => {
     upload.single(fieldName)(req, res, (err) => {
@@ -393,6 +402,26 @@ function uploadSingle(fieldName) {
       return res.status(400).json({ error: message });
     });
   };
+}
+
+function uploadSensitiveSingle(fieldName) {
+  return (req, res, next) => {
+    sensitiveUpload.single(fieldName)(req, res, err => {
+      if (!err) {
+        const validation = validateUploadedBuffer(req.file);
+        if (validation.ok) return next();
+        return res.status(400).json({ error: validation.error });
+      }
+      const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+        ? 'File is too large. Maximum size is 5MB.'
+        : err.message || 'File upload failed.';
+      return res.status(400).json({ error: message });
+    });
+  };
+}
+
+function discardUploadedFile(file) {
+  if (file?.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
 }
 
 function normalizeWageTypeInput(value) {
@@ -487,6 +516,7 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(encryptedCommunicationMiddleware);
+app.use(preventStorageCiphertextResponses);
 app.use('/api', requireSameOriginForBrowserWrites);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
@@ -965,6 +995,54 @@ function employeeReferencePayload(employee, options = {}) {
   };
 }
 
+function employeeDirectoryPayload(employee, options = {}) {
+  const revealSensitive = Boolean(options.revealSensitive);
+  return {
+    ...employeeReferencePayload(employee, options),
+    email: revealSensitive ? (employee.email || null) : (employee.email ? maskSensitiveValue(employee.email, 3) : null),
+    contact_number: revealSensitive ? (employee.contact_number || null) : (employee.contact_number ? maskSensitiveValue(employee.contact_number, 4) : null),
+    supervisor: employee.supervisor || null,
+    hiring_type: employee.hiring_type || null,
+    deployment_status: employee.deployment_status || null,
+    pending_offboarding_request_id: employee.pending_offboarding_request_id || null,
+    pending_offboarding_status: employee.pending_offboarding_status || null,
+    pending_reonboarding_request_id: employee.pending_reonboarding_request_id || null,
+  };
+}
+
+const EMPLOYEE_REVEAL_FIELDS = new Set([
+  ...EMPLOYEE_STRICT_PII_COLUMNS,
+  'residential_address_lat', 'residential_address_lng',
+  'current_address_lat', 'current_address_lng',
+  'mailing_address_lat', 'mailing_address_lng',
+]);
+
+function decryptEmployeeGps(row) {
+  for (const field of ['residential_address_lat', 'residential_address_lng', 'current_address_lat', 'current_address_lng', 'mailing_address_lat', 'mailing_address_lng']) {
+    const encryptedField = `${field}_encrypted`;
+    if (row?.[encryptedField]) row[field] = decryptColumnValue(row[encryptedField]);
+    delete row?.[encryptedField];
+  }
+  return row;
+}
+
+function maskEmployeeDetail(row) {
+  const safe = { ...row, sensitive_fields_masked: true };
+  for (const field of EMPLOYEE_REVEAL_FIELDS) {
+    if (['first_name', 'middle_name', 'last_name', 'suffix'].includes(field)) continue;
+    const value = safe[field];
+    if (value === null || value === undefined || value === '') continue;
+    safe[field] = field.includes('address') && !field.endsWith('_lat') && !field.endsWith('_lng')
+      ? 'On file'
+      : maskSensitiveValue(value, 4);
+  }
+  return safe;
+}
+
+function visibleEmployeeDetail(row) {
+  return { ...row, sensitive_fields_masked: false };
+}
+
 function normalizeBlank(value) {
   if (value === undefined) return undefined;
   if (value === null) return null;
@@ -1255,16 +1333,23 @@ async function ensureOffboardingDocumentSchema(pool) {
     ['offboarding_case_id', 'BIGINT NULL AFTER employee_id'],
     ['document_stage', "ENUM('Employee Profile','Offboarding') NOT NULL DEFAULT 'Employee Profile' AFTER document_type"],
     ['uploaded_by', 'INT NULL AFTER uploaded_date'],
+    ['file_name_encrypted', 'TEXT NULL AFTER file_name'],
+    ['encrypted_file_path', 'VARCHAR(500) NULL AFTER file_path'],
+    ['file_mime_type', 'VARCHAR(120) NULL'],
+    ['file_size_bytes', 'BIGINT NULL'],
   ];
   for (const [name, definition] of columns) {
     const [existing] = await pool.execute(`SHOW COLUMNS FROM documents LIKE '${name}'`);
     if (!existing.length) await pool.execute(`ALTER TABLE documents ADD COLUMN ${name} ${definition}`);
   }
+  await pool.execute('ALTER TABLE documents MODIFY COLUMN file_name VARCHAR(255) NULL').catch(() => {});
+  await pool.execute('ALTER TABLE documents MODIFY COLUMN file_path VARCHAR(500) NULL').catch(() => {});
 }
 
 async function loadOffboardingDocuments(executor, caseId) {
   const [documents] = await executor.execute(
-    `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_date, uploaded_by
+    `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_name_encrypted,
+            encrypted_file_path, uploaded_date, uploaded_by
        FROM documents
       WHERE offboarding_case_id = ?
         AND document_stage = 'Offboarding'
@@ -1272,7 +1357,13 @@ async function loadOffboardingDocuments(executor, caseId) {
     [caseId]
   );
   return documents.map(document => ({
-    ...document,
+    id: document.id,
+    offboarding_case_id: document.offboarding_case_id,
+    document_type: document.document_type,
+    document_stage: document.document_stage,
+    file_name: decryptColumnValue(document.file_name_encrypted || document.file_name) || 'Document',
+    uploaded_date: document.uploaded_date,
+    uploaded_by: document.uploaded_by,
     document_label: offboardingDocumentLabel(document.document_type),
   }));
 }
@@ -2027,7 +2118,11 @@ async function generateNextEmployeeCode(executor, reserve = false) {
 }
 
 function personLabel(row) {
-  const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
+  const name = [row.first_name, row.last_name]
+    .map(value => value ? decryptColumnValue(value) : null)
+    .filter(Boolean)
+    .join(' ')
+    .trim();
   return name ? `${name} (${row.employee_code || row.applicant_code || 'no code'})` : (row.employee_code || row.applicant_code || 'existing record');
 }
 
@@ -2051,7 +2146,7 @@ async function findEmployeeIntakeDuplicate(executor, employeeCode, email) {
   const [employeeEmailRows] = await executor.execute(
     `SELECT id, employee_code, email, first_name, last_name
        FROM employees
-      WHERE LOWER(email) = LOWER(?)
+      WHERE email_hash = SHA2(LOWER(?), 256)
       LIMIT 1`,
     [email]
   );
@@ -2891,21 +2986,13 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     const [rows] = await pool.query(employeeListSql, employeeParams);
     const employees = rows.map(row => decryptEmployeeStrictPii(row));
     
-    console.log('\n=== GET /api/employees ===');
-    console.log('Total employees returned:', employees.length);
-    if (employees.length > 0) {
-      console.log('Sample employee data:', {
-        employee_code: employees[0].employee_code,
-        employment_type: employees[0].employment_type,
-        date_hired: employees[0].date_hired,
-        department: employees[0].department,
-        position: employees[0].position,
-        wage_type: employees[0].wage_type
-      });
+    if (req.user.role === 'employee') return res.json(employees.filter(r => r.id === req.user.employeeId).map(employee => employeeDirectoryPayload(employee)));
+    if (employeeHasRole(req, ROLES.staff_management)) {
+      return res.json(employees.map(employee => employeeDirectoryPayload(employee, {
+        includePayrollFields: true,
+        revealSensitive: true,
+      })));
     }
-    
-    if (req.user.role === 'employee') return res.json(employees.filter(r => r.id === req.user.employeeId));
-    if (employeeHasRole(req, ROLES.staff_management)) return res.json(employees);
     if (employeeHasRole(req, ROLES.payroll_any)) {
       return res.json(employees.map(employee => employeeReferencePayload(employee, { includePayrollFields: true })));
     }
@@ -2916,6 +3003,63 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
   } catch (err) {
     console.error('Error fetching employees:', err);
     res.status(500).json({ error: 'Failed to fetch employees.' }); 
+  }
+});
+
+app.get('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const employeeId = Number(req.params.id);
+    if (!Number.isInteger(employeeId) || employeeId <= 0) return res.status(400).json({ error: 'Valid employee id is required.' });
+    if (!canAccessEmployeeRecord(req, employeeId, { allowPermission: true })) {
+      return rejectEmployeeIdor(req, res, employeeId, 'blocked_employee_detail_idor_attempt');
+    }
+    const [rows] = await pool.execute(`
+      SELECT e.*, d.name AS department, wt.name AS wage_type,
+             (SELECT ewr.rate FROM employee_wage_rates ewr WHERE ewr.employee_id = e.id ORDER BY ewr.effective_date DESC, ewr.id DESC LIMIT 1) AS basic_salary
+        FROM employees e
+        LEFT JOIN departments d ON d.id = e.department_id
+        LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+       WHERE e.id = ?
+       LIMIT 1
+    `, [employeeId]);
+    if (!rows.length) return res.status(404).json({ error: 'Employee not found.' });
+    const employee = decryptEmployeeGps(decryptEmployeeStrictPii(rows[0]));
+    for (const field of ['Password_Hash', 'password_hash', 'encrypted_pii', 'email_hash', 'Failed_Login_Attempts', 'Locked_Until']) delete employee[field];
+    res.json(visibleEmployeeDetail(employee));
+  } catch (err) {
+    console.error('Error fetching employee detail:', err.message);
+    res.status(500).json({ error: 'Failed to fetch employee detail.' });
+  }
+});
+
+app.post('/api/employees/:id/reveal-sensitive', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const employeeId = Number(req.params.id);
+    if (!Number.isInteger(employeeId) || employeeId <= 0) return res.status(400).json({ error: 'Valid employee id is required.' });
+    if (!canAccessEmployeeRecord(req, employeeId, { allowPermission: true })) {
+      return rejectEmployeeIdor(req, res, employeeId, 'blocked_employee_sensitive_reveal_idor_attempt');
+    }
+    const [rows] = await pool.execute('SELECT * FROM employees WHERE id = ? LIMIT 1', [employeeId]);
+    if (!rows.length) return res.status(404).json({ error: 'Employee not found.' });
+    const employee = decryptEmployeeGps(decryptEmployeeStrictPii(rows[0]));
+    const revealed = {};
+    for (const field of EMPLOYEE_REVEAL_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(employee, field)) revealed[field] = employee[field];
+    }
+    await auditSecurityEvent(req, {
+      action: 'employee_sensitive_fields_revealed',
+      module: 'EMPLOYEE_PRIVACY',
+      targetTable: 'employees',
+      targetRecord: employeeId,
+      newValue: { fields: Object.keys(revealed) },
+      result: 'success',
+    });
+    res.json({ employee_id: employeeId, fields: revealed });
+  } catch (err) {
+    console.error('Error revealing employee fields:', err.message);
+    res.status(500).json({ error: 'Failed to reveal sensitive employee fields.' });
   }
 });
 
@@ -3117,7 +3261,6 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
       return res.status(409).json(await employeeIntakeDuplicatePayload(pool, duplicate));
     }
 
-    console.log('Executing INSERT for:', { employee_code: finalEmployeeCode, first_name, last_name, email });
     const generatedTemporaryPassword = nodeCrypto.randomBytes(24).toString('base64');
     const employeePasswordHash = await hashTemporaryPassword(generatedTemporaryPassword);
     
@@ -3145,24 +3288,29 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
     const employee_id = result.insertId;
     await pool.execute(
       `UPDATE employees SET
-         residential_address_lat = ?, residential_address_lng = ?,
+         email_hash = ?,
+         residential_address_lat = NULL, residential_address_lng = NULL,
+         residential_address_lat_encrypted = ?, residential_address_lng_encrypted = ?,
          residential_address_region = ?, residential_address_province = ?, residential_address_city_municipality = ?,
          residential_address_barangay = ?, residential_address_street_address = ?, residential_address_full_address = ?, residential_address_place_id = ?,
-         current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         current_address_lat = NULL, current_address_lng = NULL,
+         current_address_lat_encrypted = ?, current_address_lng_encrypted = ?, current_address_same_as_home = ?,
          current_address_region = ?, current_address_province = ?, current_address_city_municipality = ?,
          current_address_barangay = ?, current_address_street_address = ?, current_address_full_address = ?, current_address_place_id = ?,
-         mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+         mailing_address_lat = NULL, mailing_address_lng = NULL,
+         mailing_address_lat_encrypted = ?, mailing_address_lng_encrypted = ?, mailing_address_same_as_home = ?
          , mailing_address_region = ?, mailing_address_province = ?, mailing_address_city_municipality = ?,
          mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
-       WHERE id = ?`,
+      WHERE id = ?`,
       [
-        dbNullable(addresses.home.lat), dbNullable(addresses.home.lng),
+        hashNullable(email),
+        encryptColumnValue(dbNullable(addresses.home.lat)), encryptColumnValue(dbNullable(addresses.home.lng)),
         employeeDbValue('residential_address_region', addresses.home.region), employeeDbValue('residential_address_province', addresses.home.province), employeeDbValue('residential_address_city_municipality', addresses.home.city_municipality),
         employeeDbValue('residential_address_barangay', addresses.home.barangay), employeeDbValue('residential_address_street_address', addresses.home.street_address), employeeDbValue('residential_address_full_address', addresses.home.full_address || addresses.home.address), employeeDbValue('residential_address_place_id', addresses.home.place_id || null),
-        dbNullable(addresses.current.lat), dbNullable(addresses.current.lng), addresses.sameCurrent ? 1 : 0,
+        encryptColumnValue(dbNullable(addresses.current.lat)), encryptColumnValue(dbNullable(addresses.current.lng)), addresses.sameCurrent ? 1 : 0,
         employeeDbValue('current_address_region', addresses.current.region), employeeDbValue('current_address_province', addresses.current.province), employeeDbValue('current_address_city_municipality', addresses.current.city_municipality),
         employeeDbValue('current_address_barangay', addresses.current.barangay), employeeDbValue('current_address_street_address', addresses.current.street_address), employeeDbValue('current_address_full_address', addresses.current.full_address || addresses.current.address), employeeDbValue('current_address_place_id', addresses.current.place_id || null),
-        dbNullable(addresses.mailing.lat), dbNullable(addresses.mailing.lng), addresses.sameMailing ? 1 : 0,
+        encryptColumnValue(dbNullable(addresses.mailing.lat)), encryptColumnValue(dbNullable(addresses.mailing.lng)), addresses.sameMailing ? 1 : 0,
         employeeDbValue('mailing_address_region', addresses.mailing.region), employeeDbValue('mailing_address_province', addresses.mailing.province), employeeDbValue('mailing_address_city_municipality', addresses.mailing.city_municipality),
         employeeDbValue('mailing_address_barangay', addresses.mailing.barangay), employeeDbValue('mailing_address_street_address', addresses.mailing.street_address), employeeDbValue('mailing_address_full_address', addresses.mailing.full_address || addresses.mailing.address), employeeDbValue('mailing_address_place_id', addresses.mailing.place_id || null),
         employee_id
@@ -3279,7 +3427,6 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
               [employee_id, wage_type_id, parseFloat(base_rate)]
             );
             
-            console.log('✅ Saved base rate:', base_rate, 'for wage_type_id:', wage_type_id);
           }
           
           // Save sewing type specific rates if provided
@@ -3293,7 +3440,6 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
                      VALUES (?, ?, ?, ?, NOW())`,
                     [employee_id, wage_type_id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
                   );
-                  console.log(`✅ Saved sewing rate for type ${sewingRate.sewing_id}: ${sewingRate.rate}`);
                 } catch (err) {
                   console.warn('⚠️ Error saving sewing rate:', err.message);
                 }
@@ -3414,7 +3560,6 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     const contractEndValue = normalizedHiringType === 'Agency-Hired' ? contract_end_date || end_of_contract || null : null;
     const directoryEndOfContract = contractEndValue || end_of_contract || null;
 
-    console.log('Executing UPDATE for:', { id, first_name, last_name, email, department_id, position, supervisor, work_location, hiring_type: normalizedHiringType, agency_name: agencyNameValue });
 
     const [result] = await pool.execute(
       `UPDATE employees SET 
@@ -3453,24 +3598,29 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     console.log('✅ UPDATE executed');
     await pool.execute(
       `UPDATE employees SET
-         residential_address_lat = ?, residential_address_lng = ?,
+         email_hash = ?,
+         residential_address_lat = NULL, residential_address_lng = NULL,
+         residential_address_lat_encrypted = ?, residential_address_lng_encrypted = ?,
          residential_address_region = ?, residential_address_province = ?, residential_address_city_municipality = ?,
          residential_address_barangay = ?, residential_address_street_address = ?, residential_address_full_address = ?, residential_address_place_id = ?,
-         current_address_lat = ?, current_address_lng = ?, current_address_same_as_home = ?,
+         current_address_lat = NULL, current_address_lng = NULL,
+         current_address_lat_encrypted = ?, current_address_lng_encrypted = ?, current_address_same_as_home = ?,
          current_address_region = ?, current_address_province = ?, current_address_city_municipality = ?,
          current_address_barangay = ?, current_address_street_address = ?, current_address_full_address = ?, current_address_place_id = ?,
-         mailing_address_lat = ?, mailing_address_lng = ?, mailing_address_same_as_home = ?
+         mailing_address_lat = NULL, mailing_address_lng = NULL,
+         mailing_address_lat_encrypted = ?, mailing_address_lng_encrypted = ?, mailing_address_same_as_home = ?
          , mailing_address_region = ?, mailing_address_province = ?, mailing_address_city_municipality = ?,
          mailing_address_barangay = ?, mailing_address_street_address = ?, mailing_address_full_address = ?, mailing_address_place_id = ?
-       WHERE id = ? OR employee_code = ?`,
+      WHERE id = ? OR employee_code = ?`,
       [
-        dbNullable(addresses.home.lat), dbNullable(addresses.home.lng),
+        hashNullable(email),
+        encryptColumnValue(dbNullable(addresses.home.lat)), encryptColumnValue(dbNullable(addresses.home.lng)),
         employeeDbValue('residential_address_region', addresses.home.region), employeeDbValue('residential_address_province', addresses.home.province), employeeDbValue('residential_address_city_municipality', addresses.home.city_municipality),
         employeeDbValue('residential_address_barangay', addresses.home.barangay), employeeDbValue('residential_address_street_address', addresses.home.street_address), employeeDbValue('residential_address_full_address', addresses.home.full_address || addresses.home.address), employeeDbValue('residential_address_place_id', addresses.home.place_id || null),
-        dbNullable(addresses.current.lat), dbNullable(addresses.current.lng), addresses.sameCurrent ? 1 : 0,
+        encryptColumnValue(dbNullable(addresses.current.lat)), encryptColumnValue(dbNullable(addresses.current.lng)), addresses.sameCurrent ? 1 : 0,
         employeeDbValue('current_address_region', addresses.current.region), employeeDbValue('current_address_province', addresses.current.province), employeeDbValue('current_address_city_municipality', addresses.current.city_municipality),
         employeeDbValue('current_address_barangay', addresses.current.barangay), employeeDbValue('current_address_street_address', addresses.current.street_address), employeeDbValue('current_address_full_address', addresses.current.full_address || addresses.current.address), employeeDbValue('current_address_place_id', addresses.current.place_id || null),
-        dbNullable(addresses.mailing.lat), dbNullable(addresses.mailing.lng), addresses.sameMailing ? 1 : 0,
+        encryptColumnValue(dbNullable(addresses.mailing.lat)), encryptColumnValue(dbNullable(addresses.mailing.lng)), addresses.sameMailing ? 1 : 0,
         employeeDbValue('mailing_address_region', addresses.mailing.region), employeeDbValue('mailing_address_province', addresses.mailing.province), employeeDbValue('mailing_address_city_municipality', addresses.mailing.city_municipality),
         employeeDbValue('mailing_address_barangay', addresses.mailing.barangay), employeeDbValue('mailing_address_street_address', addresses.mailing.street_address), employeeDbValue('mailing_address_full_address', addresses.mailing.full_address || addresses.mailing.address), employeeDbValue('mailing_address_place_id', addresses.mailing.place_id || null),
         id, id
@@ -3544,7 +3694,6 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
               [id, wage_type_id, parseFloat(base_rate)]
             );
             
-            console.log('✅ Saved base rate:', base_rate, 'for wage_type_id:', wage_type_id);
           }
           
           // Save sewing type specific rates if provided
@@ -3558,7 +3707,6 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
                      VALUES (?, ?, ?, ?, NOW())`,
                     [id, wage_type_id, sewingRate.sewing_id, parseFloat(sewingRate.rate)]
                   );
-                  console.log(`✅ Saved sewing rate for type ${sewingRate.sewing_id}: ${sewingRate.rate}`);
                 } catch (err) {
                   console.warn('⚠️ Error saving sewing rate:', err.message);
                 }
@@ -4389,21 +4537,22 @@ app.get('/api/employees/offboarding/:caseId/documents', requireAuth, requireRole
   }
 });
 
-app.post('/api/employees/offboarding/:caseId/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('file'), async (req, res) => {
+app.post('/api/employees/offboarding/:caseId/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSensitiveSingle('file'), async (req, res) => {
+  let encryptedPath = null;
   try {
     const pool = require('./config/db');
     await ensureEmployeeLifecycleManagementSchema(pool);
     const caseId = Number(req.params.caseId);
     if (!caseId) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Valid offboarding case id is required.' });
     }
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_OFFBOARDING_DOCUMENT_ALLOWED_FIELDS, 'offboarding documents')) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return;
     }
     if (!canCreateOffboarding(req)) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return rejectLifecycleUnauthorized(req, res, 'blocked_offboarding_document_upload_unauthorized', caseId);
     }
     if (!req.file) return res.status(400).json({ error: 'No file provided.' });
@@ -4417,27 +4566,30 @@ app.post('/api/employees/offboarding/:caseId/documents', requireAuth, requireRol
       [caseId]
     );
     if (!cases.length) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(404).json({ error: 'Offboarding request not found.' });
     }
     const offboardingCase = cases[0];
     if (!canAccessEmployeeRecord(req, offboardingCase.employee_id, { allowPermission: false })) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return rejectEmployeeIdor(req, res, offboardingCase.employee_id, 'blocked_offboarding_document_upload_idor_attempt');
     }
     if (isTerminalOffboardingStatus(offboardingCase.status)) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Cannot attach documents to a completed offboarding request.' });
     }
 
     const docType = normalizeOffboardingDocumentType(req.body.docType || req.body.document_type);
-    const filePath = `/uploads/${req.file.filename}`;
+    encryptedPath = await storeEncryptedBuffer('employee-documents', req.file.buffer);
     const [result] = await pool.execute(
       `INSERT INTO documents
-         (employee_id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_by)
-       VALUES (?, ?, ?, 'Offboarding', ?, ?, ?)`,
-      [offboardingCase.employee_id, caseId, docType, req.file.originalname, filePath, req.user.id || null]
+         (employee_id, offboarding_case_id, document_type, document_stage, file_name, file_path,
+          file_name_encrypted, encrypted_file_path, file_mime_type, file_size_bytes, uploaded_by)
+       VALUES (?, ?, ?, 'Offboarding', NULL, NULL, ?, ?, ?, ?, ?)`,
+      [offboardingCase.employee_id, caseId, docType, encryptColumnValue(req.file.originalname),
+        encryptedPath, req.file.mimetype, req.file.size, req.user.id || null]
     );
+    encryptedPath = null;
     await writeEmployeeLifecycleAudit(pool, req, 'OFFBOARDING_DOCUMENT_UPLOADED', offboardingCase.employee_id, null, {
       offboarding_case_id: caseId,
       document_id: result.insertId,
@@ -4452,23 +4604,25 @@ app.post('/api/employees/offboarding/:caseId/documents', requireAuth, requireRol
         document_type: docType,
         document_label: offboardingDocumentLabel(docType),
         file_name: req.file.originalname,
-        file_path: filePath,
       },
     });
   } catch (err) {
     console.error('Error uploading offboarding document:', err.message, err.sqlMessage);
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    discardUploadedFile(req.file);
+    if (encryptedPath) await deleteEncryptedFile(encryptedPath).catch(() => {});
     return res.status(500).json({ error: 'Failed to upload offboarding document.' });
   }
 });
 
 // Upload employee document
-app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('file'), async (req, res) => {
+app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSensitiveSingle('file'), async (req, res) => {
+  let encryptedPath = null;
   try {
     const pool = require('./config/db');
+    await ensureOffboardingDocumentSchema(pool);
     const { id } = req.params; // id = employee_code
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_DOCUMENT_ALLOWED_FIELDS, 'documents')) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return;
     }
     const allowedDocTypes = new Set(['Resume', 'Government_ID', 'NBI_Clearance', 'Contract', 'Other']);
@@ -4478,28 +4632,26 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
       return res.status(400).json({ error: 'No file provided.' });
     }
     
-    console.log('\n=== POST /api/employees/:id/documents ===');
-    console.log('Employee Code:', id);
-    console.log('Document Type:', docType);
-    console.log('File:', req.file.filename);
-    
     // Get employee ID from employee_code
     const [empRows] = await pool.execute('SELECT id FROM employees WHERE employee_code = ?', [id]);
     if (empRows.length === 0) {
-      fs.unlinkSync(req.file.path); // Delete uploaded file
+      discardUploadedFile(req.file);
       return res.status(404).json({ error: 'Employee not found.' });
     }
     
     const employeeId = empRows[0].id;
-    const filePath = `/uploads/${req.file.filename}`;
+    encryptedPath = await storeEncryptedBuffer('employee-documents', req.file.buffer);
     
     // Insert a new document record. Multiple files of the same document type
     // are valid because HR may collect updated or supplemental copies.
     const [result] = await pool.execute(
-      `INSERT INTO documents (employee_id, document_type, file_name, file_path)
-       VALUES (?, ?, ?, ?)`,
-      [employeeId, docType, req.file.originalname, filePath]
+      `INSERT INTO documents
+         (employee_id, document_type, file_name, file_path, file_name_encrypted,
+          encrypted_file_path, file_mime_type, file_size_bytes)
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)`,
+      [employeeId, docType, encryptColumnValue(req.file.originalname), encryptedPath, req.file.mimetype, req.file.size]
     );
+    encryptedPath = null;
     await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_DOCUMENT_UPLOADED', employeeId, null, {
       document_id: result.insertId,
       document_type: docType,
@@ -4508,19 +4660,19 @@ app.post('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_ma
     console.log('✅ Document uploaded successfully');
     return res.status(200).json({
       message: 'Document uploaded successfully.',
-      file_name: req.file.originalname,
-      file_path: filePath
+      file_name: req.file.originalname
     });
     
   } catch (err) {
     console.error('Error uploading document:', err.message);
-    if (req.file) fs.unlinkSync(req.file.path);
+    discardUploadedFile(req.file);
+    if (encryptedPath) await deleteEncryptedFile(encryptedPath).catch(() => {});
     return res.status(500).json({ error: 'Failed to upload document.' });
   }
 });
 
 // Get employee documents
-app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id } = req.params; // id = employee_code
@@ -4540,16 +4692,20 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
 
     // Fetch all documents for this employee, including optional lifecycle support files.
     const [docs] = await pool.execute(
-      `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_path, uploaded_date
+      `SELECT id, offboarding_case_id, document_type, document_stage, file_name, file_name_encrypted, uploaded_date
          FROM documents
         WHERE employee_id = ?
         ORDER BY document_stage, document_type, uploaded_date DESC`,
       [employeeId]
     );
     
-    console.log(`Fetched ${docs.length} documents for employee ${id}`);
     return res.json(docs.map(document => ({
-      ...document,
+      id: document.id,
+      offboarding_case_id: document.offboarding_case_id,
+      document_type: document.document_type,
+      document_stage: document.document_stage,
+      file_name: decryptColumnValue(document.file_name_encrypted || document.file_name) || 'Document',
+      uploaded_date: document.uploaded_date,
       document_label: document.document_stage === 'Offboarding'
         ? offboardingDocumentLabel(document.document_type)
         : document.document_type,
@@ -4562,7 +4718,7 @@ app.get('/api/employees/:id/documents', requireAuth, requireRole(ROLES.any), asy
 });
 
 // View employee document
-app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROLES.staff_management), async (req, res) => {
   try {
     const pool = require('./config/db');
     const { id, docId } = req.params;
@@ -4576,18 +4732,28 @@ app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROL
     }
 
     const [docs] = await pool.execute(
-      `SELECT file_name, file_path
+      `SELECT file_name, file_path, file_name_encrypted, encrypted_file_path, file_mime_type
          FROM documents
         WHERE id = ? AND employee_id = ?
         LIMIT 1`,
       [docId, empRows[0].id]
     );
 
-    if (!docs.length || !docs[0].file_path) {
+    if (!docs.length || (!docs[0].encrypted_file_path && !docs[0].file_path)) {
       return res.status(404).json({ error: 'Document not found.' });
     }
 
-    const relativePath = String(docs[0].file_path || '').replace(/^\/+/, '');
+    const document = docs[0];
+    const safeName = (decryptColumnValue(document.file_name_encrypted || document.file_name) || 'document.bin')
+      .replace(/["\r\n]/g, '_');
+    if (document.encrypted_file_path) {
+      const buffer = await readEncryptedBuffer(document.encrypted_file_path);
+      res.setHeader('Content-Type', document.file_mime_type || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+      return res.send(buffer);
+    }
+
+    const relativePath = String(document.file_path || '').replace(/^\/+/, '');
     const absolutePath = path.resolve(__dirname, 'public', relativePath);
     const uploadsRoot = path.resolve(__dirname, 'public', 'uploads');
 
@@ -4595,7 +4761,7 @@ app.get('/api/employees/:id/documents/:docId/view', requireAuth, requireRole(ROL
       return res.status(404).json({ error: 'Document file not found.' });
     }
 
-    res.setHeader('Content-Disposition', `inline; filename="${path.basename(docs[0].file_name || absolutePath).replace(/"/g, '')}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
     return res.sendFile(absolutePath);
   } catch (err) {
     console.error('Error viewing document:', err.message);
@@ -4615,16 +4781,21 @@ app.delete('/api/employees/:id/documents/:docId', requireAuth, requireRole(ROLES
     if (!employeeId) return;
 
     // Get document info
-    const [docs] = await pool.execute('SELECT file_path FROM documents WHERE id = ? AND employee_id = ?', [docId, employeeId]);
+    const [docs] = await pool.execute(
+      'SELECT file_path, encrypted_file_path FROM documents WHERE id = ? AND employee_id = ?',
+      [docId, employeeId]
+    );
     if (docs.length === 0) {
       return res.status(404).json({ error: 'Document not found.' });
     }
     
-    const filePath = path.join(__dirname, 'public', docs[0].file_path);
-    
-    // Delete file from disk
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (docs[0].encrypted_file_path) {
+      await deleteEncryptedFile(docs[0].encrypted_file_path);
+    } else if (docs[0].file_path) {
+      const legacyRelative = String(docs[0].file_path).replace(/^[/\\]+/, '');
+      const filePath = path.resolve(__dirname, 'public', legacyRelative);
+      const uploadsRoot = path.resolve(__dirname, 'public', 'uploads');
+      if (filePath.startsWith(`${uploadsRoot}${path.sep}`) && fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
     
     // Delete database record
@@ -4883,7 +5054,7 @@ app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.sta
     const pool = require('./config/db');
     const { id } = req.params;
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_CERTIFICATION_ALLOWED_FIELDS, 'certifications')) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return;
     }
     validateEmployeeSubresourceBody(req.body, EMPLOYEE_CERTIFICATION_ALLOWED_FIELDS, { dateFields: ['issue_date', 'expiry_date'] });
@@ -4910,7 +5081,7 @@ app.post('/api/employees/:id/certifications', requireAuth, requireRole(ROLES.sta
     res.status(201).json({ id: result.insertId, message: 'Certification added.' });
   } catch (err) {
     console.error('Error adding certification:', err.message);
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
     if (err.status) return res.status(err.status).json({ error: err.message || 'Invalid certification details.' });
     res.status(500).json({ error: 'Failed to add certification.' });
   }
@@ -5084,8 +5255,10 @@ app.delete('/api/employees/:id/skills/:skillId', requireAuth, requireRole(ROLES.
 // ============================================================
 
 // Upload employee photo (store as base64 in database)
-app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSingle('photo'), async (req, res) => {
+app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_management), EMPLOYEE_PARAMETER_TAMPER_GUARD, uploadSensitiveSingle('photo'), async (req, res) => {
   let connection;
+  let pendingPhotoPath = null;
+  let previousPhotoPath = null;
   try {
     const pool = require('./config/db');
     connection = await pool.getConnection();
@@ -5095,25 +5268,25 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
       return res.status(400).json({ error: 'No photo provided.' });
     }
 
-    console.log('\n=== POST /api/employees/:id/photo ===');
-    console.log('Employee ID:', id);
-    console.log('Photo file:', req.file.filename);
-    console.log('Photo size:', req.file.size);
-
-    // Read file and convert to base64
-    const fileData = fs.readFileSync(req.file.path);
+    const [[previousPhoto]] = await connection.execute(
+      'SELECT photo_encrypted_path FROM employee_photos WHERE employee_id = ? LIMIT 1',
+      [id]
+    );
+    previousPhotoPath = previousPhoto?.photo_encrypted_path || null;
+    pendingPhotoPath = await storeEncryptedBuffer('employee-photos', req.file.buffer);
     await connection.beginTransaction();
-    
-    // Insert or replace photo record
+
     await connection.execute(
-      `INSERT INTO employee_photos (employee_id, photo_data, photo_mime_type, photo_size)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO employee_photos (employee_id, photo_data, photo_data_encrypted, photo_encrypted_path, photo_mime_type, photo_size)
+       VALUES (?, NULL, NULL, ?, ?, ?)
        ON DUPLICATE KEY UPDATE 
-       photo_data = VALUES(photo_data),
+       photo_data = NULL,
+       photo_data_encrypted = NULL,
+       photo_encrypted_path = VALUES(photo_encrypted_path),
        photo_mime_type = VALUES(photo_mime_type),
        photo_size = VALUES(photo_size),
        updated_at = NOW()`,
-      [id, fileData, req.file.mimetype, req.file.size]
+      [id, pendingPhotoPath, req.file.mimetype, req.file.size]
     );
     const [photoRows] = await connection.execute(
       'SELECT id FROM employee_photos WHERE employee_id = ? LIMIT 1',
@@ -5128,9 +5301,11 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
       mime_type: req.file.mimetype
     });
     await connection.commit();
-
-    // Delete temporary file
-    fs.unlinkSync(req.file.path);
+    const committedPhotoPath = pendingPhotoPath;
+    pendingPhotoPath = null;
+    if (previousPhotoPath && previousPhotoPath !== committedPhotoPath) {
+      await deleteEncryptedFile(previousPhotoPath).catch(() => {});
+    }
 
     console.log('✅ Employee photo uploaded successfully');
     return res.status(200).json({
@@ -5141,10 +5316,9 @@ app.post('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_manage
     
   } catch (err) {
     if (connection) await connection.rollback().catch(() => {});
+    if (pendingPhotoPath) await deleteEncryptedFile(pendingPhotoPath).catch(() => {});
     console.error('Error uploading photo:', err.message);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    discardUploadedFile(req.file);
     return res.status(500).json({ error: 'Failed to upload photo.' });
   } finally {
     connection?.release();
@@ -5162,7 +5336,7 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
     }
     
     const [photos] = await pool.execute(
-      `SELECT photo_data, photo_mime_type FROM employee_photos WHERE employee_id = ?`,
+      `SELECT photo_data_encrypted, photo_encrypted_path, photo_mime_type FROM employee_photos WHERE employee_id = ?`,
       [employeeId]
     );
 
@@ -5170,12 +5344,15 @@ app.get('/api/employees/:id/photo', requireAuth, requireRole(ROLES.any), async (
       return res.status(404).json({ error: 'No photo found for this employee.' });
     }
 
-    const { photo_data, photo_mime_type } = photos[0];
+    const { photo_data_encrypted, photo_encrypted_path, photo_mime_type } = photos[0];
+    const photoBuffer = photo_encrypted_path
+      ? await readEncryptedBuffer(photo_encrypted_path)
+      : Buffer.from(decryptColumnValue(photo_data_encrypted), 'base64');
     
     // Send binary photo data
     res.set('Cache-Control', 'private, no-store');
     res.set('Content-Type', photo_mime_type);
-    res.send(photo_data);
+    res.send(photoBuffer);
     
   } catch (err) {
     console.error('Error fetching photo:', err.message);
@@ -5192,6 +5369,11 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
     const { id } = req.params; // numeric employee ID
     await connection.beginTransaction();
 
+    const [[photo]] = await connection.execute(
+      'SELECT photo_encrypted_path FROM employee_photos WHERE employee_id = ? FOR UPDATE',
+      [id]
+    );
+
     const [result] = await connection.execute(
       `DELETE FROM employee_photos WHERE employee_id = ?`,
       [id]
@@ -5204,6 +5386,7 @@ app.delete('/api/employees/:id/photo', requireAuth, requireRole(ROLES.staff_mana
     await connection.execute('UPDATE employees SET photo_id = NULL WHERE id = ?', [id]);
     await writeEmployeeLifecycleAudit(connection, req, 'EMPLOYEE_PHOTO_DELETED', Number(id));
     await connection.commit();
+    if (photo?.photo_encrypted_path) await deleteEncryptedFile(photo.photo_encrypted_path).catch(() => {});
 
     console.log('✅ Employee photo deleted successfully');
     return res.status(200).json({ message: 'Photo deleted successfully.' });
@@ -5316,17 +5499,18 @@ async function getConfiguredLeaveBalance(executor, employeeId, leaveType, year, 
 async function writeLeaveAudit(pool, leaveId, employeeId, actorUserId, action, remarks = null, oldStatus = null, newStatus = null, metadata = null) {
   await pool.execute(
     `INSERT INTO leave_audit_trail
-       (leave_request_id, employee_id, actor_user_id, action, remarks, old_status, new_status, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (leave_request_id, employee_id, actor_user_id, action, remarks, old_status, new_status, metadata,
+        remarks_encrypted, metadata_encrypted)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?)`,
     [
       leaveId || null,
       employeeId || null,
       actorUserId || null,
       action,
-      remarks || null,
       oldStatus || null,
       newStatus || null,
-      metadata ? JSON.stringify(metadata) : null
+      encryptAuditValue(remarks),
+      encryptAuditValue(metadata),
     ]
   );
 }
@@ -5479,9 +5663,18 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();
+      const {
+        reason, reason_encrypted, remarks, remarks_encrypted,
+        rejection_remarks, rejection_remarks_encrypted,
+        approval_remarks, approval_remarks_encrypted,
+        file_path, attachment_name_encrypted, attachment_encrypted_path,
+        ...safeRow
+      } = row;
       return {
-        ...row,
+        ...safeRow,
         employee_name: employeeName || row.employee_code || `Employee #${row.employee_id}`,
+        sensitive_details_available: !!(reason_encrypted || remarks_encrypted || rejection_remarks_encrypted || approval_remarks_encrypted || reason || remarks || rejection_remarks || approval_remarks),
+        attachment_available: !!(attachment_encrypted_path || file_path),
       };
     }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
@@ -5567,11 +5760,12 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
   }
 });
 
-app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attachment'), async (req, res) => {
+app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingle('attachment'), async (req, res) => {
+  let pendingEncryptedAttachmentPath = null;
   try {
     const pool = require('./config/db');
     if (await rejectUnsupportedRouteFields(req, res, LEAVE_REQUEST_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return;
     }
     const { type, leave_type_id, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
@@ -5602,20 +5796,21 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     );
     if (!empRows.length) return res.status(404).json({ error: 'Employee not found.' });
     const employee = empRows[0];
+    decryptEmployeeStrictPii(employee);
     if (String(employee.status || '').toLowerCase() !== 'active') {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Only active employees can file leave.' });
     }
 
     const leaveType = await getLeaveType(pool, { id: leave_type_id, name: type });
     if (!leaveType) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Active leave type is required.' });
     }
 
     const payType = normalizePayType(employee.wage_type);
     if (source === 'Portal' && ['Per Trip', 'Per Piece'].includes(payType)) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(403).json({ error: 'Per Trip and Per Piece employees cannot file leave through the portal. HR must manually encode their leave records.' });
     }
 
@@ -5623,13 +5818,13 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     const toDate = new Date(date_to || date_from);
     const requestedDays = decimalValue(days, Math.floor((toDate - fromDate) / 86400000) + 1);
     if (!date_from || !date_to || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || toDate < fromDate || requestedDays <= 0) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Valid leave dates and duration are required.' });
     }
 
     const eligibilityErrors = validateLeaveEligibility(employee, leaveType, Boolean(req.file));
     if (eligibilityErrors.length) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: eligibilityErrors.join(' ') });
     }
 
@@ -5643,19 +5838,19 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
       [empId, date_to, date_from]
     );
     if (overlaps.length) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'This employee already has an overlapping leave request.' });
     }
 
     const balance = await getConfiguredLeaveBalance(pool, empId, leaveType, year);
     if (source === 'Portal') {
       if (!balance) {
-        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        discardUploadedFile(req.file);
         return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
       }
       const remaining = decimalValue(balance.remaining_days_value);
       if (requestedDays > remaining) {
-        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        discardUploadedFile(req.file);
         return res.status(400).json({ error: 'Requested duration exceeds the available leave balance.' });
       }
     }
@@ -5672,24 +5867,95 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSingle('attach
     const extensionDays = leaveType.allow_unpaid_extension ? decimalValue(leaveType.max_extension_days) : 0;
     const annualLimit = decimalValue(leaveType.max_allowed_days) + extensionDays;
     if (decimalValue(annualRows[0]?.total_days) + requestedDays > annualLimit) {
-      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Requested duration exceeds the configured annual limit for this leave type.' });
     }
 
-    const filePath = req.file ? `/uploads/${req.file.filename}` : null;
+    if (req.file) {
+      pendingEncryptedAttachmentPath = await storeEncryptedBuffer('leave-attachments', req.file.buffer);
+    }
     const [result] = await pool.execute(
       `INSERT INTO leave_requests
-       (employee_id, leave_type_id, leave_category, type, date_from, date_to, days, reason, file_path,
-        filing_source, status, remarks, filed_by, submitted_by, encoded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?)`,
-      [empId, leaveType.id, leaveType.category, leaveType.name, date_from, date_to, requestedDays, reason, filePath, source, remarks || null, req.user.id, req.user.id, source === 'Manual' ? req.user.id : null]
+       (employee_id, leave_type_id, leave_category, type, date_from, date_to, days,
+        reason, reason_encrypted, file_path, attachment_name_encrypted, attachment_encrypted_path,
+        attachment_mime_type, attachment_size_bytes, filing_source, status,
+        remarks, remarks_encrypted, filed_by, submitted_by, encoded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, 'Pending', NULL, ?, ?, ?, ?)`,
+      [
+        empId, leaveType.id, leaveType.category, leaveType.name, date_from, date_to, requestedDays,
+        encryptColumnValue(reason),
+        req.file ? encryptColumnValue(req.file.originalname) : null,
+        pendingEncryptedAttachmentPath,
+        req.file?.mimetype || null,
+        req.file?.size || null,
+        source,
+        encryptColumnValue(remarks),
+        req.user.id,
+        req.user.id,
+        source === 'Manual' ? req.user.id : null,
+      ]
     );
+    pendingEncryptedAttachmentPath = null;
 
     await writeLeaveAudit(pool, result.insertId, empId, req.user.id, source === 'Manual' ? 'leave_manual_encoded' : 'leave_created', remarks || reason || null, null, 'Pending', { leave_type: leaveType.name, filing_source: source });
     res.json({ id: result.insertId, message: 'Leave request submitted.' });
   } catch (err) {
+    if (pendingEncryptedAttachmentPath) await deleteEncryptedFile(pendingEncryptedAttachmentPath).catch(() => {});
     console.error('Error saving leave request:', err.message);
     res.status(500).json({ error: 'Failed to submit leave.' });
+  }
+});
+
+app.post('/api/leave/:id/reveal-sensitive', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [[leave]] = await pool.execute(
+      `SELECT employee_id, reason, reason_encrypted, remarks, remarks_encrypted,
+              rejection_remarks, rejection_remarks_encrypted,
+              approval_remarks, approval_remarks_encrypted,
+              file_path, attachment_encrypted_path
+         FROM leave_requests WHERE id = ? LIMIT 1`,
+      [req.params.id]
+    );
+    if (!leave) return res.status(404).json({ error: 'Leave request not found.' });
+    if (!hasLeavePermission(req.user, 'leave.request.view_all') && Number(leave.employee_id) !== Number(req.user.employeeId)) {
+      return res.status(403).json({ error: 'You may only reveal your own leave request.' });
+    }
+    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_sensitive_details_revealed');
+    return res.json({
+      reason: decryptColumnValue(leave.reason_encrypted || leave.reason),
+      remarks: decryptColumnValue(leave.remarks_encrypted || leave.remarks),
+      rejection_remarks: decryptColumnValue(leave.rejection_remarks_encrypted || leave.rejection_remarks),
+      approval_remarks: decryptColumnValue(leave.approval_remarks_encrypted || leave.approval_remarks),
+      attachment_available: !!(leave.attachment_encrypted_path || leave.file_path),
+    });
+  } catch (err) {
+    console.error('Error revealing leave details:', err.message);
+    return res.status(500).json({ error: 'Failed to reveal leave details.' });
+  }
+});
+
+app.get('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  try {
+    const pool = require('./config/db');
+    const [[leave]] = await pool.execute(
+      `SELECT employee_id, attachment_name_encrypted, attachment_encrypted_path, attachment_mime_type
+         FROM leave_requests WHERE id = ? LIMIT 1`,
+      [req.params.id]
+    );
+    if (!leave?.attachment_encrypted_path) return res.status(404).json({ error: 'Leave attachment not found.' });
+    if (!hasLeavePermission(req.user, 'leave.request.view_all') && Number(leave.employee_id) !== Number(req.user.employeeId)) {
+      return res.status(403).json({ error: 'You may only access your own leave attachment.' });
+    }
+    const buffer = await readEncryptedBuffer(leave.attachment_encrypted_path);
+    const fileName = decryptColumnValue(leave.attachment_name_encrypted) || 'leave-attachment.bin';
+    await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_attachment_downloaded');
+    res.setHeader('Content-Type', leave.attachment_mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\r\n]/g, '_')}"`);
+    return res.send(buffer);
+  } catch (err) {
+    console.error('Error downloading leave attachment:', err.message);
+    return res.status(500).json({ error: 'Failed to download leave attachment.' });
   }
 });
 
@@ -5759,13 +6025,27 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
          approved_by = CASE WHEN ? = 'Approved' THEN ? ELSE approved_by END,
          approved_at = CASE WHEN ? = 'Approved' THEN NOW() ELSE approved_at END,
          approval_date = CASE WHEN ? = 'Approved' THEN NOW() ELSE approval_date END,
-         approval_remarks = CASE WHEN ? = 'Approved' THEN ? ELSE approval_remarks END,
+         approval_remarks = NULL,
+         approval_remarks_encrypted = CASE WHEN ? = 'Approved' THEN ? ELSE approval_remarks_encrypted END,
          rejected_by = CASE WHEN ? = 'Rejected' THEN ? ELSE rejected_by END,
          rejected_at = CASE WHEN ? = 'Rejected' THEN NOW() ELSE rejected_at END,
-         rejection_remarks = CASE WHEN ? = 'Rejected' THEN ? ELSE rejection_remarks END,
-         remarks = COALESCE(?, remarks)
+         rejection_remarks = NULL,
+         rejection_remarks_encrypted = CASE WHEN ? = 'Rejected' THEN ? ELSE rejection_remarks_encrypted END,
+         remarks = NULL,
+         remarks_encrypted = COALESCE(?, remarks_encrypted)
        WHERE id = ?`,
-      [status, req.user.id, status, req.user.id, status, status, status, remarks, status, req.user.id, status, status, remarks, remarks, req.params.id]
+      [
+        status, req.user.id,
+        status, req.user.id,
+        status,
+        status,
+        status, encryptColumnValue(remarks),
+        status, req.user.id,
+        status,
+        status, encryptColumnValue(remarks),
+        encryptColumnValue(remarks),
+        req.params.id,
+      ]
     );
     const action = status === 'Approved' ? 'leave_approved' : status === 'Rejected' ? 'leave_rejected' : status === 'Cancelled' ? 'leave_cancelled' : 'leave_updated';
     await writeLeaveAudit(connection, req.params.id, leave.employee_id, req.user.id, action, remarks, leave.status, status);
@@ -5793,7 +6073,19 @@ app.get('/api/leave/audit', requireAuth, requireLeavePermission('leave.audit.vie
     );
     res.json(rows.map(row => {
       decryptEmployeeStrictPii(row);
-      return { ...row, employee_name: employeeDisplayName(row) || row.employee_code || '-' };
+      return {
+        id: row.id,
+        leave_request_id: row.leave_request_id,
+        employee_id: row.employee_id,
+        action: row.action,
+        old_status: row.old_status,
+        new_status: row.new_status,
+        actor_name: row.actor_name,
+        created_at: row.created_at,
+        employee_name: employeeDisplayName(row) || row.employee_code || '-',
+        remarks_available: !!(row.remarks_encrypted || row.remarks),
+        metadata_available: !!(row.metadata_encrypted || row.metadata),
+      };
     }));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch leave audit trail.' });

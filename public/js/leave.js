@@ -31,6 +31,113 @@ function isLeaveEmployee() {
   return !isLeaveManager();
 }
 
+async function leaveNotice(message, title = 'Notice', type = 'info') {
+  if (typeof showAlert === 'function') return showAlert(message, title, type);
+  return alert(message);
+}
+
+async function leaveConfirm(message, title = 'Confirm', confirmText = 'Continue', cancelText = 'Cancel') {
+  if (typeof showConfirm === 'function') return showConfirm(message, title, confirmText, cancelText);
+  return confirm(message);
+}
+
+function closeLeaveRemarksPrompt(value = null) {
+  const modal = document.getElementById('leave-remarks-prompt-modal');
+  const resolver = modal?._leaveResolve;
+  if (modal) {
+    modal._leaveResolve = null;
+    modal.remove();
+  }
+  if (resolver) resolver(value);
+}
+
+function leaveRemarksPrompt({
+  title = 'Reject Leave Request',
+  message = 'Enter rejection remarks before rejecting this leave request.',
+  confirmText = 'Reject Leave',
+  placeholder = 'Write rejection remarks...',
+} = {}) {
+  document.getElementById('leave-remarks-prompt-modal')?.remove();
+  return new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.id = 'leave-remarks-prompt-modal';
+    modal.className = 'leave-modal';
+    modal.style.display = 'flex';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'leave-remarks-prompt-title');
+    modal._leaveResolve = resolve;
+    modal.innerHTML = `
+      <div class="leave-modal-card" style="width:min(520px,94vw);">
+        <div class="leave-modal-head">
+          <h3 class="leave-section-title" id="leave-remarks-prompt-title">${escapeLeaveText(title)}</h3>
+          <button class="btn btn-outline" type="button" data-leave-remarks-cancel>Close</button>
+        </div>
+        <div class="leave-modal-body">
+          <p style="margin:0 0 12px;color:var(--muted);font-size:13px;">${escapeLeaveText(message)}</p>
+          <textarea id="leave-remarks-prompt-input" rows="4" maxlength="500" placeholder="${escapeLeaveText(placeholder)}" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);padding:10px;resize:vertical;"></textarea>
+          <div id="leave-remarks-prompt-error" style="display:none;margin-top:8px;color:var(--red);font-size:12px;">Remarks are required when rejecting.</div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+            <button class="btn btn-outline" type="button" data-leave-remarks-cancel>Cancel</button>
+            <button class="btn btn-primary" type="button" data-leave-remarks-submit>${escapeLeaveText(confirmText)}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', event => {
+      if (event.target === modal || event.target.closest('[data-leave-remarks-cancel]')) {
+        closeLeaveRemarksPrompt(null);
+      }
+    });
+    modal.querySelector('[data-leave-remarks-submit]')?.addEventListener('click', () => {
+      const input = modal.querySelector('#leave-remarks-prompt-input');
+      const error = modal.querySelector('#leave-remarks-prompt-error');
+      const remarks = String(input?.value || '').trim();
+      if (!remarks) {
+        if (error) error.style.display = 'block';
+        input?.focus();
+        return;
+      }
+      closeLeaveRemarksPrompt(remarks);
+    });
+    modal.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeLeaveRemarksPrompt(null);
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        modal.querySelector('[data-leave-remarks-submit]')?.click();
+      }
+    });
+    document.body.appendChild(modal);
+    setTimeout(() => modal.querySelector('#leave-remarks-prompt-input')?.focus(), 30);
+  });
+}
+
+async function revealLeaveSensitiveDetails(leaveId) {
+  const response = await apiFetch(`/api/leave/${encodeURIComponent(leaveId)}/reveal-sensitive`, {
+    method: 'POST',
+    body: '{}',
+  });
+  const data = await response?.json().catch(() => ({}));
+  if (!response?.ok) return alert(data.error || 'Failed to reveal leave details.');
+  const lines = [
+    `Reason: ${data.reason || '-'}`,
+    `Remarks: ${data.remarks || '-'}`,
+    `Rejection remarks: ${data.rejection_remarks || '-'}`,
+    `Approval remarks: ${data.approval_remarks || '-'}`,
+  ];
+  alert(lines.join('\n'));
+}
+
+async function downloadLeaveAttachment(leaveId) {
+  const response = await apiFetch(`/api/leave/${encodeURIComponent(leaveId)}/attachment`);
+  if (!response?.ok) return alert('Failed to download leave attachment.');
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'leave-attachment';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Load current user (works on both leave and requests pages) ──
 async function fetchCurrentUser(callback) {
   if (CURRENT_USER) { if (callback) callback(); return; }
@@ -322,8 +429,8 @@ window.renderLeaveTable = function() {
       <td style="padding:16px 24px;font-size:13px;color:var(--text);">${new Date(leave.date_from).toLocaleDateString()} – ${new Date(leave.date_to).toLocaleDateString()} (${leave.days || 1}d)</td>
       <td style="padding:16px 24px;font-size:13px;color:var(--muted);max-width:200px;">
         <div style="display:flex;flex-direction:column;gap:6px;">
-          <span style="text-overflow:ellipsis;overflow:hidden;white-space:nowrap;" title="${leave.reason || '-'}">${leave.reason || '-'}</span>
-          ${leave.file_path ? `<a href="${leave.file_path}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text);text-decoration:none;background:var(--bg-alt);padding:4px 10px;border-radius:6px;border:1px solid var(--border);width:max-content;opacity:0.8;transition:opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">📎 View File</a>` : ''}
+          <button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(leave.id)})">Show details</button>
+          ${leave.attachment_available ? `<button type="button" class="btn btn-outline" onclick="downloadLeaveAttachment(${Number(leave.id)})">Download attachment</button>` : ''}
         </div>
       </td>
       <td style="padding:16px 24px;text-align:${(CURRENT_LEAVE_TAB === 'pending' && canApprove) ? 'right' : 'left'};">
@@ -351,33 +458,33 @@ window.renderLeaveTable = function() {
 async function approveLeave(btn) {
   const row = btn.closest('tr');
   const leaveId = row?.dataset.leaveId;
-  if (!leaveId) { alert('Error: Could not find leave request'); return; }
-  if (!confirm('Approve this leave request?')) return;
+  if (!leaveId) { await leaveNotice('Error: Could not find leave request', 'Leave Request', 'error'); return; }
+  if (!(await leaveConfirm('Approve this leave request?', 'Approve Leave Request', 'Approve', 'Cancel'))) return;
   try {
     const res = await apiFetch(`/api/leave/${leaveId}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Approved' })
     });
     if (!res || !res.ok) throw new Error('Failed to approve');
-    alert('Leave approved successfully');
+    await leaveNotice('Leave approved successfully', 'Leave Request', 'success');
     loadLeaveRequests();
-  } catch (err) { alert('Failed to approve leave: ' + err.message); }
+  } catch (err) { await leaveNotice('Failed to approve leave: ' + err.message, 'Leave Request', 'error'); }
 }
 
 async function denyLeave(btn) {
   const row = btn.closest('tr');
   const leaveId = row?.dataset.leaveId;
-  if (!leaveId) { alert('Error: Could not find leave request'); return; }
-  if (!confirm('Deny this leave request?')) return;
-  const remarks = prompt('Enter rejection remarks:');
-  if (!remarks) return alert('Remarks are required when rejecting.');
+  if (!leaveId) { await leaveNotice('Error: Could not find leave request', 'Leave Request', 'error'); return; }
+  if (!(await leaveConfirm('Reject this leave request?', 'Reject Leave Request', 'Reject', 'Cancel'))) return;
+  const remarks = await leaveRemarksPrompt();
+  if (!remarks) return;
   try {
     const res = await apiFetch(`/api/leave/${leaveId}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Rejected', remarks })
     });
     if (!res || !res.ok) throw new Error('Failed to deny');
-    alert('Leave denied successfully');
+    await leaveNotice('Leave rejected successfully', 'Leave Request', 'success');
     loadLeaveRequests();
-  } catch (err) { alert('Failed to deny leave: ' + err.message); }
+  } catch (err) { await leaveNotice('Failed to reject leave: ' + err.message, 'Leave Request', 'error'); }
 }
 
 // ── REQUESTS PAGE ─────────────────────────────────────────────
@@ -417,7 +524,7 @@ function renderAllRequests(leaves, genReqs) {
     employee: l.employee_name,
     type: 'Leave Request',
     details: `${l.type} · ${new Date(l.date_from).toLocaleDateString()} – ${new Date(l.date_to).toLocaleDateString()} (${l.days || 1}d)`,
-    reason: l.reason || '-',
+    reason: `<button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(l.id)})">Show details</button>`,
     date: new Date(l.created_at),
     status: leaveStatusValue(l.status),
   }));
@@ -556,11 +663,9 @@ async function saveRequest() {
     
     const days = Math.max(Math.ceil((new Date(endDate || startDate) - new Date(startDate)) / 86400000) + 1, 1);
     
-    console.log('Filing leave request:', { leaveType, startDate, endDate, days, reason });
     
     try {
       const payload = { leave_type_id: leaveTypeId, type: leaveType, date_from: startDate, date_to: endDate || startDate, days, reason, employee_id: CURRENT_USER.employeeId };
-      console.log('Payload:', JSON.stringify(payload, null, 2));
       
       let res;
       
@@ -764,7 +869,6 @@ async function submitManualLeave(event) {
     encoded_at: new Date().toISOString(),
   };
 
-  console.log('Submitting manual leave with payload:', payload);
   console.log('File attached:', attachment?.name);
 
   try {
@@ -1242,28 +1346,30 @@ window.renderLeaveTable = function() {
 };
 
 async function approveLeaveById(id) {
-  if (!confirm('Approve this leave request?')) return;
+  if (!(await leaveConfirm('Approve this leave request?', 'Approve Leave Request', 'Approve', 'Cancel'))) return;
   const res = await apiFetch(`/api/leave/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status: 'Approved', remarks: 'Approved' })
   });
   if (!res || !res.ok) {
     const error = await res?.json().catch(() => ({}));
-    return alert(error.error || 'Failed to approve leave.');
+    return leaveNotice(error.error || 'Failed to approve leave.', 'Leave Request', 'error');
   }
   await loadLeaveRequests();
 }
 
 async function rejectLeaveById(id) {
-  const remarks = prompt('Enter rejection remarks:');
-  if (!remarks) return alert('Remarks are required when rejecting.');
+  const confirmed = await leaveConfirm('Reject this leave request?', 'Reject Leave Request', 'Reject', 'Cancel');
+  if (!confirmed) return;
+  const remarks = await leaveRemarksPrompt();
+  if (!remarks) return;
   const res = await apiFetch(`/api/leave/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status: 'Rejected', remarks })
   });
   if (!res || !res.ok) {
     const error = await res?.json().catch(() => ({}));
-    return alert(error.error || 'Failed to reject leave.');
+    return leaveNotice(error.error || 'Failed to reject leave.', 'Leave Request', 'error');
   }
   await loadLeaveRequests();
 }
@@ -1288,9 +1394,8 @@ function viewLeaveDetails(id) {
       <div><strong>Duration</strong><br>${leave.days || 1} day(s)</div>
       <div><strong>Source</strong><br>${leave.filing_source || 'Portal'}</div>
       <div><strong>Status</strong><br>${leave.status}</div>
-      <div><strong>Reason</strong><br>${leave.reason || '-'}</div>
-      <div><strong>Remarks</strong><br>${leave.remarks || leave.rejection_remarks || '-'}</div>
-      ${leave.file_path ? `<div><a href="${leave.file_path}" target="_blank">View Attachment</a></div>` : ''}
+      <div><strong>Sensitive details</strong><br><button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(leave.id)})">Show details</button></div>
+      ${leave.attachment_available ? `<div><button type="button" class="btn btn-outline" onclick="downloadLeaveAttachment(${Number(leave.id)})">Download attachment</button></div>` : ''}
     </div>
     <div style="margin-top:14px;">
       <strong>Leave Balance Before Approval</strong>

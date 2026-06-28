@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { decryptNullable, sha256 } = require('../server/data-protection');
+const { decryptColumnValue, decryptNullable, sha256 } = require('../server/data-protection');
 
 const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_LOCK_MINUTES = 15;
@@ -76,8 +76,9 @@ const USER_SELECT_FIELDS = `
   COALESCE(e.Employee_ID, e.id) AS Employee_ID,
   u.id AS id,
   e.id AS employee_table_id,
-  COALESCE(u.email, e.email) AS Email,
+  u.email AS Legacy_User_Email,
   u.email_encrypted AS User_Email_Encrypted,
+  e.email AS Employee_Email_Encrypted,
   COALESCE(u.password_hash, e.Password_Hash) AS Password_Hash,
   u.role_id AS Role_ID,
   r.access_level AS Access_Level,
@@ -96,16 +97,20 @@ const USER_SELECT_FIELDS = `
 
 function hydrateUserRow(row) {
   if (!row) return row;
-  if (!row.Email && row.User_Email_Encrypted) {
-    try {
-      row.Email = decryptNullable(row.User_Email_Encrypted);
-    } catch (error) {
-      // Email is not required to authenticate. Do not fail login because a
-      // legacy encrypted email was written with an old or missing AES key.
-      console.warn('[authQueries] encrypted login email could not be decrypted:', error.message);
-      row.Email = null;
-    }
+  try {
+    row.Email = row.Email
+      ? decryptColumnValue(row.Email)
+      : row.User_Email_Encrypted
+        ? decryptNullable(row.User_Email_Encrypted)
+        : decryptColumnValue(row.Legacy_User_Email || row.Employee_Email_Encrypted);
+  } catch (error) {
+    // Email is optional during authentication. Never return storage ciphertext
+    // when a legacy value cannot be decrypted with the active key.
+    console.warn('[authQueries] encrypted login email could not be decrypted.');
+    row.Email = null;
   }
+  delete row.Legacy_User_Email;
+  delete row.Employee_Email_Encrypted;
   delete row.User_Email_Encrypted;
   return row;
 }
@@ -121,11 +126,10 @@ async function findUserByEmail(email) {
          LEFT JOIN employees e ON e.id = u.employee_id
          LEFT JOIN roles r ON r.id = u.role_id
         WHERE u.email_hash = ?
-           OR LOWER(e.email) = LOWER(?)
-           OR LOWER(u.email) = LOWER(?)
+           OR e.email_hash = ?
            OR LOWER(u.username) = LOWER(?)
         LIMIT 1`,
-      [sha256(email), email.trim(), email.trim(), email.trim()]
+      [sha256(email), sha256(email), email.trim()]
     );
 
     return hydrateUserRow(rows[0] || null);

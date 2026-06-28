@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { decryptColumnValue, encryptColumnValue, hashNullable } = require('../server/data-protection');
 const { createAuditLog } = require('../db/authQueries');
 const {
   getIprogConfig,
@@ -127,7 +128,7 @@ async function getEmployeePhone(employeeId) {
     'SELECT contact_number FROM employees WHERE Employee_ID = ? OR id = ? LIMIT 1',
     [employeeId, employeeId]
   );
-  return normalizePhilippineMobileNumber(rows[0]?.contact_number);
+  return normalizePhilippineMobileNumber(decryptColumnValue(rows[0]?.contact_number));
 }
 
 async function sendVerification(phoneNumber, config) {
@@ -149,14 +150,19 @@ async function sendVerification(phoneNumber, config) {
 
 async function findChallenge(challengeId) {
   const [rows] = await pool.execute(
-    `SELECT Challenge_ID, Employee_ID, Provider, Phone_Number, Challenge_Token_Hash,
+    `SELECT Challenge_ID, Employee_ID, Provider, Phone_Number_Encrypted, Challenge_Token_Hash,
             Status, Attempt_Count, Resend_Count, Last_Sent_At, Expires_At
        FROM MFA_CHALLENGE
       WHERE Challenge_ID = ?
       LIMIT 1`,
     [challengeId]
   );
-  return rows[0] || null;
+  const challenge = rows[0] || null;
+  if (challenge) {
+    challenge.Phone_Number = decryptColumnValue(challenge.Phone_Number_Encrypted);
+    delete challenge.Phone_Number_Encrypted;
+  }
+  return challenge;
 }
 
 async function expireChallenge(challenge, req) {
@@ -203,9 +209,9 @@ async function createMfaChallenge({ employeeId, req }) {
   );
   const [created] = await pool.execute(
     `INSERT INTO MFA_CHALLENGE
-      (Employee_ID, Provider, Phone_Number, Challenge_Token_Hash, Status, Expires_At)
-     VALUES (?, ?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL ? SECOND))`,
-    [employeeId, configProvider, phoneNumber, sha256(challengeToken), config.pinValidity]
+      (Employee_ID, Provider, Phone_Number, Phone_Number_Encrypted, Phone_Number_Hash, Challenge_Token_Hash, Status, Expires_At)
+     VALUES (?, ?, NULL, ?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL ? SECOND))`,
+    [employeeId, configProvider, encryptColumnValue(phoneNumber), hashNullable(phoneNumber), sha256(challengeToken), config.pinValidity]
   );
   const challengeId = created.insertId;
   await auditMfa(employeeId, 'MFA_CHALLENGE_CREATED', `MFA challenge ${challengeId} created.`, req);

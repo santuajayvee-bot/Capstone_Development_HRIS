@@ -231,8 +231,6 @@ router.get('/dashboard', async (req, res) => {
       today_attendance: attendanceRows[0] || null,
     };
 
-    console.log(`\n✅ [Employee] Dashboard loaded for ${profile.first_name} ${profile.last_name} (ID: ${empId})`);
-
     return res.json(safeSummary);
   } catch (err) {
     console.error('[Employee] Dashboard error:', err.message);

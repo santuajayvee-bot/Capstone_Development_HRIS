@@ -671,31 +671,53 @@ function onbApplicantDetails(applicant) {
       ['Employment type', applicant.desired_employment_type || 'Full-time'],
       ['Shift', applicant.shift_schedule || 'Not prepared'],
     ]),
-    onbRecordSection('Contact and Personal Information', [
-      ['Email', applicant.email],
-      ['Work email', applicant.work_email || 'Not prepared'],
-      ['Contact number', applicant.contact_number],
-      ['Birth details', [applicant.date_of_birth, applicant.place_of_birth].filter(Boolean).join(' / ') || 'Not provided'],
-      ['Personal profile', [applicant.gender, applicant.civil_status, applicant.blood_type].filter(Boolean).join(' / ') || 'Not provided'],
-      ['Residential address', applicant.residential_address],
-      ['Emergency contact', applicant.emergency_contact_name ? `${applicant.emergency_contact_name} / ${applicant.emergency_contact_number || 'number pending'}` : 'Not provided'],
-    ]),
+    `<section class="onb-page-section"><h4>Contact and Personal Information</h4>
+       <div data-onb-sensitive-details><button class="onb-mini" type="button" onclick="onbRevealApplicantSensitive()">Show sensitive details</button></div>
+     </section>`,
     onbRecordSection('Payroll and Secure References', [
       ['Payroll setup', applicant.expected_wage_type ? `${applicant.expected_wage_type}: ${applicant.expected_base_rate ?? 'rate pending'}` : 'Configure after transfer'],
-      ['Government IDs', applicant.sss_number || applicant.philhealth_number || applicant.pagibig_number || applicant.tin ? 'Prepared securely' : 'Not provided'],
-      ['Bank details', applicant.bank_name || applicant.bank_account ? 'Prepared securely' : 'Not provided'],
-      ['Biometric reference', applicant.biometric_prepared ? `${applicant.biometric_reference} (${applicant.biometric_device_name || 'device prepared'})` : 'Not prepared'],
+      ['Government IDs', applicant.sensitive_details_available ? 'Hidden until revealed' : 'Not provided'],
+      ['Bank details', applicant.sensitive_details_available ? 'Hidden until revealed' : 'Not provided'],
+      ['Biometric reference', applicant.biometric_prepared ? `Prepared securely (${applicant.biometric_device_name || 'device prepared'})` : 'Not prepared'],
     ]),
   ];
   if (applicant.hiring_type === 'Agency-Hired') {
     sections.push(onbRecordSection('Agency Deployment', [
       ['Agency', applicant.agency_name],
-      ['Agency contact', `${applicant.agency_contact_person} / ${applicant.agency_contact_number}`],
+      ['Agency contact', 'Hidden until sensitive details are revealed'],
       ['Deployment', applicant.deployment_status],
       ['Contract', `${applicant.contract_start_date || 'Not set'} to ${applicant.contract_end_date || 'Not set'}`],
     ]));
   }
   return sections.join('');
+}
+
+async function onbRevealApplicantSensitive() {
+  if (!ONB_ACTIVE_APPLICANT) return;
+  try {
+    const data = await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/reveal-sensitive`, {
+      method: 'POST',
+      body: '{}',
+    });
+    const target = document.querySelector('[data-onb-sensitive-details]');
+    if (!target) return;
+    target.innerHTML = onbRecordTable([
+      ['Email', data.email || 'Not provided'],
+      ['Work email', data.work_email || 'Not provided'],
+      ['Contact number', data.contact_number || 'Not provided'],
+      ['Birth details', [data.date_of_birth, data.place_of_birth].filter(Boolean).join(' / ') || 'Not provided'],
+      ['Personal profile', [data.gender, data.civil_status, data.blood_type].filter(Boolean).join(' / ') || 'Not provided'],
+      ['Residential address', data.residential_address || 'Not provided'],
+      ['Current address', data.current_address || 'Not provided'],
+      ['Mailing address', data.mailing_address || 'Not provided'],
+      ['Emergency contact', data.emergency_contact_name ? `${data.emergency_contact_name} / ${data.emergency_contact_number || 'number pending'}` : 'Not provided'],
+      ['Government IDs', [data.sss_number, data.philhealth_number, data.pagibig_number, data.tin].filter(Boolean).join(' / ') || 'Not provided'],
+      ['Bank details', data.bank_name || data.bank_account ? `${data.bank_name || 'Bank'} / ${data.bank_account || 'account pending'}` : 'Not provided'],
+      ['Agency contact', data.agency_contact_person ? `${data.agency_contact_person} / ${data.agency_contact_number || 'number pending'}` : 'Not provided'],
+    ]);
+  } catch (error) {
+    onbToast(error.message, 'error');
+  }
 }
 
 function onbDocumentRows(documents) {
