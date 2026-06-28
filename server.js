@@ -563,16 +563,15 @@ const SPA_ROUTE_PATHS = new Set([
   '/payslips',
 ]);
 
-app.use((req, res, next) => {
-  if (req.method !== 'GET') return next();
-  const cleanPath = req.path.replace(/\/+$/g, '') || '/';
-  if (req.path.length > 1 && req.path.endsWith('/') && SPA_ROUTE_PATHS.has(cleanPath)) {
-    return res.redirect(308, `${cleanPath}${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`);
-  }
-  next();
-});
+const SPA_ROUTE_HANDLERS = [
+  ...SPA_ROUTE_PATHS,
+  ...[...SPA_ROUTE_PATHS].map(routePath => `${routePath}/`),
+];
 
-app.get([...SPA_ROUTE_PATHS], (_req, res) => {
+app.get(SPA_ROUTE_HANDLERS, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

@@ -12,6 +12,7 @@ This file consolidates the project setup, security, payroll, blockchain, onboard
 6. [Onboarding Setup](#onboarding-setup)
 7. [Attendance Biometric Setup](#attendance-biometric-setup)
 8. [Biometric Background Service Setup](#biometric-background-service-setup)
+9. [AWS Biometric Deployment](docs/aws-biometric-deployment.md)
 
 
 ---
@@ -1130,6 +1131,7 @@ For AWS, change `hris_attendance_url`:
 ```
 
 If the biometric device in System Settings uses API key auth, set the same key in `auth_secret`.
+Use `tools/biometric-bridge/bridge-config.aws.example.json` as the AWS station template and follow the full AWS checklist in `docs/aws-biometric-deployment.md`.
 
 ### Windows Startup
 

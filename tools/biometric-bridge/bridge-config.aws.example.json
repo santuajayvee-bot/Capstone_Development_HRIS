@@ -1,0 +1,10 @@
+{
+  "device_reference": "ZK9500-AWS-001",
+  "hris_attendance_url": "https://hris.example.com/api/biometric/station-attendance",
+  "auth_header_name": "x-biometric-api-key",
+  "auth_secret": "replace-with-the-device-api-key-from-system-admin",
+  "background_scanner_enabled": true,
+  "duplicate_local_cooldown_seconds": 60,
+  "scanner_idle_delay_ms": 600,
+  "listener_prefix": "http://localhost:8787/"
+}

@@ -445,6 +445,9 @@ router.post('/biometric/devices', requireAuth, requireRole(SYSTEM_ADMIN_ROLES), 
     if (!['API_KEY', 'BEARER', 'HMAC', 'OAUTH2', 'MTLS', 'NONE'].includes(authType)) {
       return res.status(400).json({ error: 'Unsupported biometric authentication type.' });
     }
+    if (process.env.NODE_ENV === 'production' && authType === 'NONE') {
+      return res.status(400).json({ error: 'Biometric device authentication is required in production.' });
+    }
     if (!['MTLS', 'NONE'].includes(authType) && authSecret.length < 8) {
       return res.status(400).json({ error: 'Authentication secret must be at least 8 characters.' });
     }
@@ -486,6 +489,12 @@ router.put('/biometric/devices/:deviceId', requireAuth, requireRole(SYSTEM_ADMIN
 
     if (!['API_KEY', 'BEARER', 'HMAC', 'OAUTH2', 'MTLS', 'NONE'].includes(authType)) {
       return res.status(400).json({ error: 'Unsupported biometric authentication type.' });
+    }
+    if (process.env.NODE_ENV === 'production' && authType === 'NONE') {
+      return res.status(400).json({ error: 'Biometric device authentication is required in production.' });
+    }
+    if (!['MTLS', 'NONE'].includes(authType) && !encryptedSecret) {
+      return res.status(400).json({ error: 'Authentication secret must be configured.' });
     }
 
     await pool.execute(

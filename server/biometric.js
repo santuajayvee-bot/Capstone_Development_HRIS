@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const {
@@ -368,13 +369,27 @@ async function writeBiometricAudit(req, employeeId, action, oldValue = null, new
 
 async function validateDeviceAuth(req, device) {
   const secret = getDeviceSecret(device);
-  if (!secret || device.auth_type === 'NONE') return true;
+  const allowUnauthenticatedDevice = process.env.NODE_ENV !== 'production'
+    && process.env.ALLOW_UNAUTHENTICATED_BIOMETRIC_WEBHOOK === 'true';
+
+  if (device.auth_type === 'NONE') return allowUnauthenticatedDevice;
+  if (device.auth_type === 'MTLS') return req.socket.authorized === true;
+  if (!secret) return allowUnauthenticatedDevice;
   if (device.auth_type === 'API_KEY') {
     const headerName = String(device.auth_header_name || 'x-biometric-api-key').toLowerCase();
     return timingSafeEqualText(req.headers[headerName], secret);
   }
   if (device.auth_type === 'BEARER' || device.auth_type === 'OAUTH2') {
     return timingSafeEqualText(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), secret);
+  }
+  if (device.auth_type === 'HMAC') {
+    const timestamp = String(req.headers['x-biometric-timestamp'] || '');
+    const signature = String(req.headers['x-biometric-signature'] || '').replace(/^sha256=/i, '');
+    const timestampSeconds = Number(timestamp);
+    const fresh = Number.isFinite(timestampSeconds) && Math.abs(Date.now() / 1000 - timestampSeconds) <= 300;
+    const payload = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+    const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest('hex');
+    return fresh && timingSafeEqualText(signature, expected);
   }
   return false;
 }

@@ -22,6 +22,7 @@
     "security:invalidate-legacy-passwords": "node scripts/invalidate-legacy-password-hashes.js --apply",
     "security:configure-local-db": "node scripts/configure-local-database-security.js --apply",
     "security:verify-db": "node scripts/verify-database-security.js",
+    "security:verify-aws-biometric": "node scripts/verify-aws-biometric-config.js",
     "test:payroll-statutory-controlled": "node scripts/payroll-statutory-controlled-test.js",
     "seed:payroll-daily-hourly-source": "node scripts/seed-payroll-daily-hourly-source.js",
     "test:onboarding": "node test-onboarding.js",
