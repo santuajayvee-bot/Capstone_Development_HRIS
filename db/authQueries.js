@@ -59,6 +59,13 @@ async function ensureUserAuthColumns() {
   for (const [name, definition] of [
     ['account_status', "ENUM('Active','Disabled','Offboarded','Inactive') NOT NULL DEFAULT 'Active'"],
     ['token_version', 'INT NOT NULL DEFAULT 0'],
+    ['password_changed_at', 'DATETIME NULL'],
+    ['force_password_change', 'BOOLEAN NOT NULL DEFAULT FALSE'],
+    ['failed_login_attempts', 'INT NOT NULL DEFAULT 0'],
+    ['account_locked_until', 'DATETIME NULL'],
+    ['last_login_at', 'DATETIME NULL'],
+    ['email_hash', 'CHAR(64) NULL'],
+    ['email_encrypted', 'TEXT NULL'],
   ]) {
     const [existing] = await pool.execute(`SHOW COLUMNS FROM users LIKE '${name}'`);
     if (!existing.length) await pool.execute(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
@@ -90,7 +97,14 @@ const USER_SELECT_FIELDS = `
 function hydrateUserRow(row) {
   if (!row) return row;
   if (!row.Email && row.User_Email_Encrypted) {
-    row.Email = decryptNullable(row.User_Email_Encrypted);
+    try {
+      row.Email = decryptNullable(row.User_Email_Encrypted);
+    } catch (error) {
+      // Email is not required to authenticate. Do not fail login because a
+      // legacy encrypted email was written with an old or missing AES key.
+      console.warn('[authQueries] encrypted login email could not be decrypted:', error.message);
+      row.Email = null;
+    }
   }
   delete row.User_Email_Encrypted;
   return row;
@@ -124,6 +138,7 @@ async function findUserById(employeeId) {
   ensureEmployeeId(employeeId);
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT ${USER_SELECT_FIELDS}
          FROM users u
@@ -144,6 +159,7 @@ async function findUserByUserId(userId) {
   ensureEmployeeId(userId);
 
   try {
+    await ensureUserAuthColumns();
     const [rows] = await pool.execute(
       `SELECT ${USER_SELECT_FIELDS}
          FROM users u
@@ -819,4 +835,5 @@ module.exports = {
   findValidPasswordResetToken,
   markPasswordResetTokenUsed,
   createAuditLog,
+  _hydrateUserRowForTest: hydrateUserRow,
 };
