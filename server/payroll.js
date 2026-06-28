@@ -5783,15 +5783,29 @@ router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
     const { id, size_range, description, is_active } = req.body;
     const range = String(size_range || '').trim();
     if (!range) return res.status(400).json({ error: 'Size range is required.' });
+    const [duplicates] = await pool.execute(
+      `SELECT *
+         FROM payroll_size_ranges
+        WHERE size_range = ?
+          AND (? IS NULL OR id <> ?)
+        LIMIT 1`,
+      [range, id || null, id || null]
+    );
+    if (id && duplicates.length) {
+      return res.status(409).json({ error: `Size range "${range}" already exists. Edit the existing size range instead.` });
+    }
+    // Default ranges are seeded during schema setup. Saving one again should
+    // update/reactivate that configuration instead of failing as a duplicate.
+    const targetId = id || duplicates[0]?.id || null;
     let oldValue = null;
-    if (id) {
-      const [oldRows] = await pool.execute('SELECT * FROM payroll_size_ranges WHERE id = ?', [id]);
-      oldValue = oldRows[0] || null;
+    if (targetId) {
+      const [oldRows] = await pool.execute('SELECT * FROM payroll_size_ranges WHERE id = ?', [targetId]);
+      oldValue = oldRows[0] || duplicates[0] || null;
       await pool.execute(`
         UPDATE payroll_size_ranges
            SET size_range = ?, description = ?, is_active = ?, updated_by = ?
          WHERE id = ?
-      `, [range, description || null, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+      `, [range, description || null, Number(is_active) === 0 ? 0 : 1, currentUserId(req), targetId]);
     } else {
       await pool.execute(`
         INSERT INTO payroll_size_ranges (size_range, description, is_active, created_by, updated_by)
@@ -5802,9 +5816,15 @@ router.post('/size-ranges', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
       remarks: `Saved size range: ${range}`,
       metadata: { old_value: oldValue, new_value: req.body }
     });
-    res.json({ message: 'Size range saved.' });
+    res.json({
+      message: targetId ? 'Existing size range updated.' : 'Size range saved.',
+      id: targetId || undefined
+    });
   } catch (err) {
     console.error('Error saving size range:', err);
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'This size range already exists. Edit the existing size range instead.' });
+    }
     res.status(500).json({ error: 'Failed to save size range.' });
   }
 });
@@ -7563,6 +7583,95 @@ async function payrollGenerationEmployeeRows(pool, body, payTypeFilter) {
   return employees;
 }
 
+function hasSpecificPayrollEmployeeFilter(body = {}) {
+  return Boolean(body.employee_id || body.employee_code);
+}
+
+async function payrollGenerationSourceEmployeeSets(pool, period) {
+  const attendance = new Set();
+  const piece = new Set();
+  const trip = new Set();
+  const readyStatuses = ['Approved', 'Payroll Ready'];
+
+  if (await payrollTableExists(pool, 'attendance_summary')) {
+    const [rows] = await pool.execute(`
+      SELECT DISTINCT employee_id
+        FROM attendance_summary
+       WHERE attendance_date BETWEEN ? AND ?
+         AND verification_status = 'PAYROLL_READY'
+         AND COALESCE(payroll_eligible, 0) = 1
+         AND payroll_run_id IS NULL
+    `, [period.start, period.end]);
+    rows.forEach(row => attendance.add(Number(row.employee_id)));
+  }
+
+  if (await payrollTableExists(pool, 'payroll_production_outputs')) {
+    const [rows] = await pool.execute(`
+      SELECT DISTINCT employee_id
+        FROM payroll_production_outputs
+       WHERE output_date BETWEEN ? AND ?
+         AND status IN (?, ?)
+         AND payroll_run_id IS NULL
+    `, [period.start, period.end, ...readyStatuses]);
+    rows.forEach(row => piece.add(Number(row.employee_id)));
+  }
+
+  if (await payrollTableExists(pool, 'payroll_production_pairs')) {
+    const [rows] = await pool.execute(`
+      SELECT DISTINCT worker1_employee_id AS employee_id
+        FROM payroll_production_pairs
+       WHERE production_date BETWEEN ? AND ?
+         AND status IN (?, ?)
+         AND payroll_run_id IS NULL
+      UNION
+      SELECT DISTINCT worker2_employee_id AS employee_id
+        FROM payroll_production_pairs
+       WHERE production_date BETWEEN ? AND ?
+         AND status IN (?, ?)
+         AND payroll_run_id IS NULL
+    `, [period.start, period.end, ...readyStatuses, period.start, period.end, ...readyStatuses]);
+    rows.forEach(row => piece.add(Number(row.employee_id)));
+  }
+
+  if (await payrollTableExists(pool, 'piece_rate_outputs') && await payrollTableExists(pool, 'piece_rate_output_shares')) {
+    const [rows] = await pool.execute(`
+      SELECT DISTINCT s.employee_id
+        FROM piece_rate_outputs o
+        JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+       WHERE o.output_date BETWEEN ? AND ?
+         AND o.status IN (?, ?)
+         AND o.payroll_run_id IS NULL
+    `, [period.start, period.end, ...readyStatuses]);
+    rows.forEach(row => piece.add(Number(row.employee_id)));
+  }
+
+  if (await payrollTableExists(pool, 'delivery_trips')) {
+    const [rows] = await pool.execute(`
+      SELECT DISTINCT employee_id
+        FROM delivery_trips
+       WHERE trip_date BETWEEN ? AND ?
+         AND status IN (?, ?)
+         AND payroll_run_id IS NULL
+    `, [period.start, period.end, ...readyStatuses]);
+    rows.forEach(row => trip.add(Number(row.employee_id)));
+  }
+
+  return { attendance, piece, trip };
+}
+
+async function filterEmployeesWithPayrollSources(pool, employees, period, body = {}) {
+  if (hasSpecificPayrollEmployeeFilter(body)) return employees;
+  const sourceSets = await payrollGenerationSourceEmployeeSets(pool, period);
+  return employees.filter(emp => {
+    const employeeId = Number(emp.id);
+    const wageType = normalizePayrollWageType(emp.wage_type);
+    if (['Daily', 'Hourly', 'Monthly'].includes(wageType)) return sourceSets.attendance.has(employeeId);
+    if (wageType === 'Per-Piece') return sourceSets.piece.has(employeeId);
+    if (isTripBasedWageType(emp.wage_type)) return sourceSets.trip.has(employeeId);
+    return false;
+  });
+}
+
 function payrollPreviewResponse({ period, employees, rows, skipped }) {
   return {
     preview: true,
@@ -7859,7 +7968,8 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
     payroll_frequency: body.payroll_frequency || body.frequency
   });
   const payrollPolicy = await getPayrollPolicy(pool);
-  const employees = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
+  const allEmployees = await payrollGenerationEmployeeRows(pool, body, payTypeFilter);
+  const employees = await filterEmployeesWithPayrollSources(pool, allEmployees, period, body);
   const [existingRuns] = await pool.execute('SELECT id, status FROM payroll_runs WHERE month_year = ? LIMIT 1', [period.month_year]);
   const payrollRunId = existingRuns[0]?.id || null;
   const payrollRunStatus = existingRuns[0]?.status || null;
@@ -8201,7 +8311,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       WHERE ${employeeWhere.join(' AND ')}
       ORDER BY e.employee_code, e.id
     `, employeeParams);
-    const employees = employeeRows;
+    const employees = await filterEmployeesWithPayrollSources(connection, employeeRows, period, req.body || {});
     selectedEmployeeCount = employees.length;
 
     let skippedCount = 0;

@@ -30,7 +30,7 @@ let pieceRateConfig = {
   production_outputs: [],
   production_pairs: []
 };
-let pieceRateRecordsView = 'rates';
+let pieceRateRecordsView = 'sizes';
 const PIECE_RATE_RECORDS_PAGE_SIZE = 10;
 const pieceRateRecordsPages = {};
 
@@ -2462,7 +2462,7 @@ function showCalculationBreakdown(record) {
   document.body.appendChild(modal);
 }
 
-function switchPayrollTab(tab) {
+function switchPayrollTab(tab, options = {}) {
   const targetTab = tab === 'payslips' ? 'records' : tab;
   document.querySelectorAll('.payroll-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.payrollTab === tab);
@@ -2489,6 +2489,9 @@ function switchPayrollTab(tab) {
   if (targetTab === 'records') loadSalaryCalculations();
   if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
   if (targetTab === 'final-pay-approval') loadFinalPayApprovals();
+  if (!options.skipRouteUpdate && typeof syncRouteForPage === 'function') {
+    syncRouteForPage('payroll', { payrollTab: targetTab });
+  }
 }
 
 function payrollOffboardingTable(rows, actionRenderer) {
@@ -2810,8 +2813,8 @@ function renderPieceRateConfig(config) {
     <div class="piece-records-compact">
       <div class="piece-records-head">
         <div>
-          <h3>Records</h3>
-          <p>Choose one record type to view or edit. This keeps the page light.</p>
+          <h3>Active Configurations</h3>
+          <p>View or edit the active payroll configuration records below.</p>
         </div>
         <select id="piece-rate-record-view" onchange="switchPieceRateRecordsView(this.value)">
           ${views.map(([value, label]) => `<option value="${value}" ${pieceRateRecordsView === value ? 'selected' : ''}>${label}</option>`).join('')}
@@ -3048,10 +3051,14 @@ async function saveSizeRange(event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save size range');
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || 'Failed to save size range');
     form.reset();
+    pieceRateRecordsView = 'sizes';
+    pieceRateRecordsPages.sizes = 1;
     await loadPieceRateConfig();
-    if (typeof showAlert === 'function') await showAlert('Size range saved.', 'Saved', 'success');
+    document.getElementById('piece-rate-config-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (typeof showAlert === 'function') await showAlert(result.message || 'Size range saved.', 'Saved', 'success');
   } catch (err) {
     if (typeof showAlert === 'function') await showAlert(err.message, 'Error', 'error');
     else alert(err.message);

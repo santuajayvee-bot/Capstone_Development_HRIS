@@ -20,6 +20,162 @@ const PAGE_TITLES = {
   'self-service': 'My Profile',
 };
 
+const APP_ROUTE_MAP = {
+  '/dashboard': { page: 'dashboard' },
+  '/employees': { page: 'employees' },
+  '/attendance': { page: 'attendance' },
+  '/leave': { page: 'leave' },
+  '/payroll': { page: 'payroll' },
+  '/salary-calculation': { page: 'payroll', params: { payrollTab: 'salary' } },
+  '/reports': { page: 'reports' },
+  '/settings': { page: 'self-service' },
+  '/organization-setup': { page: 'organization-setup' },
+  '/register': { page: 'register' },
+  '/employee-profile': { page: 'employee-profile' },
+  '/requests': { page: 'requests' },
+  '/onboarding': { page: 'onboarding' },
+  '/blockchain': { page: 'blockchain' },
+  '/system-admin': { page: 'system-admin' },
+  '/my-profile': { page: 'self-service' },
+};
+
+function normalizeAppPath(path = window.location.pathname) {
+  const cleanPath = String(path || '/')
+    .split('?')[0]
+    .split('#')[0]
+    .replace(/\/+$/g, '');
+  return cleanPath || '/';
+}
+
+function defaultRouteForUser(user = null) {
+  return '/dashboard';
+}
+
+function resolveAppRoute(path = window.location.pathname) {
+  const normalizedPath = normalizeAppPath(path);
+  const user = typeof getUser === 'function' ? getUser() : null;
+
+  if (normalizedPath === '/' || normalizedPath === '/index.html') {
+    return { path: defaultRouteForUser(user), page: user && typeof isEmployeeRole === 'function' && isEmployeeRole(user.role) ? 'employee-dashboard' : 'dashboard', params: user && typeof isEmployeeRole === 'function' && isEmployeeRole(user.role) ? { employeeTab: 'overview' } : {} };
+  }
+
+  if (normalizedPath === '/login') {
+    return { path: '/login', public: true };
+  }
+
+  if (normalizedPath === '/dashboard' && user && typeof isEmployeeRole === 'function' && isEmployeeRole(user.role)) {
+    return { path: '/dashboard', page: 'employee-dashboard', params: { employeeTab: 'overview' } };
+  }
+
+  if (normalizedPath === '/payslips') {
+    if (user && typeof isEmployeeRole === 'function' && isEmployeeRole(user.role)) {
+      return { path: '/payslips', page: 'employee-dashboard', params: { employeeTab: 'payslips' } };
+    }
+    return { path: '/payslips', page: 'payroll', params: { payrollTab: 'records' } };
+  }
+
+  const route = APP_ROUTE_MAP[normalizedPath];
+  return route ? { path: normalizedPath, ...route, params: { ...(route.params || {}) } } : null;
+}
+
+function routeForPage(pageId, params = null) {
+  const routeParams = params || {};
+  if (pageId === 'dashboard') return '/dashboard';
+  if (pageId === 'employee-dashboard') {
+    return routeParams.employeeTab === 'payslips' ? '/payslips' : '/dashboard';
+  }
+  if (pageId === 'payroll') {
+    if (routeParams.payrollTab === 'salary') return '/salary-calculation';
+    if (routeParams.payrollTab === 'records' || routeParams.payrollTab === 'payslips') return '/payslips';
+    return '/payroll';
+  }
+  const match = Object.entries(APP_ROUTE_MAP).find(([, route]) => route.page === pageId && !route.params);
+  return match ? match[0] : `/${pageId}`;
+}
+
+function setAppPath(path, replace = false) {
+  const targetPath = normalizeAppPath(path);
+  const currentPath = normalizeAppPath();
+  if (targetPath === currentPath) return;
+  const method = replace ? 'replaceState' : 'pushState';
+  window.history[method]({ path: targetPath }, '', targetPath);
+}
+
+function syncRouteForPage(pageId, params = null, replace = false) {
+  setAppPath(routeForPage(pageId, params), replace);
+}
+
+function showLoginRoute(replace = true) {
+  const app = document.getElementById('app');
+  const login = document.getElementById('login-screen');
+  if (app) app.style.display = 'none';
+  if (login) login.style.display = 'flex';
+  setAppPath('/login', replace);
+}
+
+function showApplicationShell(user = null) {
+  const app = document.getElementById('app');
+  const login = document.getElementById('login-screen');
+  if (login) login.style.display = 'none';
+  if (app) app.style.display = 'block';
+  if (user && typeof buildSidebar === 'function') {
+    const navItems = document.getElementById('nav-items');
+    if (!navItems?.children.length) buildSidebar(user);
+  }
+}
+
+function applyRoutePageState(pageId, params = null) {
+  const routeParams = params || {};
+  if (pageId === 'payroll' && routeParams.payrollTab && typeof switchPayrollTab === 'function') {
+    switchPayrollTab(routeParams.payrollTab, { skipRouteUpdate: true });
+  }
+}
+
+function handleAppRoute(options = {}) {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  const loggedIn = typeof isLoggedIn === 'function' ? isLoggedIn() : !!user;
+  let route = resolveAppRoute(window.location.pathname);
+  const currentPath = normalizeAppPath();
+
+  if (!route) {
+    const fallbackPath = loggedIn ? defaultRouteForUser(user) : '/login';
+    setAppPath(fallbackPath, true);
+    route = resolveAppRoute(fallbackPath);
+  }
+
+  if (route?.public) {
+    if (loggedIn) {
+      setAppPath(defaultRouteForUser(user), true);
+      handleAppRoute({ replace: true });
+      return;
+    }
+    showLoginRoute(true);
+    return;
+  }
+
+  if (!loggedIn) {
+    if (currentPath !== '/login') sessionStorage.setItem('vp_pending_route', currentPath);
+    showLoginRoute(true);
+    return;
+  }
+
+  if (user?.mustChangePassword || user?.forcePasswordChange) {
+    route = { path: '/settings', page: 'self-service', params: { forcePasswordChange: true } };
+    setAppPath('/settings', true);
+  }
+
+  showApplicationShell(user);
+  if (!route?.page) return;
+
+  if (typeof canAccess === 'function' && !canAccess(route.page)) {
+    showAccessDenied();
+    return;
+  }
+
+  if (route.path && route.path !== currentPath) setAppPath(route.path, true);
+  navigate(route.page, null, { ...(route.params || {}), skipRouteUpdate: true });
+}
+
 let topbarClockTimer = null;
 const AUTO_TABLE_PAGE_SIZE = 10;
 let autoTablePaginationId = 0;
@@ -163,12 +319,16 @@ function enhanceTablePagination(table) {
 }
 
 function navigate(pageId, navEl, params = null) {
+  const routeParams = { ...(params || {}) };
+  const skipRouteUpdate = routeParams.skipRouteUpdate === true;
+  delete routeParams.skipRouteUpdate;
+
   const user = typeof getUser === 'function' ? getUser() : null;
   if (typeof applyUserRoleToDocument === 'function') applyUserRoleToDocument(user);
   if ((user?.mustChangePassword || user?.forcePasswordChange) && pageId !== 'self-service') {
     pageId = 'self-service';
     navEl = null;
-    params = { ...(params || {}), forcePasswordChange: true };
+    routeParams.forcePasswordChange = true;
   }
 
   // Role guard — check permission before switching
@@ -202,13 +362,13 @@ function navigate(pageId, navEl, params = null) {
       'self-service': 'My Profile',
       requests: 'My Requests',
     };
-    const titleKey = params?.employeeTab ? `${pageId}:${params.employeeTab}` : pageId;
+    const titleKey = routeParams.employeeTab ? `${pageId}:${routeParams.employeeTab}` : pageId;
     titleEl.textContent = isEmployeeUser && employeeTitles[titleKey]
       ? employeeTitles[titleKey]
       : PAGE_TITLES[pageId] || pageId;
   }
 
-  const navKey = params?.employeeTab ? `${pageId}:${params.employeeTab}` : pageId;
+  const navKey = routeParams.employeeTab ? `${pageId}:${routeParams.employeeTab}` : pageId;
 
   if (navEl) {
     document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => n.classList.remove('active'));
@@ -223,7 +383,8 @@ function navigate(pageId, navEl, params = null) {
   });
   if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
 
-  window.ROUTE_PARAMS = { pageId, ...(params || {}) };
+  window.ROUTE_PARAMS = { pageId, ...routeParams };
+  if (!skipRouteUpdate) syncRouteForPage(pageId, routeParams);
 
   if (pageId === 'dashboard' && typeof loadDashboard === 'function') {
     loadDashboard();
@@ -280,6 +441,7 @@ function navigate(pageId, navEl, params = null) {
     if (typeof loadSalaryCalculationPage === 'function') {
       loadSalaryCalculationPage();
     }
+    requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
   }
 
   // When navigating to system-admin, initialize the module
@@ -293,7 +455,7 @@ function navigate(pageId, navEl, params = null) {
   }
 
   if (pageId === 'employee-profile' && typeof loadEmployeeProfilePage === 'function') {
-    loadEmployeeProfilePage(params || {});
+    loadEmployeeProfilePage(routeParams || {});
   }
 
   if (pageId === 'self-service' && typeof initSelfServiceProfile === 'function') {
@@ -320,14 +482,24 @@ window.navigate         = navigate;
 window.showAccessDenied = showAccessDenied;
 window.enhanceResponsiveTables = enhanceResponsiveTables;
 window.startTopbarClock = startTopbarClock;
+window.routeForPage = routeForPage;
+window.resolveAppRoute = resolveAppRoute;
+window.syncRouteForPage = syncRouteForPage;
+window.handleAppRoute = handleAppRoute;
+window.showLoginRoute = showLoginRoute;
 
 document.addEventListener('partialsLoaded', () => {
   enhanceResponsiveTables();
   updateTopbarDateTime();
+  if (window.ROUTE_PARAMS?.pageId) {
+    applyRoutePageState(window.ROUTE_PARAMS.pageId, window.ROUTE_PARAMS);
+  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
   startTopbarClock();
+  window.addEventListener('popstate', () => handleAppRoute({ fromPopState: true }));
+  setTimeout(() => handleAppRoute({ replace: true }), 0);
 
   const pageBody = document.querySelector('.page-body');
   if (!pageBody) return;

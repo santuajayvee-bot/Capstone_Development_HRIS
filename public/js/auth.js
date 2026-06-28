@@ -261,11 +261,15 @@ async function apiFetch(url, options = {}) {
   if (response.status === 401) {
     console.warn('401 Unauthorized:', url);
     clearAuth();
-    const app = document.getElementById('app');
-    const login = document.getElementById('login-screen');
-    if (app && login) {
-      app.style.display = 'none';
-      login.style.display = 'flex';
+    if (typeof showLoginRoute === 'function') {
+      showLoginRoute(true);
+    } else {
+      const app = document.getElementById('app');
+      const login = document.getElementById('login-screen');
+      if (app && login) {
+        app.style.display = 'none';
+        login.style.display = 'flex';
+      }
     }
   }
   if (response.status === 403) {
@@ -284,12 +288,13 @@ function buildSidebar(user) {
   if (!navItems) return;
   const config = NAV_CONFIG[user.role] || NAV_CONFIG.employee;
   navItems.innerHTML = config.map((item, index) => `
-    <div class="nav-item ${index === 0 ? 'active' : ''}"
+    <a href="${typeof routeForPage === 'function' ? routeForPage(item.page, item.tab ? { employeeTab: item.tab } : null) : '#'}"
+         class="nav-item ${index === 0 ? 'active' : ''}"
          data-page="${item.page}"
          data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
-         onclick="navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
+         onclick="event.preventDefault(); navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
       <span class="nav-icon">${item.icon}</span> ${item.label}
-    </div>
+    </a>
   `).join('');
 
   const name = document.getElementById('sidebar-user-name');
@@ -328,14 +333,14 @@ function buildEmployeeBottomNav(user) {
   ].filter(item => canAccess(item.page));
 
   bottomNav.innerHTML = items.map((item, index) => `
-    <button type="button"
+    <a href="${typeof routeForPage === 'function' ? routeForPage(item.page, item.tab ? { employeeTab: item.tab } : null) : '#'}"
             class="employee-bottom-nav-item ${index === 0 ? 'active' : ''}"
             data-page="${item.page}"
             data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
-            onclick="navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
+            onclick="event.preventDefault(); navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
       <span>${item.icon}</span>
       <small>${item.label}</small>
-    </button>
+    </a>
   `).join('');
   bottomNav.style.display = '';
   document.body.classList.add('has-employee-bottom-nav');
@@ -383,8 +388,12 @@ function logout() {
   if (typeof stopAttendanceAjaxRefresh === 'function') stopAttendanceAjaxRefresh();
   clearAuth();
   closeMobileSidebar();
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
+  if (typeof showLoginRoute === 'function') {
+    showLoginRoute(true);
+  } else {
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('login-screen').style.display = 'flex';
+  }
 }
 
 function closeMobileSidebar() {
@@ -405,11 +414,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     buildSidebar(user);
-    if (user?.role === 'employee' && typeof navigate === 'function') {
-      navigate('employee-dashboard', null, { employeeTab: 'overview' });
-    } else if (typeof loadDashboard === 'function') {
-      loadDashboard();
-    }
     if (typeof initAttendanceRealtime === 'function') {
       initAttendanceRealtime();
     }

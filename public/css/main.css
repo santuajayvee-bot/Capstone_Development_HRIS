@@ -115,6 +115,7 @@ body *:not(code):not(pre) {
   font-size: 13.5px;
   font-weight: 500;
   color: var(--muted);
+  text-decoration: none;
   transition: .15s;
   border-left: 3px solid transparent;
 }
@@ -1710,6 +1711,22 @@ input.lgsv-date-native[type="date"] {
   font-size: 12px;
   font-weight: 700;
 }
+#payroll-tab-piece-config .payroll-field-row > label {
+  display: grid;
+  grid-template-rows: auto minmax(38px, auto) 34px;
+  align-self: stretch;
+}
+#payroll-tab-piece-config .payroll-field-row > label > .field-validation-message {
+  display: -webkit-box;
+  align-self: start;
+  min-height: 34px;
+  max-height: 34px;
+  margin-top: 0;
+  overflow: hidden;
+  line-height: 17px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .payroll-field-row input,
 .payroll-field-row select {
   width: 100%;
@@ -2548,6 +2565,7 @@ video {
     border-radius: 8px;
     background: transparent;
     color: var(--muted);
+    text-decoration: none;
     font-size: 11px;
   }
 

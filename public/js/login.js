@@ -148,6 +148,17 @@ function completeAuthenticatedLogin(data) {
     return;
   }
 
+  const pendingRoute = sessionStorage.getItem('vp_pending_route');
+  if (pendingRoute && typeof resolveAppRoute === 'function' && typeof handleAppRoute === 'function') {
+    sessionStorage.removeItem('vp_pending_route');
+    const route = resolveAppRoute(pendingRoute);
+    if (route?.page && typeof canAccess === 'function' && canAccess(route.page)) {
+      window.history.replaceState({ path: pendingRoute }, '', pendingRoute);
+      handleAppRoute({ replace: true });
+      return;
+    }
+  }
+
   if (data.user?.role === 'employee') {
     navigate('employee-dashboard', null, { employeeTab: 'overview' });
   } else {
