@@ -572,7 +572,12 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get([...SPA_ROUTE_PATHS], (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
+  redirect: false,
   setHeaders(res, filePath) {
     if (/\.(?:html|js|css)$/i.test(filePath)) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
