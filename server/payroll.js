@@ -8218,11 +8218,12 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       metadata: { processedCount, skippedCount, totalEmployees: employees.length, skipped }
     });
     await connection.commit();
-    await completePerformanceLog(connection, payrollPerformance, {
-      employeesProcessed: processedCount,
+    const performanceResult = await completePerformanceLog(connection, payrollPerformance, {
+      employeesProcessed: selectedEmployeeCount,
       payrollPeriod: period.month_year,
       status: 'success',
       metadata: {
+        generated_employees: processedCount,
         selected_employees: selectedEmployeeCount,
         skipped_employees: skippedCount,
         performance_batch_size: performanceBatchSize,
@@ -8236,6 +8237,15 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       period_start: period.start,
       period_end: period.end,
       employeesProcessed: processedCount,
+      performance: performanceResult ? {
+        operation_name: performanceResult.operationName,
+        employees_processed: performanceResult.employeesProcessed,
+        payroll_period: performanceResult.payrollPeriod,
+        start_time: performanceResult.startTime.toISOString(),
+        end_time: performanceResult.endTime.toISOString(),
+        duration_ms: performanceResult.durationMs,
+        status: performanceResult.status,
+      } : null,
       totalEmployees: employees.length,
       skippedCount,
       skipped,
@@ -8247,10 +8257,11 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
     try { await connection.rollback(); } catch (_) {}
     console.error('Error generating payroll:', err);
     await completePerformanceLog(connection || pool, payrollPerformance, {
-      employeesProcessed: processedCount || selectedEmployeeCount || 0,
+      employeesProcessed: selectedEmployeeCount || processedCount || 0,
       payrollPeriod: payrollPeriodForPerformance,
       status: 'failed',
       metadata: {
+        generated_employees: processedCount,
         selected_employees: selectedEmployeeCount,
         performance_batch_size: performanceBatchSize,
       },

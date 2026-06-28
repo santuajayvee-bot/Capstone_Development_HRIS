@@ -77,8 +77,8 @@ async function run() {
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
-    const durationMs = Date.now() - started;
-    const employees = Number(result.employeesProcessed || 0);
+    const durationMs = Number(result.performance?.duration_ms || (Date.now() - started));
+    const employees = Number(result.performance?.employees_processed || result.employeesProcessed || 0);
     console.log(`Payroll generation completed for ${employees} employees in ${durationMs}ms. batch=${size} period=${payrollPeriod}`);
   }
 }
