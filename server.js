@@ -542,6 +542,36 @@ app.use((req, res, next) => {
   next();
 });
 app.use('/uploads', (_req, res) => res.status(404).send('Not found'));
+
+const SPA_ROUTE_PATHS = new Set([
+  '/dashboard',
+  '/employees',
+  '/attendance',
+  '/leave',
+  '/payroll',
+  '/salary-calculation',
+  '/reports',
+  '/settings',
+  '/organization-setup',
+  '/register',
+  '/employee-profile',
+  '/requests',
+  '/onboarding',
+  '/blockchain',
+  '/system-admin',
+  '/my-profile',
+  '/payslips',
+]);
+
+app.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  const cleanPath = req.path.replace(/\/+$/g, '') || '/';
+  if (req.path.length > 1 && req.path.endsWith('/') && SPA_ROUTE_PATHS.has(cleanPath)) {
+    return res.redirect(308, `${cleanPath}${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`);
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, filePath) {
     if (/\.(?:html|js|css)$/i.test(filePath)) {
