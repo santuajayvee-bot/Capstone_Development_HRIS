@@ -32,7 +32,8 @@ const reportState = {
   pendingReportTrigger: null,
   employees: [],
   departments: [],
-  payrollPeriods: []
+  payrollPeriods: [],
+  pendingDtrAnchorFilters: null
 };
 
 const REGISTRY_TYPES = [
@@ -41,6 +42,7 @@ const REGISTRY_TYPES = [
   { value: '45', label: '45% Sewing Registry' },
   { value: 'swr-fxr-sum', label: 'SWR-FXR-SUM Registry' }
 ];
+const DTR_ANCHOR_ROLES = new Set(['hr_admin', 'hr_manager']);
 
 document.addEventListener('DOMContentLoaded', initReportsPage);
 document.addEventListener('partialsLoaded', initReportsPage);
@@ -179,23 +181,29 @@ function renderReportOutputs() {
   if (!body) return;
   if (count) count.textContent = `${REPORT_OUTPUTS.length} outputs available. DTR and payslips require one selected employee.`;
 
-  body.innerHTML = REPORT_OUTPUTS.map(output => `
-    <tr>
-      <td>${escapeHtml(output.name)}</td>
-      <td>${escapeHtml(output.description)}</td>
-      <td>
-        <select class="filter-select report-format-select" id="report-format-${escapeAttr(output.id)}">
-          ${output.formats.map(format => `<option value="${escapeAttr(format)}">${escapeHtml(format.toUpperCase())}</option>`).join('')}
-        </select>
-      </td>
-      <td>
-        <div class="button-row">
-          <button class="btn btn-primary btn-sm" type="button" onclick="generateReportOutput('${escapeAttr(output.id)}', this)">Generate</button>
-          <button class="btn btn-outline btn-sm" type="button" onclick="printReportOutput('${escapeAttr(output.id)}', this)">Print</button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  body.innerHTML = REPORT_OUTPUTS.map(output => {
+    const dtrAnchorButton = output.id === 'daily-attendance'
+      ? `<button class="btn btn-outline btn-sm" type="button" onclick="anchorDtrOutput('${escapeAttr(output.id)}', this)">Finalize & Anchor DTR</button>`
+      : '';
+    return `
+      <tr>
+        <td>${escapeHtml(output.name)}</td>
+        <td>${escapeHtml(output.description)}</td>
+        <td>
+          <select class="filter-select report-format-select" id="report-format-${escapeAttr(output.id)}">
+            ${output.formats.map(format => `<option value="${escapeAttr(format)}">${escapeHtml(format.toUpperCase())}</option>`).join('')}
+          </select>
+        </td>
+        <td>
+          <div class="button-row">
+            <button class="btn btn-primary btn-sm" type="button" onclick="generateReportOutput('${escapeAttr(output.id)}', this)">Generate</button>
+            <button class="btn btn-outline btn-sm" type="button" onclick="printReportOutput('${escapeAttr(output.id)}', this)">Print</button>
+            ${dtrAnchorButton}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 async function generateReportOutput(reportId, trigger = null) {
@@ -214,6 +222,14 @@ async function printReportOutput(reportId, trigger = null) {
     await loadReportDependencies();
   }
   openReportOptionsModal(reportId, 'print', trigger);
+}
+
+async function anchorDtrOutput(reportId, trigger = null) {
+  if (!canFinalizeDtrFromReports()) {
+    alert('Only HR Admin / HR Manager can finalize and anchor an Attendance DTR.');
+    return;
+  }
+  openReportOptionsModal(reportId, 'anchor', trigger);
 }
 
 async function loadReportOutput(reportId, trigger = null, loadingText = 'Loading...', options = {}) {
@@ -354,9 +370,29 @@ function employeeOptions(department = '') {
     .filter(option => option.value);
 }
 
+function normalizeReportRole(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+function reportsUserRole() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  return normalizeReportRole(user?.role || document.body?.dataset?.userRole || '');
+}
+
+function canFinalizeDtrFromReports() {
+  const user = typeof getUser === 'function' ? getUser() : null;
+  const role = reportsUserRole();
+  const label = String(user?.roleLabel || user?.role_label || '').toLowerCase();
+  return DTR_ANCHOR_ROLES.has(role) || /\bhr\s+(admin|manager)\b/i.test(label);
+}
+
 function openReportOptionsModal(reportId, action, trigger = null) {
   const output = REPORT_OUTPUTS.find(item => item.id === reportId);
   if (!output) return;
+  if (action === 'anchor' && output.id !== 'daily-attendance') return;
   reportState.pendingReportId = reportId;
   reportState.pendingReportAction = action;
   reportState.pendingReportTrigger = trigger || null;
@@ -371,10 +407,17 @@ function openReportOptionsModal(reportId, action, trigger = null) {
     .map(run => ({ value: run.month_year || run.payroll_period || run.id, label: reportPeriodLabel(run) }))
     .filter(option => option.value);
   const requiresEmployee = ['daily-attendance', 'employee-payslip'].includes(reportId);
-  const isAttendanceDtr = reportId === 'daily-attendance';
-  const showRegistry = reportId === 'payroll-register';
-  const dtrDateFrom = dateFrom || new Date().toISOString().slice(0, 10);
-  const dtrDateTo = dateTo || dtrDateFrom;
+  const showRegistry = reportId === 'payroll-register' && action !== 'anchor';
+  const actionPhrase = action === 'anchor'
+    ? 'finalizing and anchoring'
+    : action === 'print'
+      ? 'previewing or printing'
+      : 'generating';
+  const primaryLabel = action === 'anchor'
+    ? 'Finalize & Anchor DTR'
+    : action === 'print'
+      ? 'Preview / Print'
+      : 'Generate';
 
   const modal = document.createElement('div');
   modal.id = 'report-options-modal';
@@ -384,7 +427,7 @@ function openReportOptionsModal(reportId, action, trigger = null) {
       <div class="report-modal-header">
         <div>
           <h3 id="report-options-title">${escapeHtml(output.name)}</h3>
-          <p>Select filters before ${action === 'print' ? 'previewing or printing' : 'generating'} this report.</p>
+          <p>Select filters before ${actionPhrase} this report.</p>
         </div>
         <button type="button" class="report-modal-close" onclick="closeReportOptionsModal()">×</button>
       </div>
@@ -417,12 +460,11 @@ function openReportOptionsModal(reportId, action, trigger = null) {
               ${empOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
             </select>
           </label>
-          <label class="span-2">Department
-            <select id="report-modal-department" class="filter-select" onchange="renderReportModalEmployeeOptions()">
-              <option value="all">All departments</option>
-              ${deptOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
-            </select>
-          </label>
+          ${action === 'anchor' ? `
+            <div class="span-2 report-anchor-warning">
+              This creates the official finalized DTR record, computes its SHA-256 hash, and anchors only the hash/audit metadata. Generate/Print remains for preview only.
+            </div>
+          ` : ''}
           ${showRegistry ? `
             <div class="span-2 report-choice-block">
               <div class="report-choice-title">Registry Type</div>
@@ -440,7 +482,7 @@ function openReportOptionsModal(reportId, action, trigger = null) {
       </div>
       <div class="report-modal-footer">
         <button class="btn btn-outline" type="button" onclick="closeReportOptionsModal()">Cancel</button>
-        <button class="btn btn-primary" type="button" onclick="confirmReportOptionsModal()">${action === 'print' ? 'Preview / Print' : 'Generate'}</button>
+        <button class="btn btn-primary" type="button" onclick="confirmReportOptionsModal()">${primaryLabel}</button>
       </div>
     </div>
   `;
@@ -488,7 +530,7 @@ async function confirmReportOptionsModal() {
 
   if (['daily-attendance', 'employee-payslip'].includes(reportId) && !/^\d+$/.test(filters.employee_id || '')) {
     alert(reportId === 'daily-attendance'
-      ? 'Select one employee before generating an attendance DTR.'
+      ? `Select one employee before ${action === 'anchor' ? 'finalizing and anchoring' : 'generating'} an attendance DTR.`
       : 'Select one employee before generating a payslip.');
     return;
   }
@@ -511,6 +553,11 @@ async function confirmReportOptionsModal() {
 
   closeReportOptionsModal();
 
+  if (action === 'anchor') {
+    await finalizeAndAnchorDtrFromReports(filters, trigger);
+    return;
+  }
+
   if (reportId === 'payroll-register' && ['main', '55', '45'].includes(registryType) && action === 'print') {
     await printSewingRegistryHtml(registryType, trigger, registryMonthFromPeriod(filters.payroll_period));
     return;
@@ -521,7 +568,219 @@ async function confirmReportOptionsModal() {
   });
   if (!result) return;
   if (action === 'print') previewBlob(result.blob);
-  else downloadBlob(result.blob, result.filename);
+  else {
+    downloadBlob(result.blob, result.filename);
+    if (reportId === 'daily-attendance' && canFinalizeDtrFromReports()) {
+      showDtrPostGeneratePrompt(filters);
+    }
+  }
+}
+
+function selectedReportEmployeeLabel(employeeId) {
+  const employee = reportState.employees.find(emp => String(emp.id) === String(employeeId));
+  return employee ? employeeOptionLabel(employee) : `Employee #${employeeId}`;
+}
+
+function validateDtrAnchorFilters(filters) {
+  if (!/^\d+$/.test(filters.employee_id || '')) {
+    alert('Select one employee before finalizing and anchoring an attendance DTR.');
+    return false;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(filters.date_from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(filters.date_to || '')) {
+    alert('Select a valid Date From and Date To before finalizing and anchoring an attendance DTR.');
+    return false;
+  }
+  if (filters.date_to < filters.date_from) {
+    alert('Date To cannot be earlier than Date From.');
+    return false;
+  }
+  return true;
+}
+
+function closeDtrPostGenerateModal() {
+  document.getElementById('dtr-post-generate-modal')?.remove();
+}
+
+async function confirmDtrAnchorFromGeneratedReport() {
+  const filters = reportState.pendingDtrAnchorFilters;
+  closeDtrPostGenerateModal();
+  if (!filters) return;
+  await finalizeAndAnchorDtrFromReports(filters);
+}
+
+function showDtrPostGeneratePrompt(filters) {
+  reportState.pendingDtrAnchorFilters = { ...filters };
+  closeDtrPostGenerateModal();
+  const employeeLabel = selectedReportEmployeeLabel(filters.employee_id);
+  const modal = document.createElement('div');
+  modal.id = 'dtr-post-generate-modal';
+  modal.className = 'report-modal-backdrop';
+  modal.innerHTML = `
+    <div class="report-modal" role="dialog" aria-modal="true" aria-labelledby="dtr-post-generate-title">
+      <div class="report-modal-header">
+        <div>
+          <h3 id="dtr-post-generate-title">Attendance DTR Generated</h3>
+          <p>The PDF was generated. If HR has verified it, finalize and anchor the official DTR hash now.</p>
+        </div>
+        <button type="button" class="report-modal-close" onclick="closeDtrPostGenerateModal()">×</button>
+      </div>
+      <div class="report-modal-body">
+        <div class="report-anchor-warning">
+          Finalize & Anchor DTR for <strong>${escapeHtml(employeeLabel)}</strong><br>
+          Period: <strong>${escapeHtml(filters.date_from)}</strong> to <strong>${escapeHtml(filters.date_to)}</strong>
+        </div>
+      </div>
+      <div class="report-modal-footer">
+        <button class="btn btn-outline" type="button" onclick="closeDtrPostGenerateModal()">Later</button>
+        <button class="btn btn-primary" type="button" onclick="confirmDtrAnchorFromGeneratedReport()">Finalize & Anchor DTR</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function finalizeAndAnchorDtrFromReports(filters, trigger = null) {
+  if (!validateDtrAnchorFilters(filters)) return;
+
+  const employeeLabel = selectedReportEmployeeLabel(filters.employee_id);
+  const confirmed = window.confirm(
+    `Finalize and anchor the official DTR for ${employeeLabel} from ${filters.date_from} to ${filters.date_to}?\n\n` +
+    'This will save an off-chain DTR record, compute its SHA-256 hash, and submit only the hash/audit metadata to the blockchain layer.'
+  );
+  if (!confirmed) return;
+
+  const button = trigger?.closest?.('button') || trigger || null;
+  const original = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Anchoring...';
+  }
+
+  try {
+    const response = await apiFetch(`/api/blockchain/dtr/generate/${encodeURIComponent(filters.employee_id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start_date: filters.date_from,
+        end_date: filters.date_to,
+        remarks: 'Finalized and anchored from Reports module'
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 202) {
+      if (response.status === 409 && data.existing_dtr_id) {
+        showDtrAnchorResult({
+          status: 'existing',
+          message: data.error || 'A finalized DTR already exists for this employee and date range.',
+          dtr_id: data.existing_dtr_id
+        });
+        return;
+      }
+      throw new Error(data.error || 'Unable to finalize and anchor DTR.');
+    }
+    showDtrAnchorResult(data);
+  } catch (err) {
+    console.error('DTR anchor failed:', err);
+    showDtrAnchorResult({
+      status: 'failed',
+      message: err.message || 'Unable to finalize and anchor DTR.'
+    });
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+function dtrAnchorStatusLabel(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'success') return 'Recorded on Fabric';
+  if (normalized === 'pending_anchor') return 'Finalized locally - Pending Fabric anchor';
+  if (normalized === 'existing') return 'Already finalized';
+  if (normalized === 'failed') return 'Failed';
+  return status || 'Completed';
+}
+
+async function retryPendingDtrAnchor(dtrId, trigger = null) {
+  const id = String(dtrId || '').trim();
+  if (!id || id === '-') {
+    alert('No pending DTR ID is available for retry.');
+    return;
+  }
+
+  const button = trigger?.closest?.('button') || trigger || null;
+  const original = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Retrying...';
+  }
+
+  try {
+    const response = await apiFetch(`/api/blockchain/dtr/anchor/${encodeURIComponent(id)}`, {
+      method: 'POST'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 202) {
+      throw new Error(data.error || 'Unable to retry DTR blockchain anchor.');
+    }
+    showDtrAnchorResult(data);
+  } catch (err) {
+    console.error('DTR anchor retry failed:', err);
+    showDtrAnchorResult({
+      status: 'failed',
+      dtr_id: id,
+      message: err.message || 'Unable to retry DTR blockchain anchor.'
+    });
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+function closeDtrAnchorResultModal() {
+  document.getElementById('dtr-anchor-result-modal')?.remove();
+}
+
+function showDtrAnchorResult(data = {}) {
+  closeDtrAnchorResultModal();
+  const status = dtrAnchorStatusLabel(data.status);
+  const isCritical = ['failed'].includes(String(data.status || '').toLowerCase());
+  const isPending = String(data.status || '').toLowerCase() === 'pending_anchor';
+  const dtrId = String(data.dtr_id || '').trim();
+  const retryButton = isPending && dtrId
+    ? `<button class="btn btn-outline" type="button" onclick="retryPendingDtrAnchor('${escapeAttr(dtrId)}', this)">Retry Fabric Anchor</button>`
+    : '';
+  const modal = document.createElement('div');
+  modal.id = 'dtr-anchor-result-modal';
+  modal.className = 'report-modal-backdrop';
+  modal.innerHTML = `
+    <div class="report-modal" role="dialog" aria-modal="true" aria-labelledby="dtr-anchor-result-title">
+      <div class="report-modal-header">
+        <div>
+          <h3 id="dtr-anchor-result-title">DTR Blockchain Result</h3>
+          <p>${escapeHtml(data.message || 'DTR blockchain request completed.')}</p>
+        </div>
+        <button type="button" class="report-modal-close" onclick="closeDtrAnchorResultModal()">×</button>
+      </div>
+      <div class="report-modal-body">
+        <div class="report-result-grid">
+          <div><span>Status</span><strong class="${isCritical ? 'result-critical' : isPending ? 'result-warning' : 'result-success'}">${escapeHtml(status)}</strong></div>
+          <div><span>DTR ID</span><strong>${escapeHtml(data.dtr_id || '-')}</strong></div>
+          <div class="span-2"><span>DTR Hash</span><code>${escapeHtml(data.dtr_hash || data.computed_hash || '-')}</code></div>
+          <div class="span-2"><span>Transaction Hash</span><code>${escapeHtml(data.transaction_hash || '-')}</code></div>
+        </div>
+        ${isPending ? '<div class="report-anchor-warning">The DTR is finalized in MySQL and queued as PENDING_ANCHOR. Once Fabric is reachable and the DTR chaincode is deployed, click Retry Fabric Anchor.</div>' : ''}
+      </div>
+      <div class="report-modal-footer">
+        ${retryButton}
+        <button class="btn btn-primary" type="button" onclick="closeDtrAnchorResultModal()">OK</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
 }
 
 async function printSewingRegistryHtml(kind, trigger = null, payrollPeriodOverride = '') {
@@ -707,6 +966,11 @@ function escapeAttr(value) {
 
 window.generateReportOutput = generateReportOutput;
 window.printReportOutput = printReportOutput;
+window.anchorDtrOutput = anchorDtrOutput;
 window.closeReportOptionsModal = closeReportOptionsModal;
 window.confirmReportOptionsModal = confirmReportOptionsModal;
+window.closeDtrPostGenerateModal = closeDtrPostGenerateModal;
+window.confirmDtrAnchorFromGeneratedReport = confirmDtrAnchorFromGeneratedReport;
+window.closeDtrAnchorResultModal = closeDtrAnchorResultModal;
+window.retryPendingDtrAnchor = retryPendingDtrAnchor;
 window.renderReportModalEmployeeOptions = renderReportModalEmployeeOptions;

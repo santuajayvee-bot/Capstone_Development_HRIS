@@ -210,16 +210,56 @@ async function getPayrollHistory(payrollId) {
   });
 }
 
+async function submitDTRRecord(ledgerRecord) {
+  return withContract(async contract => {
+    const result = await contract.submitTransaction('CreateDTRRecord', JSON.stringify(ledgerRecord));
+    return parseResult(result);
+  });
+}
+
+async function createDTRAdjustmentRecord(ledgerRecord) {
+  return withContract(async contract => {
+    const result = await contract.submitTransaction('CreateDTRAdjustmentRecord', JSON.stringify(ledgerRecord));
+    return parseResult(result);
+  });
+}
+
+async function queryDTRRecord(dtrId) {
+  return withContract(async contract => {
+    const result = await contract.evaluateTransaction('ReadDTRRecord', String(dtrId));
+    return parseResult(result);
+  });
+}
+
+async function verifyDTRHash(dtrId, dtrHash) {
+  return withContract(async contract => {
+    const result = await contract.evaluateTransaction('VerifyDTRHash', String(dtrId), dtrHash);
+    return parseResult(result);
+  });
+}
+
+async function getDTRHistory(dtrId) {
+  return withContract(async contract => {
+    const result = await contract.evaluateTransaction('GetDTRHistory', String(dtrId));
+    return parseResult(result) || [];
+  });
+}
+
 module.exports = {
   FabricUnavailableError,
   connectToFabricNetwork,
   createPayrollAdjustmentRecord,
   fabricConfig,
   getFabricConfigStatus,
+  getDTRHistory,
   getPayrollHistory,
   isFabricEnabled,
+  queryDTRRecord,
   queryPayrollRecord,
+  submitDTRAdjustmentRecord: createDTRAdjustmentRecord,
+  submitDTRRecord,
   submitPayrollAdjustmentRecord: createPayrollAdjustmentRecord,
   submitPayrollRecord,
+  verifyDTRHash,
   verifyPayrollHash,
 };

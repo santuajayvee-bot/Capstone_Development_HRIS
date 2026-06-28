@@ -41,8 +41,16 @@ fi
 
 compose_exec "${payroll_peer_env} peer lifecycle chaincode checkcommitreadiness --channelID ${CHANNEL_NAME} --name ${CHAINCODE_NAME} --version ${CHAINCODE_VERSION} --sequence ${CHAINCODE_SEQUENCE} --tls --cafile ${ORDERER_CA} --output json"
 
-if ! compose_exec "${payroll_peer_env} peer lifecycle chaincode querycommitted --channelID ${CHANNEL_NAME} --name ${CHAINCODE_NAME} >/dev/null 2>&1"; then
+CURRENT_COMMITTED_SEQUENCE="$(
+  compose_exec "${payroll_peer_env} peer lifecycle chaincode querycommitted --channelID ${CHANNEL_NAME} --name ${CHAINCODE_NAME}" 2>/dev/null \
+    | sed -n 's/.*Sequence: \([0-9]\+\).*/\1/p' \
+    | head -n 1 || true
+)"
+
+if [ "${CURRENT_COMMITTED_SEQUENCE}" != "${CHAINCODE_SEQUENCE}" ]; then
   compose_exec "${payroll_peer_env} peer lifecycle chaincode commit -o ${ORDERER_ADDRESS} --channelID ${CHANNEL_NAME} --name ${CHAINCODE_NAME} --version ${CHAINCODE_VERSION} --sequence ${CHAINCODE_SEQUENCE} --tls --cafile ${ORDERER_CA} --peerAddresses peer0.hr.lgsvhr.com:7051 --tlsRootCertFiles ${HR_TLS_ROOT} --peerAddresses peer0.payroll.lgsvhr.com:7051 --tlsRootCertFiles ${PAYROLL_TLS_ROOT}"
+else
+  echo "Chaincode ${CHAINCODE_NAME} sequence ${CHAINCODE_SEQUENCE} is already committed on ${CHANNEL_NAME}; skipping commit."
 fi
 
 compose_exec "${payroll_peer_env} peer lifecycle chaincode querycommitted --channelID ${CHANNEL_NAME} --name ${CHAINCODE_NAME}"

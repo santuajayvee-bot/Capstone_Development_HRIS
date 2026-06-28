@@ -1,8 +1,8 @@
 <!-- ============================================================
-     pages/blockchain.html - Permissioned Payroll Blockchain
+     pages/blockchain.html - Permissioned Blockchain Audit
      ============================================================ -->
-<div class="section-title">Payroll Blockchain Audit</div>
-<div class="section-sub">Submitted payroll queue records, finalized hashes, Fabric receipts, and integrity verification</div>
+<div class="section-title">Blockchain Audit</div>
+<div class="section-sub">Finalized payroll and attendance DTR hashes, Fabric receipts, local fallback queues, and integrity verification</div>
 
 <div id="bc-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
 
@@ -10,7 +10,7 @@
   <div class="stat-card">
     <div class="stat-label">Integrity Records</div>
     <div class="stat-val" id="bc-stat-total">-</div>
-    <div class="stat-sub">Payroll records</div>
+    <div class="stat-sub">Payroll + Attendance DTR</div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Recorded</div>
@@ -63,6 +63,38 @@
     </table>
   </div>
   <div id="bc-pagination" class="bc-pagination" style="display:none;"></div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px;">
+    <div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Attendance DTR Blockchain Audit</div>
+      <div class="section-sub">Finalized attendance DTR hashes only. Raw attendance logs, biometric data, and employee PII remain off-chain in MySQL.</div>
+    </div>
+    <div class="section-sub">Records: <span id="bc-dtr-count">-</span></div>
+  </div>
+  <div class="table-wrap blockchain-table-wrap">
+    <table class="blockchain-table" data-no-pagination="1">
+      <thead>
+        <tr>
+          <th>DTR ID</th>
+          <th>Employee Ref</th>
+          <th>Date Range</th>
+          <th>Hours / OT</th>
+          <th>Late / UT</th>
+          <th>Blockchain Status</th>
+          <th>Latest Audit</th>
+          <th>Receipt / Hash</th>
+          <th>Finalized At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bc-dtr-tbody">
+        <tr><td colspan="10" class="att-empty">Loading attendance DTR blockchain records...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div id="bc-dtr-pagination" class="bc-pagination" style="display:none;"></div>
 </div>
 
 <div id="bc-audit-panel" class="card" tabindex="-1">

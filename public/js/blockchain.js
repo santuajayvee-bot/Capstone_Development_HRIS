@@ -1,10 +1,12 @@
 /* ============================================================
-   BLOCKCHAIN.JS - Permissioned payroll audit ledger UI
+   BLOCKCHAIN.JS - Permissioned payroll + attendance DTR audit UI
    ============================================================ */
 
 let BC_RECORDS = [];
+let BC_DTR_RECORDS = [];
 let BC_INITIALIZED = false;
 let BC_PAGE = 1;
+let BC_DTR_PAGE = 1;
 const BC_PAGE_SIZE = 10;
 
 function bcEsc(value) {
@@ -73,8 +75,20 @@ function bcCanVerify() {
   return ['system_admin', 'admin'].includes(bcUserRole());
 }
 
+function bcCanViewPayrollRecords() {
+  return ['system_admin', 'admin', 'payroll_officer', 'payroll_manager'].includes(bcUserRole());
+}
+
+function bcCanRetryDtrAnchor() {
+  return ['hr_admin', 'hr_manager', 'system_admin', 'admin'].includes(bcUserRole());
+}
+
 function bcTotalPages() {
   return Math.max(1, Math.ceil(BC_RECORDS.length / BC_PAGE_SIZE));
+}
+
+function bcDtrTotalPages() {
+  return Math.max(1, Math.ceil(BC_DTR_RECORDS.length / BC_PAGE_SIZE));
 }
 
 function renderBlockchainPagination() {
@@ -111,6 +125,40 @@ function changeBlockchainPage(direction) {
   renderBlockchainRows({ preservePage: true });
 }
 
+function renderDtrPagination() {
+  const pager = document.getElementById('bc-dtr-pagination');
+  if (!pager) return;
+
+  if (BC_DTR_RECORDS.length <= BC_PAGE_SIZE) {
+    pager.style.display = 'none';
+    pager.innerHTML = '';
+    return;
+  }
+
+  const totalPages = bcDtrTotalPages();
+  BC_DTR_PAGE = Math.min(Math.max(BC_DTR_PAGE, 1), totalPages);
+  const start = (BC_DTR_PAGE - 1) * BC_PAGE_SIZE;
+  const end = Math.min(start + BC_PAGE_SIZE, BC_DTR_RECORDS.length);
+
+  pager.style.display = '';
+  pager.innerHTML = `
+    <div class="bc-pagination-info">Showing ${start + 1}-${end} of ${BC_DTR_RECORDS.length}</div>
+    <div class="bc-pagination-controls">
+      <button class="btn btn-outline btn-sm" type="button" data-bc-dtr-page="prev" ${BC_DTR_PAGE <= 1 ? 'disabled' : ''}>Previous</button>
+      <span>Page ${BC_DTR_PAGE} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" data-bc-dtr-page="next" ${BC_DTR_PAGE >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>
+  `;
+
+  pager.querySelector('[data-bc-dtr-page="prev"]')?.addEventListener('click', () => changeDtrBlockchainPage(-1));
+  pager.querySelector('[data-bc-dtr-page="next"]')?.addEventListener('click', () => changeDtrBlockchainPage(1));
+}
+
+function changeDtrBlockchainPage(direction) {
+  BC_DTR_PAGE = Math.min(Math.max(BC_DTR_PAGE + direction, 1), bcDtrTotalPages());
+  renderDtrBlockchainRows({ preservePage: true });
+}
+
 async function bcRequest(url, options = {}) {
   const response = typeof apiFetch === 'function'
     ? await apiFetch(url, options)
@@ -126,17 +174,23 @@ async function bcRequest(url, options = {}) {
 }
 
 function renderBlockchainStats(payload) {
-  const records = payload.records || [];
+  const payrollRecords = payload.records || [];
+  const dtrRecords = payload.dtr_records || [];
+  const records = [...payrollRecords, ...dtrRecords];
   const recorded = records.filter(row => String(row.Blockchain_Status).toUpperCase() === 'RECORDED').length;
   const pending = records.filter(row => ['PENDING_APPROVAL', 'PENDING', 'PENDING_ANCHOR'].includes(String(row.Blockchain_Status).toUpperCase())).length;
   const critical = records.filter(row => String(row.Latest_Audit_Status).toUpperCase() === 'CRITICAL').length;
-  const latest = records[0]?.Latest_Audit_At || records[0]?.Finalized_At || null;
+  const latest = records
+    .map(row => row.Latest_Audit_At || row.Finalized_At || row.updated_at || row.created_at)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
 
   bcSetText('bc-stat-total', records.length);
   bcSetText('bc-stat-recorded', recorded);
   bcSetText('bc-stat-pending', pending);
   bcSetText('bc-stat-critical', critical);
   bcSetText('bc-stat-latest', latest ? bcFormatDate(latest) : '-');
+  bcSetText('bc-dtr-count', dtrRecords.length);
 
   const fabric = payload.fabric || {};
   const status = !fabric.enabled
@@ -151,6 +205,13 @@ function renderBlockchainStats(payload) {
 function renderBlockchainRows(options = {}) {
   const tbody = document.getElementById('tx-tbody');
   if (!tbody) return;
+
+  if (!bcCanViewPayrollRecords()) {
+    tbody.innerHTML = '<tr><td colspan="9" class="att-empty">Payroll blockchain records are restricted to Payroll and System Administrator roles.</td></tr>';
+    renderBlockchainPagination();
+    if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
+    return;
+  }
 
   if (!BC_RECORDS.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="att-empty">No payroll integrity records found.</td></tr>';
@@ -195,16 +256,88 @@ function renderBlockchainRows(options = {}) {
   if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
 }
 
+function renderDtrBlockchainRows(options = {}) {
+  const tbody = document.getElementById('bc-dtr-tbody');
+  if (!tbody) return;
+
+  bcSetText('bc-dtr-count', BC_DTR_RECORDS.length);
+
+  if (!BC_DTR_RECORDS.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="att-empty">No attendance DTR blockchain records found.</td></tr>';
+    renderDtrPagination();
+    if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
+    return;
+  }
+
+  if (!options.preservePage) BC_DTR_PAGE = 1;
+  BC_DTR_PAGE = Math.min(Math.max(BC_DTR_PAGE, 1), bcDtrTotalPages());
+  const pageRows = BC_DTR_RECORDS.slice((BC_DTR_PAGE - 1) * BC_PAGE_SIZE, BC_DTR_PAGE * BC_PAGE_SIZE);
+
+  tbody.innerHTML = pageRows.map(record => {
+    const dtrId = Number(record.DTR_ID);
+    const status = record.Blockchain_Status || 'PENDING';
+    const auditStatus = record.Latest_Audit_Status || '-';
+    const integrityHash = record.Transaction_Hash || record.Latest_Payload_Hash || record.DTR_Hash || record.local_hash || '';
+    const isRecorded = String(status).toUpperCase() === 'RECORDED';
+    const isPendingAnchor = String(status).toUpperCase() === 'PENDING_ANCHOR';
+    const verifyButton = bcCanVerify() && isRecorded
+      ? `<button class="btn btn-outline btn-sm" onclick="verifyDtrHash(${dtrId})">Verify</button>`
+      : '';
+    const retryButton = bcCanRetryDtrAnchor() && isPendingAnchor
+      ? `<button class="btn btn-outline btn-sm" onclick="retryDtrAnchor(${dtrId})">Retry Anchor</button>`
+      : '';
+
+    return `<tr>
+      <td class="tx-block">${bcEsc(record.DTR_ID)}</td>
+      <td>${bcEsc(record.Employee_Ref || record.Employee_Code || record.Employee_ID || '-')}</td>
+      <td>${bcEsc(record.Date_Range_Start || '-')}<br><span class="tx-hash">to ${bcEsc(record.Date_Range_End || '-')}</span></td>
+      <td>${bcEsc(record.Total_Work_Hours ?? '0.00')} hrs<br><span class="tx-hash">OT ${bcEsc(record.Total_Overtime_Hours ?? '0.00')}</span></td>
+      <td>${bcEsc(record.Total_Late_Minutes ?? 0)} min<br><span class="tx-hash">UT ${bcEsc(record.Total_Undertime_Minutes ?? 0)} min</span></td>
+      <td>${bcBadge(status)}</td>
+      <td>${bcBadge(auditStatus)}</td>
+      <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
+      <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${verifyButton}
+          ${retryButton}
+          <button class="btn btn-outline btn-sm" type="button" onclick="loadDtrBlockchainAudit(${dtrId})">View audit</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+  renderDtrPagination();
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('page-blockchain') || document);
+}
+
 async function loadBlockchainRecords() {
   try {
     bcShowMessage('');
-    const { data } = await bcRequest('/api/blockchain/payroll/finalized');
-    BC_RECORDS = data.records || [];
-    renderBlockchainStats(data);
+    const payrollRequest = bcCanViewPayrollRecords()
+      ? bcRequest('/api/blockchain/payroll/finalized').catch(error => ({ error, data: { records: [] } }))
+      : Promise.resolve({ data: { records: [] } });
+    const [payrollResult, dtrResult] = await Promise.all([
+      payrollRequest,
+      bcRequest('/api/blockchain/dtr/finalized').catch(error => ({ error, data: { records: [] } })),
+    ]);
+    BC_RECORDS = payrollResult.data.records || [];
+    BC_DTR_RECORDS = dtrResult.data.records || [];
+    renderBlockchainStats({
+      fabric: payrollResult.data.fabric || dtrResult.data.fabric || {},
+      records: BC_RECORDS,
+      dtr_records: BC_DTR_RECORDS,
+    });
     renderBlockchainRows();
+    renderDtrBlockchainRows();
+    const errors = [payrollResult.error, dtrResult.error].filter(Boolean);
+    if (errors.length) {
+      bcShowMessage(errors.map(error => error.message).join(' '), 'warning');
+    }
   } catch (error) {
     BC_RECORDS = [];
+    BC_DTR_RECORDS = [];
     renderBlockchainRows();
+    renderDtrBlockchainRows();
     bcShowMessage(error.message, 'critical');
   }
 }
@@ -231,12 +364,47 @@ async function verifyPayrollHash(payrollId) {
   }
 }
 
+async function verifyDtrHash(dtrId) {
+  try {
+    const { response, data } = await bcRequest(`/api/blockchain/dtr/verify/${dtrId}`);
+    if (response.status === 202) {
+      bcShowMessage(data.message, 'warning');
+    } else if (data.status === 'critical') {
+      bcShowMessage(data.message, 'critical');
+    } else {
+      bcShowMessage(data.message || 'Attendance DTR integrity verified.');
+    }
+    await loadBlockchainRecords();
+    await loadDtrBlockchainAudit(dtrId);
+  } catch (error) {
+    if (error.status === 409 && error.data?.status === 'critical') {
+      bcShowMessage(error.data.message, 'critical');
+      await loadDtrBlockchainAudit(dtrId);
+      return;
+    }
+    bcShowMessage(error.message, 'critical');
+  }
+}
+
+async function retryDtrAnchor(dtrId) {
+  try {
+    const { response, data } = await bcRequest(`/api/blockchain/dtr/anchor/${dtrId}`, {
+      method: 'POST',
+    });
+    bcShowMessage(data.message || (response.status === 202 ? 'DTR remains queued for Fabric anchoring.' : 'Attendance DTR hash recorded on Fabric.'), response.status === 202 ? 'warning' : 'info');
+    await loadBlockchainRecords();
+    await loadDtrBlockchainAudit(dtrId);
+  } catch (error) {
+    bcShowMessage(error.message, 'critical');
+  }
+}
+
 function closeBlockchainAuditModal() {
   const modal = document.getElementById('bc-audit-modal');
   if (modal) modal.style.display = 'none';
 }
 
-function openBlockchainAuditModal(payrollId) {
+function openBlockchainAuditModal(recordType, recordId) {
   let modal = document.getElementById('bc-audit-modal');
   if (!modal) {
     modal = document.createElement('div');
@@ -280,14 +448,14 @@ function openBlockchainAuditModal(payrollId) {
     });
   }
 
-  modal.querySelector('#bc-audit-modal-title').textContent = `Audit Trail - Payroll ${payrollId}`;
+  modal.querySelector('#bc-audit-modal-title').textContent = `Audit Trail - ${recordType} ${recordId}`;
   modal.querySelector('#bc-audit-modal-tbody').innerHTML = '<tr><td colspan="6" class="att-empty">Loading audit trail...</td></tr>';
   modal.style.display = 'flex';
   modal.querySelector('#bc-audit-modal-close')?.focus();
   return modal;
 }
 
-function renderAuditRows(logs) {
+function renderAuditRows(logs, emptyLabel = 'record') {
   return logs.length ? logs.map(log => `<tr>
     <td>${bcEsc(bcFormatDate(log.Created_At))}</td>
     <td>${bcEsc(log.Event_Type)}</td>
@@ -295,13 +463,13 @@ function renderAuditRows(logs) {
     <td class="tx-hash" title="${bcEsc(log.Payload_Hash || '')}">${bcEsc(bcShortHash(log.Payload_Hash))}</td>
     <td class="tx-hash" title="${bcEsc(log.Transaction_Hash || '')}">${bcEsc(bcShortHash(log.Transaction_Hash))}</td>
     <td>${bcEsc(log.Actor_Role || '-')}</td>
-  </tr>`).join('') : '<tr><td colspan="6" class="att-empty">No audit entries for this payroll record.</td></tr>';
+  </tr>`).join('') : `<tr><td colspan="6" class="att-empty">No audit entries for this ${bcEsc(emptyLabel)}.</td></tr>`;
 }
 
 async function loadBlockchainAudit(payrollId) {
   const title = document.getElementById('bc-audit-title');
   const tbody = document.getElementById('bc-audit-tbody');
-  const modal = openBlockchainAuditModal(payrollId);
+  const modal = openBlockchainAuditModal('Payroll', payrollId);
   const modalBody = modal.querySelector('#bc-audit-modal-tbody');
 
   if (title) title.textContent = `Audit Trail - Payroll ${payrollId}`;
@@ -310,7 +478,7 @@ async function loadBlockchainAudit(payrollId) {
   try {
     const { data } = await bcRequest(`/api/blockchain/payroll/audit/${payrollId}`);
     const logs = data.audit_logs || [];
-    const rows = renderAuditRows(logs);
+    const rows = renderAuditRows(logs, 'payroll record');
     if (tbody) tbody.innerHTML = rows;
     if (modalBody) modalBody.innerHTML = rows;
     if (typeof enhanceResponsiveTables === 'function') {
@@ -320,6 +488,39 @@ async function loadBlockchainAudit(payrollId) {
     bcShowMessage(logs.length
       ? `Loaded ${logs.length} audit event${logs.length === 1 ? '' : 's'} for payroll ${payrollId}.`
       : `No audit entries were found for payroll ${payrollId}.`);
+  } catch (error) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
+    if (modalBody) modalBody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
+    if (typeof enhanceResponsiveTables === 'function') {
+      enhanceResponsiveTables(document.getElementById('bc-audit-panel') || document);
+      enhanceResponsiveTables(modal);
+    }
+    bcShowMessage(error.message, 'critical');
+  }
+}
+
+async function loadDtrBlockchainAudit(dtrId) {
+  const title = document.getElementById('bc-audit-title');
+  const tbody = document.getElementById('bc-audit-tbody');
+  const modal = openBlockchainAuditModal('Attendance DTR', dtrId);
+  const modalBody = modal.querySelector('#bc-audit-modal-tbody');
+
+  if (title) title.textContent = `Audit Trail - Attendance DTR ${dtrId}`;
+  if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Loading audit trail...</td></tr>';
+
+  try {
+    const { data } = await bcRequest(`/api/blockchain/dtr/audit/${dtrId}`);
+    const logs = data.audit_logs || [];
+    const rows = renderAuditRows(logs, 'attendance DTR record');
+    if (tbody) tbody.innerHTML = rows;
+    if (modalBody) modalBody.innerHTML = rows;
+    if (typeof enhanceResponsiveTables === 'function') {
+      enhanceResponsiveTables(document.getElementById('bc-audit-panel') || document);
+      enhanceResponsiveTables(modal);
+    }
+    bcShowMessage(logs.length
+      ? `Loaded ${logs.length} audit event${logs.length === 1 ? '' : 's'} for Attendance DTR ${dtrId}.`
+      : `No audit entries were found for Attendance DTR ${dtrId}.`);
   } catch (error) {
     if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
     if (modalBody) modalBody.innerHTML = '<tr><td colspan="6" class="att-empty">Unable to load the audit trail.</td></tr>';
@@ -356,5 +557,8 @@ function watchBlockchainActivation() {
 document.addEventListener('DOMContentLoaded', watchBlockchainActivation);
 window.loadBlockchainRecords = loadBlockchainRecords;
 window.verifyPayrollHash = verifyPayrollHash;
+window.verifyDtrHash = verifyDtrHash;
+window.retryDtrAnchor = retryDtrAnchor;
 window.loadBlockchainAudit = loadBlockchainAudit;
+window.loadDtrBlockchainAudit = loadDtrBlockchainAudit;
 window.closeBlockchainAuditModal = closeBlockchainAuditModal;

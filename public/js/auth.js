@@ -9,11 +9,11 @@ const ROLE_PERMISSIONS = {
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'reports', 'onboarding', 'employee-profile', 'self-service',
+    'attendance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'reports', 'onboarding', 'employee-profile', 'self-service',
+    'attendance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   system_admin: [
     'dashboard', 'system-admin', 'attendance', 'blockchain', 'self-service',
@@ -47,6 +47,7 @@ const NAV_CONFIG = {
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   hr_manager: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
@@ -56,6 +57,7 @@ const NAV_CONFIG = {
     { page: 'attendance', icon: 'AT', label: 'Attendance' },
     { page: 'reports', icon: 'RP', label: 'Reports' },
     { page: 'onboarding', icon: 'ON', label: 'On-Boarding' },
+    { page: 'blockchain', icon: 'BC', label: 'Blockchain' },
   ],
   system_admin: [
     { page: 'dashboard', icon: 'DB', label: 'Dashboard' },
@@ -110,7 +112,7 @@ const PAGE_ROLE_ALLOWLIST = {
   payroll: new Set(['payroll_officer', 'payroll_manager']),
   reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
   'system-admin': new Set(['system_admin', 'admin']),
-  blockchain: new Set(['system_admin', 'admin', 'payroll_officer', 'payroll_manager']),
+  blockchain: new Set(['system_admin', 'admin', 'hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
 };
 
 const ROLE_ALIASES = {

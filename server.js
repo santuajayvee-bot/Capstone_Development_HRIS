@@ -22,6 +22,7 @@ const attendanceRoutes                       = require('./server/attendance');
 const biometricRoutes                        = require('./server/biometric');
 const holidayRoutes                          = require('./server/holidays');
 const blockchainPayrollRoutes                = require('./server/routes/blockchain-payroll');
+const blockchainDtrRoutes                    = require('./server/routes/blockchain-dtr');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
 const accountCreationRequestRoutes           = require('./server/account-creation-requests');
@@ -845,6 +846,7 @@ app.use('/api/biometric', biometricRoutes);
 
 // Permissioned blockchain payroll audit layer
 app.use('/api/blockchain/payroll', blockchainPayrollRoutes);
+app.use('/api/blockchain/dtr', blockchainDtrRoutes);
 
 // Onboarding Module (pre-employment lifecycle, secure document vault, transfer)
 app.use('/api/onboarding', onboardingRoutes);
