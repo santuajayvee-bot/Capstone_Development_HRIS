@@ -381,6 +381,24 @@ async function recordFailedLoginFailureForUser(userId, options = {}) {
   }
 }
 
+async function ensureEmployeeAuthIdentifier(employeeTableId) {
+  ensureEmployeeId(employeeTableId);
+
+  try {
+    await pool.execute(
+      'UPDATE employees SET Employee_ID = id WHERE id = ? AND Employee_ID IS NULL',
+      [employeeTableId]
+    );
+    const [rows] = await pool.execute(
+      'SELECT Employee_ID FROM employees WHERE id = ? LIMIT 1',
+      [employeeTableId]
+    );
+    return rows[0]?.Employee_ID || employeeTableId;
+  } catch (error) {
+    logAndThrow(error, 'ensureEmployeeAuthIdentifier');
+  }
+}
+
 async function getUserLoginLockState(userId) {
   ensureEmployeeId(userId);
 
@@ -816,6 +834,7 @@ module.exports = {
   findUserByEmail,
   findUserById,
   findUserByUserId,
+  ensureEmployeeAuthIdentifier,
   incrementFailedLoginAttempts,
   recordFailedLoginFailure,
   recordFailedLoginFailureForUser,

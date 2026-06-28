@@ -16,6 +16,7 @@ const {
   updateLastLogin,
   createUserSession,
   createAuditLog,
+  ensureEmployeeAuthIdentifier,
 } = require('../db/authQueries');
 const {
   getUserPermissions,
@@ -177,7 +178,9 @@ function mfaErrorResponse(res, error) {
 }
 
 async function issueAuthenticatedSession(req, res, user) {
-  const employeeId = getAuthEmployeeId(user);
+  const employeeTableId = user.employee_table_id || user.Employee_ID;
+  const employeeId = await ensureEmployeeAuthIdentifier(employeeTableId);
+  user.Employee_ID = employeeId;
   const ipAddress = getRequestIp(req);
   const userAgent = getUserAgent(req);
 

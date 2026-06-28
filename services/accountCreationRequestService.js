@@ -355,7 +355,7 @@ async function createApprovedTransferredEmployeeAccount({ req, employeeId, body 
     );
     await connection.execute(
       'UPDATE employees SET Password_Hash = ?, Password_Changed_At = NULL, Failed_Login_Attempts = 0, ' +
-        'Locked_Until = NULL, force_password_change = 1 WHERE id = ?',
+        'Locked_Until = NULL, force_password_change = 1, Employee_ID = COALESCE(Employee_ID, id) WHERE id = ?',
       [passwordHash, employee.id]
     );
     await writeAudit(
@@ -480,7 +480,7 @@ async function approveAccountCreationRequest({ req, requestId, body }) {
     );
     await connection.execute(
       'UPDATE employees SET Password_Hash = ?, Password_Changed_At = NULL, Failed_Login_Attempts = 0, ' +
-        'Locked_Until = NULL, force_password_change = 1 WHERE id = ?',
+        'Locked_Until = NULL, force_password_change = 1, Employee_ID = COALESCE(Employee_ID, id) WHERE id = ?',
       [passwordHash, employee.id]
     );
     await connection.execute(

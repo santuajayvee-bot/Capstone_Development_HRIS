@@ -1,6 +1,6 @@
 const assert = require('assert');
 process.env.NODE_ENV = 'test';
-const { _hydrateUserRowForTest } = require('../db/authQueries');
+const { _hydrateUserRowForTest, ensureEmployeeAuthIdentifier } = require('../db/authQueries');
 
 const malformedEncryptedEmail = {
   id: 1,
@@ -26,4 +26,16 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(plaintextEmail, 'User_Em
 
 console.log('Auth query hydration tests: PASS');
 
-require('../config/db').end();
+(async () => {
+  const pool = require('../config/db');
+  const [rows] = await pool.execute('SELECT id FROM employees WHERE id IS NOT NULL ORDER BY id LIMIT 1');
+  if (rows[0]?.id) {
+    const employeeId = await ensureEmployeeAuthIdentifier(rows[0].id);
+    assert.ok(Number(employeeId) > 0);
+  }
+  console.log('Auth employee identifier tests: PASS');
+  await pool.end();
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
