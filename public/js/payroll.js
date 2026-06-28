@@ -1866,9 +1866,15 @@ function payslipAttendanceRows(payslip) {
   const rows = [];
   const lateMinutes = payslipNumber(earnings.late_minutes);
   const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
+  const lateDeduction = payslipNumber(earnings.late_deduction);
+  const undertimeDeduction = payslipNumber(earnings.undertime_deduction);
 
-  if (lateMinutes > 0) rows.push({ label: 'Late', value: payslipMinuteLabel(lateMinutes) });
-  if (undertimeMinutes > 0) rows.push({ label: 'Undertime', value: payslipMinuteLabel(undertimeMinutes) });
+  if (lateMinutes > 0 || lateDeduction > 0) {
+    rows.push({ label: 'Late', value: `${payslipMinuteLabel(lateMinutes)} / ${payslipMoney(lateDeduction)}` });
+  }
+  if (undertimeMinutes > 0 || undertimeDeduction > 0) {
+    rows.push({ label: 'Undertime', value: `${payslipMinuteLabel(undertimeMinutes)} / ${payslipMoney(undertimeDeduction)}` });
+  }
 
   return rows;
 }
@@ -2178,6 +2184,14 @@ function showCalculationBreakdown(record) {
   const fmt = value => money(number(value));
   const modalId = 'calc-breakdown-modal';
   document.getElementById(modalId)?.remove();
+  let snapshot = {};
+  try {
+    snapshot = record.validation_snapshot
+      ? (typeof record.validation_snapshot === 'string' ? JSON.parse(record.validation_snapshot) : record.validation_snapshot)
+      : {};
+  } catch (_) {
+    snapshot = {};
+  }
 
   const sourceDateLabel = record.source_date_from
     ? record.source_date_from === record.source_date_to
@@ -2335,7 +2349,9 @@ function showCalculationBreakdown(record) {
   const deductionRows = [
     ['SSS', number(record.sss_deduction)],
     ['Pag-IBIG', number(record.pagibig_deduction)],
-    ['PhilHealth', number(record.philhealth_deduction)]
+    ['PhilHealth', number(record.philhealth_deduction)],
+    ['Late Deduction', number(snapshot.late_deduction)],
+    ['Undertime Deduction', number(snapshot.undertime_deduction)]
   ].filter(([, amount]) => deductionsApplied && amount > 0);
   if (deductionsApplied && !deductionRows.length && totalDeductions > 0) {
     deductionRows.push(['Configured Deductions', totalDeductions]);

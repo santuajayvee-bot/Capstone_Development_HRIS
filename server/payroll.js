@@ -2559,9 +2559,15 @@ function payslipAttendanceRows(payslip) {
   const rows = [];
   const lateMinutes = numeric(earnings.late_minutes);
   const undertimeMinutes = numeric(earnings.undertime_minutes);
+  const lateDeduction = numeric(earnings.late_deduction);
+  const undertimeDeduction = numeric(earnings.undertime_deduction);
 
-  if (lateMinutes > 0) rows.push({ label: 'Late', value: payslipMinuteLabel(lateMinutes) });
-  if (undertimeMinutes > 0) rows.push({ label: 'Undertime', value: payslipMinuteLabel(undertimeMinutes) });
+  if (lateMinutes > 0 || lateDeduction > 0) {
+    rows.push({ label: 'Late', value: `${payslipMinuteLabel(lateMinutes)} / ${peso(lateDeduction)}` });
+  }
+  if (undertimeMinutes > 0 || undertimeDeduction > 0) {
+    rows.push({ label: 'Undertime', value: `${payslipMinuteLabel(undertimeMinutes)} / ${peso(undertimeDeduction)}` });
+  }
 
   return rows;
 }
