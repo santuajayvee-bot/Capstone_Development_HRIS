@@ -33,6 +33,17 @@ function getRefreshTokenExpiresDays() {
   return configuredDays;
 }
 
+function getRefreshCookieSecureFlag() {
+  const configured = String(process.env.REFRESH_COOKIE_SECURE || '').trim().toLowerCase();
+
+  if (['true', '1', 'yes', 'on'].includes(configured)) return true;
+  if (['false', '0', 'no', 'off'].includes(configured)) return false;
+
+  // Secure-by-default for deployed environments. Local HTTP development can
+  // explicitly set NODE_ENV=development or REFRESH_COOKIE_SECURE=false.
+  return process.env.NODE_ENV !== 'development';
+}
+
 function getUserValue(user, preferredKey, fallbackKeys = []) {
   if (!user || typeof user !== 'object') return undefined;
 
@@ -68,18 +79,13 @@ function generateAccessToken(user) {
     id: getUserValue(user, 'id', ['user_id']),
     username: getUserValue(user, 'username', ['Username']),
     role: getUserValue(user, 'role', ['role_name']),
-    roleLabel: getUserValue(user, 'roleLabel', ['role_label']),
     employeeId,
-    Employee_ID: employeeId,
     roleId: getUserValue(user, 'Role_ID', ['role_id']),
     accessLevel: getUserValue(user, 'Access_Level', ['access_level']),
-    email: getUserValue(user, 'Email', ['email']),
     forcePasswordChange: Boolean(getUserValue(user, 'forcePasswordChange', ['force_password_change', 'mustChangePassword'])),
     mustChangePassword: Boolean(getUserValue(user, 'mustChangePassword', ['forcePasswordChange', 'force_password_change'])),
     passwordChangedAt: getUserValue(user, 'passwordChangedAt', ['Password_Changed_At', 'password_changed_at']) || null,
     tokenVersion: Number(getUserValue(user, 'tokenVersion', ['Token_Version', 'token_version']) || 0),
-    permissions: Array.isArray(user.permissions) ? user.permissions : [],
-    employeeProfile: user.employeeProfile || null,
     jti: jwtId,
   };
 
@@ -138,7 +144,7 @@ function getRefreshCookieOptions() {
   // which helps reduce token theft if an XSS bug is ever introduced.
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: getRefreshCookieSecureFlag(),
     sameSite: 'strict',
     path: '/api/auth',
     maxAge,
