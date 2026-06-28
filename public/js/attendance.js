@@ -18,8 +18,11 @@ let ATT_RECORDS_SEARCH_TIMER = null;
 let ATT_BIOMETRIC_EVENTS = [];
 let ATT_BIOMETRIC_EVENTS_PAGE = 1;
 let ATT_BIOMETRIC_EVENTS_SIGNATURE = '';
+let ATT_HOLIDAYS = [];
+let ATT_HOLIDAYS_PAGE = 1;
 const ATT_RECORDS_PAGE_SIZE = 10;
 const ATT_BIOMETRIC_EVENTS_PAGE_SIZE = 5;
+const ATT_HOLIDAYS_PAGE_SIZE = 10;
 const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 
@@ -2007,6 +2010,57 @@ function holidayTypeOptions(value) {
   return options.map(([key, label]) => `<option value="${key}" ${key === value ? 'selected' : ''}>${label}</option>`).join('');
 }
 
+function renderHolidayPagination(totalRows) {
+  const container = document.getElementById('holiday-calendar-pagination');
+  if (!container) return;
+  const totalPages = Math.max(1, Math.ceil(totalRows / ATT_HOLIDAYS_PAGE_SIZE));
+  ATT_HOLIDAYS_PAGE = Math.min(Math.max(ATT_HOLIDAYS_PAGE, 1), totalPages);
+  if (!totalRows) {
+    container.innerHTML = '';
+    return;
+  }
+  const start = (ATT_HOLIDAYS_PAGE - 1) * ATT_HOLIDAYS_PAGE_SIZE + 1;
+  const end = Math.min(totalRows, ATT_HOLIDAYS_PAGE * ATT_HOLIDAYS_PAGE_SIZE);
+  container.innerHTML = `
+    <span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
+    <div class="att-records-pagination-actions">
+      <button class="btn btn-outline btn-sm" type="button" onclick="setHolidayCalendarPage(${ATT_HOLIDAYS_PAGE - 1})" ${ATT_HOLIDAYS_PAGE <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="att-records-pagination-page">Page ${ATT_HOLIDAYS_PAGE} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setHolidayCalendarPage(${ATT_HOLIDAYS_PAGE + 1})" ${ATT_HOLIDAYS_PAGE >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>`;
+}
+
+function renderHolidayRows() {
+  const tbody = document.getElementById('holiday-calendar-tbody');
+  if (!tbody) return;
+  if (!ATT_HOLIDAYS.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="att-empty">No holidays found for this year. Sync PH holidays to populate.</td></tr>';
+    renderHolidayPagination(0);
+    return;
+  }
+  const start = (ATT_HOLIDAYS_PAGE - 1) * ATT_HOLIDAYS_PAGE_SIZE;
+  const pageRows = ATT_HOLIDAYS.slice(start, start + ATT_HOLIDAYS_PAGE_SIZE);
+  tbody.innerHTML = pageRows.map(row => {
+    const id = Number(row.holiday_id);
+    return `<tr>
+      <td>${esc(formatDate(row.holiday_date))}</td>
+      <td><strong>${esc(row.local_name || row.name)}</strong>${row.name && row.name !== row.local_name ? `<span class="att-employee-code">${esc(row.name)}</span>` : ''}</td>
+      <td><select id="holiday-type-${id}">${holidayTypeOptions(row.holiday_type)}</select></td>
+      <td><input id="holiday-multiplier-${id}" type="number" min="0" max="5" step="0.01" value="${esc(row.multiplier ?? 1)}" /></td>
+      <td><select id="holiday-active-${id}"><option value="true" ${row.is_active ? 'selected' : ''}>Active</option><option value="false" ${!row.is_active ? 'selected' : ''}>Inactive</option></select></td>
+      <td>${esc(row.source || 'MANUAL')}</td>
+      <td><button class="btn btn-outline btn-sm" type="button" onclick="saveHolidayOverride(${id})">Save</button></td>
+    </tr>`;
+  }).join('');
+  renderHolidayPagination(ATT_HOLIDAYS.length);
+}
+
+function setHolidayCalendarPage(page) {
+  const totalPages = Math.max(1, Math.ceil(ATT_HOLIDAYS.length / ATT_HOLIDAYS_PAGE_SIZE));
+  ATT_HOLIDAYS_PAGE = Math.min(Math.max(Number(page) || 1, 1), totalPages);
+  renderHolidayRows();
+}
+
 async function loadHolidayCalendar() {
   const tbody = document.getElementById('holiday-calendar-tbody');
   const status = document.getElementById('holiday-calendar-status');
@@ -2018,25 +2072,18 @@ async function loadHolidayCalendar() {
     const res = await apiFetch(`/api/holidays?year=${encodeURIComponent(year)}&country_code=PH&active=all`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load holidays.');
-    if (!Array.isArray(data) || !data.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="att-empty">No holidays found for this year. Sync PH holidays to populate.</td></tr>';
-      if (status) status.textContent = 'No holidays loaded.';
-      return;
+    ATT_HOLIDAYS = Array.isArray(data) ? data : [];
+    const totalPages = Math.max(1, Math.ceil(ATT_HOLIDAYS.length / ATT_HOLIDAYS_PAGE_SIZE));
+    ATT_HOLIDAYS_PAGE = Math.min(Math.max(ATT_HOLIDAYS_PAGE, 1), totalPages);
+    renderHolidayRows();
+    if (status) {
+      status.textContent = ATT_HOLIDAYS.length
+        ? `Loaded ${ATT_HOLIDAYS.length} holiday(s) for ${year}.`
+        : 'No holidays loaded.';
     }
-    tbody.innerHTML = data.map(row => {
-      const id = Number(row.holiday_id);
-      return `<tr>
-        <td>${esc(formatDate(row.holiday_date))}</td>
-        <td><strong>${esc(row.local_name || row.name)}</strong>${row.name && row.name !== row.local_name ? `<span class="att-employee-code">${esc(row.name)}</span>` : ''}</td>
-        <td><select id="holiday-type-${id}">${holidayTypeOptions(row.holiday_type)}</select></td>
-        <td><input id="holiday-multiplier-${id}" type="number" min="0" max="5" step="0.01" value="${esc(row.multiplier ?? 1)}" style="width:90px;" /></td>
-        <td><select id="holiday-active-${id}"><option value="true" ${row.is_active ? 'selected' : ''}>Active</option><option value="false" ${!row.is_active ? 'selected' : ''}>Inactive</option></select></td>
-        <td>${esc(row.source || 'MANUAL')}</td>
-        <td><button class="btn btn-outline btn-sm" type="button" onclick="saveHolidayOverride(${id})">Save</button></td>
-      </tr>`;
-    }).join('');
-    if (status) status.textContent = `Loaded ${data.length} holiday(s) for ${year}.`;
   } catch (err) {
+    ATT_HOLIDAYS = [];
+    renderHolidayPagination(0);
     tbody.innerHTML = `<tr><td colspan="7" class="att-empty">${esc(err.message)}</td></tr>`;
     if (status) status.textContent = err.message;
   }
@@ -2138,6 +2185,7 @@ window.saveAttendancePolicies = saveAttendancePolicies;
 window.loadHolidayCalendar = loadHolidayCalendar;
 window.syncHolidayCalendar = syncHolidayCalendar;
 window.saveHolidayOverride = saveHolidayOverride;
+window.setHolidayCalendarPage = setHolidayCalendarPage;
 window.switchAttendancePolicyTab = switchAttendancePolicyTab;
 document.addEventListener('click', closeAttendanceActionMenus);
 window.addEventListener('resize', closeAttendanceActionMenus);

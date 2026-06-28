@@ -471,6 +471,45 @@
 #att-payroll-policy .policy-management-card button {
   border-radius:0 !important;
 }
+.holiday-calendar-wrap {
+  overflow-x:auto;
+}
+.holiday-calendar-table {
+  min-width:1180px;
+  table-layout:fixed;
+}
+.holiday-calendar-table th:nth-child(1),
+.holiday-calendar-table td:nth-child(1) { width:120px; }
+.holiday-calendar-table th:nth-child(2),
+.holiday-calendar-table td:nth-child(2) { width:520px; }
+.holiday-calendar-table th:nth-child(3),
+.holiday-calendar-table td:nth-child(3) { width:190px; }
+.holiday-calendar-table th:nth-child(4),
+.holiday-calendar-table td:nth-child(4) { width:130px; }
+.holiday-calendar-table th:nth-child(5),
+.holiday-calendar-table td:nth-child(5) { width:130px; }
+.holiday-calendar-table th:nth-child(6),
+.holiday-calendar-table td:nth-child(6) { width:130px; }
+.holiday-calendar-table th:nth-child(7),
+.holiday-calendar-table td:nth-child(7) { width:100px; }
+.holiday-calendar-table tbody tr:hover td {
+  background:transparent !important;
+}
+.holiday-calendar-table td {
+  vertical-align:middle;
+}
+.holiday-calendar-table select,
+.holiday-calendar-table input {
+  width:100%;
+  min-width:0;
+  height:34px;
+}
+.holiday-calendar-table .btn {
+  min-width:64px;
+}
+.holiday-calendar-pagination {
+  margin-top:10px;
+}
 @media (max-width: 1000px) {
   .att-stats, .records-summary, .att-sync-layout, .bio-status-grid, .bio-diagnostic-grid, .bio-steps { grid-template-columns:repeat(2, 1fr); }
   .att-detail-grid, .att-metric-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }

@@ -251,12 +251,13 @@
       </div>
     </div>
     <div id="holiday-calendar-status" class="att-muted" role="status" aria-live="polite"></div>
-    <div class="table-wrap" style="margin-top:10px;">
-      <table>
+    <div class="table-wrap holiday-calendar-wrap" style="margin-top:10px;" data-no-pagination="1">
+      <table id="holiday-calendar-table" class="holiday-calendar-table" data-no-pagination="1">
         <thead><tr><th>Date</th><th>Name</th><th>Type</th><th>Multiplier</th><th>Status</th><th>Source</th><th>Action</th></tr></thead>
         <tbody id="holiday-calendar-tbody"><tr><td colspan="7" class="att-empty">Load the holiday calendar.</td></tr></tbody>
       </table>
     </div>
+    <div id="holiday-calendar-pagination" class="att-records-pagination holiday-calendar-pagination"></div>
   </div>
 </div>
 
