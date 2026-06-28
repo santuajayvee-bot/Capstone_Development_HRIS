@@ -28,10 +28,12 @@ function isNonEmptyString(value) {
 const ROLE_ALIASES = {
   'admin': 'system_admin',
   'system_admin': 'system_admin',
+  'system_administrator': 'system_admin',
   'hr': 'hr_manager',
   'hradmin': 'hr_manager',
   'hr_admin': 'hr_manager',
   'hr_manager': 'hr_manager',
+  'human_resources': 'hr_manager',
   'payroll': 'payroll_officer',
   'payrollofficer': 'payroll_officer',
   'payroll_officer': 'payroll_officer',
@@ -90,7 +92,22 @@ function normalizeRole(role) {
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
   const compact = key.replace(/_/g, '');
-  return ROLE_ALIASES[key] || ROLE_ALIASES[compact] || key || 'employee';
+  const withoutParenthetical = key.replace(/_*\([^)]*\)/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  const withoutLevelSuffix = key.replace(/_*\(?level_?\d+\)?/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  const candidates = [
+    key,
+    compact,
+    withoutParenthetical,
+    withoutParenthetical.replace(/_/g, ''),
+    withoutLevelSuffix,
+    withoutLevelSuffix.replace(/_/g, ''),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (ROLE_ALIASES[candidate]) return ROLE_ALIASES[candidate];
+  }
+
+  return key || 'employee';
 }
 
 function normalizeAllowedRoles(allowedRoles) {
