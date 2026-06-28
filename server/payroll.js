@@ -3443,7 +3443,7 @@ async function ensurePieceRatePayrollSchema(pool) {
       id INT AUTO_INCREMENT PRIMARY KEY,
       product_type VARCHAR(120) NOT NULL,
       product_category VARCHAR(120) NULL,
-      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      piece_rate DECIMAL(12,4) NOT NULL DEFAULT 0,
       effective_date DATE NOT NULL,
       is_active TINYINT(1) NOT NULL DEFAULT 1,
       created_by INT NULL,
@@ -3538,7 +3538,7 @@ async function ensurePieceRatePayrollSchema(pool) {
       size_range VARCHAR(40) NULL,
       worker_category VARCHAR(80) NOT NULL,
       quantity_produced INT NOT NULL DEFAULT 0,
-      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      piece_rate DECIMAL(12,4) NOT NULL DEFAULT 0,
       production_value DECIMAL(12,2) NOT NULL DEFAULT 0,
       share_percentage DECIMAL(6,2) NOT NULL DEFAULT 0,
       quota_incentive DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -3566,7 +3566,7 @@ async function ensurePieceRatePayrollSchema(pool) {
       sew_type_code VARCHAR(40) NULL,
       size_range VARCHAR(40) NULL,
       quantity_produced INT NOT NULL DEFAULT 0,
-      piece_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+      piece_rate DECIMAL(12,4) NOT NULL DEFAULT 0,
       production_value DECIMAL(12,2) NOT NULL DEFAULT 0,
       worker1_share DECIMAL(6,2) NOT NULL DEFAULT 0,
       worker2_share DECIMAL(6,2) NOT NULL DEFAULT 0,
@@ -3591,7 +3591,7 @@ async function ensurePieceRatePayrollSchema(pool) {
       operation_type VARCHAR(40) NOT NULL,
       size_range VARCHAR(40) NULL,
       quantity_produced DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-      rate_per_piece DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+      rate_per_piece DECIMAL(12,4) NOT NULL DEFAULT 0.0000,
       full_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
       output_mode ENUM('solo','partner') NOT NULL DEFAULT 'solo',
       split_rule VARCHAR(40) NOT NULL DEFAULT 'SOLO',
@@ -5877,7 +5877,10 @@ router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
     const range = String(size_range || product_category || '').trim();
     if (!sewCode) return res.status(400).json({ error: 'Type of Sew is required.' });
     if (!range) return res.status(400).json({ error: 'Size Range is required.' });
-    if (!(Number(piece_rate) > 0)) return res.status(400).json({ error: 'Piece rate must be greater than zero.' });
+    const normalizedRate = String(piece_rate ?? '').trim();
+    if (!/^\d{1,8}(?:\.\d{1,4})?$/.test(normalizedRate) || !(Number(normalizedRate) > 0)) {
+      return res.status(400).json({ error: 'Piece rate must be greater than zero and use up to 4 decimal places.' });
+    }
     if (!effective_date) return res.status(400).json({ error: 'Effective date is required.' });
 
     let oldValue = null;
@@ -5899,13 +5902,13 @@ router.post('/piece-rates', requireAuth, requireRole(PAYROLL_PERMISSIONS.setting
            SET product_type = ?, product_category = ?, sew_type_code = ?, size_range = ?,
                piece_rate = ?, effective_date = ?, is_active = ?, updated_by = ?
          WHERE id = ?
-      `, [sewCode, range, sewCode, range, piece_rate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
+      `, [sewCode, range, sewCode, range, normalizedRate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), id]);
     } else {
       await pool.execute(`
         INSERT INTO payroll_piece_rates
           (product_type, product_category, sew_type_code, size_range, piece_rate, effective_date, is_active, created_by, updated_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [sewCode, range, sewCode, range, piece_rate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
+      `, [sewCode, range, sewCode, range, normalizedRate, effective_date, Number(is_active) === 0 ? 0 : 1, currentUserId(req), currentUserId(req)]);
     }
     await logPayrollAudit(pool, req, 'piece_rate_configuration_saved', {
       remarks: `Saved piece rate: ${sewCode} / ${range}`,

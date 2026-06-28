@@ -38,6 +38,10 @@ function money(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function pieceRateMoney(value) {
+  return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+}
+
 function payrollEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
@@ -2769,7 +2773,7 @@ function populatePieceRateDropdowns() {
     .map(row => {
       const sew = row.sew_type_code || row.product_type;
       const size = row.size_range || row.product_category || '';
-      return `<option value="${sew}" data-size="${size}" data-category="${size}">${sew}${size ? ` / ${size}` : ''} (${money(row.piece_rate)})</option>`;
+      return `<option value="${sew}" data-size="${size}" data-category="${size}">${sew}${size ? ` / ${size}` : ''} (${pieceRateMoney(row.piece_rate)})</option>`;
     })
     .join('');
   const workerOptions = activeRows(pieceRateConfig.production_shares)
@@ -2943,7 +2947,7 @@ function renderPieceRateRecordTable(config, view) {
     return pieceRecordTable(['Employee', 'Period', 'Type', 'Amount', 'Remarks'], page.rows, row => `<tr><td>${payrollEscape(row.employee_name || row.employee_code || row.employee_id)}</td><td>${payrollEscape(row.payroll_period)}</td><td>${payrollEscape(row.incentive_type)}</td><td>${money(row.amount)}</td><td>${payrollEscape(row.remarks || '-')}</td></tr>`, 'No incentive encodings yet.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
   const page = pieceRecordPageRows(activeSetupRows(config.piece_rates));
-  return pieceRecordTable(['Type of Sew', 'Size Range', 'Rate', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.sew_type_code || row.product_type)}</td><td>${payrollEscape(row.size_range || row.product_category || '-')}</td><td>${money(row.piece_rate)}</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions('rates', row)}</td></tr>`, 'No piece rates configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
+  return pieceRecordTable(['Type of Sew', 'Size Range', 'Rate', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.sew_type_code || row.product_type)}</td><td>${payrollEscape(row.size_range || row.product_category || '-')}</td><td>${pieceRateMoney(row.piece_rate)}</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions('rates', row)}</td></tr>`, 'No piece rates configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
 }
 
 function changePieceRateRecordsPage(direction) {

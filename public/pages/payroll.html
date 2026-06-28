@@ -427,7 +427,7 @@
   <div class="page-header compact">
     <div>
       <div class="section-title small">Piece-Rate Payroll Configuration</div>
-      <div class="section-sub">Configure sew codes, size ranges, rates, sharing rules, production output, and incentives.</div>
+      <div class="section-sub">Configure the sew codes, size ranges, and rates used by piece-rate encoding.</div>
     </div>
     <div class="button-row">
       <button class="btn btn-outline" onclick="generatePiecePayrollRegister()">Generate Register</button>
@@ -470,75 +470,13 @@
         <input type="hidden" name="id" />
         <label>Type of Sew<select name="sew_type_code" id="rate-sew-type" required><option value="">Select type</option></select></label>
         <label>Size Range<select name="size_range" id="rate-size-range" required><option value="">Select size range</option></select></label>
-        <label>Rate<input name="piece_rate" type="number" min="0.01" step="0.01" required /></label>
+        <label>Rate<input name="piece_rate" type="number" min="0.0001" step="0.0001" required /></label>
         <label>Effective Date<input name="effective_date" type="date" required /></label>
         <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
         <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Rate</button></div>
       </form>
     </fieldset>
 
-    <h3>Production Encoding</h3>
-    <form id="production-pair-form" onsubmit="encodeProductionPair(event)">
-      <fieldset>
-        <legend>Payroll Information</legend>
-        <div class="payroll-field-row">
-          <label>Payroll Period<input name="payroll_period" type="month" required /></label>
-          <label>Production Date<input name="production_date" type="date" required /></label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Employee and Output Mode</legend>
-        <div class="payroll-field-row">
-          <label>Output Mode<select name="output_mode" id="piece-output-mode" onchange="togglePiecePartnerFields()"><option value="solo">Solo</option><option value="partner">Partner</option></select></label>
-          <label>Employee<input name="worker1_employee_id" type="number" min="1" required /></label>
-          <label class="piece-partner-field">Partner Employee<input name="worker2_employee_id" type="number" min="1" /></label>
-          <label class="piece-partner-field">Split Rule<select name="pairing_type" id="pair-assignment-type"><option>Standard Sewer-Fixer</option><option>Substitute Sewer-Sewer</option></select></label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Production Details</legend>
-        <div class="payroll-field-row">
-          <label>Type of Sew<select name="sew_type_code" id="pair-sew-type" required></select></label>
-          <label>Size Range<select name="size_range" id="pair-size-range" required></select></label>
-          <label>Quantity Produced<input name="quantity_produced" type="number" min="1" step="1" required /></label>
-          <label>Rate<input id="pair-piece-rate-preview" type="text" value="PHP 0.00" readonly /></label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Computation Summary</legend>
-        <table class="payroll-simple-table">
-          <tbody>
-            <tr><th>Raw Earnings</th><td id="pair-raw-earnings">PHP 0.00</td></tr>
-            <tr><th>Worker 1 Share %</th><td id="pair-worker1-share">0%</td></tr>
-            <tr><th>Worker 1 Earnings</th><td id="pair-worker1-earnings">PHP 0.00</td></tr>
-            <tr><th>Worker 2 Share %</th><td id="pair-worker2-share">0%</td></tr>
-            <tr><th>Worker 2 Earnings</th><td id="pair-worker2-earnings">PHP 0.00</td></tr>
-          </tbody>
-        </table>
-      </fieldset>
-
-      <div class="payroll-form-actions">
-        <span id="production-pair-status" class="payroll-form-status"></span>
-        <button class="btn btn-outline" type="button" onclick="saveProductionPairDraft()">Save Draft</button>
-        <button class="btn btn-primary" type="submit">Submit Encoding</button>
-        <button class="btn btn-outline" type="button" onclick="clearProductionPairForm()">Clear Form</button>
-      </div>
-    </form>
-
-    <fieldset>
-      <legend>Incentives</legend>
-      <form id="piece-incentive-entry-form" class="payroll-field-row" onsubmit="encodePieceIncentive(event)">
-        <label>Employee<input name="employee_id" type="number" min="1" required /></label>
-        <label>Payroll Period<input name="payroll_period" type="month" required /></label>
-        <label>Incentive Type<select name="incentive_type"><option>Quota Incentive</option><option>Sunday Work Incentive</option><option>Special Sewing Incentive</option></select></label>
-        <label>Amount<input name="amount" type="number" min="0.01" step="0.01" required /></label>
-        <label class="span-2">Remarks<input name="remarks" placeholder="Optional notes" /></label>
-        <div class="payroll-form-actions"><span id="piece-incentive-entry-status" class="payroll-form-status"></span><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Incentive</button></div>
-      </form>
-    </fieldset>
   </div>
 
   <div id="piece-rate-config-grid" style="margin-top:18px;"></div>

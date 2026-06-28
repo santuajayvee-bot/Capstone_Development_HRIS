@@ -108,6 +108,16 @@ function runAlterStatement(db, statement) {
       return runConditionalAlter(db, table, compatibleClause, condition);
     }
 
+    const modifyMatch = clause.match(
+      /^MODIFY\s+COLUMN\s+IF\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+([\s\S]+)$/i
+    );
+    if (modifyMatch) {
+      const column = normalizeIdentifier(modifyMatch[1]);
+      const compatibleClause = `MODIFY COLUMN \`${column}\` ${modifyMatch[2]}`;
+      const condition = `(SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${escapeSqlString(table)}' AND COLUMN_NAME = '${escapeSqlString(column)}') > 0`;
+      return runConditionalAlter(db, table, compatibleClause, condition);
+    }
+
     return db.runSql(`ALTER TABLE \`${table}\` ${clause}`);
   }), Promise.resolve());
 }
