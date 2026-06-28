@@ -2318,7 +2318,7 @@ function hasEncryptedPayslipStorage(columns = new Set()) {
 }
 
 function payslipStoragePlainAmount(columns, value) {
-  return hasEncryptedPayslipStorage(columns) ? 0 : roundMoney(value);
+  return hasEncryptedPayslipStorage(columns) ? null : roundMoney(value);
 }
 
 function payslipStoragePlainSource(columns, value) {
