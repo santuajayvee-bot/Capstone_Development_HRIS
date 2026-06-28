@@ -2022,10 +2022,10 @@ function renderHolidayPagination(totalRows) {
   const start = (ATT_HOLIDAYS_PAGE - 1) * ATT_HOLIDAYS_PAGE_SIZE + 1;
   const end = Math.min(totalRows, ATT_HOLIDAYS_PAGE * ATT_HOLIDAYS_PAGE_SIZE);
   container.innerHTML = `
-    <span class="att-records-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
-    <div class="att-records-pagination-actions">
+    <span class="att-records-pagination-summary holiday-calendar-pagination-summary">Showing ${start}-${end} of ${totalRows} holidays</span>
+    <div class="att-records-pagination-actions holiday-calendar-pagination-actions">
       <button class="btn btn-outline btn-sm" type="button" onclick="setHolidayCalendarPage(${ATT_HOLIDAYS_PAGE - 1})" ${ATT_HOLIDAYS_PAGE <= 1 ? 'disabled' : ''}>Previous</button>
-      <span class="att-records-pagination-page">Page ${ATT_HOLIDAYS_PAGE} of ${totalPages}</span>
+      <span class="att-records-pagination-page holiday-calendar-pagination-page">Page ${ATT_HOLIDAYS_PAGE} of ${totalPages}</span>
       <button class="btn btn-outline btn-sm" type="button" onclick="setHolidayCalendarPage(${ATT_HOLIDAYS_PAGE + 1})" ${ATT_HOLIDAYS_PAGE >= totalPages ? 'disabled' : ''}>Next</button>
     </div>`;
 }

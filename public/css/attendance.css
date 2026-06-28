@@ -508,7 +508,41 @@
   min-width:64px;
 }
 .holiday-calendar-pagination {
-  margin-top:10px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:12px;
+  min-height:54px;
+  margin-top:0;
+  padding:12px 14px;
+  border:1px solid var(--border);
+  border-top:0;
+  border-radius:0 0 8px 8px;
+  background:var(--card);
+  color:var(--muted);
+  font-size:12px;
+}
+.holiday-calendar-pagination-summary,
+.holiday-calendar-pagination-page {
+  display:inline-flex;
+  align-items:center;
+  min-height:32px;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.holiday-calendar-pagination-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-left:auto;
+}
+.holiday-calendar-pagination-actions .btn {
+  min-width:72px;
+  height:32px;
+  white-space:nowrap;
 }
 @media (max-width: 1000px) {
   .att-stats, .records-summary, .att-sync-layout, .bio-status-grid, .bio-diagnostic-grid, .bio-steps { grid-template-columns:repeat(2, 1fr); }
@@ -525,7 +559,8 @@
   #att-records .att-summary-cell {
     min-width: 150px;
   }
-  #att-records .att-records-pagination {
+  #att-records .att-records-pagination,
+  .holiday-calendar-pagination {
     align-items: stretch;
     padding: 10px;
   }
@@ -534,24 +569,31 @@
     padding: 10px;
   }
   #att-records .att-records-pagination-summary,
-  #att-biometric .att-records-pagination-summary {
+  #att-biometric .att-records-pagination-summary,
+  .holiday-calendar-pagination-summary {
     width: 100%;
     text-align: center;
+    justify-content: center;
   }
   #att-records .att-records-pagination-actions,
-  #att-biometric .att-records-pagination-actions {
+  #att-biometric .att-records-pagination-actions,
+  .holiday-calendar-pagination-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+    margin-left: 0;
   }
   #att-records .att-records-pagination-page,
-  #att-biometric .att-records-pagination-page {
+  #att-biometric .att-records-pagination-page,
+  .holiday-calendar-pagination-page {
     grid-column: 1 / -1;
     order: -1;
     text-align: center;
+    justify-content: center;
   }
   #att-records .att-records-pagination-actions .btn,
-  #att-biometric .att-records-pagination-actions .btn {
+  #att-biometric .att-records-pagination-actions .btn,
+  .holiday-calendar-pagination-actions .btn {
     min-width: 0;
     width: 100%;
   }
