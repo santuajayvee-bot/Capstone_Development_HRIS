@@ -18,7 +18,7 @@
     "test:attendance-biometric": "node test-biometric-attendance.js",
     "test:attendance-policy": "node tests/attendance-policy.test.js",
     "test:payroll-attendance-config": "node tests/payroll-attendance-config.test.js",
-    "test:security": "node tests/frontend-output-security.test.js && node tests/input-validation.test.js && node tests/upload-security.test.js && node tests/csrf-protection.test.js && node tests/payroll-piece-rate-auth.test.js && node tests/password-storage-security.test.js",
+    "test:security": "node tests/frontend-output-security.test.js && node tests/input-validation.test.js && node tests/error-response.test.js && node tests/upload-security.test.js && node tests/csrf-protection.test.js && node tests/payroll-piece-rate-auth.test.js && node tests/password-storage-security.test.js",
     "security:invalidate-legacy-passwords": "node scripts/invalidate-legacy-password-hashes.js --apply",
     "security:configure-local-db": "node scripts/configure-local-database-security.js --apply",
     "security:verify-db": "node scripts/verify-database-security.js",

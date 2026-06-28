@@ -31,6 +31,7 @@ const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptP
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
+const { clientErrorResponse }                = require('./server/error-response');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
@@ -5988,10 +5989,14 @@ app.use('/api', selfServiceRoutes);
 
 // Error handling middleware (before SPA fallback)
 app.use((err, req, res, next) => {
-  console.error('❌ Unhandled Error:', err.message);
-  res.status(err.status || 500).json({ 
-    error: 'Internal Server Error'
+  const { status, body } = clientErrorResponse(err);
+  console.error('Request error:', {
+    status,
+    method: req.method,
+    path: req.originalUrl,
+    message: err.message,
   });
+  res.status(status).json(body);
 });
 
 // SPA fallback
