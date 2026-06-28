@@ -4657,6 +4657,7 @@ function initializePayrollModule() {
   }
   if (weeklyDepartment && !weeklyDepartment.dataset.employeeFilterBound) {
     weeklyDepartment.addEventListener('change', () => {
+      if (weeklyEmployee) weeklyEmployee.value = '';
       renderWeeklyPayrollEmployeeOptions();
       loadWeeklyPayrollRegistry();
     });
@@ -4664,6 +4665,7 @@ function initializePayrollModule() {
   }
   if (weeklyPayType && !weeklyPayType.dataset.employeeFilterBound) {
     weeklyPayType.addEventListener('change', () => {
+      if (weeklyEmployee) weeklyEmployee.value = '';
       renderWeeklyPayrollEmployeeOptions();
       loadWeeklyPayrollRegistry();
     });
