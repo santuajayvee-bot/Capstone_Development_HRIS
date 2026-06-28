@@ -677,6 +677,9 @@ async function loadEmployeesForDropdown() {
 }
 
 function toggleLeaveForm() {
+  const manualForm = document.getElementById('manual-leave-form');
+  if (manualForm) manualForm.style.display = 'block';
+  return;
   const container = document.getElementById('leave-form-container');
   const btn = document.getElementById('toggle-form-btn');
   if (container && btn) {
@@ -800,7 +803,6 @@ async function submitManualLeave(event) {
     const result = await res.json();
     alert(`✅ Leave successfully encoded for employee.\n\nLeave ID: ${result.id}\nType: ${leaveType}\nDuration: ${daysBetween} day(s)\nStatus: Approved`);
     clearLeaveForm();
-    toggleLeaveForm(); // Collapse form
     loadLeaveRequests(); // Refresh table
   } catch (err) {
     alert(`❌ Error encoding leave: ${err.message}`);
@@ -1314,6 +1316,8 @@ function toggleLeaveForm() {
   const form = document.getElementById('manual-leave-form');
   const btn = document.getElementById('toggle-form-btn');
   if (!form) return;
+  form.style.display = 'block';
+  return;
   const open = form.style.display !== 'none';
   form.style.display = open ? 'none' : 'block';
   if (btn) btn.textContent = open ? 'Expand Form' : 'Collapse Form';

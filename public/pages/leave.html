@@ -125,9 +125,8 @@
         <h3 class="leave-section-title">Manual Leave Encoding</h3>
         <div style="margin-top:4px;color:var(--muted);font-size:12px;">Use this for Per Trip and Per Piece employees, or HR-entered leave records.</div>
       </div>
-      <button class="btn btn-outline" id="toggle-form-btn" onclick="toggleLeaveForm()">Expand Form</button>
     </div>
-    <form id="manual-leave-form" onsubmit="submitManualLeave(event)" style="display:none;margin-top:12px;">
+    <form id="manual-leave-form" onsubmit="submitManualLeave(event)" style="margin-top:12px;">
       <div class="leave-form-grid">
         <div class="leave-field"><label>Employee</label><select id="manual-employee" required onchange="syncManualEmployeeInfo()"></select></div>
         <div class="leave-field"><label>Pay Type</label><input id="manual-pay-type" readonly></div>
