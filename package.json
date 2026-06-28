@@ -27,6 +27,7 @@
     "test:onboarding": "node test-onboarding.js",
     "test:mfa": "node tests/iprog-sms-service.test.js",
     "test:payroll-controlled": "node scripts/payroll-controlled-test.js",
+    "test:payroll-performance": "node scripts/payroll-performance-batch-test.js",
     "seed:payroll-manual-deduction": "node scripts/payroll-manual-deduction-seed.js",
     "seed:payroll-deduction-boundary": "node scripts/payroll-deduction-boundary-seed.js",
     "seed:payroll-piece-trip-deduction": "node scripts/payroll-piece-trip-deduction-seed.js",

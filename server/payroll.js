@@ -25,6 +25,11 @@ const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeduct
 const { computePayrollHash } = require('./utils/payrollHash');
 const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 const {
+  completePerformanceLog,
+  normalizePerformanceBatchSize,
+  startPerformanceTimer,
+} = require('./performance-logger');
+const {
   isTripBasedWageType,
   normalizeTripType,
   normalizeTripRole,
@@ -6584,8 +6589,17 @@ router.post('/production-pairs', requireAuth, requireRole(ROLES.payroll_any), PA
 
 // Save salary calculation (Base Salary or Hourly)
 router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  const pool = require('../config/db');
+  const salaryPerformance = startPerformanceTimer(
+    String(req.body?.status || '').toLowerCase() === 'draft'
+      ? 'salary_calculation_save'
+      : 'salary_calculation_submit',
+    {
+      employeesProcessed: req.body?.employee_id ? 1 : 0,
+      payrollPeriod: req.body?.payroll_period || req.body?.calculation_date || null,
+    }
+  );
   try {
-    const pool = require('../config/db');
     const {
       salary_calculation_id,
       employee_id,
@@ -6627,11 +6641,11 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       special_incentive
     } = req.body;
 
-    console.log('\n=== POST /api/payroll/salary-calculation ===');
-    console.log('Employee ID:', employee_id);
-    console.log('Wage Type ID:', wage_type_id);
-    console.log('Gross:', gross_pay, '| Net:', net_pay);
-    console.log('Hours Worked:', hours_worked, '| Days Worked:', days_worked);
+    console.log('[performance] Salary calculation request received.', {
+      operation_name: salaryPerformance.operationName,
+      employees_processed: employee_id ? 1 : 0,
+      payroll_period: payroll_period || calculation_date || null,
+    });
 
     const calcDate = calculation_date || new Date().toISOString().split('T')[0];
     await ensurePieceRatePayrollSchema(pool);
@@ -7048,7 +7062,6 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
       ]);
     }
 
-    console.log('✅ Salary calculation saved with ID:', salaryCalculationId);
     const blockchainQueue = calculationStatus === 'Submitted'
       ? await queueSubmittedPayrollRecord(pool, req, salaryCalculationId)
       : null;
@@ -7080,6 +7093,12 @@ router.post('/salary-calculation', requireAuth, requireRole(ROLES.payroll_any), 
   } catch (err) {
     console.error('❌ Error saving salary calculation:', err);
     res.status(500).json({ error: 'Failed to save salary calculation.' });
+  } finally {
+    await completePerformanceLog(pool, salaryPerformance, {
+      employeesProcessed: req.body?.employee_id ? 1 : 0,
+      payrollPeriod: req.body?.payroll_period || req.body?.calculation_date || null,
+      status: res.statusCode >= 400 ? 'failed' : 'success',
+    });
   }
 });
 
@@ -7801,10 +7820,19 @@ router.get('/filter-options', requireAuth, requireRole(POLICY_VIEW_ROLES), async
 // Generate weekly/monthly payroll by employee pay type.
 router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   const pool = require('../config/db');
-  const connection = await pool.getConnection();
+  const payrollPerformance = startPerformanceTimer('payroll_generation', {
+    payrollPeriod: req.body?.payroll_period || req.body?.month_year || req.body?.period || null,
+  });
+  let connection;
+  let processedCount = 0;
+  let selectedEmployeeCount = 0;
+  let payrollPeriodForPerformance = req.body?.payroll_period || req.body?.month_year || req.body?.period || null;
+  let performanceBatchSize = null;
   try {
+    connection = await pool.getConnection();
     await connection.beginTransaction();
     await ensurePieceRatePayrollSchema(connection);
+    performanceBatchSize = normalizePerformanceBatchSize(req.body.performance_batch_size || req.body.benchmark_employee_limit);
     const payTypeFilter = String(req.body.pay_type || req.body.payroll_type || '').trim();
     const period = {
       ...payrollPeriodFromRequest(req.body),
@@ -7820,6 +7848,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
     if (!period.month_year || !period.start || !period.end) {
       throw new Error('Payroll period, start date, and end date are required.');
     }
+    payrollPeriodForPerformance = period.month_year;
 
     const payrollRun = await findOrCreatePayrollRun(connection, req, period);
     const payrollRunId = payrollRun.id;
@@ -7858,7 +7887,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       }
     }
 
-    const [employees] = await connection.execute(`
+    const [employeeRows] = await connection.execute(`
       SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position, e.department_id,
              e.hiring_type,
              COALESCE(NULLIF(e.agency_name, ''), NULL) AS agency_name,
@@ -7869,8 +7898,9 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       WHERE ${employeeWhere.join(' AND ')}
       ORDER BY e.employee_code, e.id
     `, employeeParams);
+    const employees = performanceBatchSize ? employeeRows.slice(0, performanceBatchSize) : employeeRows;
+    selectedEmployeeCount = employees.length;
 
-    let processedCount = 0;
     let skippedCount = 0;
     const skipped = [];
     const registry = [];
@@ -8188,6 +8218,16 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
       metadata: { processedCount, skippedCount, totalEmployees: employees.length, skipped }
     });
     await connection.commit();
+    await completePerformanceLog(connection, payrollPerformance, {
+      employeesProcessed: processedCount,
+      payrollPeriod: period.month_year,
+      status: 'success',
+      metadata: {
+        selected_employees: selectedEmployeeCount,
+        skipped_employees: skippedCount,
+        performance_batch_size: performanceBatchSize,
+      },
+    });
 
     res.json({ 
       success: true, 
@@ -8206,10 +8246,19 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
   } catch (err) {
     try { await connection.rollback(); } catch (_) {}
     console.error('Error generating payroll:', err);
+    await completePerformanceLog(connection || pool, payrollPerformance, {
+      employeesProcessed: processedCount || selectedEmployeeCount || 0,
+      payrollPeriod: payrollPeriodForPerformance,
+      status: 'failed',
+      metadata: {
+        selected_employees: selectedEmployeeCount,
+        performance_batch_size: performanceBatchSize,
+      },
+    });
     const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
     res.status(status).json({ error: status === 400 ? err.message : 'Failed to generate payroll.' });
   } finally {
-    connection.release();
+    if (connection) connection.release();
   }
 });
 
@@ -9700,9 +9749,17 @@ router.post('/allowance-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
 });
 
 router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
+  const pool = require('../config/db');
+  const statusPerformance = req.body?.status === 'For Approval'
+    ? startPerformanceTimer('salary_calculation_submit_for_approval', {
+      employeesProcessed: 0,
+      payrollPeriod: null,
+    })
+    : null;
   let connection;
+  let statusPerformancePeriod = null;
+  let statusPerformanceEmployees = 0;
   try {
-    const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
     const { id } = req.params;
     const { status, remarks } = req.body;
@@ -9743,6 +9800,10 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
        FOR UPDATE
     `, [id]);
     const record = records[0];
+    if (record) {
+      statusPerformanceEmployees = 1;
+      statusPerformancePeriod = record.payroll_period || record.calculation_date || null;
+    }
     if (!record) {
       await connection.rollback();
       return res.status(404).json({ error: 'Salary calculation not found.' });
@@ -9937,6 +9998,13 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
     console.error('Error updating payroll status:', err);
     res.status(500).json({ error: 'Failed to update payroll status' });
   } finally {
+    if (statusPerformance) {
+      await completePerformanceLog(connection || pool, statusPerformance, {
+        employeesProcessed: statusPerformanceEmployees,
+        payrollPeriod: statusPerformancePeriod,
+        status: res.statusCode >= 400 ? 'failed' : 'success',
+      });
+    }
     if (connection) connection.release();
   }
 });
