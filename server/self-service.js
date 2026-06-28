@@ -94,6 +94,8 @@ const SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS = new Set([
   'mailing_address_province', 'mailing_address_city_municipality',
   'mailing_address_barangay', 'mailing_address_street_address',
   'mailing_address_full_address', 'mailing_address_place_id',
+  'emergency_contact_name', 'emergency_contact_relationship',
+  'emergency_contact_num', 'emergency_contact_email',
   'marital_status', 'residential_address', 'sss_number', 'philhealth_number',
   'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account',
   'first_name', 'middle_name', 'last_name', 'suffix'
