@@ -94,6 +94,10 @@ const LOGISTICS_TRIP_PERMISSIONS = {
   configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval, ...ROLES.admin_any],
 };
 
+const MAX_DAILY_PIECE_OUTPUT_QUANTITY = 10000;
+const MAX_LOGISTICS_TRIP_QUANTITY = 100;
+const MAX_PAYROLL_SOURCE_RATE = 100000;
+
 const PAYROLL_COMPUTED_FIELD_GUARD = rejectForbiddenFields(COMPUTED_PAYROLL_FIELDS, {
   action: 'blocked_payroll_parameter_tampering_attempt',
   module: 'PAYROLL_SECURITY',
@@ -194,6 +198,51 @@ function cleanOptionalDate(value, field) {
     throw err;
   }
   return text;
+}
+
+function todayManilaDateKey() {
+  return new Date(Date.now() + (8 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+}
+
+function strictPayrollDate(value, label = 'Date', { allowFuture = false } = {}) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`${label} must use YYYY-MM-DD.`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const validCalendarDate = parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+  if (!validCalendarDate) throw new Error(`${label} is not a valid calendar date.`);
+  if (!allowFuture && text > todayManilaDateKey()) throw new Error(`${label} cannot be in the future.`);
+  return text;
+}
+
+function strictPayrollPeriod(value, label = 'Payroll period') {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})$/);
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12) {
+    throw new Error(`${label} must use YYYY-MM.`);
+  }
+  return text;
+}
+
+function requireDateWithinPayrollPeriod(dateValue, payrollPeriod, label = 'Date') {
+  if (dateValue.slice(0, 7) !== payrollPeriod) {
+    throw new Error(`${label} must fall within the selected payroll period.`);
+  }
+}
+
+function boundedPositiveNumber(value, label, maximum, { integer = false, allowZero = false } = {}) {
+  if (value === '' || value === null || value === undefined) throw new Error(`${label} is required.`);
+  const number = Number(value);
+  const minimumOk = allowZero ? number >= 0 : number > 0;
+  if (!Number.isFinite(number) || !minimumOk || number > maximum || (integer && !Number.isInteger(number))) {
+    throw new Error(`${label} must be a valid ${allowZero ? 'non-negative' : 'positive'} ${integer ? 'whole ' : ''}number not greater than ${maximum}.`);
+  }
+  return integer ? number : roundMoney(number);
 }
 
 async function ensurePayrollOffboardingSchema(pool) {
@@ -700,9 +749,7 @@ function settingAppliesThisWeek(setting, weekNumber) {
 }
 
 function logisticsDate(value, label = 'Date') {
-  const text = String(value || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error(`${label} must use YYYY-MM-DD.`);
-  return text;
+  return strictPayrollDate(value, label);
 }
 
 function logisticsPositiveId(value, label) {
@@ -1511,9 +1558,7 @@ function roundMoney(value) {
 }
 
 function payrollDate(value, label = 'Date') {
-  const text = String(value || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error(`${label} must use YYYY-MM-DD.`);
-  return text;
+  return strictPayrollDate(value, label);
 }
 
 function weeklyPayrollKey(startDate, endDate) {
@@ -1633,6 +1678,7 @@ function monthRange(monthYear) {
     const year = Number(weekMatch[1]);
     const month = Number(weekMatch[2]);
     const week = Number(weekMatch[3]);
+    if (month < 1 || month > 12) throw new Error('Payroll period month is invalid.');
     const monthEndDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
     const firstDayOfMonth = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
     const startDay = Math.min(monthEndDay, Math.max(1, ((week - 1) * 7) - firstDayOfMonth + 1));
@@ -1650,10 +1696,10 @@ function monthRange(monthYear) {
   const now = new Date();
   const year = match ? Number(match[1]) : now.getFullYear();
   const month = match ? Number(match[2]) : now.getMonth() + 1;
-  const safeMonth = Math.min(12, Math.max(1, month));
-  const start = `${year}-${String(safeMonth).padStart(2, '0')}-01`;
-  const end = new Date(Date.UTC(year, safeMonth, 0)).toISOString().slice(0, 10);
-  return { month_year: `${year}-${String(safeMonth).padStart(2, '0')}`, start, end };
+  if (match && (month < 1 || month > 12)) throw new Error('Payroll period month is invalid.');
+  const start = `${year}-${String(month).padStart(2, '0')}-01`;
+  const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return { month_year: `${year}-${String(month).padStart(2, '0')}`, start, end };
 }
 
 async function findOrCreatePayrollRun(pool, req, period) {
@@ -3118,14 +3164,14 @@ function logisticsPositionKind(position) {
 }
 
 async function computeLogisticsCrewPayroll(pool, body) {
-  const driverId = Number(body.driver_employee_id);
-  const helper1Id = Number(body.helper1_employee_id);
-  const helper2Id = body.helper2_employee_id ? Number(body.helper2_employee_id) : null;
-  const tripDate = body.transaction_date || new Date().toISOString().split('T')[0];
+  const driverId = logisticsPositiveId(body.driver_employee_id, 'Driver Employee');
+  const helper1Id = logisticsPositiveId(body.helper1_employee_id, 'Helper 1 Employee');
+  const helper2Id = body.helper2_employee_id ? logisticsPositiveId(body.helper2_employee_id, 'Helper 2 Employee') : null;
+  const tripDate = strictPayrollDate(body.transaction_date || todayManilaDateKey(), 'Transaction date');
   const truckTypeId = logisticsPositiveId(body.truck_type_id, 'Truck type');
   const locationId = logisticsPositiveId(body.location_id, 'Delivery location');
   const tripType = normalizeTripType(body.trip_type);
-  const tripCount = Math.max(1, Number(body.trip_count || body.trips || 1));
+  const tripCount = boundedPositiveNumber(body.trip_count || body.trips || 1, 'Trip count', MAX_LOGISTICS_TRIP_QUANTITY, { integer: true });
 
   if (!driverId) throw new Error('A logistics transaction must have 1 Driver.');
   if (!helper1Id) throw new Error('A logistics transaction must have at least 1 Helper.');
@@ -3843,15 +3889,14 @@ async function activeProductionPairRule(pool, pairingType, dateValue) {
 
 async function computeProductionPairPayroll(pool, input) {
   await ensurePieceRatePayrollSchema(pool);
-  const productionDate = input.production_date || new Date().toISOString().split('T')[0];
+  const productionDate = strictPayrollDate(input.production_date || todayManilaDateKey(), 'Production date');
   const sewTypeCode = String(input.sew_type_code || input.product_type || '').trim();
   const sizeRange = String(input.size_range || input.product_category || '').trim();
   const pairingType = String(input.pairing_type || '').trim();
-  const quantity = Math.max(0, parseInt(input.quantity_produced || 0, 10) || 0);
+  const quantity = boundedPositiveNumber(input.quantity_produced, 'Quantity produced', MAX_DAILY_PIECE_OUTPUT_QUANTITY, { integer: true });
   if (!sewTypeCode) throw new Error('Type of Sew is required.');
   if (!sizeRange) throw new Error('Size Range is required.');
   if (!['Standard Sewer-Fixer', 'Substitute Sewer-Sewer'].includes(pairingType)) throw new Error('Valid pairing type is required.');
-  if (!quantity) throw new Error('Quantity produced is required.');
   if (!input.worker1_employee_id || !input.worker2_employee_id) throw new Error('Worker 1 and Worker 2 are required.');
   if (String(input.worker1_employee_id) === String(input.worker2_employee_id)) throw new Error('Worker 1 and Worker 2 must be different employees.');
 
@@ -3908,15 +3953,14 @@ async function computeProductionPairPayroll(pool, input) {
 
 async function computePieceRatePayroll(pool, input) {
   await ensurePieceRatePayrollSchema(pool);
-  const outputDate = input.output_date || input.calculation_date || new Date().toISOString().split('T')[0];
-  const quantity = Math.max(0, parseInt(input.quantity_produced ?? input.quantity ?? 0, 10) || 0);
+  const outputDate = strictPayrollDate(input.output_date || input.calculation_date || todayManilaDateKey(), 'Output date');
+  const quantity = boundedPositiveNumber(input.quantity_produced ?? input.quantity, 'Quantity produced', MAX_DAILY_PIECE_OUTPUT_QUANTITY, { integer: true });
   const productType = String(input.sew_type_code || input.product_type || '').trim();
   const productCategory = String(input.size_range || input.product_category || '').trim();
   const workerCategory = String(input.worker_category || '').trim();
   if (!productType) throw new Error('Type of Sew is required for piece-rate payroll.');
   if (!productCategory) throw new Error('Size Range is required for piece-rate payroll.');
   if (!workerCategory) throw new Error('Worker category is required for piece-rate payroll.');
-  if (!quantity) throw new Error('Quantity produced is required for piece-rate payroll.');
 
   const rate = await activePieceRate(pool, productType, productCategory, outputDate);
   if (!rate) throw new Error('No active piece rate found for the selected Type of Sew, Size Range, and date.');
@@ -4745,7 +4789,7 @@ async function logisticsRatePayload(pool, body) {
   if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 100) throw new Error('Multiplier must be greater than zero and no more than 100.');
   const specialRuleDescription = logisticsText(body.special_rule_description, 'Special rule description', 500);
   const status = logisticsStatus(body.status);
-  const effectiveDate = logisticsDate(body.effective_date || new Date().toISOString().slice(0, 10), 'Effective date');
+  const effectiveDate = strictPayrollDate(body.effective_date || todayManilaDateKey(), 'Effective date', { allowFuture: true });
   const [truckRows] = await pool.execute('SELECT id FROM truck_types WHERE id = ? LIMIT 1', [truckTypeId]);
   const [locationRows] = await pool.execute('SELECT id FROM logistics_locations WHERE id = ? LIMIT 1', [locationId]);
   if (!truckRows.length || !locationRows.length) throw new Error('Truck type and location must exist.');
@@ -4873,7 +4917,7 @@ async function logisticsTripPayload(pool, body) {
   const tripDate = logisticsDate(body.trip_date, 'Trip date');
   const tripType = normalizeTripType(body.trip_type);
   const role = normalizeTripRole(body.role);
-  const outputQuantity = Math.max(1, numeric(body.output_quantity || 1));
+  const outputQuantity = boundedPositiveNumber(body.output_quantity || 1, 'Output quantity', MAX_LOGISTICS_TRIP_QUANTITY, { integer: true });
   const plateNumber = logisticsText(body.plate_number, 'Plate number', 30);
   if (plateNumber && !/^[A-Za-z0-9 -]+$/.test(plateNumber)) throw new Error('Plate number may contain letters, numbers, spaces, and hyphens only.');
   const [employees] = await pool.execute(`
@@ -5278,12 +5322,17 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
-    const { employee_id, sewing_type_id, quantity, rate, transaction_date, calculation_status } = req.body;
+    const { calculation_status } = req.body;
+    const employee_id = logisticsPositiveId(req.body.employee_id, 'Employee');
+    const sewing_type_id = logisticsPositiveId(req.body.sewing_type_id, 'Sewing type');
+    const quantity = boundedPositiveNumber(req.body.quantity, 'Quantity', MAX_DAILY_PIECE_OUTPUT_QUANTITY, { integer: true });
+    const rate = boundedPositiveNumber(req.body.rate, 'Rate', MAX_PAYROLL_SOURCE_RATE);
+    const transaction_date = strictPayrollDate(req.body.transaction_date, 'Transaction date');
 
     // Calculate week and month
-    const date = new Date(transaction_date);
-    const week = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
-    const monthYear = date.toISOString().slice(0, 7);
+    const date = new Date(`${transaction_date}T00:00:00Z`);
+    const week = Math.ceil((date.getUTCDate() + new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)).getUTCDay()) / 7);
+    const monthYear = transaction_date.slice(0, 7);
 
     // Source rows store earnings only. Payroll generation owns deductions.
     const grossPay = quantity * rate;
@@ -5413,7 +5462,7 @@ router.post('/transactions/production', requireAuth, requireRole(ROLES.payroll_a
     });
   } catch (err) {
     console.error('Error recording production transaction:', err);
-    res.status(500).json({ error: 'Failed to record transaction' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to record transaction.') });
   }
 });
 
@@ -5538,22 +5587,21 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
     const {
-      salary_calculation_id,
-      employee_id,
-      logistics_region_id,
-      rate,
-      trip_reference,
-      transaction_date,
       driver_employee_id,
       helper1_employee_id,
       helper2_employee_id,
       calculation_status
     } = req.body;
+    const employee_id = req.body.employee_id ? logisticsPositiveId(req.body.employee_id, 'Employee') : null;
+    const logistics_region_id = req.body.logistics_region_id ? logisticsPositiveId(req.body.logistics_region_id, 'Logistics region') : null;
+    const rate = req.body.rate === undefined ? null : boundedPositiveNumber(req.body.rate, 'Rate', MAX_PAYROLL_SOURCE_RATE);
+    const trip_reference = logisticsText(req.body.trip_reference, 'Trip reference', 80);
+    const transaction_date = strictPayrollDate(req.body.transaction_date || todayManilaDateKey(), 'Transaction date');
 
     // Calculate week and month
-    const date = new Date(transaction_date || new Date());
-    const week = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
-    const monthYear = date.toISOString().slice(0, 7);
+    const date = new Date(`${transaction_date}T00:00:00Z`);
+    const week = Math.ceil((date.getUTCDate() + new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)).getUTCDay()) / 7);
+    const monthYear = transaction_date.slice(0, 7);
 
     if (driver_employee_id || helper1_employee_id || helper2_employee_id) {
       const crew = await computeLogisticsCrewPayroll(pool, req.body);
@@ -5643,6 +5691,9 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
     }
 
     // Source rows store earnings only. Deductions are snapshotted once by the salary calculation submit flow.
+    if (!employee_id || !logistics_region_id || !(rate > 0)) {
+      throw new Error('Employee, logistics region, and rate are required.');
+    }
     const grossPay = rate;
     const netPay = grossPay;
 
@@ -5670,7 +5721,7 @@ router.post('/transactions/logistics', requireAuth, requireRole(ROLES.payroll_an
     });
   } catch (err) {
     console.error('Error recording logistics transaction:', err);
-    res.status(500).json({ error: 'Failed to record transaction' });
+    res.status(400).json({ error: safePayrollError(err, 'Failed to record transaction.') });
   }
 });
 
@@ -6140,18 +6191,16 @@ router.post('/piece-incentive-entries', requireAuth, requireRole(ROLES.payroll_a
 });
 
 async function resolveDailyPieceOutput(pool, input) {
-  const outputDate = String(input.output_date || input.production_date || '').slice(0, 10);
-  const payrollPeriod = String(input.payroll_period || input.payroll_period_id || '').trim();
+  const outputDate = strictPayrollDate(input.output_date || input.production_date, 'Output date');
+  const payrollPeriod = strictPayrollPeriod(input.payroll_period || input.payroll_period_id, 'Payroll period');
   const operationType = String(input.operation_type || input.sew_type_code || '').trim().toUpperCase();
   const sizeRange = String(input.size_range || '').trim();
-  const quantity = Number(input.quantity_produced || 0);
+  const quantity = boundedPositiveNumber(input.quantity_produced, 'Quantity produced', MAX_DAILY_PIECE_OUTPUT_QUANTITY, { integer: true });
   const outputMode = String(input.output_mode || (input.partner_employee_id || input.worker2_employee_id ? 'partner' : 'solo')).toLowerCase();
   const primaryEmployeeId = Number(input.employee_id || input.worker1_employee_id || 0);
   const partnerEmployeeId = Number(input.partner_employee_id || input.worker2_employee_id || 0) || null;
-  if (!/^\d{4}-\d{2}$/.test(payrollPeriod)) throw new Error('A valid payroll period is required.');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(outputDate)) throw new Error('A valid output date is required.');
-  if (outputDate.slice(0, 7) !== payrollPeriod) throw new Error('Output date must fall within the selected payroll period.');
-  if (!operationType || !sizeRange || !(quantity > 0) || !primaryEmployeeId) {
+  requireDateWithinPayrollPeriod(outputDate, payrollPeriod, 'Output date');
+  if (!operationType || !sizeRange || !primaryEmployeeId) {
     throw new Error('Employee, output date, Type of Sew, Size Range, and quantity are required.');
   }
   if (!['solo', 'partner'].includes(outputMode)) throw new Error('Output mode must be solo or partner.');
