@@ -2557,7 +2557,7 @@ function payslipMoneyRows(payslip) {
 
   if (numeric(payslip.earnings.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: numeric(payslip.earnings.rot_sot) });
   if (numeric(payslip.earnings.add) > 0) earnings.push({ label: 'Additional Pay', amount: numeric(payslip.earnings.add) });
-  if (numeric(payslip.earnings.allowances) > 0) earnings.push({ label: 'Allowances', amount: numeric(payslip.earnings.allowances) });
+  earnings.push({ label: 'Allowances', amount: numeric(payslip.earnings.allowances), blankWhenZero: true });
   earnings.push({ label: 'Total Earnings', amount: numeric(payslip.summary.gross_pay), total: true });
 
   const seen = new Set();
@@ -2606,20 +2606,25 @@ function payslipMinuteLabel(value) {
 
 function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
-  const rows = [];
   const lateMinutes = numeric(earnings.late_minutes);
   const undertimeMinutes = numeric(earnings.undertime_minutes);
   const lateDeduction = numeric(earnings.late_deduction);
   const undertimeDeduction = numeric(earnings.undertime_deduction);
 
-  if (lateMinutes > 0 || lateDeduction > 0) {
-    rows.push({ label: 'Late', value: `${payslipMinuteLabel(lateMinutes)} / ${peso(lateDeduction)}` });
-  }
-  if (undertimeMinutes > 0 || undertimeDeduction > 0) {
-    rows.push({ label: 'Undertime', value: `${payslipMinuteLabel(undertimeMinutes)} / ${peso(undertimeDeduction)}` });
-  }
-
-  return rows;
+  return [
+    {
+      label: 'Late',
+      value: lateMinutes > 0 || lateDeduction > 0
+        ? `${payslipMinuteLabel(lateMinutes)} / ${peso(lateDeduction)}`
+        : ''
+    },
+    {
+      label: 'Undertime',
+      value: undertimeMinutes > 0 || undertimeDeduction > 0
+        ? `${payslipMinuteLabel(undertimeMinutes)} / ${peso(undertimeDeduction)}`
+        : ''
+    }
+  ];
 }
 
 function amountToWords(value) {
@@ -2696,7 +2701,7 @@ function drawPayslipPdf(doc, payslip) {
       doc.rect(left + labelWidth, y, amountWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
       doc.font(row.total ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5).fillColor(ink)
         .text(row.label, left + 6, y + 5, { width: labelWidth - 12, align: row.total ? 'right' : 'left', ellipsis: true })
-        .text(peso(row.amount), left + labelWidth + 6, y + 5, { width: amountWidth - 12, align: 'right' });
+        .text(row.blankWhenZero && numeric(row.amount) <= 0 ? '' : peso(row.amount), left + labelWidth + 6, y + 5, { width: amountWidth - 12, align: 'right' });
       y += rowHeight;
     }
     return y;
@@ -2748,12 +2753,8 @@ function drawPayslipPdf(doc, payslip) {
   detail('Reference No.', payslip.reference_no, left + half + 14, y, rightLabel, half - rightLabel - 14);
   y += 36;
 
-  if (attendanceRows.length) {
-    y = detailTable('Late / UT', attendanceRows, y);
-    y += 26;
-  } else {
-    y += 12;
-  }
+  y = detailTable('Late / UT', attendanceRows, y);
+  y += 26;
 
   y = table('Earnings', earnings, y);
   y += 28;

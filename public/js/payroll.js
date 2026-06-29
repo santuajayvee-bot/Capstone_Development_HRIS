@@ -1980,25 +1980,29 @@ function payslipMinuteLabel(value) {
 
 function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
-  const rows = [];
   const lateMinutes = payslipNumber(earnings.late_minutes);
   const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
   const lateDeduction = payslipNumber(earnings.late_deduction);
   const undertimeDeduction = payslipNumber(earnings.undertime_deduction);
 
-  if (lateMinutes > 0 || lateDeduction > 0) {
-    rows.push({ label: 'Late', value: `${payslipMinuteLabel(lateMinutes)} / ${payslipMoney(lateDeduction)}` });
-  }
-  if (undertimeMinutes > 0 || undertimeDeduction > 0) {
-    rows.push({ label: 'Undertime', value: `${payslipMinuteLabel(undertimeMinutes)} / ${payslipMoney(undertimeDeduction)}` });
-  }
-
-  return rows;
+  return [
+    {
+      label: 'Late',
+      value: lateMinutes > 0 || lateDeduction > 0
+        ? `${payslipMinuteLabel(lateMinutes)} / ${payslipMoney(lateDeduction)}`
+        : ''
+    },
+    {
+      label: 'Undertime',
+      value: undertimeMinutes > 0 || undertimeDeduction > 0
+        ? `${payslipMinuteLabel(undertimeMinutes)} / ${payslipMoney(undertimeDeduction)}`
+        : ''
+    }
+  ];
 }
 
 function payslipAttendanceTable(payslip) {
   const rows = payslipAttendanceRows(payslip);
-  if (!rows.length) return '';
   return `
     <div class="lgsv-payslip-attendance">
       <h4>Late / UT</h4>
@@ -2023,7 +2027,7 @@ function payslipRows(payslip) {
   ];
   if (payslipNumber(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: payslipNumber(payslip.earnings.rot_sot) });
   if (payslipNumber(payslip.earnings?.add) > 0) earnings.push({ label: 'Additional Pay', amount: payslipNumber(payslip.earnings.add) });
-  if (payslipNumber(payslip.earnings?.allowances) > 0) earnings.push({ label: 'Allowances', amount: payslipNumber(payslip.earnings.allowances) });
+  earnings.push({ label: 'Allowances', amount: payslipNumber(payslip.earnings?.allowances), blankWhenZero: true });
   earnings.push({ label: 'Total Earnings', amount: payslipNumber(payslip.summary?.gross_pay), total: true });
 
   const seen = new Set();
@@ -2058,7 +2062,7 @@ function payslipTable(title, rows) {
         ${rows.map(row => `
           <tr class="${row.total ? 'is-total' : ''}">
             <td>${payrollEscape(row.label)}</td>
-            <td>${payrollEscape(payslipMoney(row.amount))}</td>
+            <td>${payrollEscape(row.blankWhenZero && payslipNumber(row.amount) <= 0 ? '' : payslipMoney(row.amount))}</td>
           </tr>
         `).join('')}
       </tbody>
