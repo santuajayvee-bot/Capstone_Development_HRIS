@@ -16,10 +16,67 @@ let sysEmployeesDataSignature = '';
 let sysAuditRequestController = null;
 let sysAuditRequestId = 0;
 
+const SYS_ROLE_DISPLAY_OVERRIDES = {
+  hr_admin: {
+    label: 'HR Admin',
+    description: 'Employee lifecycle, 201-file, attendance validation, leave management, and HR reports.',
+  },
+  hr_manager: {
+    label: 'HR Manager',
+    description: 'HR approvals, employee lifecycle oversight, leave review, and HR operational reports.',
+  },
+  payroll_officer: {
+    label: 'Payroll Officer',
+    description: 'Draft payroll computation, verified production and trip logs, statutory deductions, and pay dispute support.',
+  },
+  payroll_manager: {
+    label: 'Payroll Manager',
+    description: 'Payroll approval, finalized payroll records, official financial summaries, and payroll reports.',
+  },
+  employee: {
+    label: 'Employee',
+    description: 'Employee self-service, attendance view, leave request, and finalized payslip access.',
+  },
+  system_admin: {
+    label: 'System Administrator',
+    description: 'System accounts, role access control, audit logs, blockchain verification, backup, and security configuration.',
+  },
+  manager: {
+    label: 'Legacy Manager',
+    description: 'Legacy role retained only for existing records.',
+    hideWhenEmpty: true,
+  },
+};
+
 function sysEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[char]));
+}
+
+function sysRoleName(role) {
+  return String(role?.name || role?.role_name || '').trim().toLowerCase();
+}
+
+function sysRoleDisplay(role) {
+  const override = SYS_ROLE_DISPLAY_OVERRIDES[sysRoleName(role)] || {};
+  return {
+    ...role,
+    label: override.label || role.label || role.role_label || role.name || role.role_name || 'Role',
+    description: override.description || null,
+    hideWhenEmpty: Boolean(override.hideWhenEmpty),
+  };
+}
+
+function sysAssignableRoles() {
+  return sysAllRoles
+    .filter(role => sysRoleName(role) !== 'manager')
+    .map(sysRoleDisplay);
+}
+
+function sysRoleLabelForUser(user) {
+  const role = sysRoleDisplay({ name: user.role_name, label: user.role_label });
+  return role.label;
 }
 
 function sysLooksEncryptedPayload(value) {
@@ -125,7 +182,7 @@ function sysAccountActionMenu(user) {
   return '<div class="account-menu">' +
     '<button type="button" class="account-menu-trigger" data-account-menu-toggle ' +
       'aria-label="Account actions for ' + sysEsc(user.username) + '" aria-haspopup="menu" aria-expanded="false">' +
-      '<span aria-hidden="true">&#8942;</span>' +
+      '<span>Actions</span>' +
     '</button>' +
     '<div class="account-menu-popover" role="menu" aria-label="Actions for ' + sysEsc(user.username) + '">' +
       sysAccountMenuAction('role', 'Change role', 'shield', user.id) +
@@ -139,6 +196,13 @@ function closeAccountActionMenus(exceptMenu = null) {
   document.querySelectorAll('.account-menu.is-open').forEach(menu => {
     if (menu === exceptMenu) return;
     menu.classList.remove('is-open', 'is-open-up');
+    const popover = menu.querySelector('.account-menu-popover');
+    if (popover) {
+      popover.style.top = '';
+      popover.style.left = '';
+      popover.style.right = '';
+      popover.style.bottom = '';
+    }
     const trigger = menu.querySelector('[data-account-menu-toggle]');
     if (trigger) trigger.setAttribute('aria-expanded', 'false');
   });
@@ -146,10 +210,24 @@ function closeAccountActionMenus(exceptMenu = null) {
 
 function openAccountActionMenu(menu, trigger) {
   closeAccountActionMenus(menu);
+  const popover = menu.querySelector('.account-menu-popover');
+  if (!popover) return;
   const estimatedMenuHeight = 150;
+  const estimatedMenuWidth = 180;
   const triggerBounds = trigger.getBoundingClientRect();
   const shouldOpenUpward = window.innerHeight - triggerBounds.bottom < estimatedMenuHeight
     && triggerBounds.top > estimatedMenuHeight;
+  const top = shouldOpenUpward
+    ? Math.max(8, triggerBounds.top - estimatedMenuHeight - 6)
+    : Math.min(window.innerHeight - estimatedMenuHeight - 8, triggerBounds.bottom + 6);
+  const left = Math.min(
+    Math.max(8, triggerBounds.right - estimatedMenuWidth),
+    window.innerWidth - estimatedMenuWidth - 8
+  );
+  popover.style.top = `${top}px`;
+  popover.style.left = `${left}px`;
+  popover.style.right = 'auto';
+  popover.style.bottom = 'auto';
   menu.classList.toggle('is-open-up', shouldOpenUpward);
   menu.classList.add('is-open');
   trigger.setAttribute('aria-expanded', 'true');
@@ -157,7 +235,7 @@ function openAccountActionMenu(menu, trigger) {
 
 async function openRoleUpdateForUser(user) {
   if (!sysAllRoles.length) await loadRolesList();
-  showRoleModal(Number(user.id), user.username, user.role_label || user.role_name, Number(user.role_id));
+  showRoleModal(Number(user.id), user.username, sysRoleLabelForUser(user), Number(user.role_id));
 }
 
 function bindAccountActionButtons() {
@@ -375,7 +453,7 @@ function renderUsersTable(users) {
         <td>${Number(u.id)}</td>
         <td><strong>${sysEsc(u.username)}</strong></td>
         <td>${empName}<br><small style="color:var(--muted)">${empCode}</small></td>
-        <td>${sysEsc(u.role_label || u.role_name)}</td>
+        <td>${sysEsc(sysRoleLabelForUser(u))}</td>
         <td><span class="badge-level badge-level-${levelNum}">${u.access_level || '—'}</span></td>
         <td><span class="${statusClass}">${statusText}</span></td>
         <td><span class="${locked ? 'badge-locked' : 'badge-clear'}">${sysEsc(lockoutText)}</span></td>
@@ -435,7 +513,7 @@ async function loadRolesList() {
     const roleFilter = document.getElementById('user-role-filter');
     if (roleFilter) {
       roleFilter.innerHTML = '<option value="">All Roles</option>' +
-        sysAllRoles.map(r => `<option value="${r.name}">${r.label}</option>`).join('');
+        sysAssignableRoles().map(r => `<option value="${sysEsc(sysRoleName(r))}">${sysEsc(r.label)}</option>`).join('');
     }
   } catch (err) {
     console.error('[SysAdmin] loadRolesList error:', err);
@@ -467,11 +545,15 @@ async function loadRolesGrid() {
     'Level 4': 'System accounts, RBAC, audit logs, blockchain audit, backup, and health monitoring.',
   };
 
-  grid.innerHTML = sysAllRoles.map(r => {
+  const rolesForGrid = sysAllRoles
+    .map(sysRoleDisplay)
+    .filter(r => !r.hideWhenEmpty || (usersPerRole[r.id] || []).length > 0);
+
+  grid.innerHTML = rolesForGrid.map(r => {
     const levelNum = r.access_level ? r.access_level.replace('Level ', '') : '1';
     const roleUsers = usersPerRole[r.id] || [];
     const count = roleUsers.length;
-    const desc = levelDescriptions[r.access_level] || 'No description available.';
+    const desc = r.description || levelDescriptions[r.access_level] || 'No description available.';
 
     // Build expandable user list
     let userListHTML = '';
@@ -485,8 +567,8 @@ async function loadRolesGrid() {
             return `
               <div class="role-user-item">
                 <div class="role-user-info">
-                  <strong>${u.username}</strong>
-                  <small>${name}</small>
+                  <strong>${sysEsc(u.username)}</strong>
+                  <small>${sysEsc(name)}</small>
                 </div>
                 <span class="${statusCls}">${statusTxt}</span>
               </div>`;
@@ -498,14 +580,14 @@ async function loadRolesGrid() {
       <div class="role-card role-card-clickable" onclick="toggleRoleUsers(${r.id})">
         <div class="role-card-header">
           <div>
-            <div class="role-card-title">${r.label}</div>
-            <div class="role-card-desc">${desc}</div>
+            <div class="role-card-title">${sysEsc(r.label)}</div>
+            <div class="role-card-desc">${sysEsc(desc)}</div>
           </div>
           <span class="badge-level badge-level-${levelNum}">${r.access_level || '—'}</span>
         </div>
         <div class="role-card-users">
           <strong>${count}</strong> user${count !== 1 ? 's' : ''} assigned
-          <span class="role-expand-hint" id="role-hint-${r.id}">${count > 0 ? '▼ Click to view' : ''}</span>
+          <span class="role-expand-hint" id="role-hint-${r.id}">${count > 0 ? 'View users' : ''}</span>
         </div>
         ${userListHTML}
       </div>
@@ -519,7 +601,7 @@ function toggleRoleUsers(roleId) {
   if (!list) return;
   const isVisible = list.style.display !== 'none';
   list.style.display = isVisible ? 'none' : 'block';
-  if (hint) hint.textContent = isVisible ? '▼ Click to view' : '▲ Hide';
+  if (hint) hint.textContent = isVisible ? 'View users' : 'Hide users';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -634,7 +716,7 @@ function auditDetails(log) {
   const oldValue = auditShortValue(log.old_value);
   const newValue = auditShortValue(log.new_value);
   if (oldValue || newValue) {
-    if (oldValue && newValue) parts.push(`${oldValue} → ${newValue}`);
+    if (oldValue && newValue) parts.push(`${oldValue} to ${newValue}`);
     else parts.push(oldValue || newValue);
   }
 
@@ -718,7 +800,7 @@ async function showRegisterModal() {
   // Populate role dropdown
   const roleSelect = document.getElementById('reg-role-id');
   roleSelect.innerHTML = '<option value="">— Select Role —</option>' +
-    sysAllRoles.map(r => `<option value="${r.id}">${r.label} (${r.access_level || '—'})</option>`).join('');
+    sysAssignableRoles().map(r => `<option value="${r.id}">${sysEsc(r.label)} (${sysEsc(r.access_level || '—')})</option>`).join('');
 
   document.getElementById('register-modal').style.display = 'flex';
 }
@@ -748,7 +830,7 @@ function onEmployeeSelect() {
   const existingUser = sysAllUsers.find(u => u.employee_id === empId);
   if (existingUser) {
     document.getElementById('preview-account').innerHTML =
-      `<span style="color:#fdcb6e">⚠ ${existingUser.username} (${existingUser.role_label || existingUser.role_name})</span>`;
+      `<span style="color:#fdcb6e">${sysEsc(existingUser.username)} (${sysEsc(sysRoleLabelForUser(existingUser))})</span>`;
     document.getElementById('register-modal-title').textContent = 'Update Existing Account';
     // Pre-fill username
     document.getElementById('reg-username').value = existingUser.username;
@@ -856,7 +938,7 @@ async function submitRegistration() {
     const data = await res.json();
 
     if (res.ok) {
-      showSysToast(`✅ ${data.message}`, 'success');
+      showSysToast(data.message, 'success');
       closeRegisterModal();
       loadUsersTable();
     } else {
@@ -869,7 +951,7 @@ async function submitRegistration() {
     const submitBtn = document.getElementById('btn-reg-submit');
     if (submitBtn) {
       submitBtn.disabled = false;
-      submitBtn.textContent = '🔒 Register Account';
+      submitBtn.textContent = 'Register Account';
     }
   }
 }
@@ -888,8 +970,8 @@ function showRoleModal(userId, username, currentRole, currentRoleId) {
   document.getElementById('role-modal-user-id').value = userId;
 
   const roleSelect = document.getElementById('role-modal-new-role');
-  roleSelect.innerHTML = sysAllRoles
-    .map(r => `<option value="${r.id}" ${Number(r.id) === Number(currentRoleId) ? 'selected' : ''}>${r.label} (${r.access_level || '—'})</option>`)
+  roleSelect.innerHTML = sysAssignableRoles()
+    .map(r => `<option value="${r.id}" ${Number(r.id) === Number(currentRoleId) ? 'selected' : ''}>${sysEsc(r.label)} (${sysEsc(r.access_level || '—')})</option>`)
     .join('');
 
   document.getElementById('role-modal').style.display = 'flex';
@@ -912,11 +994,11 @@ async function submitRoleUpdate() {
     const data = await res.json();
 
     if (res.ok) {
-      showSysToast(`✅ ${data.message}`, 'success');
+      showSysToast(data.message, 'success');
       closeRoleModal();
       loadUsersTable();
     } else {
-      showSysToast(`❌ ${data.error}`, 'error');
+      showSysToast(data.error || 'Role update failed.', 'error');
     }
   } catch (err) {
     console.error('[SysAdmin] submitRoleUpdate error:', err);
@@ -937,10 +1019,10 @@ async function toggleUserStatus(userId, activate) {
     const data = await res.json();
 
     if (res.ok) {
-      showSysToast(`✅ Account ${action}d.`, 'success');
+      showSysToast(`Account ${action}d.`, 'success');
       loadUsersTable();
     } else {
-      showSysToast(`❌ ${data.error}`, 'error');
+      showSysToast(data.error || 'Account status update failed.', 'error');
     }
   } catch (err) {
     showSysToast('Network error.', 'error');
@@ -991,7 +1073,7 @@ async function submitCredentialsUpdate() {
     const data = await res.json();
 
     if (res.ok) {
-      showSysToast(`✅ ${data.message}`, 'success');
+      showSysToast(data.message, 'success');
       if (data.temporaryPassword && generated) {
         generated.textContent = `Generated temporary password: ${data.temporaryPassword}`;
         generated.style.display = 'block';
@@ -1000,7 +1082,7 @@ async function submitCredentialsUpdate() {
       }
       loadUsersTable();
     } else {
-      showSysToast(`❌ ${data.error}`, 'error');
+      showSysToast(data.error || 'Credentials update failed.', 'error');
     }
   } catch (err) {
     console.error('[SysAdmin] submitCredentialsUpdate error:', err);
@@ -1103,7 +1185,7 @@ function renderAccountCreationRequests(requests) {
     return '<tr>' +
       '<td><strong>' + sysEsc(employeeLabel) + '</strong></td>' +
       '<td>' + sysEsc(request.suggested_username) + '</td>' +
-      '<td>' + sysEsc(request.default_role?.label || 'Regular Employee') + '</td>' +
+      '<td>' + sysEsc(sysRoleDisplay(request.default_role || { name: 'employee', label: 'Employee' }).label) + '</td>' +
       '<td>' + sysEsc(request.requested_by_username || 'System') + '</td>' +
       '<td><small>' + sysEsc(requestedAt) + '</small></td>' +
       '<td><span class="badge-level badge-level-2">' + sysEsc(request.status) + '</span></td>' +
@@ -1134,7 +1216,7 @@ async function openAccountRequestModal(requestId) {
   generated.textContent = '';
 
   const roleSelect = document.getElementById('account-request-role');
-  roleSelect.innerHTML = sysAllRoles.map(role => {
+  roleSelect.innerHTML = sysAssignableRoles().map(role => {
     const selected = Number(role.id) === Number(request.default_role?.id) ? ' selected' : '';
     return '<option value="' + Number(role.id) + '"' + selected + '>' +
       sysEsc(role.label + ' (' + (role.access_level || 'Level 1') + ')') +
