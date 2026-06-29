@@ -65,17 +65,20 @@ function sqlLiteral(value) {
   return `'${String(value ?? '').replace(/'/g, "''")}'`;
 }
 
-function auditEventTypeCondition(eventType) {
+function auditEventTypeCondition(eventType, fields = {}) {
   const normalized = String(eventType || '').trim().toLowerCase();
+  const actionField = fields.action || 'action_performed';
+  const moduleField = fields.module || 'module';
+  const detailsField = fields.details || 'details';
   if (!normalized) return null;
-  if (normalized === 'create') return "LOWER(action_performed) REGEXP 'create|created|add|added|register|registered|submit|submitted|upload|uploaded|encode|encoded|generate|generated'";
-  if (normalized === 'update') return "LOWER(action_performed) REGEXP 'update|updated|change|changed|edit|edited|approve|approved|reject|rejected|correct|corrected|verify|verified|activate|activated|deactivate|deactivated|reset|reassign|reassigned'";
-  if (normalized === 'delete') return "LOWER(action_performed) REGEXP 'delete|deleted|remove|removed|disable|disabled|cancel|cancelled|revoke|revoked'";
-  if (normalized === 'security') return "LOWER(CONCAT_WS(' ', module, action_performed, details)) REGEXP 'security|denied|blocked|unauthorized|failed|tamper|lock|mfa|password|token|session'";
+  if (normalized === 'create') return `LOWER(${actionField}) REGEXP 'create|created|add|added|register|registered|submit|submitted|upload|uploaded|encode|encoded|generate|generated'`;
+  if (normalized === 'update') return `LOWER(${actionField}) REGEXP 'update|updated|change|changed|edit|edited|approve|approved|reject|rejected|correct|corrected|verify|verified|activate|activated|deactivate|deactivated|reset|reassign|reassigned'`;
+  if (normalized === 'delete') return `LOWER(${actionField}) REGEXP 'delete|deleted|remove|removed|disable|disabled|cancel|cancelled|revoke|revoked'`;
+  if (normalized === 'security') return `LOWER(CONCAT_WS(' ', ${moduleField}, ${actionField}, ${detailsField})) REGEXP 'security|denied|blocked|unauthorized|failed|tamper|lock|mfa|password|token|session'`;
   return null;
 }
 
-async function buildGeneralAuditQueries() {
+async function buildGeneralAuditQueries({ includeLegacy = false } = {}) {
   const queries = [];
 
   if (await hasTable('system_audit_log')) {
@@ -109,6 +112,13 @@ async function buildGeneralAuditQueries() {
       LEFT JOIN users u ON u.id = ${await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL')}
     `);
   }
+
+  // Fast path for the System Admin default view. `system_audit_log` is the
+  // canonical/general audit table and now receives metadata-only write audits
+  // from all modules. Legacy module-specific audit tables can be queried by
+  // passing include_legacy=1, but they are intentionally excluded by default so
+  // one slow historical table cannot freeze the Audit Trail page.
+  if (!includeLegacy) return queries;
 
   if (await hasTable('payroll_audit_trail')) {
     const employeeId = await columnExpr('payroll_audit_trail', 'pat', 'employee_id', 'NULL');
@@ -256,6 +266,92 @@ function redactAuditValue(value) {
   if (!text) return null;
   if (resemblesEncryptedPayload(text)) return '[protected]';
   return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
+}
+
+async function queryCanonicalSystemAuditLog({
+  limit,
+  offset,
+  module,
+  search,
+  eventType,
+} = {}) {
+  if (!(await hasTable('system_audit_log'))) return [];
+
+  const logId = await columnExpr('system_audit_log', 'sal', 'id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'));
+  const timestamp = await columnExpr('system_audit_log', 'sal', 'timestamp', await columnExpr('system_audit_log', 'sal', 'Created_At', 'NULL'));
+  const moduleExpr = await columnExpr('system_audit_log', 'sal', 'module', sqlLiteral('SYSTEM'));
+  const userId = await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL');
+  const employeeId = await columnExpr('system_audit_log', 'sal', 'employee_id', await columnExpr('system_audit_log', 'sal', 'Employee_ID', 'NULL'));
+  const actionExpr = `COALESCE(${[
+    await columnExpr('system_audit_log', 'sal', 'action_performed', 'NULL'),
+    await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL'),
+    await columnExpr('system_audit_log', 'sal', 'Description', 'NULL'),
+  ].join(', ')})`;
+  const oldValue = await columnExpr('system_audit_log', 'sal', 'old_value', 'NULL');
+  const newValue = await columnExpr('system_audit_log', 'sal', 'new_value', await columnExpr('system_audit_log', 'sal', 'Description', 'NULL'));
+  const ipAddress = await columnExpr('system_audit_log', 'sal', 'ip_address', await columnExpr('system_audit_log', 'sal', 'IP_Address', 'NULL'));
+  const userAgent = await columnExpr('system_audit_log', 'sal', 'user_agent', await columnExpr('system_audit_log', 'sal', 'User_Agent', 'NULL'));
+  const targetEmployeeId = await columnExpr('system_audit_log', 'sal', 'target_employee_id', 'NULL');
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const orderExpr = logId === 'NULL' ? timestamp : logId;
+  const params = [];
+
+  let query = `
+    SELECT
+      CONCAT('system:', ${logId}) AS id,
+      'system_audit_log' AS source_table,
+      ${moduleExpr} AS module,
+      ${actionExpr} AS action_performed,
+      ${timestamp} AS timestamp,
+      ${userId} AS user_id,
+      u.username AS admin_username,
+      ${employeeId} AS employee_id,
+      ${targetEmployeeId} AS target_employee_id,
+      ${oldValue} AS old_value,
+      ${newValue} AS new_value,
+      ${ipAddress} AS ip_address,
+      ${userAgent} AS user_agent,
+      NULL AS result,
+      NULL AS field_changed,
+      NULL AS details
+    FROM system_audit_log sal
+    LEFT JOIN users u ON u.id = ${userId}
+    WHERE ${timestamp} IS NOT NULL
+  `;
+
+  if (module) {
+    query += ` AND ${moduleExpr} = ?`;
+    params.push(module);
+  }
+
+  const eventCondition = auditEventTypeCondition(eventType, {
+    action: `COALESCE(${actionExpr}, '')`,
+    module: `COALESCE(${moduleExpr}, '')`,
+    details: `COALESCE(${newValue}, '')`,
+  });
+  if (eventCondition) query += ` AND (${eventCondition})`;
+
+  if (search) {
+    const needle = `%${search}%`;
+    query += `
+      AND (
+        LOWER(COALESCE(${actionExpr}, '')) LIKE ?
+        OR LOWER(COALESCE(${moduleExpr}, '')) LIKE ?
+        OR LOWER(COALESCE(u.username, '')) LIKE ?
+        OR LOWER(COALESCE(${newValue}, '')) LIKE ?
+        OR LOWER(COALESCE(${oldValue}, '')) LIKE ?
+        OR LOWER('system_audit_log') LIKE ?
+      )
+    `;
+    params.push(needle, needle, needle, needle, needle, needle);
+  }
+
+  // Safe interpolation: safeLimit/safeOffset are clamped numeric values.
+  query += ` ORDER BY ${orderExpr} DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
+
+  const [rows] = await pool.execute(query, params);
+  return rows;
 }
 
 function resemblesEncryptedPayload(value) {
@@ -891,8 +987,19 @@ router.get('/audit-log', async (req, res) => {
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const module = String(req.query.module || '').trim();
     const search = String(req.query.search || '').trim().toLowerCase();
-    const eventTypeCondition = auditEventTypeCondition(req.query.event_type || req.query.action_type);
-    const sources = await buildGeneralAuditQueries();
+    const eventType = req.query.event_type || req.query.action_type;
+    const eventTypeCondition = auditEventTypeCondition(eventType);
+    const includeLegacy = req.query.include_legacy === '1';
+    if (!includeLegacy) {
+      const rows = await queryCanonicalSystemAuditLog({ limit, offset, module, search, eventType });
+      return res.json(rows.map(row => ({
+        ...row,
+        old_value: redactAuditValue(row.old_value),
+        new_value: redactAuditValue(row.new_value),
+      })));
+    }
+
+    const sources = await buildGeneralAuditQueries({ includeLegacy });
     const sourceLimit = Math.min(Math.max(limit + offset, 250), 1000);
 
     if (sources.length === 0) {

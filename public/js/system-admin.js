@@ -221,7 +221,8 @@ function bindAccountActionButtons() {
 function switchSysAdminTab(tabId, el) {
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.sysadmin-panel').forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
+  const tabButton = el || document.querySelector(`.sysadmin-tab[data-tab="${tabId}"]`);
+  if (tabButton) tabButton.classList.add('active');
   const panel = document.getElementById('panel-' + tabId);
   if (panel) panel.classList.add('active');
 
@@ -240,9 +241,24 @@ function switchSysAdminTab(tabId, el) {
 // ── Initialize on navigation ────────────────────────────────
 function initSystemAdmin() {
   bindAccountActionButtons();
-  loadUsersTable();
   loadRolesList();
-  startAccountRealtime();
+
+  const activeTab =
+    document.querySelector('.sysadmin-tab.active')?.dataset?.tab ||
+    document.querySelector('.sysadmin-panel.active')?.id?.replace(/^panel-/, '') ||
+    'accounts';
+
+  if (activeTab === 'accounts') {
+    loadUsersTable();
+    startAccountRealtime();
+  } else {
+    stopAccountRealtime();
+  }
+
+  if (activeTab === 'roles') loadRolesGrid();
+  if (activeTab === 'account-requests') loadAccountCreationRequests();
+  if (activeTab === 'audit') loadAuditLog();
+  if (activeTab === 'biometric-settings') loadBiometricSettings();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -510,6 +526,9 @@ function toggleRoleUsers(roleId) {
 
 async function loadAuditLog() {
   const tbody = document.getElementById('audit-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
   try {
     const module = document.getElementById('audit-module-filter')?.value || '';
     const eventType = document.getElementById('audit-action-filter')?.value || '';
@@ -520,7 +539,8 @@ async function loadAuditLog() {
     if (search) params.set('search', search);
     const url = `/api/admin/audit-log?${params.toString()}`;
 
-    const res = await apiFetch(url);
+    const res = await apiFetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!res) {
       if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Session expired. Please log in again.</td></tr>';
       return;
@@ -534,8 +554,12 @@ async function loadAuditLog() {
     const logs = await res.json();
     renderAuditLog(logs);
   } catch (err) {
+    clearTimeout(timeoutId);
     console.error('[SysAdmin] loadAuditLog error:', err);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Failed to load audit trail. Check console for details.</td></tr>';
+    const message = err?.name === 'AbortError'
+      ? 'Audit trail request timed out. Try selecting a specific module or refresh after restarting the server.'
+      : 'Failed to load audit trail. Check console for details.';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${sysEsc(message)}</td></tr>`;
   }
 }
 
