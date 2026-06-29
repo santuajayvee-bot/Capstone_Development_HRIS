@@ -38,5 +38,7 @@ assert.match(sensitiveMigration, /LOWER\(TABLE_NAME\)\s*=\s*LOWER\(\?\)/);
 assert.match(sensitiveMigration, /modifyColumn\(connection,\s*'documents',\s*'file_path',\s*'VARCHAR\(500\) NULL'\)/);
 assert.match(sensitiveMigration, /modifyColumn\(connection,\s*'user_profile_change_requests',\s*column,\s*'TEXT NULL'\)/);
 assert.match(sensitiveMigration, /EMPLOYEE_PII_COLUMN_DEFINITIONS\.email\s*=\s*'VARCHAR\(768\) NULL'/);
+assert.match(sensitiveMigration, /tableExists\(connection, 'users'\)\s*&&\s*await columnExists\(connection, 'users', 'email'\)/);
+assert.match(sensitiveMigration, /requiredColumns = \[primaryKey, nameColumn, pathColumn, encryptedNameColumn, encryptedPathColumn, encryptedLegacyPathColumn\]/);
 
 console.log('Privacy hardening tests: PASS');

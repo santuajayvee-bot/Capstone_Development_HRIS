@@ -299,6 +299,10 @@ async function encryptLegacyFiles(connection, options) {
   const { table, primaryKey, scope, nameColumn, pathColumn, encryptedNameColumn, encryptedPathColumn, encryptedLegacyPathColumn, mimeColumn, sizeColumn } = options;
   const actualTable = await resolveTableName(connection, table);
   if (!actualTable) return;
+  const requiredColumns = [primaryKey, nameColumn, pathColumn, encryptedNameColumn, encryptedPathColumn, encryptedLegacyPathColumn];
+  for (const column of new Set(requiredColumns)) {
+    if (!(await columnExists(connection, actualTable, column))) return;
+  }
   const [rows] = await connection.query(
     `SELECT ${identifier(primaryKey)}, ${identifier(nameColumn)}, ${identifier(pathColumn)}, ${identifier(encryptedPathColumn)}, ${identifier(encryptedLegacyPathColumn)} FROM ${identifier(actualTable)}`
   );
@@ -356,6 +360,10 @@ async function decryptLegacyFiles(connection, options) {
   const { table, primaryKey, nameColumn, pathColumn, encryptedNameColumn, encryptedPathColumn, encryptedLegacyPathColumn, mimeColumn } = options;
   const actualTable = await resolveTableName(connection, table);
   if (!actualTable) return;
+  const requiredColumns = [primaryKey, nameColumn, pathColumn, encryptedNameColumn, encryptedPathColumn, encryptedLegacyPathColumn];
+  for (const column of new Set(requiredColumns)) {
+    if (!(await columnExists(connection, actualTable, column))) return;
+  }
   const [rows] = await connection.query(
     `SELECT ${identifier(primaryKey)}, ${identifier(encryptedNameColumn)}, ${identifier(encryptedPathColumn)}, ${identifier(encryptedLegacyPathColumn)}${mimeColumn ? `, ${identifier(mimeColumn)}` : ''} FROM ${identifier(actualTable)}`
   );
@@ -465,7 +473,9 @@ async function backfill(connection) {
   }
   await backfillPairedColumns(connection, 'employees', 'id', GPS_COLUMNS);
 
-  if (await tableExists(connection, 'users')) {
+  // Some deployed schemas intentionally removed the legacy plaintext users.email
+  // column after adding email_hash/email_encrypted. Only backfill it when present.
+  if (await tableExists(connection, 'users') && await columnExists(connection, 'users', 'email')) {
     const [rows] = await connection.query('SELECT id, email, email_hash, email_encrypted FROM users');
     for (const row of rows) {
       if (!row.email) continue;
@@ -585,7 +595,7 @@ exports.down = async function down() {
     await backfillPairedColumns(connection, 'employee_deductions', 'id', [['notes', 'notes_encrypted']], true);
     await backfillPairedColumns(connection, 'employee_deduction_accounts', 'id', [['remarks', 'remarks_encrypted']], true);
 
-    if (await tableExists(connection, 'users')) {
+    if (await tableExists(connection, 'users') && await columnExists(connection, 'users', 'email')) {
       const [rows] = await connection.query('SELECT id, email, email_encrypted FROM users');
       for (const row of rows) {
         if (!row.email && row.email_encrypted) await connection.execute('UPDATE users SET email = ? WHERE id = ?', [decryptColumnValue(row.email_encrypted), row.id]);
