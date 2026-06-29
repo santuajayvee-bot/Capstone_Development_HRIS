@@ -39,6 +39,11 @@ const { encryptedCommunicationMiddleware }   = require('./server/middleware/encr
 const { encryptAuditValue, maskSensitiveValue, preventStorageCiphertextResponses } = require('./server/privacy-protection');
 const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./server/encrypted-file-vault');
 const {
+  inclusiveDays,
+  strictDateOnly,
+  yearFromDateOnly,
+}                                             = require('./server/utils/dateValidation');
+const {
   auditSecurityEvent,
   createRateLimiter,
   multerFileFilter,
@@ -1538,11 +1543,11 @@ function validateEmployeeDateField(body, field, { required = false, noFuture = f
     body[field] = null;
     return;
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw rejectEmployeeInput(field);
-  const date = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(date.getTime()) || value !== date.toISOString().slice(0, 10)) throw rejectEmployeeInput(field);
-  if (noFuture && date > new Date()) throw rejectEmployeeInput(field);
-  body[field] = value;
+  try {
+    body[field] = strictDateOnly(value, field, { noFuture });
+  } catch (_) {
+    throw rejectEmployeeInput(field);
+  }
 }
 
 function validateEmployeeYearField(body, field) {
@@ -2060,9 +2065,7 @@ function normalizeEmployeeEmploymentType(value, hiringType) {
 
 function optionalLifecycleDate(value, field) {
   if (value == null || value === '') return null;
-  const date = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${field} must use YYYY-MM-DD format.`);
-  return date;
+  return strictDateOnly(value, field);
 }
 
 function normalizeLifecycleAction(value) {
@@ -4075,8 +4078,12 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
       setBool('sessions_invalidated');
       setBool('biometric_access_removed');
       if (Object.prototype.hasOwnProperty.call(req.body, 'it_processed_at')) {
-        if (req.body.it_processed_at && Number.isNaN(new Date(req.body.it_processed_at).getTime())) {
-          return res.status(400).json({ error: 'IT processed date is invalid.', field: 'it_processed_at' });
+        if (req.body.it_processed_at) {
+          try {
+            req.body.it_processed_at = strictDateOnly(req.body.it_processed_at, 'IT processed date', { noFuture: true });
+          } catch (error) {
+            return res.status(400).json({ error: error.message || 'IT processed date is invalid.', field: 'it_processed_at' });
+          }
         }
         updates.push('it_processed_at = ?');
         values.push(req.body.it_processed_at || null);
@@ -5869,7 +5876,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
       discardUploadedFile(req.file);
       return;
     }
-    const { type, leave_type_id, date_from, date_to, days, reason, employee_id, filing_source, remarks } = req.body;
+    const { type, leave_type_id, days, reason, employee_id, filing_source, remarks } = req.body;
     const source = filing_source === 'Manual' ? 'Manual' : 'Portal';
 
     if (source === 'Manual' && !hasLeavePermission(req.user, 'leave.manual.create')) {
@@ -5915,12 +5922,24 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
       return res.status(403).json({ error: 'Per Trip and Per Piece employees cannot file leave through the portal. HR must manually encode their leave records.' });
     }
 
-    const fromDate = new Date(date_from);
-    const toDate = new Date(date_to || date_from);
-    const requestedDays = decimalValue(days, Math.floor((toDate - fromDate) / 86400000) + 1);
-    if (!date_from || !date_to || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || toDate < fromDate || requestedDays <= 0) {
+    let date_from;
+    let date_to;
+    try {
+      date_from = strictDateOnly(req.body.date_from, 'Leave start date', { noPast: source === 'Portal' });
+      date_to = strictDateOnly(req.body.date_to || req.body.date_from, 'Leave end date', { noPast: source === 'Portal' });
+    } catch (error) {
+      discardUploadedFile(req.file);
+      return res.status(400).json({ error: error.message || 'Valid leave dates are required.' });
+    }
+    const computedDays = inclusiveDays(date_from, date_to);
+    const requestedDays = decimalValue(days, computedDays);
+    if (computedDays <= 0 || requestedDays <= 0 || requestedDays > computedDays) {
       discardUploadedFile(req.file);
       return res.status(400).json({ error: 'Valid leave dates and duration are required.' });
+    }
+    if (computedDays > 366) {
+      discardUploadedFile(req.file);
+      return res.status(400).json({ error: 'Leave date range cannot exceed 366 days.' });
     }
 
     const eligibilityErrors = validateLeaveEligibility(employee, leaveType, Boolean(req.file));
@@ -5929,7 +5948,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
       return res.status(400).json({ error: eligibilityErrors.join(' ') });
     }
 
-    const year = fromDate.getFullYear();
+    const year = yearFromDateOnly(date_from);
     const [overlaps] = await pool.execute(
       `SELECT id FROM leave_requests
        WHERE employee_id = ?
@@ -6095,7 +6114,7 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
       await connection.rollback();
       return res.status(400).json({ error: 'Leave type configuration was not found.' });
     }
-    const year = new Date(leave.date_from).getFullYear();
+    const year = yearFromDateOnly(leave.date_from);
 
     if (status === 'Approved' && leave.status !== 'Approved') {
       const balance = await getConfiguredLeaveBalance(connection, leave.employee_id, leaveType, year, true);

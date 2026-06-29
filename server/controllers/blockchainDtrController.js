@@ -15,6 +15,7 @@ const {
   submitDTRRecord,
   verifyDTRHash: verifyDTRHashOnFabric,
 } = require('../services/fabricService');
+const { isStrictDateOnly } = require('../utils/dateValidation');
 
 const FABRIC_OFFLINE_MESSAGE = 'Blockchain network is not currently connected. Local DTR audit records are available, but Fabric verification is disabled.';
 const FABRIC_CHAINCODE_NOT_READY_MESSAGE = 'Fabric is reachable, but the deployed chaincode is not ready for DTR anchoring yet. The DTR is finalized in MySQL and queued as PENDING_ANCHOR.';
@@ -101,7 +102,7 @@ function assertAllowedFields(body, allowedFields) {
 }
 
 function isDate(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  return typeof value === 'string' && isStrictDateOnly(value);
 }
 
 function dateRangeFromBody(body = {}) {

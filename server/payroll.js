@@ -191,13 +191,13 @@ function cleanMoneyReviewValue(body, field, fallback = 0) {
 function cleanOptionalDate(value, field) {
   if (!value) return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  const text = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(new Date(`${text}T00:00:00Z`).getTime())) {
+  try {
+    return strictPayrollDate(value, field);
+  } catch (_) {
     const err = new Error(`${field} is invalid.`);
     err.status = 400;
     throw err;
   }
-  return text;
 }
 
 function todayManilaDateKey() {
@@ -10025,8 +10025,13 @@ router.post('/sss-tables', requireAuth, requireRole(PAYROLL_PERMISSIONS.settings
   try {
     connection = await pool.getConnection();
     const versionName = cleanPayrollText(req.body?.version_name, 160);
-    const effectiveDate = String(req.body?.effective_date || '');
-    if (!versionName || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) {
+    let effectiveDate = '';
+    try {
+      effectiveDate = strictPayrollDate(req.body?.effective_date, 'Effective date', { allowFuture: true });
+    } catch (_) {
+      effectiveDate = '';
+    }
+    if (!versionName || !effectiveDate) {
       return res.status(400).json({ error: 'Version name and a valid effective date are required.' });
     }
     const preview = validateSssImportRows(req.body?.rows);

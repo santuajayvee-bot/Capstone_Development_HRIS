@@ -30,6 +30,7 @@ const {
 } = require('./attendance-service');
 const { emitAttendanceCreated } = require('./realtime');
 const { auditSecurityEvent } = require('./security-controls');
+const { isStrictDateOnly } = require('./utils/dateValidation');
 const {
   ensureAttendancePolicySettings,
   getActiveAttendancePolicy,
@@ -195,7 +196,7 @@ function isTime(value) {
 }
 
 function isDate(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  return typeof value === 'string' && isStrictDateOnly(value);
 }
 
 function normalizeDtrTimes(body, fallback = {}) {

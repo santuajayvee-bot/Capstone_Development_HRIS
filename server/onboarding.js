@@ -17,6 +17,7 @@ const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 const { decryptAuditValue, encryptAuditValue } = require('./privacy-protection');
 const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
+const { optionalDateOnly } = require('./utils/dateValidation');
 
 const router = express.Router();
 const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
@@ -151,10 +152,9 @@ function optionalPositiveInteger(value, field) {
   return positiveInteger(value, field);
 }
 
-function optionalDate(value, field) {
+function optionalDate(value, field, options = {}) {
   if (value == null || value === '') return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) throw new Error(`${field} must use YYYY-MM-DD format.`);
-  return String(value);
+  return optionalDateOnly(value, field, options);
 }
 
 function validEmail(value) {
@@ -511,7 +511,7 @@ async function createOnboardingApplicantRecord(connection, req, rawBody, options
     mailing_address_same_as_home: Number(body.mailing_address_same_as_home) === 1 || truthy(body.mailing_address_same_as_home),
     work_email: optionalEmail(body.work_email, 'Work email'),
     nationality: cleanText(body.nationality, 50) || 'Filipino',
-    date_of_birth: optionalDate(body.date_of_birth, 'Date of birth'),
+    date_of_birth: optionalDate(body.date_of_birth, 'Date of birth', { noFuture: true }),
     place_of_birth: cleanText(body.place_of_birth, 180),
     place_of_birth_lat: cleanText(body.place_of_birth_lat, 40),
     place_of_birth_lng: cleanText(body.place_of_birth_lng, 40),

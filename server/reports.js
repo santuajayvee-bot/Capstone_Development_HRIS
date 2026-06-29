@@ -8,6 +8,7 @@ const XLSX = require('xlsx');
 const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { decryptColumnValue } = require('./data-protection');
+const { isStrictDateOnly } = require('./utils/dateValidation');
 
 const router = express.Router();
 
@@ -155,7 +156,8 @@ function cleanFilter(value) {
 }
 
 function sqlDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? value : null;
+  const text = String(value || '').trim();
+  return isStrictDateOnly(text) ? text : null;
 }
 
 function addCondition(where, params, sql, value) {

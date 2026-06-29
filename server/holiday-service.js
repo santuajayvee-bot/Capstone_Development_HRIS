@@ -1,3 +1,5 @@
+const { isStrictDateOnly } = require('./utils/dateValidation');
+
 const VALID_HOLIDAY_TYPES = new Set(['REGULAR', 'SPECIAL_NON_WORKING', 'SPECIAL_WORKING', 'COMPANY', 'OTHER']);
 const REGULAR_HOLIDAY_PATTERNS = [
   /new year/i,
@@ -32,7 +34,7 @@ function cleanText(value, maxLength = 500) {
 }
 
 function isDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+  return isStrictDateOnly(value);
 }
 
 function normalizeCountryCode(value = 'PH') {
