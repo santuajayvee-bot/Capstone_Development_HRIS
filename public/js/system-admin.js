@@ -13,6 +13,8 @@ let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
 let sysUsersDataSignature = '';
 let sysEmployeesDataSignature = '';
+let sysAuditRequestController = null;
+let sysAuditRequestId = 0;
 
 function sysEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -527,20 +529,41 @@ function toggleRoleUsers(roleId) {
 async function loadAuditLog() {
   const tbody = document.getElementById('audit-tbody');
   if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>';
+
+  // Only the newest filter/refresh request may update the table. Aborting the
+  // previous request also prevents overlapping audit downloads from leaving
+  // the screen in a stale loading state.
+  if (sysAuditRequestController) sysAuditRequestController.abort();
+  const requestId = ++sysAuditRequestId;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  sysAuditRequestController = controller;
+  let timeoutError = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutError = setTimeout(() => {
+      controller.abort();
+      const error = new Error('Audit trail request timed out.');
+      error.name = 'TimeoutError';
+      reject(error);
+    }, 15000);
+  });
+
   try {
     const module = document.getElementById('audit-module-filter')?.value || '';
     const eventType = document.getElementById('audit-action-filter')?.value || '';
     const search = document.getElementById('audit-search')?.value?.trim() || '';
-    const params = new URLSearchParams({ limit: '200' });
+    const params = new URLSearchParams({ limit: '100' });
     if (module) params.set('module', module);
     if (eventType) params.set('event_type', eventType);
     if (search) params.set('search', search);
     const url = `/api/admin/audit-log?${params.toString()}`;
 
-    const res = await apiFetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
+    // Keep the same timeout active through response-body parsing. Fetch can
+    // resolve as soon as headers arrive while response.json() is still pending.
+    const res = await Promise.race([
+      apiFetch(url, { signal: controller.signal }),
+      timeoutPromise,
+    ]);
+    if (requestId !== sysAuditRequestId) return;
     if (!res) {
       if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Session expired. Please log in again.</td></tr>';
       return;
@@ -551,15 +574,28 @@ async function loadAuditLog() {
       if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
       return;
     }
-    const logs = await res.json();
+
+    const payload = await Promise.race([res.json(), timeoutPromise]);
+    if (requestId !== sysAuditRequestId) return;
+    const logs = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.logs)
+        ? payload.logs
+        : Array.isArray(payload?.audit_logs)
+          ? payload.audit_logs
+          : null;
+    if (!Array.isArray(logs)) throw new Error('Invalid audit log response.');
     renderAuditLog(logs);
   } catch (err) {
-    clearTimeout(timeoutId);
+    if (requestId !== sysAuditRequestId) return;
     console.error('[SysAdmin] loadAuditLog error:', err);
-    const message = err?.name === 'AbortError'
-      ? 'Audit trail request timed out. Try selecting a specific module or refresh after restarting the server.'
+    const message = ['AbortError', 'TimeoutError'].includes(err?.name)
+      ? 'Audit trail request timed out. Please press Refresh to try again.'
       : 'Failed to load audit trail. Check console for details.';
     if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${sysEsc(message)}</td></tr>`;
+  } finally {
+    clearTimeout(timeoutError);
+    if (requestId === sysAuditRequestId) sysAuditRequestController = null;
   }
 }
 

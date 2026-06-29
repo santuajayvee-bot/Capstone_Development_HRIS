@@ -82,7 +82,12 @@ async function buildGeneralAuditQueries({ includeLegacy = false } = {}) {
   const queries = [];
 
   if (await hasTable('system_audit_log')) {
-    const logId = await columnExpr('system_audit_log', 'sal', 'id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'));
+    const logId = await columnExpr(
+      'system_audit_log',
+      'sal',
+      'id',
+      await columnExpr('system_audit_log', 'sal', 'log_id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'))
+    );
     const timestamp = await columnExpr('system_audit_log', 'sal', 'timestamp', await columnExpr('system_audit_log', 'sal', 'Created_At', 'NULL'));
     const module = await columnExpr('system_audit_log', 'sal', 'module', sqlLiteral('SYSTEM'));
     const action = `COALESCE(${[
@@ -277,7 +282,12 @@ async function queryCanonicalSystemAuditLog({
 } = {}) {
   if (!(await hasTable('system_audit_log'))) return [];
 
-  const logId = await columnExpr('system_audit_log', 'sal', 'id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'));
+  const logId = await columnExpr(
+    'system_audit_log',
+    'sal',
+    'id',
+    await columnExpr('system_audit_log', 'sal', 'log_id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'))
+  );
   const timestamp = await columnExpr('system_audit_log', 'sal', 'timestamp', await columnExpr('system_audit_log', 'sal', 'Created_At', 'NULL'));
   const moduleExpr = await columnExpr('system_audit_log', 'sal', 'module', sqlLiteral('SYSTEM'));
   const userId = await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL');
@@ -352,6 +362,70 @@ async function queryCanonicalSystemAuditLog({
 
   const [rows] = await pool.execute(query, params);
   return rows;
+}
+
+async function queryGeneralAuditSources({
+  limit,
+  offset,
+  module,
+  search,
+  eventType,
+  includeLegacy = true,
+} = {}) {
+  const sources = await buildGeneralAuditQueries({ includeLegacy });
+  const sourceLimit = Math.min(Math.max(Number(limit || 100) + Number(offset || 0), 250), 1000);
+  const eventTypeCondition = auditEventTypeCondition(eventType);
+
+  if (sources.length === 0) return [];
+
+  const sourceResults = await Promise.all(sources.map(async sourceSql => {
+    let query = `
+      SELECT *
+        FROM (${sourceSql}) general_audit
+       WHERE timestamp IS NOT NULL
+    `;
+    const params = [];
+
+    if (module) {
+      query += ' AND module = ?';
+      params.push(module);
+    }
+
+    if (eventTypeCondition) {
+      query += ` AND (${eventTypeCondition})`;
+    }
+
+    if (search) {
+      const needle = `%${search}%`;
+      query += `
+        AND (
+          LOWER(COALESCE(action_performed, '')) LIKE ?
+          OR LOWER(COALESCE(module, '')) LIKE ?
+          OR LOWER(COALESCE(admin_username, '')) LIKE ?
+          OR LOWER(COALESCE(details, '')) LIKE ?
+          OR LOWER(COALESCE(source_table, '')) LIKE ?
+          OR LOWER(COALESCE(result, '')) LIKE ?
+        )
+      `;
+      params.push(needle, needle, needle, needle, needle, needle);
+    }
+
+    // Safe interpolation: sourceLimit is clamped numeric input.
+    query += ` ORDER BY timestamp DESC LIMIT ${sourceLimit}`;
+
+    try {
+      const [rows] = await pool.execute(query, params);
+      return rows;
+    } catch (sourceError) {
+      console.warn('[RBAC] audit source skipped:', sourceError.message);
+      return [];
+    }
+  }));
+
+  return sourceResults
+    .flat()
+    .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+    .slice(Number(offset || 0), Number(offset || 0) + Number(limit || 100));
 }
 
 function resemblesEncryptedPayload(value) {
@@ -988,10 +1062,17 @@ router.get('/audit-log', async (req, res) => {
     const module = String(req.query.module || '').trim();
     const search = String(req.query.search || '').trim().toLowerCase();
     const eventType = req.query.event_type || req.query.action_type;
-    const eventTypeCondition = auditEventTypeCondition(eventType);
     const includeLegacy = req.query.include_legacy === '1';
     if (!includeLegacy) {
       const rows = await queryCanonicalSystemAuditLog({ limit, offset, module, search, eventType });
+      if (rows.length === 0) {
+        const fallbackRows = await queryGeneralAuditSources({ limit, offset, module, search, eventType, includeLegacy: true });
+        return res.json(fallbackRows.map(row => ({
+          ...row,
+          old_value: redactAuditValue(row.old_value),
+          new_value: redactAuditValue(row.new_value),
+        })));
+      }
       return res.json(rows.map(row => ({
         ...row,
         old_value: redactAuditValue(row.old_value),
@@ -999,61 +1080,7 @@ router.get('/audit-log', async (req, res) => {
       })));
     }
 
-    const sources = await buildGeneralAuditQueries({ includeLegacy });
-    const sourceLimit = Math.min(Math.max(limit + offset, 250), 1000);
-
-    if (sources.length === 0) {
-      return res.json([]);
-    }
-
-    const sourceResults = await Promise.all(sources.map(async sourceSql => {
-      let query = `
-        SELECT *
-          FROM (${sourceSql}) general_audit
-         WHERE timestamp IS NOT NULL
-      `;
-      const params = [];
-
-      if (module) {
-        query += ' AND module = ?';
-        params.push(module);
-      }
-
-      if (eventTypeCondition) {
-        query += ` AND (${eventTypeCondition})`;
-      }
-
-      if (search) {
-        const needle = `%${search}%`;
-        query += `
-          AND (
-            LOWER(COALESCE(action_performed, '')) LIKE ?
-            OR LOWER(COALESCE(module, '')) LIKE ?
-            OR LOWER(COALESCE(admin_username, '')) LIKE ?
-            OR LOWER(COALESCE(details, '')) LIKE ?
-            OR LOWER(COALESCE(source_table, '')) LIKE ?
-            OR LOWER(COALESCE(result, '')) LIKE ?
-          )
-        `;
-        params.push(needle, needle, needle, needle, needle, needle);
-      }
-
-      // Safe interpolation: sourceLimit is clamped numeric input.
-      query += ` ORDER BY timestamp DESC LIMIT ${sourceLimit}`;
-
-      try {
-        const [rows] = await pool.execute(query, params);
-        return rows;
-      } catch (sourceError) {
-        console.warn('[RBAC] audit source skipped:', sourceError.message);
-        return [];
-      }
-    }));
-
-    const rows = sourceResults
-      .flat()
-      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-      .slice(offset, offset + limit);
+    const rows = await queryGeneralAuditSources({ limit, offset, module, search, eventType, includeLegacy });
 
     return res.json(rows.map(row => ({
       ...row,
