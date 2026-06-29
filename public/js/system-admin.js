@@ -512,27 +512,80 @@ async function loadAuditLog() {
   const tbody = document.getElementById('audit-tbody');
   try {
     const module = document.getElementById('audit-module-filter')?.value || '';
-    const url = module
-      ? `/api/admin/audit-log?module=${encodeURIComponent(module)}&limit=100`
-      : '/api/admin/audit-log?limit=100';
+    const eventType = document.getElementById('audit-action-filter')?.value || '';
+    const search = document.getElementById('audit-search')?.value?.trim() || '';
+    const params = new URLSearchParams({ limit: '200' });
+    if (module) params.set('module', module);
+    if (eventType) params.set('event_type', eventType);
+    if (search) params.set('search', search);
+    const url = `/api/admin/audit-log?${params.toString()}`;
 
     const res = await apiFetch(url);
     if (!res) {
-      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Session expired. Please log in again.</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Session expired. Please log in again.</td></tr>';
       return;
     }
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       console.error('Failed to load audit log:', errData);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="table-empty">Error: ${errData.error || 'Failed to load audit log.'}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
       return;
     }
     const logs = await res.json();
     renderAuditLog(logs);
   } catch (err) {
     console.error('[SysAdmin] loadAuditLog error:', err);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Failed to load audit trail. Check console for details.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Failed to load audit trail. Check console for details.</td></tr>';
   }
+}
+
+function auditModuleLevel(moduleName) {
+  if (moduleName === 'RBAC_SECURITY' || moduleName === 'SYSTEM' || moduleName === 'BLOCKCHAIN') return 4;
+  if (moduleName === 'PAYROLL') return 3;
+  if (['EMPLOYEE', 'ATTENDANCE', 'LEAVE', '201_FILE', 'ONBOARDING'].includes(moduleName)) return 2;
+  return 1;
+}
+
+function auditShortValue(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value === '[protected]') return 'Protected data';
+
+  const text = String(value);
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') {
+      return Object.entries(parsed)
+        .slice(0, 6)
+        .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
+        .join(', ');
+    }
+  } catch {
+    // Plain text audit values are valid.
+  }
+
+  return text;
+}
+
+function auditDetails(log) {
+  const parts = [];
+  if (log.field_changed) parts.push(`Field: ${log.field_changed}`);
+  if (log.details) parts.push(log.details);
+
+  const oldValue = auditShortValue(log.old_value);
+  const newValue = auditShortValue(log.new_value);
+  if (oldValue || newValue) {
+    if (oldValue && newValue) parts.push(`${oldValue} → ${newValue}`);
+    else parts.push(oldValue || newValue);
+  }
+
+  const details = parts.filter(Boolean).join(' | ');
+  return details ? (details.length > 140 ? `${details.slice(0, 140)}…` : details) : '—';
+}
+
+function auditTarget(log) {
+  if (log.target_employee_id) return `Employee #${log.target_employee_id}`;
+  if (log.employee_id) return `Employee #${log.employee_id}`;
+  return '—';
 }
 
 function renderAuditLog(logs) {
@@ -540,32 +593,27 @@ function renderAuditLog(logs) {
   if (!tbody) return;
 
   if (logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No audit entries found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No audit entries found.</td></tr>';
     return;
   }
 
   tbody.innerHTML = logs.map(log => {
-    const ts = log.timestamp
-      ? new Date(log.timestamp).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'medium' })
-      : '—';
-
-    let details = '—';
-    if (log.new_value) {
-      try {
-        const nv = JSON.parse(log.new_value);
-        details = Object.entries(nv).map(([k, v]) => `${k}: ${v}`).join(', ');
-        if (details.length > 80) details = details.substring(0, 80) + '…';
-      } catch { details = log.new_value.substring(0, 80); }
-    }
+    const ts = sysFormatDateTime(log.timestamp);
+    const moduleName = log.module || 'SYSTEM';
+    const moduleLevel = auditModuleLevel(moduleName);
+    const actor = log.admin_username || (log.user_id ? `User #${log.user_id}` : 'System');
+    const resultOrIp = [log.result, log.ip_address].filter(Boolean).join(' / ') || '—';
 
     return `
       <tr>
-        <td><small>${ts}</small></td>
-        <td>${log.admin_username || 'System'}</td>
-        <td style="max-width:300px;word-break:break-word;"><small>${log.action_performed || '—'}</small></td>
-        <td><span class="badge-level badge-level-${log.module === 'RBAC_SECURITY' ? '4' : '2'}">${log.module || '—'}</span></td>
-        <td><small>${log.ip_address || '—'}</small></td>
-        <td><small style="color:var(--muted)">${details}</small></td>
+        <td><small>${sysEsc(ts)}</small></td>
+        <td><span class="badge-level badge-level-${moduleLevel}">${sysEsc(moduleName)}</span></td>
+        <td style="max-width:260px;word-break:break-word;"><small>${sysEsc(log.action_performed || '—')}</small></td>
+        <td>${sysEsc(actor)}</td>
+        <td><small>${sysEsc(auditTarget(log))}</small></td>
+        <td><small>${sysEsc(resultOrIp)}</small></td>
+        <td><small>${sysEsc(log.source_table || '—')}</small></td>
+        <td><small style="color:var(--muted)">${sysEsc(auditDetails(log))}</small></td>
       </tr>
     `;
   }).join('');

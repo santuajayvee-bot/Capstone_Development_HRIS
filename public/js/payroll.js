@@ -2579,14 +2579,33 @@ function showCalculationBreakdown(record) {
   document.body.appendChild(modal);
 }
 
+function updatePayrollDropdownNav(activeTab) {
+  const activeButton = document.querySelector(`.payroll-tab[data-payroll-tab="${activeTab}"]`);
+  const activeLabel = activeButton?.textContent?.trim() || 'Dashboard';
+  const processingTabs = new Set(['dashboard', 'run', 'salary', 'records', 'offboarding-clearance', 'final-pay-approval', 'audit']);
+  const activeGroup = processingTabs.has(activeTab) ? 'processing' : 'configuration';
+
+  document.querySelectorAll('.payroll-nav-dropdown').forEach(dropdown => {
+    const isActive = dropdown.dataset.payrollGroup === activeGroup;
+    dropdown.classList.toggle('active', isActive);
+    if (!isActive || dropdown.open) dropdown.removeAttribute('open');
+  });
+
+  const processingCurrent = document.getElementById('payroll-processing-current');
+  const configurationCurrent = document.getElementById('payroll-configuration-current');
+  if (processingCurrent) processingCurrent.textContent = activeGroup === 'processing' ? activeLabel : 'Open processing';
+  if (configurationCurrent) configurationCurrent.textContent = activeGroup === 'configuration' ? activeLabel : 'Select setup';
+}
+
 function switchPayrollTab(tab, options = {}) {
   const targetTab = tab === 'payslips' ? 'records' : tab;
   document.querySelectorAll('.payroll-tab').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.payrollTab === tab);
+    btn.classList.toggle('active', btn.dataset.payrollTab === targetTab);
   });
   document.querySelectorAll('.payroll-panel').forEach(panel => {
     panel.classList.toggle('active', panel.id === `payroll-tab-${targetTab}`);
   });
+  updatePayrollDropdownNav(targetTab);
 
   if (targetTab === 'dashboard') loadPayrollDashboard();
   if (targetTab === 'run') {

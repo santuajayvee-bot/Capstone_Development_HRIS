@@ -8,25 +8,42 @@
   </div>
 </div>
 
-<div class="payroll-nav-groups" role="tablist">
-  <div class="payroll-nav-group">
-    <span>Payroll Processing</span>
-    <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Dashboard</button>
-    <button class="payroll-tab" data-payroll-tab="run" onclick="switchPayrollTab('run')">Payroll Run</button>
-    <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Encoding</button>
-    <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
-    <button class="payroll-tab" data-payroll-tab="offboarding-clearance" onclick="switchPayrollTab('offboarding-clearance')">Offboarding Clearance</button>
-    <button class="payroll-tab" data-payroll-tab="final-pay-approval" onclick="switchPayrollTab('final-pay-approval')">Final Pay Approval</button>
-    <button class="payroll-tab" data-payroll-tab="audit" onclick="switchPayrollTab('audit')">Audit Trail</button>
-  </div>
-  <div class="payroll-nav-group">
-    <span>Payroll Configuration</span>
-    <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowances</button>
-    <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deductions</button>
-    <button class="payroll-tab" data-payroll-tab="employee-deductions" onclick="switchPayrollTab('employee-deductions')">Cash Advance</button>
-    <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece Rate</button>
-    <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
-  </div>
+<div class="payroll-nav-groups payroll-nav-dropdowns" role="tablist">
+  <details class="payroll-nav-dropdown active" data-payroll-group="processing">
+    <summary>
+      <span>
+        <small>Payroll Module</small>
+        <strong>Payroll Processing</strong>
+      </span>
+      <em id="payroll-processing-current">Dashboard</em>
+    </summary>
+    <div class="payroll-dropdown-menu">
+      <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Dashboard</button>
+      <button class="payroll-tab" data-payroll-tab="run" onclick="switchPayrollTab('run')">Payroll Run</button>
+      <button class="payroll-tab" data-payroll-tab="salary" onclick="switchPayrollTab('salary')">Encoding</button>
+      <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
+      <button class="payroll-tab" data-payroll-tab="offboarding-clearance" onclick="switchPayrollTab('offboarding-clearance')">Offboarding Clearance</button>
+      <button class="payroll-tab" data-payroll-tab="final-pay-approval" onclick="switchPayrollTab('final-pay-approval')">Final Pay Approval</button>
+      <button class="payroll-tab" data-payroll-tab="audit" onclick="switchPayrollTab('audit')">Audit Trail</button>
+    </div>
+  </details>
+
+  <details class="payroll-nav-dropdown" data-payroll-group="configuration">
+    <summary>
+      <span>
+        <small>Payroll Module</small>
+        <strong>Payroll Configuration</strong>
+      </span>
+      <em id="payroll-configuration-current">Select setup</em>
+    </summary>
+    <div class="payroll-dropdown-menu">
+      <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowances</button>
+      <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deductions</button>
+      <button class="payroll-tab" data-payroll-tab="employee-deductions" onclick="switchPayrollTab('employee-deductions')">Cash Advance</button>
+      <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece Rate</button>
+      <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
+    </div>
+  </details>
 </div>
 
 <section class="payroll-panel" id="payroll-tab-run">

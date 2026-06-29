@@ -294,8 +294,9 @@ function buildSidebar(user) {
          class="nav-item ${index === 0 ? 'active' : ''}"
          data-page="${item.page}"
          data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
+         title="${item.label}"
          onclick="event.preventDefault(); navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
-      <span class="nav-icon">${item.icon}</span> ${item.label}
+      <span class="nav-label">${item.label}</span>
     </a>
   `).join('');
 

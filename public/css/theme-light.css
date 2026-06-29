@@ -3183,3 +3183,219 @@ button,
     display: none !important;
   }
 }
+/* Desktop clean shell: hide the sidebar when idle, expand it on hover/focus. */
+@media (min-width: 769px) and (hover: hover) {
+  :root {
+    --sidebar-expanded-width: 220px;
+    --sidebar-collapsed-width: 14px;
+  }
+
+  .sidebar {
+    width: var(--sidebar-collapsed-width) !important;
+    min-width: var(--sidebar-collapsed-width) !important;
+    max-width: var(--sidebar-collapsed-width) !important;
+    overflow: hidden !important;
+    transition:
+      width .22s ease,
+      min-width .22s ease,
+      max-width .22s ease,
+      box-shadow .22s ease !important;
+  }
+
+  .sidebar:hover,
+  .sidebar:focus-within {
+    width: var(--sidebar-expanded-width) !important;
+    min-width: var(--sidebar-expanded-width) !important;
+    max-width: var(--sidebar-expanded-width) !important;
+    box-shadow: 18px 0 38px rgba(15, 23, 42, .10) !important;
+  }
+
+  .sidebar::after {
+    content: "";
+    position: absolute;
+    top: 14px;
+    right: 3px;
+    width: 4px;
+    height: calc(100% - 28px);
+    border-radius: 999px;
+    background: rgba(231, 55, 55, .28);
+    opacity: .75;
+    pointer-events: none;
+  }
+
+  .sidebar:hover::after,
+  .sidebar:focus-within::after {
+    opacity: 0;
+  }
+
+  .sidebar-logo,
+  .nav-items,
+  .sidebar-user {
+    width: var(--sidebar-expanded-width) !important;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-10px);
+    transition: opacity .16s ease, transform .16s ease !important;
+  }
+
+  .sidebar:hover .sidebar-logo,
+  .sidebar:hover .nav-items,
+  .sidebar:hover .sidebar-user,
+  .sidebar:focus-within .sidebar-logo,
+  .sidebar:focus-within .nav-items,
+  .sidebar:focus-within .sidebar-user {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+
+  .nav-item {
+    gap: 0 !important;
+    white-space: nowrap !important;
+  }
+
+  .nav-item .nav-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Payroll module selector: keep processing and configuration separated. */
+.payroll-nav-dropdowns {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+  margin: 0 0 16px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  position: relative;
+  z-index: 20;
+}
+
+.payroll-nav-dropdown {
+  position: relative;
+  min-width: 270px;
+}
+
+.payroll-nav-dropdown summary {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border) !important;
+  background: #ffffff !important;
+  color: #111827 !important;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.payroll-nav-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.payroll-nav-dropdown summary::after {
+  content: "⌄";
+  color: #98a2b3;
+  font-size: 16px;
+  transition: transform .16s ease;
+}
+
+.payroll-nav-dropdown[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.payroll-nav-dropdown summary small {
+  display: block;
+  margin-bottom: 3px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.payroll-nav-dropdown summary strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.payroll-nav-dropdown summary em {
+  max-width: 120px;
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payroll-nav-dropdown.active summary {
+  border-color: #fecaca !important;
+  background: #fff5f5 !important;
+  box-shadow: inset 3px 0 0 #e73737;
+}
+
+.payroll-nav-dropdown.active summary strong,
+.payroll-nav-dropdown.active summary em {
+  color: #b91c1c !important;
+}
+
+.payroll-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(360px, 88vw);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, .14);
+  z-index: 80;
+}
+
+.payroll-dropdown-menu .payroll-tab {
+  width: 100% !important;
+  min-height: 38px !important;
+  justify-content: flex-start !important;
+  padding: 9px 11px !important;
+  border: 0 !important;
+  background: #ffffff !important;
+  color: #344054 !important;
+  text-align: left !important;
+}
+
+.payroll-dropdown-menu .payroll-tab:hover {
+  background: #f9fafb !important;
+  color: #111827 !important;
+}
+
+.payroll-dropdown-menu .payroll-tab.active {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+}
+
+@media (max-width: 768px) {
+  .payroll-nav-dropdowns {
+    display: grid !important;
+    gap: 10px !important;
+  }
+
+  .payroll-nav-dropdown {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .payroll-dropdown-menu {
+    position: static;
+    width: 100%;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+}

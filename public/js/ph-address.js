@@ -68,6 +68,19 @@
     return [street, barangay, city, province, region, 'Philippines'].filter(Boolean).join(', ');
   }
 
+  function splitLegacyAddress(address) {
+    const text = String(address || '').trim();
+    if (!text) return { line: '', location: '' };
+    const parts = text.split(',').map(part => part.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      return { line: text, location: 'Philippines' };
+    }
+    return {
+      line: parts[0],
+      location: parts.slice(1).join(', ')
+    };
+  }
+
   function syncInputAddress(section) {
     const input = getLocationInput(section);
     if (!input) return;
@@ -173,18 +186,21 @@
     const lineInput = getLineInput(section);
     const value = suffix => data[`${prefix}_${suffix}`] || '';
     if (input) {
-      const street = value('street_address') || data[prefix] || '';
+      const hasStructuredLocation = Boolean(value('barangay') || value('city_municipality') || value('province') || value('region'));
+      const legacy = splitLegacyAddress(value('full_address') || data[prefix] || '');
+      const street = value('street_address') || (!hasStructuredLocation ? legacy.line : '') || data[prefix] || '';
       const lat = data[`${prefix}_lat`];
       const lng = data[`${prefix}_lng`];
       const placeId = value('place_id');
-      if (lineInput) lineInput.value = value('street_address') || '';
-      const location = [
+      if (lineInput) lineInput.value = value('street_address') || (!hasStructuredLocation ? legacy.line : '');
+      const structuredLocation = [
         value('barangay'),
         value('city_municipality'),
         value('province'),
         value('region'),
         value('barangay') || value('city_municipality') || value('province') || value('region') ? 'Philippines' : ''
       ].filter(Boolean).join(', ');
+      const location = structuredLocation || legacy.location || value('full_address') || street;
       if (window.setAddressSelection) window.setAddressSelection(input, value('full_address') || street, lat, lng, placeId, {
         region: value('region'),
         province: value('province'),
@@ -193,8 +209,8 @@
         street_address: street,
         full_address: value('full_address') || street
       });
-      input.value = location || value('full_address') || street;
-      input.dataset.fullAddress = location || value('full_address') || street;
+      input.value = location;
+      input.dataset.fullAddress = location;
       if (!window.setAddressSelection) input.value = location || street;
     }
   };

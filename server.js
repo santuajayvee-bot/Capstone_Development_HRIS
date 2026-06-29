@@ -508,6 +508,72 @@ function employeeDbValue(field, value) {
   return EMPLOYEE_STRICT_PII_COLUMNS.includes(field) ? encryptColumnValue(safeValue) : safeValue;
 }
 
+const AUDITED_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function auditModuleFromPath(pathname = '') {
+  const pathOnly = String(pathname || '').split('?')[0].toLowerCase();
+  if (pathOnly.startsWith('/api/admin') || pathOnly.startsWith('/api/account-requests')) return 'ACCOUNT_LIFECYCLE';
+  if (pathOnly.startsWith('/api/account') || pathOnly.startsWith('/api/auth')) return 'AUTH';
+  if (pathOnly.startsWith('/api/payroll')) return 'PAYROLL';
+  if (pathOnly.startsWith('/api/attendance') || pathOnly.startsWith('/api/biometric')) return 'ATTENDANCE';
+  if (pathOnly.startsWith('/api/leave')) return 'LEAVE';
+  if (pathOnly.startsWith('/api/employees') || pathOnly.startsWith('/api/employee-setup')) return 'EMPLOYEE';
+  if (pathOnly.startsWith('/api/201-files')) return '201_FILE';
+  if (pathOnly.startsWith('/api/onboarding')) return 'ONBOARDING';
+  if (pathOnly.startsWith('/api/reports')) return 'REPORTS';
+  if (pathOnly.startsWith('/api/blockchain')) return 'BLOCKCHAIN';
+  if (pathOnly.startsWith('/api/employee')) return 'SELF_SERVICE';
+  if (pathOnly.startsWith('/api/requests')) return 'SELF_SERVICE';
+  return 'SYSTEM';
+}
+
+function auditVerbFromMethod(method) {
+  if (method === 'POST') return 'CREATE';
+  if (method === 'PUT' || method === 'PATCH') return 'UPDATE';
+  if (method === 'DELETE') return 'DELETE';
+  return 'WRITE';
+}
+
+function firstNumericPathId(pathname = '') {
+  const match = String(pathname || '').match(/\/(\d+)(?:\/|$)/);
+  return match ? Number(match[1]) : null;
+}
+
+function generalWriteAuditMiddleware(req, res, next) {
+  if (!AUDITED_WRITE_METHODS.has(req.method)) return next();
+  if (!String(req.originalUrl || '').startsWith('/api/')) return next();
+
+  // Auth endpoints have dedicated logging and may contain credentials/MFA flow.
+  if (String(req.originalUrl || '').startsWith('/api/auth/')) return next();
+
+  res.on('finish', () => {
+    const userId = req.user?.id;
+    if (!userId) return;
+    const statusCode = Number(res.statusCode || 0);
+    if (statusCode >= 500) return;
+
+    const pathOnly = String(req.originalUrl || '').split('?')[0];
+    const module = auditModuleFromPath(pathOnly);
+    const verb = auditVerbFromMethod(req.method);
+    const result = statusCode >= 200 && statusCode < 400 ? 'success' : 'failed';
+
+    auditSecurityEvent(req, {
+      action: `${verb}_API: ${req.method} ${pathOnly}`,
+      module,
+      targetTable: pathOnly,
+      targetRecord: firstNumericPathId(pathOnly),
+      newValue: {
+        method: req.method,
+        path: pathOnly,
+        statusCode,
+      },
+      result,
+    }).catch(() => {});
+  });
+
+  return next();
+}
+
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buffer) => {
@@ -523,6 +589,7 @@ app.use('/api', requireSameOriginForBrowserWrites);
 app.use(validateRequestBody);
 app.use('/api/auth/login', AUTH_RATE_LIMIT);
 app.use('/api', API_RATE_LIMIT);
+app.use('/api', generalWriteAuditMiddleware);
 app.use((req, res, next) => {
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');

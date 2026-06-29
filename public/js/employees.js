@@ -2777,7 +2777,6 @@ const PROFILE_TABS = new Set([
   'bank-tax',
   'leave'
 ]);
-const PROFILE_TABLE_ONLY_TABS = new Set(['family', 'experience']);
 
 function openEmployeeProfile(employeeId, tab = 'personal') {
   navigate('employee-profile', null, { employeeId, tab });
@@ -2808,7 +2807,7 @@ async function loadEmployeeProfilePage(params = {}) {
 
   renderProfileSummary(currentProfileEmployee);
   renderProfileTabs(currentProfileEmployee);
-  clearProfileSensitiveEditFields();
+  populateProfileEditForm(currentProfileEmployee);
   hideProfilePhoto();
   loadProfileFamilyMembers(currentProfileEmployee.id);
   loadProfileWorkExperiences(currentProfileEmployee.id);
@@ -2816,12 +2815,6 @@ async function loadEmployeeProfilePage(params = {}) {
   loadProfileDocuments(currentProfileEmployee);
   loadProfileLeaveHistory(currentProfileEmployee);
   switchProfileTab(selectedTab);
-}
-
-function clearProfileSensitiveEditFields() {
-  document.querySelectorAll('[id^="profile-edit-"]').forEach(input => {
-    if (input.matches('input, textarea')) input.value = '';
-  });
 }
 
 function profileSensitiveAction() {
@@ -3287,9 +3280,6 @@ function renderProfileTabs(employee) {
 
 function switchProfileTab(tabName) {
   currentProfileTab = normalizeProfileTab(tabName);
-  if (PROFILE_TABLE_ONLY_TABS.has(currentProfileTab)) {
-    toggleProfileEditMode(false, true);
-  }
 
   document.querySelectorAll('.profile-tab-panel').forEach(panel => panel.classList.remove('active'));
   document.querySelectorAll('.profile-edit-tab-panel').forEach(panel => panel.classList.remove('active'));
@@ -3968,12 +3958,12 @@ function toggleProfileEditMode(forceState = null, skipTabSync = false) {
   const view = document.getElementById('profile-view-root');
   const edit = document.getElementById('profile-edit-root');
   const page = document.querySelector('.profile-page');
+  const isCurrentlyEditing = edit?.classList.contains('active') === true;
   let nextState = forceState === null ? !edit?.classList.contains('active') : !!forceState;
 
-  if (nextState && PROFILE_TABLE_ONLY_TABS.has(currentProfileTab)) {
-    nextState = false;
+  if (nextState && !isCurrentlyEditing && currentProfileEmployee) {
+    populateProfileEditForm(currentProfileEmployee);
   }
-
   if (view) view.classList.toggle('hidden', nextState);
   if (edit) edit.classList.toggle('active', nextState);
   if (page) page.classList.toggle('profile-editing', nextState);

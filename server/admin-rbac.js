@@ -21,7 +21,14 @@ const {
   validateTemporaryPassword,
 } = require('../services/passwordService');
 
+const auditSchemaCache = {
+  tables: new Map(),
+  columns: new Map(),
+};
+
 async function hasColumn(tableName, columnName) {
+  const cacheKey = `${tableName}.${columnName}`.toLowerCase();
+  if (auditSchemaCache.columns.has(cacheKey)) return auditSchemaCache.columns.get(cacheKey);
   const [rows] = await pool.execute(
     `SELECT COUNT(*) AS count
        FROM INFORMATION_SCHEMA.COLUMNS
@@ -30,7 +37,225 @@ async function hasColumn(tableName, columnName) {
         AND COLUMN_NAME = ?`,
     [tableName, columnName]
   );
-  return Number(rows[0]?.count || 0) > 0;
+  const exists = Number(rows[0]?.count || 0) > 0;
+  auditSchemaCache.columns.set(cacheKey, exists);
+  return exists;
+}
+
+async function hasTable(tableName) {
+  const cacheKey = String(tableName || '').toLowerCase();
+  if (auditSchemaCache.tables.has(cacheKey)) return auditSchemaCache.tables.get(cacheKey);
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+       FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  const exists = Number(rows[0]?.count || 0) > 0;
+  auditSchemaCache.tables.set(cacheKey, exists);
+  return exists;
+}
+
+async function columnExpr(tableName, alias, columnName, fallback = 'NULL') {
+  return (await hasColumn(tableName, columnName)) ? `${alias}.${columnName}` : fallback;
+}
+
+function sqlLiteral(value) {
+  return `'${String(value ?? '').replace(/'/g, "''")}'`;
+}
+
+function auditEventTypeCondition(eventType) {
+  const normalized = String(eventType || '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'create') return "LOWER(action_performed) REGEXP 'create|created|add|added|register|registered|submit|submitted|upload|uploaded|encode|encoded|generate|generated'";
+  if (normalized === 'update') return "LOWER(action_performed) REGEXP 'update|updated|change|changed|edit|edited|approve|approved|reject|rejected|correct|corrected|verify|verified|activate|activated|deactivate|deactivated|reset|reassign|reassigned'";
+  if (normalized === 'delete') return "LOWER(action_performed) REGEXP 'delete|deleted|remove|removed|disable|disabled|cancel|cancelled|revoke|revoked'";
+  if (normalized === 'security') return "LOWER(CONCAT_WS(' ', module, action_performed, details)) REGEXP 'security|denied|blocked|unauthorized|failed|tamper|lock|mfa|password|token|session'";
+  return null;
+}
+
+async function buildGeneralAuditQueries() {
+  const queries = [];
+
+  if (await hasTable('system_audit_log')) {
+    const logId = await columnExpr('system_audit_log', 'sal', 'id', await columnExpr('system_audit_log', 'sal', 'Log_ID', 'NULL'));
+    const timestamp = await columnExpr('system_audit_log', 'sal', 'timestamp', await columnExpr('system_audit_log', 'sal', 'Created_At', 'NULL'));
+    const module = await columnExpr('system_audit_log', 'sal', 'module', sqlLiteral('SYSTEM'));
+    const action = `COALESCE(${[
+      await columnExpr('system_audit_log', 'sal', 'action_performed', 'NULL'),
+      await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL'),
+      await columnExpr('system_audit_log', 'sal', 'Description', 'NULL'),
+    ].join(', ')})`;
+    queries.push(`
+      SELECT
+        CONCAT('system:', ${logId}) AS id,
+        'system_audit_log' AS source_table,
+        ${module} AS module,
+        ${action} AS action_performed,
+        ${timestamp} AS timestamp,
+        ${await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL')} AS user_id,
+        u.username AS admin_username,
+        ${await columnExpr('system_audit_log', 'sal', 'employee_id', 'NULL')} AS employee_id,
+        ${await columnExpr('system_audit_log', 'sal', 'target_employee_id', 'NULL')} AS target_employee_id,
+        ${await columnExpr('system_audit_log', 'sal', 'old_value', 'NULL')} AS old_value,
+        ${await columnExpr('system_audit_log', 'sal', 'new_value', 'NULL')} AS new_value,
+        ${await columnExpr('system_audit_log', 'sal', 'ip_address', 'NULL')} AS ip_address,
+        ${await columnExpr('system_audit_log', 'sal', 'user_agent', 'NULL')} AS user_agent,
+        NULL AS result,
+        NULL AS field_changed,
+        NULL AS details
+      FROM system_audit_log sal
+      LEFT JOIN users u ON u.id = ${await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL')}
+    `);
+  }
+
+  if (await hasTable('payroll_audit_trail')) {
+    const employeeId = await columnExpr('payroll_audit_trail', 'pat', 'employee_id', 'NULL');
+    const payrollRunId = await columnExpr('payroll_audit_trail', 'pat', 'payroll_run_id', 'NULL');
+    const salaryCalculationId = await columnExpr('payroll_audit_trail', 'pat', 'salary_calculation_id', 'NULL');
+    const result = await columnExpr('payroll_audit_trail', 'pat', 'result', 'NULL');
+    queries.push(`
+      SELECT
+        CONCAT('payroll:', pat.id) AS id,
+        'payroll_audit_trail' AS source_table,
+        'PAYROLL' AS module,
+        pat.action AS action_performed,
+        pat.created_at AS timestamp,
+        ${await columnExpr('payroll_audit_trail', 'pat', 'user_id', 'NULL')} AS user_id,
+        u.username AS admin_username,
+        ${employeeId} AS employee_id,
+        ${employeeId} AS target_employee_id,
+        NULL AS old_value,
+        ${await columnExpr('payroll_audit_trail', 'pat', 'metadata', 'NULL')} AS new_value,
+        ${await columnExpr('payroll_audit_trail', 'pat', 'ip_address', 'NULL')} AS ip_address,
+        NULL AS user_agent,
+        ${result} AS result,
+        NULL AS field_changed,
+        CONCAT_WS(' | ',
+          IF(${employeeId} IS NULL, NULL, CONCAT('Employee ID: ', ${employeeId})),
+          IF(${payrollRunId} IS NULL, NULL, CONCAT('Payroll Run: ', ${payrollRunId})),
+          IF(${salaryCalculationId} IS NULL, NULL, CONCAT('Salary Calc: ', ${salaryCalculationId})),
+          IF(${result} IS NULL, NULL, CONCAT('Result: ', ${result}))
+        ) AS details
+      FROM payroll_audit_trail pat
+      LEFT JOIN users u ON u.id = ${await columnExpr('payroll_audit_trail', 'pat', 'user_id', 'NULL')}
+    `);
+  }
+
+  if (await hasTable('leave_audit_trail')) {
+    const oldStatus = await columnExpr('leave_audit_trail', 'lat', 'old_status', 'NULL');
+    const newStatus = await columnExpr('leave_audit_trail', 'lat', 'new_status', 'NULL');
+    const remarksEncrypted = await columnExpr('leave_audit_trail', 'lat', 'remarks_encrypted', 'NULL');
+    const metadataEncrypted = await columnExpr('leave_audit_trail', 'lat', 'metadata_encrypted', 'NULL');
+    queries.push(`
+      SELECT
+        CONCAT('leave:', lat.id) AS id,
+        'leave_audit_trail' AS source_table,
+        'LEAVE' AS module,
+        lat.action AS action_performed,
+        lat.created_at AS timestamp,
+        ${await columnExpr('leave_audit_trail', 'lat', 'actor_user_id', 'NULL')} AS user_id,
+        u.username AS admin_username,
+        ${await columnExpr('leave_audit_trail', 'lat', 'employee_id', 'NULL')} AS employee_id,
+        ${await columnExpr('leave_audit_trail', 'lat', 'employee_id', 'NULL')} AS target_employee_id,
+        ${oldStatus} AS old_value,
+        ${newStatus} AS new_value,
+        NULL AS ip_address,
+        NULL AS user_agent,
+        NULL AS result,
+        NULL AS field_changed,
+        CONCAT_WS(' | ',
+          IF(${await columnExpr('leave_audit_trail', 'lat', 'leave_request_id', 'NULL')} IS NULL, NULL, CONCAT('Leave Request: ', ${await columnExpr('leave_audit_trail', 'lat', 'leave_request_id', 'NULL')})),
+          IF(${oldStatus} IS NULL AND ${newStatus} IS NULL, NULL, CONCAT('Status: ', COALESCE(${oldStatus}, '-'), ' → ', COALESCE(${newStatus}, '-'))),
+          IF(${remarksEncrypted} IS NULL, NULL, 'Remarks protected'),
+          IF(${metadataEncrypted} IS NULL, NULL, 'Metadata protected')
+        ) AS details
+      FROM leave_audit_trail lat
+      LEFT JOIN users u ON u.id = ${await columnExpr('leave_audit_trail', 'lat', 'actor_user_id', 'NULL')}
+    `);
+  }
+
+  if (await hasTable('user_profile_audit_logs')) {
+    queries.push(`
+      SELECT
+        CONCAT('profile:', upal.id) AS id,
+        'user_profile_audit_logs' AS source_table,
+        'SELF_SERVICE' AS module,
+        upal.action AS action_performed,
+        upal.created_at AS timestamp,
+        upal.user_id AS user_id,
+        u.username AS admin_username,
+        upal.employee_id AS employee_id,
+        upal.employee_id AS target_employee_id,
+        NULL AS old_value,
+        NULL AS new_value,
+        ${await columnExpr('user_profile_audit_logs', 'upal', 'ip_address', 'NULL')} AS ip_address,
+        ${await columnExpr('user_profile_audit_logs', 'upal', 'user_agent', 'NULL')} AS user_agent,
+        NULL AS result,
+        ${await columnExpr('user_profile_audit_logs', 'upal', 'field_changed', 'NULL')} AS field_changed,
+        CONCAT_WS(' | ', IF(${await columnExpr('user_profile_audit_logs', 'upal', 'field_changed', 'NULL')} IS NULL, NULL, CONCAT('Field: ', ${await columnExpr('user_profile_audit_logs', 'upal', 'field_changed', 'NULL')})), 'Change details protected') AS details
+      FROM user_profile_audit_logs upal
+      LEFT JOIN users u ON u.id = upal.user_id
+    `);
+  }
+
+  if (await hasTable('employee_201_file_access_audit')) {
+    queries.push(`
+      SELECT
+        CONCAT('201:', efa.id) AS id,
+        'employee_201_file_access_audit' AS source_table,
+        '201_FILE' AS module,
+        efa.action AS action_performed,
+        efa.accessed_at AS timestamp,
+        efa.accessed_by AS user_id,
+        u.username AS admin_username,
+        efa.employee_id AS employee_id,
+        efa.employee_id AS target_employee_id,
+        NULL AS old_value,
+        NULL AS new_value,
+        NULL AS ip_address,
+        NULL AS user_agent,
+        NULL AS result,
+        NULL AS field_changed,
+        CONCAT_WS(' | ', IF(efa.resource_type IS NULL, NULL, CONCAT('Resource: ', efa.resource_type)), IF(efa.resource_id IS NULL, NULL, CONCAT('Resource ID: ', efa.resource_id)), IF(efa.details IS NULL, NULL, 'Details available')) AS details
+      FROM employee_201_file_access_audit efa
+      LEFT JOIN users u ON u.id = efa.accessed_by
+    `);
+  }
+
+  if (await hasTable('onboarding_applicant_activity')) {
+    queries.push(`
+      SELECT
+        CONCAT('onboarding:', oaa.activity_id) AS id,
+        'onboarding_applicant_activity' AS source_table,
+        'ONBOARDING' AS module,
+        oaa.action AS action_performed,
+        oaa.created_at AS timestamp,
+        oaa.actor_user_id AS user_id,
+        u.username AS admin_username,
+        NULL AS employee_id,
+        oaa.applicant_id AS target_employee_id,
+        NULL AS old_value,
+        NULL AS new_value,
+        NULL AS ip_address,
+        NULL AS user_agent,
+        NULL AS result,
+        NULL AS field_changed,
+        CONCAT_WS(' | ', CONCAT('Applicant ID: ', oaa.applicant_id), IF(${await columnExpr('onboarding_applicant_activity', 'oaa', 'reason_encrypted', 'NULL')} IS NULL, NULL, 'Reason protected'), IF(${await columnExpr('onboarding_applicant_activity', 'oaa', 'new_value_encrypted', 'NULL')} IS NULL, NULL, 'Change details protected')) AS details
+      FROM onboarding_applicant_activity oaa
+      LEFT JOIN users u ON u.id = oaa.actor_user_id
+    `);
+  }
+
+  return queries;
+}
+
+function redactAuditValue(value) {
+  const text = nullableText(value);
+  if (!text) return null;
+  if (resemblesEncryptedPayload(text)) return '[protected]';
+  return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
 }
 
 function resemblesEncryptedPayload(value) {
@@ -658,29 +883,76 @@ router.patch('/users/:userId/activate', async (req, res) => {
 });
 
 /* ================================================================
-   GET /api/admin/audit-log — View RBAC audit trail
+   GET /api/admin/audit-log — System-wide audit trail
    ================================================================ */
 router.get('/audit-log', async (req, res) => {
   try {
-    const limit  = Math.min(parseInt(req.query.limit) || 50, 200);
-    const offset = parseInt(req.query.offset) || 0;
-    const module = req.query.module || null;
+    const limit  = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const module = String(req.query.module || '').trim();
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const eventTypeCondition = auditEventTypeCondition(req.query.event_type || req.query.action_type);
+    const sources = await buildGeneralAuditQueries();
+    const sourceLimit = Math.min(Math.max(limit + offset, 250), 1000);
 
-    let query = `SELECT sal.*, u.username AS admin_username
-                 FROM system_audit_log sal
-                 LEFT JOIN users u ON u.id = sal.user_id`;
-    const params = [];
-
-    if (module) {
-      query += ' WHERE sal.module = ?';
-      params.push(module);
+    if (sources.length === 0) {
+      return res.json([]);
     }
 
-    // Use string interpolation for LIMIT/OFFSET (safe — values are parseInt'd above)
-    query += ` ORDER BY sal.timestamp DESC LIMIT ${limit} OFFSET ${offset}`;
+    const sourceResults = await Promise.all(sources.map(async sourceSql => {
+      let query = `
+        SELECT *
+          FROM (${sourceSql}) general_audit
+         WHERE timestamp IS NOT NULL
+      `;
+      const params = [];
 
-    const [rows] = await pool.execute(query, params);
-    return res.json(rows);
+      if (module) {
+        query += ' AND module = ?';
+        params.push(module);
+      }
+
+      if (eventTypeCondition) {
+        query += ` AND (${eventTypeCondition})`;
+      }
+
+      if (search) {
+        const needle = `%${search}%`;
+        query += `
+          AND (
+            LOWER(COALESCE(action_performed, '')) LIKE ?
+            OR LOWER(COALESCE(module, '')) LIKE ?
+            OR LOWER(COALESCE(admin_username, '')) LIKE ?
+            OR LOWER(COALESCE(details, '')) LIKE ?
+            OR LOWER(COALESCE(source_table, '')) LIKE ?
+            OR LOWER(COALESCE(result, '')) LIKE ?
+          )
+        `;
+        params.push(needle, needle, needle, needle, needle, needle);
+      }
+
+      // Safe interpolation: sourceLimit is clamped numeric input.
+      query += ` ORDER BY timestamp DESC LIMIT ${sourceLimit}`;
+
+      try {
+        const [rows] = await pool.execute(query, params);
+        return rows;
+      } catch (sourceError) {
+        console.warn('[RBAC] audit source skipped:', sourceError.message);
+        return [];
+      }
+    }));
+
+    const rows = sourceResults
+      .flat()
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+      .slice(offset, offset + limit);
+
+    return res.json(rows.map(row => ({
+      ...row,
+      old_value: redactAuditValue(row.old_value),
+      new_value: redactAuditValue(row.new_value),
+    })));
   } catch (err) {
     console.error('❌ [RBAC] audit-log error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch audit log.' });
