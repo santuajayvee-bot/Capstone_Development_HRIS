@@ -324,14 +324,15 @@
   <div class="card">
     <div class="att-card-heading">
       <div><h3>Attendance Audit Log</h3><p>Reasoned corrections, verification actions, mappings, and synchronization operations.</p></div>
-      <button class="btn btn-outline btn-sm" onclick="loadAuditLog()">Refresh</button>
+      <button class="btn btn-outline btn-sm" onclick="loadAttendanceAuditLog()">Refresh</button>
     </div>
-    <div class="table-wrap">
-      <table>
+    <div class="table-wrap audit-trail-table-wrap">
+      <table data-no-pagination="1">
         <thead><tr><th>Timestamp</th><th>Performed By</th><th>Employee</th><th>Action</th><th>Old Value</th><th>New Value</th><th>IP</th></tr></thead>
         <tbody id="audit-tbody"><tr><td colspan="7" class="att-empty">Loading...</td></tr></tbody>
       </table>
     </div>
+    <div class="audit-trail-pagination" id="attendance-audit-pagination" aria-live="polite"></div>
   </div>
 </div>
 

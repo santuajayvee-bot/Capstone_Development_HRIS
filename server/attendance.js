@@ -75,6 +75,56 @@ function includesRole(roles, req) {
   return roles.includes(req.user?.role);
 }
 
+function normalizeAttendanceRole(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/_*\([^)]*\)/g, '')
+    .replace(/_level_?\d+/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+function requireAttendanceAuditAccess(req, res, next) {
+  const role = normalizeAttendanceRole(req.user?.role);
+  const roleLabel = normalizeAttendanceRole(req.user?.roleLabel || req.user?.role_label);
+  const allowedRoles = new Set([
+    'admin',
+    'system_admin',
+    'system_administrator',
+    'hr',
+    'hradmin',
+    'hr_admin',
+    'hr_manager',
+    'human_resources',
+    'manager',
+  ]);
+
+  if (allowedRoles.has(role) || allowedRoles.has(roleLabel) || roleLabel.includes('hr_manager')) {
+    return next();
+  }
+
+  auditSecurityEvent(req, {
+    action: 'failed_attendance_audit_access_attempt',
+    module: 'ATTENDANCE_SECURITY',
+    targetTable: req.originalUrl || null,
+    newValue: {
+      method: req.method,
+      path: req.originalUrl,
+      actual_role: req.user?.role || 'anonymous',
+      actual_role_label: req.user?.roleLabel || req.user?.role_label || null,
+    },
+    result: 'blocked',
+  }).catch(() => {});
+
+  return res.status(403).json({
+    error: 'Access denied.',
+    role: req.user?.role || null,
+    roleLabel: req.user?.roleLabel || req.user?.role_label || null,
+  });
+}
+
 function attendanceEmployeeName(row) {
   const first = decryptColumnValue(row?.first_name) || '';
   const middle = decryptColumnValue(row?.middle_name) || '';
@@ -1242,7 +1292,7 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
   }
 });
 
-router.get('/audit-log', requireAuth, requireRole(AUDIT_ROLES), async (_req, res) => {
+router.get('/audit-log', requireAuth, requireAttendanceAuditAccess, async (_req, res) => {
   try {
     const [rows] = await pool.execute(
       `SELECT sal.*, u.username AS performed_by,

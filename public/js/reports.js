@@ -403,6 +403,9 @@ function openReportOptionsModal(reportId, action, trigger = null) {
   const payrollPeriod = valueOf('report-payroll-period');
   const deptOptions = departmentOptions();
   const empOptions = employeeOptions();
+  const isAttendanceDtr = reportId === 'daily-attendance';
+  const dtrDateFrom = dateFrom;
+  const dtrDateTo = dateTo;
   const periodOptions = reportState.payrollPeriods
     .map(run => ({ value: run.month_year || run.payroll_period || run.id, label: reportPeriodLabel(run) }))
     .filter(option => option.value);
@@ -452,6 +455,12 @@ function openReportOptionsModal(reportId, action, trigger = null) {
             <select id="report-modal-payroll-period" class="filter-select">
               <option value="all">All periods</option>
               ${periodOptions.map(option => `<option value="${escapeAttr(option.value)}" ${String(option.value) === payrollPeriod ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Department
+            <select id="report-modal-department" class="filter-select" onchange="renderReportModalEmployeeOptions()">
+              <option value="all">All departments</option>
+              ${deptOptions.map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('')}
             </select>
           </label>
           <label class="span-2">Employee${requiresEmployee ? ' *' : ''}
@@ -601,6 +610,60 @@ function closeDtrPostGenerateModal() {
   document.getElementById('dtr-post-generate-modal')?.remove();
 }
 
+function closeDtrAnchorConfirmModal() {
+  document.getElementById('dtr-anchor-confirm-modal')?.remove();
+}
+
+function showDtrAnchorConfirmModal(filters, trigger = null) {
+  return new Promise(resolve => {
+    closeDtrAnchorConfirmModal();
+    const employeeLabel = selectedReportEmployeeLabel(filters.employee_id);
+    const modal = document.createElement('div');
+    modal.id = 'dtr-anchor-confirm-modal';
+    modal.className = 'report-modal-backdrop';
+    modal.innerHTML = `
+      <div class="report-modal" role="dialog" aria-modal="true" aria-labelledby="dtr-anchor-confirm-title">
+        <div class="report-modal-header">
+          <div>
+            <h3 id="dtr-anchor-confirm-title">Finalize and Anchor DTR</h3>
+            <p>Please confirm before creating the official finalized DTR record.</p>
+          </div>
+          <button type="button" class="report-modal-close" data-dtr-anchor-confirm="cancel">×</button>
+        </div>
+        <div class="report-modal-body">
+          <div class="report-anchor-warning">
+            This action will save the official off-chain DTR record, compute its SHA-256 hash, and submit only the hash and audit metadata to the blockchain layer.
+          </div>
+          <div class="report-result-grid report-confirm-grid">
+            <div class="span-2"><span>Employee</span><strong>${escapeHtml(employeeLabel)}</strong></div>
+            <div><span>Date From</span><strong>${escapeHtml(filters.date_from)}</strong></div>
+            <div><span>Date To</span><strong>${escapeHtml(filters.date_to)}</strong></div>
+          </div>
+        </div>
+        <div class="report-modal-footer">
+          <button class="btn btn-outline" type="button" data-dtr-anchor-confirm="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-dtr-anchor-confirm="confirm">Finalize & Anchor DTR</button>
+        </div>
+      </div>
+    `;
+    const finish = confirmed => {
+      closeDtrAnchorConfirmModal();
+      resolve(Boolean(confirmed));
+    };
+    modal.addEventListener('click', event => {
+      const action = event.target?.closest?.('[data-dtr-anchor-confirm]')?.dataset?.dtrAnchorConfirm;
+      if (action === 'confirm') finish(true);
+      if (action === 'cancel') finish(false);
+      if (event.target === modal) finish(false);
+    });
+    modal.addEventListener('keydown', event => {
+      if (event.key === 'Escape') finish(false);
+    });
+    document.body.appendChild(modal);
+    modal.querySelector('[data-dtr-anchor-confirm="confirm"]')?.focus();
+  });
+}
+
 async function confirmDtrAnchorFromGeneratedReport() {
   const filters = reportState.pendingDtrAnchorFilters;
   closeDtrPostGenerateModal();
@@ -642,11 +705,7 @@ function showDtrPostGeneratePrompt(filters) {
 async function finalizeAndAnchorDtrFromReports(filters, trigger = null) {
   if (!validateDtrAnchorFilters(filters)) return;
 
-  const employeeLabel = selectedReportEmployeeLabel(filters.employee_id);
-  const confirmed = window.confirm(
-    `Finalize and anchor the official DTR for ${employeeLabel} from ${filters.date_from} to ${filters.date_to}?\n\n` +
-    'This will save an off-chain DTR record, compute its SHA-256 hash, and submit only the hash/audit metadata to the blockchain layer.'
-  );
+  const confirmed = await showDtrAnchorConfirmModal(filters, trigger);
   if (!confirmed) return;
 
   const button = trigger?.closest?.('button') || trigger || null;
@@ -676,14 +735,17 @@ async function finalizeAndAnchorDtrFromReports(filters, trigger = null) {
         });
         return;
       }
-      throw new Error(data.error || 'Unable to finalize and anchor DTR.');
+      const error = new Error(data.error || data.message || 'Unable to finalize and anchor DTR.');
+      error.details = data.details || data.reason || data.error_detail || null;
+      throw error;
     }
     showDtrAnchorResult(data);
   } catch (err) {
     console.error('DTR anchor failed:', err);
     showDtrAnchorResult({
       status: 'failed',
-      message: err.message || 'Unable to finalize and anchor DTR.'
+      message: err.message || 'Unable to finalize and anchor DTR.',
+      reason: err.details || err.reason || ''
     });
   } finally {
     if (button) {
@@ -749,6 +811,7 @@ function showDtrAnchorResult(data = {}) {
   const status = dtrAnchorStatusLabel(data.status);
   const isCritical = ['failed'].includes(String(data.status || '').toLowerCase());
   const isPending = String(data.status || '').toLowerCase() === 'pending_anchor';
+  const reason = data.reason || data.details || data.error || '';
   const dtrId = String(data.dtr_id || '').trim();
   const retryButton = isPending && dtrId
     ? `<button class="btn btn-outline" type="button" onclick="retryPendingDtrAnchor('${escapeAttr(dtrId)}', this)">Retry Fabric Anchor</button>`
@@ -769,6 +832,7 @@ function showDtrAnchorResult(data = {}) {
         <div class="report-result-grid">
           <div><span>Status</span><strong class="${isCritical ? 'result-critical' : isPending ? 'result-warning' : 'result-success'}">${escapeHtml(status)}</strong></div>
           <div><span>DTR ID</span><strong>${escapeHtml(data.dtr_id || '-')}</strong></div>
+          ${reason ? `<div class="span-2"><span>Reason</span><strong class="${isCritical ? 'result-critical' : ''}">${escapeHtml(reason)}</strong></div>` : ''}
           <div class="span-2"><span>DTR Hash</span><code>${escapeHtml(data.dtr_hash || data.computed_hash || '-')}</code></div>
           <div class="span-2"><span>Transaction Hash</span><code>${escapeHtml(data.transaction_hash || '-')}</code></div>
         </div>

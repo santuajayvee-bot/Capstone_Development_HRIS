@@ -17,6 +17,7 @@
     <button class="payroll-tab" data-payroll-tab="records" onclick="switchPayrollTab('records')">Payroll Records</button>
     <button class="payroll-tab" data-payroll-tab="offboarding-clearance" onclick="switchPayrollTab('offboarding-clearance')">Offboarding Clearance</button>
     <button class="payroll-tab" data-payroll-tab="final-pay-approval" onclick="switchPayrollTab('final-pay-approval')">Final Pay Approval</button>
+    <button class="payroll-tab" data-payroll-tab="audit" onclick="switchPayrollTab('audit')">Audit Trail</button>
   </div>
   <div class="payroll-nav-group">
     <span>Payroll Configuration</span>
@@ -78,6 +79,21 @@
       <button class="btn btn-outline" onclick="loadFinalPayApprovals()">Refresh</button>
     </div>
     <div id="final-pay-approval-grid" style="margin-top:14px;"></div>
+  </div>
+</section>
+
+<section class="payroll-panel" id="payroll-tab-audit">
+  <div class="table-wrap">
+    <div class="payroll-card-header-row">
+      <div>
+        <h3>Payroll Audit Trail</h3>
+        <p>Payroll Officer and Payroll Manager activity, including piece-rate configuration, encoded output, generation, approval, release, and lock actions.</p>
+      </div>
+      <button class="btn btn-outline" type="button" onclick="loadPayrollAudit()">Refresh</button>
+    </div>
+    <div id="payroll-audit-grid">
+      <div class="payroll-empty-state">Open this tab to load payroll audit activity.</div>
+    </div>
   </div>
 </section>
 

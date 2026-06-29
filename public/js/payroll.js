@@ -18,6 +18,9 @@ let weeklyPayrollRegistryPage = 1;
 let payrollAttendanceConfigRows = [];
 let payrollAttendanceConfigOptions = { departments: [], employees: [], pay_types: [], employment_types: [] };
 const WEEKLY_PAYROLL_REGISTRY_PAGE_SIZE = 10;
+let payrollAuditRows = [];
+let payrollAuditPage = 1;
+const PAYROLL_AUDIT_PAGE_SIZE = 10;
 let pieceRateConfig = {
   sew_types: [],
   size_ranges: [],
@@ -1441,23 +1444,133 @@ async function lockSalaryCalculation(calculationId) {
 
 async function recalculateSalaryCalculation(calculationId) {
   if (!Number.isInteger(Number(calculationId))) return;
-  const confirmed = typeof showConfirm === 'function'
-    ? await showConfirm('Recalculate this employee only from approved source records?', 'Recalculate Payroll', 'Recalculate', 'Cancel')
-    : window.confirm('Recalculate this employee only from approved source records?');
-  if (!confirmed) return;
   try {
-    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/recalculate`, { method: 'POST' });
+    const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/recalculation-preview`);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Payroll recalculation failed.');
-    document.getElementById('calc-breakdown-modal')?.remove();
-    if (typeof showAlert === 'function') await showAlert('Payroll recalculated.', 'Payroll Updated', 'success');
-    else alert('Payroll recalculated.');
-    await loadSalaryCalculations();
-    await loadWeeklyPayrollRegistry();
+    if (!response.ok) throw new Error(data.error || 'Unable to load the recalculation preview.');
+    showPayrollRecalculationModal(data);
   } catch (error) {
     if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
     else alert(error.message);
   }
+}
+
+function showPayrollRecalculationModal(preview) {
+  const modalId = 'payroll-recalculation-modal';
+  document.getElementById('calc-breakdown-modal')?.remove();
+  document.getElementById(modalId)?.remove();
+  const entries = Array.isArray(preview.entries) ? preview.entries : [];
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'erp-modal-backdrop';
+  const rows = entries.map((entry, index) => `
+    <tr>
+      <td data-label="Source">
+        <strong>${payrollEscape(entry.description || 'Payroll source')}</strong>
+        <small>${payrollEscape(entry.date || '-')}</small>
+      </td>
+      <td data-label="Unit rate">PHP ${Number(entry.unit_amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} / ${payrollEscape(String(entry.unit_label || 'unit').replace(/s$/, ''))}</td>
+      <td data-label="Current">${Number(entry.current_value || 0).toLocaleString()} ${payrollEscape(entry.unit_label || '')}</td>
+      <td data-label="Corrected">
+        <input class="payroll-recalc-value" type="number" min="0" max="1000000" step="0.01"
+          data-index="${index}" value="${Number(entry.current_value || 0)}" aria-label="Corrected ${payrollEscape(entry.unit_label || 'value')}" required />
+      </td>
+      <td data-label="Corrected amount" class="payroll-recalc-row-amount">${money(Number(entry.current_amount || 0))}</td>
+    </tr>
+  `).join('');
+  modal.innerHTML = `
+    <div class="erp-modal payroll-recalculation-dialog" role="dialog" aria-modal="true" aria-labelledby="payroll-recalculation-title">
+      <div class="erp-modal-head">
+        <div>
+          <h2 id="payroll-recalculation-title">Payroll Recalculation Preview</h2>
+          <p>${payrollEscape(preview.employee_name || '-')} · ${payrollEscape(preview.employee_code || '-')} · ${payrollEscape(preview.wage_type || '-')}</p>
+        </div>
+        <button class="erp-modal-close" type="button" aria-label="Close" onclick="document.getElementById('${modalId}')?.remove()">×</button>
+      </div>
+      <form id="payroll-recalculation-form">
+        <div class="payroll-recalculation-note">
+          Correct only the source quantity or payable hours that were encoded incorrectly. Payroll totals and statutory deductions are recalculated by the system after you apply the correction.
+        </div>
+        <div class="payroll-recalculation-current">
+          <span>Current gross<strong>${money(Number(preview.current?.gross_pay || 0))}</strong></span>
+          <span>Current deductions<strong>${money(Number(preview.current?.total_deductions || 0))}</strong></span>
+          <span>Current net pay<strong>${money(Number(preview.current?.net_pay || 0))}</strong></span>
+          <span>Corrected source earnings<strong id="payroll-recalc-projected">${money(entries.reduce((sum, entry) => sum + Number(entry.current_amount || 0), 0))}</strong></span>
+        </div>
+        <div class="table-responsive payroll-recalculation-table-wrap">
+          <table class="payroll-breakdown-table payroll-recalculation-table">
+            <thead><tr><th>Source</th><th>Unit Rate</th><th>Current</th><th>Corrected</th><th>Corrected Amount</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <label class="payroll-recalculation-reason">
+          Correction reason
+          <textarea id="payroll-recalculation-reason" rows="3" maxlength="500" minlength="8" placeholder="State what was encoded incorrectly and why it must be corrected." required></textarea>
+          <small>Required for the payroll audit trail (minimum 8 characters).</small>
+        </label>
+        <div class="payroll-breakdown-actions">
+          <button class="btn btn-outline" type="button" onclick="document.getElementById('${modalId}')?.remove()">Cancel</button>
+          <button class="btn btn-primary" type="submit">Apply Recalculation</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const updateProjection = () => {
+    let projected = 0;
+    modal.querySelectorAll('.payroll-recalc-value').forEach(input => {
+      const index = Number(input.dataset.index);
+      const entry = entries[index] || {};
+      const correctedValue = Math.max(0, Number(input.value || 0));
+      const correctedAmount = correctedValue * Number(entry.unit_amount || 0) + Number(entry.fixed_amount || 0);
+      projected += correctedAmount;
+      const amountCell = input.closest('tr')?.querySelector('.payroll-recalc-row-amount');
+      if (amountCell) amountCell.textContent = money(correctedAmount);
+    });
+    const total = modal.querySelector('#payroll-recalc-projected');
+    if (total) total.textContent = money(projected);
+  };
+  modal.querySelectorAll('.payroll-recalc-value').forEach(input => input.addEventListener('input', updateProjection));
+  modal.addEventListener('click', event => { if (event.target.id === modalId) modal.remove(); });
+  modal.querySelector('#payroll-recalculation-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const reason = String(modal.querySelector('#payroll-recalculation-reason')?.value || '').trim();
+    if (reason.length < 8) {
+      if (typeof showAlert === 'function') await showAlert('Enter a correction reason of at least 8 characters.', 'Reason Required', 'warning');
+      return;
+    }
+    const corrections = [...modal.querySelectorAll('.payroll-recalc-value')].map(input => {
+      const entry = entries[Number(input.dataset.index)] || {};
+      return { key: entry.key, corrected_value: Number(input.value) };
+    });
+    const changed = corrections.some((item, index) => Math.abs(Number(item.corrected_value) - Number(entries[index]?.current_value || 0)) > 0.0001);
+    if (!changed) {
+      if (typeof showAlert === 'function') await showAlert('Change at least one quantity or hour value.', 'No Correction Entered', 'warning');
+      return;
+    }
+    const submitButton = event.submitter;
+    if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Applying...'; }
+    try {
+      const response = await apiFetch(`/api/payroll/salary-calculations/${Number(preview.id)}/recalculate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason, corrections })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Payroll recalculation failed.');
+      modal.remove();
+      const message = `Payroll recalculated. Gross pay: ${money(Number(data.gross_pay || 0))}; Net pay: ${money(Number(data.net_pay || 0))}.`;
+      if (typeof showAlert === 'function') await showAlert(message, 'Payroll Updated', 'success');
+      else alert(message);
+      await loadSalaryCalculations();
+      await loadWeeklyPayrollRegistry();
+    } catch (error) {
+      if (typeof showAlert === 'function') await showAlert(error.message, 'Payroll Error', 'error');
+      else alert(error.message);
+      if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Apply Recalculation'; }
+    }
+  });
+  document.body.appendChild(modal);
 }
 
 async function finalizePayrollOnBlockchain(calculationId, options = {}) {
@@ -2493,6 +2606,7 @@ function switchPayrollTab(tab, options = {}) {
   if (targetTab === 'records') loadSalaryCalculations();
   if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
   if (targetTab === 'final-pay-approval') loadFinalPayApprovals();
+  if (targetTab === 'audit') loadPayrollAudit();
   if (!options.skipRouteUpdate && typeof syncRouteForPage === 'function') {
     syncRouteForPage('payroll', { payrollTab: targetTab });
   }
@@ -4615,30 +4729,165 @@ async function loadPayrollAudit() {
   try {
     const res = await apiFetch('/api/payroll/audit');
     if (!res.ok) throw new Error('Failed to load payroll audit trail');
-    const rows = await res.json();
-    if (!rows.length) {
+    payrollAuditRows = await res.json();
+    if (!Array.isArray(payrollAuditRows)) payrollAuditRows = [];
+    payrollAuditPage = 1;
+    renderPayrollAudit();
+  } catch (err) {
+    payrollAuditRows = [];
+    grid.innerHTML = `<div style="padding:30px; color:var(--red); text-align:center;">${payrollEscape(err.message)}</div>`;
+  }
+}
+
+function renderPayrollAudit() {
+  const grid = document.getElementById('payroll-audit-grid');
+  if (!grid) return;
+  const rows = Array.isArray(payrollAuditRows) ? payrollAuditRows : [];
+  const totalRows = rows.length;
+  if (!totalRows) {
       grid.innerHTML = '<div style="padding:30px; color:var(--muted); text-align:center;">No payroll audit activity yet.</div>';
       return;
-    }
-    grid.innerHTML = `
-      <table>
-        <thead><tr><th>Date/Time</th><th>User</th><th>Action</th><th>Employee</th><th>Remarks</th></tr></thead>
+  }
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAYROLL_AUDIT_PAGE_SIZE));
+  payrollAuditPage = Math.min(Math.max(Number(payrollAuditPage || 1), 1), totalPages);
+  const startIndex = (payrollAuditPage - 1) * PAYROLL_AUDIT_PAGE_SIZE;
+  const pageRows = rows.slice(startIndex, startIndex + PAYROLL_AUDIT_PAGE_SIZE);
+  const start = startIndex + 1;
+  const end = Math.min(startIndex + PAYROLL_AUDIT_PAGE_SIZE, totalRows);
+
+  grid.innerHTML = `
+      <div class="audit-trail-table-wrap">
+      <table class="payroll-erp-table" data-no-pagination="1">
+        <thead><tr><th>Date/Time</th><th>User</th><th>Role</th><th>Action</th><th>Employee</th><th>Remarks</th><th>Details</th></tr></thead>
         <tbody>
-          ${rows.map(row => `
+          ${pageRows.map(row => `
             <tr>
-              <td>${new Date(row.created_at).toLocaleString()}</td>
-              <td>${row.username || '-'}</td>
-              <td>${row.action}</td>
-              <td>${row.employee_name || '-'}</td>
-              <td>${row.remarks || '-'}</td>
+              <td>${payrollEscape(row.created_at ? new Date(row.created_at).toLocaleString() : '-')}</td>
+              <td>${payrollEscape(row.username || '-')}</td>
+              <td>${payrollEscape(payrollAuditRoleLabel(row.user_role))}</td>
+              <td>${payrollEscape(payrollAuditActionLabel(row.action))}</td>
+              <td>${payrollEscape(row.employee_name || row.employee_code || '-')}</td>
+              <td>${payrollEscape(row.remarks || '-')}</td>
+              <td>${payrollEscape(payrollAuditDetails(row.metadata))}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
+      </div>
+      <div class="audit-trail-pagination" aria-live="polite">
+        <span class="audit-trail-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
+        <div class="audit-trail-pagination-actions">
+          <button class="btn btn-outline btn-sm" type="button" onclick="setPayrollAuditPage(${payrollAuditPage - 1})" ${payrollAuditPage <= 1 ? 'disabled' : ''}>Previous</button>
+          <span class="audit-trail-pagination-page">Page ${payrollAuditPage} of ${totalPages}</span>
+          <button class="btn btn-outline btn-sm" type="button" onclick="setPayrollAuditPage(${payrollAuditPage + 1})" ${payrollAuditPage >= totalPages ? 'disabled' : ''}>Next</button>
+        </div>
+      </div>
     `;
-  } catch (err) {
-    grid.innerHTML = `<div style="padding:30px; color:var(--red); text-align:center;">${err.message}</div>`;
+}
+
+function setPayrollAuditPage(page) {
+  payrollAuditPage = Number(page) || 1;
+  renderPayrollAudit();
+}
+
+function payrollAuditRoleLabel(role) {
+  const labels = {
+    payroll_officer: 'Payroll Officer',
+    payroll_manager: 'Payroll Manager',
+    hr_manager: 'HR Manager',
+    hr_admin: 'HR Admin',
+    system_admin: 'System Administrator',
+    admin: 'System Administrator',
+    employee: 'Regular Employee',
+  };
+  const key = String(role || '').trim().toLowerCase();
+  return labels[key] || titleCasePayrollAudit(key.replace(/_/g, ' ')) || '-';
+}
+
+function payrollAuditActionLabel(action) {
+  const labels = {
+    per_piece_payroll_batch_generated: 'Per-Piece Payroll Batch Generated',
+    salary_calculation_generated: 'Payroll Record Generated',
+    salary_calculation_generated_for_review: 'Payroll Record Generated for Review',
+    payroll_generated: 'Payroll Generated',
+    payroll_submitted_for_approval: 'Payroll Submitted for Approval',
+    payroll_approved: 'Payroll Approved',
+    payroll_released: 'Payroll Released',
+    payroll_locked: 'Payroll Locked',
+    payslip_generated: 'Payslip Preview Generated',
+    payslip_exported: 'Payslip Exported',
+    payslip_printed: 'Payslip Printed',
+    piece_rate_configuration_saved: 'Piece Rate Configuration Saved',
+    piece_rate_daily_output_encoded: 'Piece-Rate Output Encoded',
+    piece_rate_daily_output_updated: 'Piece-Rate Output Updated',
+    piece_rate_daily_output_deleted: 'Piece-Rate Output Deleted',
+    production_output_approved: 'Production Output Approved',
+    production_output_rejected: 'Production Output Rejected',
+    production_output_submitted: 'Production Output Submitted',
+    PAYROLL_CLEARANCE_VIEWED: 'Payroll Clearance Viewed',
+    PAYROLL_CLEARANCE_UPDATED: 'Payroll Clearance Updated',
+    PAYROLL_CLEARANCE_MARKED_WITH_ISSUE: 'Payroll Clearance Marked With Issue',
+    FINAL_PAY_APPROVED: 'Final Pay Approved',
+    FINAL_PAY_RELEASED: 'Final Pay Released',
+    deduction_setting_updated: 'Deduction Setting Saved',
+    deduction_setting_deleted: 'Deduction Setting Deleted',
+    allowance_setting_updated: 'Allowance Setting Saved',
+    employee_deduction_created: 'Cash Advance / Loan Created',
+    employee_deduction_updated: 'Cash Advance / Loan Updated',
+    employee_deduction_status_changed: 'Cash Advance / Loan Status Updated',
+  };
+  const raw = String(action || '').trim();
+  return labels[raw] || titleCasePayrollAudit(raw.replace(/_/g, ' ')) || '-';
+}
+
+function titleCasePayrollAudit(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function payrollAuditDetails(metadata) {
+  if (!metadata) return '-';
+  let parsed = metadata;
+  if (typeof metadata === 'string') {
+    try {
+      parsed = JSON.parse(metadata);
+    } catch (_) {
+      return '-';
+    }
   }
+  if (!parsed || typeof parsed !== 'object') return String(parsed || '-');
+  const details = [];
+  if (parsed.processedCount !== undefined) details.push(`${Number(parsed.processedCount || 0)} employee(s) processed`);
+  if (parsed.skippedCount !== undefined) details.push(`${Number(parsed.skippedCount || 0)} employee(s) skipped`);
+  if (parsed.source_type) details.push(`Source: ${titleCasePayrollAudit(String(parsed.source_type).replace(/_/g, ' '))}`);
+  if (parsed.reference_no) details.push(`Reference No.: ${parsed.reference_no}`);
+  if (parsed.piece_rate_output_id || parsed.id) details.push(`Record ID: ${parsed.piece_rate_output_id || parsed.id}`);
+  if (parsed.gross_pay !== undefined) details.push(`Gross Pay: ${money(parsed.gross_pay)}`);
+  if (parsed.net_pay !== undefined) details.push(`Net Pay: ${money(parsed.net_pay)}`);
+
+  const oldValue = parsed.old_value;
+  const newValue = parsed.new_value;
+  if (oldValue && newValue) {
+    details.push(`Changed from ${payrollAuditCompactValue(oldValue)} to ${payrollAuditCompactValue(newValue)}`);
+  } else if (newValue) {
+    details.push(`New value: ${payrollAuditCompactValue(newValue)}`);
+  } else if (oldValue) {
+    details.push(`Previous value: ${payrollAuditCompactValue(oldValue)}`);
+  }
+
+  return details.join('. ') || '-';
+}
+
+function payrollAuditCompactValue(value) {
+  if (value === null || value === undefined) return '-';
+  if (typeof value !== 'object') return String(value);
+  const preferred = ['sew_type_code', 'size_range', 'piece_rate', 'effective_date', 'status', 'name', 'amount', 'rate', 'quantity_produced'];
+  const parts = preferred
+    .filter(key => value[key] !== undefined && value[key] !== null && value[key] !== '')
+    .map(key => `${titleCasePayrollAudit(key.replace(/_/g, ' '))}: ${value[key]}`);
+  return parts.length ? parts.join(', ') : 'updated record values';
 }
 
 function initializePayrollModule() {
@@ -4772,6 +5021,7 @@ window.togglePayrollAttendanceConfigScope = togglePayrollAttendanceConfigScope;
 window.renderPayrollAttendanceConfigOptions = renderPayrollAttendanceConfigOptions;
 window.resetPayrollAttendanceConfigForm = resetPayrollAttendanceConfigForm;
 window.loadPayrollAudit = loadPayrollAudit;
+window.setPayrollAuditPage = setPayrollAuditPage;
 window.initializePayrollModule = initializePayrollModule;
 window.saveProductionSplit = saveProductionSplit;
 window.editProductionSplit = editProductionSplit;

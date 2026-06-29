@@ -20,9 +20,12 @@ let ATT_BIOMETRIC_EVENTS_PAGE = 1;
 let ATT_BIOMETRIC_EVENTS_SIGNATURE = '';
 let ATT_HOLIDAYS = [];
 let ATT_HOLIDAYS_PAGE = 1;
+let ATT_AUDIT_LOG_ROWS = [];
+let ATT_AUDIT_LOG_PAGE = 1;
 const ATT_RECORDS_PAGE_SIZE = 10;
 const ATT_BIOMETRIC_EVENTS_PAGE_SIZE = 5;
 const ATT_HOLIDAYS_PAGE_SIZE = 10;
+const ATT_AUDIT_LOG_PAGE_SIZE = 10;
 const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 
@@ -241,6 +244,24 @@ function canManageAttendanceRecords() { return isHr(); }
 function canManageBiometrics() { return isHr() || isSystemAdmin(); }
 function canViewAllAttendanceRecords() { return isHr() || isPayrollAttendanceViewer(); }
 
+async function refreshAttendanceUserFromServer() {
+  try {
+    const res = await apiFetch('/api/auth/me');
+    const payload = await res?.json().catch(() => ({}));
+    if (!res?.ok || !payload?.user) return ATT_USER || getUser();
+
+    const normalizedUser = typeof normalizeClientUser === 'function'
+      ? normalizeClientUser(payload.user)
+      : payload.user;
+    ATT_USER = normalizedUser;
+    sessionStorage.setItem('vp_user', JSON.stringify(normalizedUser));
+    return normalizedUser;
+  } catch (err) {
+    console.warn('Unable to refresh attendance user context:', err);
+    return ATT_USER || getUser();
+  }
+}
+
 function setVisible(id, visible) {
   const element = document.getElementById(id);
   if (element) element.style.display = visible ? '' : 'none';
@@ -433,8 +454,11 @@ function calculateDtrHours(record) {
   return calculateHours(record.time_in, record.time_out);
 }
 
-function switchAttTab(tab, element) {
+async function switchAttTab(tab, element) {
   ATT_USER = ATT_USER || getUser();
+  if (['biometric', 'policies', 'payroll-policy', 'audit'].includes(tab)) {
+    await refreshAttendanceUserFromServer();
+  }
   if (['biometric', 'policies', 'payroll-policy', 'audit'].includes(tab) && !canManageBiometrics()) {
     tab = 'overview';
     element = document.querySelector('[data-att-tab="overview"]');
@@ -455,12 +479,13 @@ function switchAttTab(tab, element) {
   if (tab === 'biometric') loadBiometricWorkspace();
   if (tab === 'policies') loadAttendancePolicies();
   if (tab === 'payroll-policy' && typeof loadPayrollPolicySettings === 'function') loadPayrollPolicySettings();
-  if (tab === 'audit') loadAuditLog();
+  if (tab === 'audit') loadAttendanceAuditLog();
 }
 
 async function initAttendance() {
   ATT_USER = getUser();
   if (!ATT_USER) return;
+  await refreshAttendanceUserFromServer();
   document.getElementById('page-attendance')?.classList.toggle('attendance-employee-mode', isEmployee());
   initAttendanceDatePickers();
 
@@ -1737,28 +1762,242 @@ async function anchorPendingIntegrity() {
   }
 }
 
-async function loadAuditLog() {
+async function loadAttendanceAuditLog() {
   const tbody = document.getElementById('audit-tbody');
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="7" class="att-empty">Loading attendance audit log...</td></tr>';
+  const pager = document.getElementById('attendance-audit-pagination');
+  if (pager) pager.innerHTML = '';
   try {
+    await refreshAttendanceUserFromServer();
+    if (!canManageBiometrics()) {
+      const role = ATT_USER?.role || 'unknown';
+      const username = ATT_USER?.username || ATT_USER?.email || 'current session';
+      tbody.innerHTML = `<tr><td colspan="7" class="att-empty">Access denied for ${esc(username)}. Server-verified role is "${esc(role)}"; please log out and sign in with an HR Manager or System Administrator account.</td></tr>`;
+      return;
+    }
     const res = await apiFetch('/api/attendance/audit-log');
     const payload = await res?.json().catch(() => ({}));
-    if (!res?.ok) throw new Error(payload.error || 'Failed to load attendance audit log.');
-    const rows = Array.isArray(payload) ? payload : [];
-    tbody.innerHTML = rows.length ? rows.map(row => `<tr>
+    if (!res?.ok) {
+      const role = ATT_USER?.role || 'unknown';
+      throw new Error(`${payload.error || 'Failed to load attendance audit log.'} Current server-verified role: ${role}.`);
+    }
+    ATT_AUDIT_LOG_ROWS = Array.isArray(payload) ? payload : [];
+    ATT_AUDIT_LOG_PAGE = 1;
+    renderAttendanceAuditLog();
+  } catch (err) {
+    console.error(err);
+    ATT_AUDIT_LOG_ROWS = [];
+    if (pager) pager.innerHTML = '';
+    tbody.innerHTML = `<tr><td colspan="7" class="att-empty">Unable to load attendance audit log: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+function renderAttendanceAuditLog() {
+  const tbody = document.getElementById('audit-tbody');
+  const pager = document.getElementById('attendance-audit-pagination');
+  if (!tbody) return;
+  const rows = Array.isArray(ATT_AUDIT_LOG_ROWS) ? ATT_AUDIT_LOG_ROWS : [];
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / ATT_AUDIT_LOG_PAGE_SIZE));
+  ATT_AUDIT_LOG_PAGE = Math.min(Math.max(Number(ATT_AUDIT_LOG_PAGE || 1), 1), totalPages);
+  const startIndex = (ATT_AUDIT_LOG_PAGE - 1) * ATT_AUDIT_LOG_PAGE_SIZE;
+  const pageRows = rows.slice(startIndex, startIndex + ATT_AUDIT_LOG_PAGE_SIZE);
+
+  tbody.innerHTML = pageRows.length ? pageRows.map(row => `<tr>
       <td>${esc(formatDateTime(row.timestamp))}</td>
       <td>${esc(row.performed_by || 'System')}</td>
       <td>${esc(row.employee_name || '-')}</td>
-      <td>${esc(row.action_performed)}</td>
-      <td>${esc(row.old_value || '-')}</td>
-      <td>${esc(row.new_value || '-')}</td>
+      <td>${esc(attendanceAuditActionLabel(row.action_performed))}</td>
+      <td class="audit-trail-detail-cell">${esc(attendanceAuditValue(row.old_value))}</td>
+      <td class="audit-trail-detail-cell">${esc(attendanceAuditValue(row.new_value))}</td>
       <td>${esc(row.ip_address || '-')}</td>
     </tr>`).join('') : '<tr><td colspan="7" class="att-empty">No attendance audit entries.</td></tr>';
-  } catch (err) {
-    console.error(err);
-    tbody.innerHTML = `<tr><td colspan="7" class="att-empty">Unable to load attendance audit log: ${esc(err.message)}</td></tr>`;
+
+  if (!pager) return;
+  if (totalRows <= ATT_AUDIT_LOG_PAGE_SIZE) {
+    pager.innerHTML = totalRows ? `<span class="audit-trail-pagination-summary">Showing ${totalRows} audit entr${totalRows === 1 ? 'y' : 'ies'}</span>` : '';
+    return;
   }
+  const start = startIndex + 1;
+  const end = Math.min(startIndex + ATT_AUDIT_LOG_PAGE_SIZE, totalRows);
+  pager.innerHTML = `
+    <span class="audit-trail-pagination-summary">Showing ${start}-${end} of ${totalRows}</span>
+    <div class="audit-trail-pagination-actions">
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceAuditPage(${ATT_AUDIT_LOG_PAGE - 1})" ${ATT_AUDIT_LOG_PAGE <= 1 ? 'disabled' : ''}>Previous</button>
+      <span class="audit-trail-pagination-page">Page ${ATT_AUDIT_LOG_PAGE} of ${totalPages}</span>
+      <button class="btn btn-outline btn-sm" type="button" onclick="setAttendanceAuditPage(${ATT_AUDIT_LOG_PAGE + 1})" ${ATT_AUDIT_LOG_PAGE >= totalPages ? 'disabled' : ''}>Next</button>
+    </div>
+  `;
+}
+
+function setAttendanceAuditPage(page) {
+  ATT_AUDIT_LOG_PAGE = Number(page) || 1;
+  renderAttendanceAuditLog();
+}
+
+function attendanceAuditActionLabel(action) {
+  const raw = String(action || '').trim();
+  if (!raw) return '-';
+
+  const manualMatch = raw.match(/^MANUAL ATTENDANCE CREATED(?:\s+\[ID:(\d+)\])?(?:\s+Reason:(.*))?$/i);
+  if (manualMatch) {
+    const parts = ['Manual Attendance Created'];
+    if (manualMatch[1]) parts.push(`ID ${manualMatch[1]}`);
+    if (manualMatch[2]) parts.push(`Reason: ${manualMatch[2].trim()}`);
+    return parts.join(' - ');
+  }
+
+  const attendanceStatusMatch = raw.match(/^ATTENDANCE\s+([A-Z_]+)(?:\s+\[ID:(\d+)\])?(?:\s+Reason:(.*))?$/i);
+  if (attendanceStatusMatch) {
+    const status = attendanceAuditTitleCase(attendanceStatusMatch[1]);
+    const parts = [`Attendance Marked ${status}`];
+    if (attendanceStatusMatch[2]) parts.push(`ID ${attendanceStatusMatch[2]}`);
+    if (attendanceStatusMatch[3]) parts.push(`Reason: ${attendanceStatusMatch[3].trim()}`);
+    return parts.join(' - ');
+  }
+
+  const allowedMatch = raw.match(/^ALLOWED:\s*(.+)$/i);
+  if (allowedMatch) return `Authorized: ${attendanceAuditTitleCase(allowedMatch[1])}`;
+
+  const deniedMatch = raw.match(/^DENIED:\s*(.+)$/i);
+  if (deniedMatch) return `Denied: ${attendanceAuditTitleCase(deniedMatch[1])}`;
+
+  const labels = {
+    'BIOMETRIC ATTENDANCE REJECTED': 'Biometric Attendance Rejected',
+    'BIOMETRIC ATTENDANCE SCAN': 'Biometric Attendance Scan Recorded',
+    'BIOMETRIC DEVICE CREATED': 'Biometric Device Created',
+    'BIOMETRIC DEVICE UPDATED': 'Biometric Device Updated',
+    'BIOMETRIC DEVICE DISABLED': 'Biometric Device Disabled',
+    'BIOMETRIC MAPPING CREATED': 'Biometric Mapping Created',
+    'BIOMETRIC MAPPING UPDATED': 'Biometric Mapping Updated',
+    'BIOMETRIC MAPPING DISABLED': 'Biometric Mapping Disabled',
+    'ATTENDANCE CORRECTED': 'Attendance Corrected',
+    'ATTENDANCE VALIDATED': 'Attendance Validated',
+    'ATTENDANCE REJECTED': 'Attendance Rejected',
+    'ATTENDANCE OVERTIME UPDATED': 'Attendance Overtime Updated',
+  };
+  const upper = raw.toUpperCase();
+  return labels[upper] || attendanceAuditTitleCase(raw);
+}
+
+function attendanceAuditValue(value) {
+  if (value === null || value === undefined) return '-';
+  const raw = String(value).trim();
+  if (!raw || raw === '-' || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'undefined') return '-';
+
+  const parsed = attendanceAuditParseValue(raw);
+  if (parsed && typeof parsed === 'object') return attendanceAuditObjectSummary(parsed);
+
+  return attendanceAuditTitleCase(raw);
+}
+
+function attendanceAuditParseValue(raw) {
+  if (!raw || !/^[\[{]/.test(raw)) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    try {
+      return JSON.parse(raw.replace(/'([^']*)'/g, (_, text) => `"${text.replace(/"/g, '\\"')}"`));
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function attendanceAuditObjectSummary(value) {
+  if (Array.isArray(value)) {
+    if (!value.length) return '-';
+    return `${value.length} item${value.length === 1 ? '' : 's'} recorded`;
+  }
+
+  const labels = {
+    reason: 'Reason',
+    deviceReference: 'Device Reference',
+    device_reference: 'Device Reference',
+    targetTable: 'Table',
+    target_table: 'Table',
+    targetRecord: 'Record ID',
+    target_record: 'Record ID',
+    role: 'Role',
+    year: 'Year',
+    country_code: 'Country',
+    count: 'Count',
+    source: 'Source',
+    date: 'Date',
+    timeIn: 'Time In',
+    time_in: 'Time In',
+    timeOut: 'Time Out',
+    time_out: 'Time Out',
+    status: 'Status',
+    verification_status: 'Status',
+    attendance_status: 'Attendance Status',
+    result: 'Result',
+    employee_code: 'Employee Code',
+    device_id: 'Device ID',
+  };
+  const preferredKeys = [
+    'reason',
+    'deviceReference',
+    'device_reference',
+    'targetTable',
+    'target_table',
+    'targetRecord',
+    'target_record',
+    'role',
+    'year',
+    'country_code',
+    'count',
+    'source',
+    'date',
+    'timeIn',
+    'time_in',
+    'timeOut',
+    'time_out',
+    'status',
+    'verification_status',
+    'attendance_status',
+    'result',
+    'employee_code',
+    'device_id',
+  ];
+  const keys = preferredKeys.filter(key => value[key] !== undefined && value[key] !== null && value[key] !== '');
+  const fallbackKeys = Object.keys(value).filter(key => !keys.includes(key) && value[key] !== undefined && value[key] !== null && value[key] !== '').slice(0, 4);
+  const visibleKeys = keys.length ? keys : fallbackKeys;
+
+  if (!visibleKeys.length) return '-';
+  return visibleKeys
+    .map(key => `${labels[key] || attendanceAuditTitleCase(key)}: ${attendanceAuditValueScalar(value[key])}`)
+    .join('; ');
+}
+
+function attendanceAuditValueScalar(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'object') return attendanceAuditObjectSummary(value);
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === 'null') return '-';
+  return attendanceAuditTitleCase(raw);
+}
+
+function attendanceAuditTitleCase(value) {
+  const normalized = String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return '-';
+
+  const acronyms = new Set(['HR', 'IP', 'ID', 'PH', 'DTR', 'OTP', 'JWT']);
+  return normalized
+    .split(' ')
+    .map(word => {
+      const upper = word.toUpperCase();
+      if (acronyms.has(upper)) return upper;
+      if (/^ZK\d+/i.test(word)) return word.toUpperCase();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(word)) return word;
+      if (/^\d{1,2}:\d{2}/.test(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ');
 }
 
 async function enrollFingerprintFromBridge() {
@@ -2179,7 +2418,8 @@ window.verifyBiometricEnrollment = verifyBiometricEnrollment;
 window.disableBiometricMapping = disableBiometricMapping;
 window.syncBiometricDevice = syncBiometricDevice;
 window.anchorPendingIntegrity = anchorPendingIntegrity;
-window.loadAuditLog = loadAuditLog;
+window.loadAttendanceAuditLog = loadAttendanceAuditLog;
+window.setAttendanceAuditPage = setAttendanceAuditPage;
 window.loadAttendancePolicies = loadAttendancePolicies;
 window.saveAttendancePolicies = saveAttendancePolicies;
 window.loadHolidayCalendar = loadHolidayCalendar;

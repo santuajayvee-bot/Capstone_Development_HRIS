@@ -1990,6 +1990,97 @@ input.lgsv-date-native[type="date"] {
   cursor: not-allowed;
   opacity: .55;
 }
+
+.payroll-recalculation-dialog { width: min(980px, 94vw); max-height: 90vh; overflow-y: auto; }
+.payroll-recalculation-dialog form { padding: 18px 22px 22px; }
+.payroll-recalculation-note {
+  padding: 11px 13px; margin-bottom: 14px; border: 1px solid #d8e2ef;
+  background: #f6f9fc; color: #334155; font-size: 12px; line-height: 1.5;
+}
+.payroll-recalculation-current {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border); margin-bottom: 14px;
+}
+.payroll-recalculation-current span { padding: 10px 12px; color: var(--muted); font-size: 11px; border-right: 1px solid var(--border); }
+.payroll-recalculation-current span:last-child { border-right: 0; }
+.payroll-recalculation-current strong { display: block; margin-top: 4px; color: var(--text); font-size: 14px; }
+.payroll-recalculation-table-wrap { max-height: 330px; overflow: auto; border: 1px solid var(--border); }
+.payroll-recalculation-table { margin: 0; }
+.payroll-recalculation-table td:first-child strong,
+.payroll-recalculation-table td:first-child small { display: block; }
+.payroll-recalculation-table td:first-child small { color: var(--muted); margin-top: 3px; }
+.payroll-recalculation-table input { width: 110px; padding: 7px 8px; border: 1px solid var(--border); font: inherit; }
+.payroll-recalculation-reason { display: block; margin-top: 15px; color: var(--text); font-size: 12px; font-weight: 600; }
+.payroll-recalculation-reason textarea { display: block; width: 100%; margin-top: 6px; padding: 9px 10px; border: 1px solid var(--border); resize: vertical; font: inherit; }
+.payroll-recalculation-reason small { display: block; margin-top: 5px; color: var(--muted); font-weight: 400; }
+
+@media (max-width: 760px) {
+  .payroll-recalculation-current { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .payroll-recalculation-current span:nth-child(2) { border-right: 0; }
+  .payroll-recalculation-current span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .payroll-recalculation-table thead { display: none; }
+  .payroll-recalculation-table,
+  .payroll-recalculation-table tbody,
+  .payroll-recalculation-table tr,
+  .payroll-recalculation-table td { display: block; width: 100%; }
+  .payroll-recalculation-table tr { padding: 10px; border-bottom: 1px solid var(--border); }
+  .payroll-recalculation-table td { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; padding: 5px 0; border: 0; }
+  .payroll-recalculation-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+}
+.audit-trail-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.audit-trail-pagination {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.audit-trail-pagination:empty {
+  display: none;
+}
+.audit-trail-pagination-summary,
+.audit-trail-pagination-page {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.audit-trail-pagination-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.audit-trail-pagination-actions .btn {
+  flex: 0 1 auto;
+  min-width: 74px;
+  white-space: nowrap;
+}
+.audit-trail-pagination .btn[disabled] {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.audit-trail-detail-cell {
+  max-width: 520px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+}
 .leave-pagination {
   margin-top: 12px;
 }
@@ -2023,6 +2114,31 @@ input.lgsv-date-native[type="date"] {
     min-width: 0;
     width: 100%;
   }
+  .audit-trail-pagination {
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding: 10px;
+  }
+  .audit-trail-pagination-summary {
+    text-align: center;
+    width: 100%;
+  }
+  .audit-trail-pagination-actions {
+    display: grid;
+    grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr);
+    width: 100%;
+  }
+  .audit-trail-pagination-page {
+    align-self: center;
+    min-width: max-content;
+    text-align: center;
+  }
+  .audit-trail-pagination .btn {
+    justify-content: center;
+    min-width: 0;
+    width: 100%;
+  }
 }
 @media (max-width: 640px) {
   .piece-records-compact {
@@ -2045,6 +2161,13 @@ input.lgsv-date-native[type="date"] {
     grid-column: 1 / -1;
     order: -1;
     text-align: center;
+  }
+  .audit-trail-pagination-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .audit-trail-pagination-page {
+    grid-column: 1 / -1;
+    order: -1;
   }
 }
 .payroll-form-status {

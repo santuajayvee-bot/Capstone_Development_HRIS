@@ -8688,11 +8688,219 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
   }
 });
 
+async function ensurePayrollRecalculationAdjustmentSchema(pool) {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS payroll_recalculation_adjustments (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      salary_calculation_id BIGINT NOT NULL,
+      employee_id BIGINT NOT NULL,
+      wage_type VARCHAR(40) NOT NULL,
+      reason VARCHAR(500) NOT NULL,
+      old_values JSON NOT NULL,
+      new_values JSON NOT NULL,
+      corrections JSON NOT NULL,
+      created_by BIGINT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      INDEX idx_payroll_recalc_calculation (salary_calculation_id, created_at),
+      INDEX idx_payroll_recalc_employee (employee_id, created_at),
+      INDEX idx_payroll_recalc_user (created_by, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+function payrollRecalculationEntries(record) {
+  const wageType = normalizePayrollWageType(record.wage_type);
+  const snapshot = parseJsonObject(record.validation_snapshot);
+  if (wageType === 'Per-Piece') {
+    return (Array.isArray(snapshot.records) ? snapshot.records : []).map((row, index) => {
+      const quantity = numeric(row.quantity);
+      const pieceRate = numeric(row.piece_rate);
+      const sharePercentage = numeric(row.share_percentage || row.details?.share_percentage || 100);
+      const details = row.details || {};
+      const fixedAmount = row.source === 'output'
+        ? numeric(details.quota_incentive) + numeric(details.sunday_incentive) + numeric(details.special_incentive)
+        : 0;
+      const currentAmount = numeric(row.gross_pay);
+      return {
+        key: `${row.source || 'output'}:${row.id || index + 1}`,
+        source: row.source || 'output',
+        source_id: row.id || null,
+        date: payrollDateKey(row.date),
+        description: row.work_item || details.product_type || details.operation_type || `Piece output ${index + 1}`,
+        unit_label: 'pieces',
+        current_value: quantity,
+        unit_amount: quantity > 0
+          ? Number(((currentAmount - fixedAmount) / quantity).toFixed(6))
+          : Number((pieceRate * (sharePercentage / 100)).toFixed(6)),
+        fixed_amount: roundMoney(fixedAmount),
+        current_amount: roundMoney(currentAmount)
+      };
+    });
+  }
+  if (isTripBasedWageType(wageType)) {
+    return (Array.isArray(snapshot.trips) ? snapshot.trips : []).map((row, index) => {
+      const quantity = numeric(row.output_quantity || 1);
+      const amount = numeric(row.total_trip_pay);
+      return {
+        key: `trip:${row.id || index + 1}`,
+        source: 'trip',
+        source_id: row.id || null,
+        date: payrollDateKey(row.trip_date),
+        description: `${row.trip_type || 'Delivery'} trip`,
+        unit_label: 'trips',
+        current_value: quantity,
+        unit_amount: roundMoney(quantity > 0 ? amount / quantity : 0),
+        fixed_amount: 0,
+        current_amount: roundMoney(amount)
+      };
+    });
+  }
+  if (wageType === 'Hourly') {
+    return [{
+      key: 'attendance:regular-hours', source: 'attendance', source_id: null,
+      date: `${record.period_start || snapshot.date_from || ''} to ${record.period_end || snapshot.date_to || ''}`,
+      description: 'Validated regular working hours', unit_label: 'hours',
+      current_value: numeric(record.hours_worked || snapshot.hours_worked),
+      unit_amount: roundMoney(record.hourly_rate || snapshot.hourly_rate || snapshot.rate),
+      fixed_amount: roundMoney(snapshot.holiday_premium),
+      current_amount: roundMoney(snapshot.gross_pay)
+    }];
+  }
+  if (wageType === 'Daily') {
+    const standardHours = numeric(snapshot.policy?.standard_hours_per_day || 8) || 8;
+    return [{
+      key: 'attendance:regular-hours', source: 'attendance', source_id: null,
+      date: `${record.period_start || snapshot.date_from || ''} to ${record.period_end || snapshot.date_to || ''}`,
+      description: 'Validated payable working hours', unit_label: 'hours',
+      current_value: roundMoney(numeric(record.days_worked || snapshot.days_worked) * standardHours),
+      unit_amount: roundMoney(numeric(record.daily_rate || snapshot.daily_rate || snapshot.rate) / standardHours),
+      fixed_amount: roundMoney(snapshot.holiday_premium),
+      current_amount: roundMoney(snapshot.gross_pay),
+      standard_hours_per_day: standardHours
+    }];
+  }
+  return [];
+}
+
+function calculateManualPayrollCorrection(record, submittedCorrections) {
+  const wageType = normalizePayrollWageType(record.wage_type);
+  const snapshot = parseJsonObject(record.validation_snapshot);
+  const entries = payrollRecalculationEntries(record);
+  if (!entries.length) throw new Error(`Manual recalculation is not available for ${wageType || 'this wage type'}.`);
+  const correctionMap = new Map();
+  for (const item of submittedCorrections) {
+    const key = String(item?.key || '').trim();
+    const correctedValue = Number(item?.corrected_value);
+    if (!key || !Number.isFinite(correctedValue) || correctedValue < 0 || correctedValue > 1000000) {
+      throw new Error('Each corrected quantity or hour value must be a valid non-negative number.');
+    }
+    if (correctionMap.has(key)) throw new Error('Duplicate payroll correction entry.');
+    correctionMap.set(key, correctedValue);
+  }
+  if (correctionMap.size !== entries.length || entries.some(entry => !correctionMap.has(entry.key))) {
+    throw new Error('All displayed payroll source entries must be included in the recalculation.');
+  }
+  const correctedEntries = entries.map(entry => {
+    const correctedValue = correctionMap.get(entry.key);
+    return {
+      ...entry,
+      corrected_value: correctedValue,
+      corrected_amount: roundMoney(correctedValue * numeric(entry.unit_amount) + numeric(entry.fixed_amount))
+    };
+  });
+  if (!correctedEntries.some(entry => Math.abs(entry.corrected_value - entry.current_value) > 0.0001)) {
+    throw new Error('Change at least one quantity or hour value before applying recalculation.');
+  }
+  const sourceGross = roundMoney(correctedEntries.reduce((sum, entry) => sum + entry.corrected_amount, 0));
+  const correctedTotal = correctedEntries.reduce((sum, entry) => sum + numeric(entry.corrected_value), 0);
+  const nextSnapshot = {
+    ...snapshot,
+    manual_recalculation: true,
+    correction_entries: correctedEntries.map(entry => ({
+      key: entry.key,
+      source: entry.source,
+      source_id: entry.source_id,
+      previous_value: entry.current_value,
+      corrected_value: entry.corrected_value,
+      unit_label: entry.unit_label,
+      corrected_amount: entry.corrected_amount
+    }))
+  };
+  if (wageType === 'Per-Piece') {
+    const byKey = new Map(correctedEntries.map(entry => [entry.key, entry]));
+    nextSnapshot.records = (Array.isArray(snapshot.records) ? snapshot.records : []).map((row, index) => {
+      const correction = byKey.get(`${row.source || 'output'}:${row.id || index + 1}`);
+      return correction ? { ...row, quantity: correction.corrected_value, gross_pay: correction.corrected_amount } : row;
+    });
+    nextSnapshot.output_quantity = correctedTotal;
+    nextSnapshot.quantity = correctedTotal;
+  }
+  if (isTripBasedWageType(wageType)) {
+    const byKey = new Map(correctedEntries.map(entry => [entry.key, entry]));
+    nextSnapshot.trips = (Array.isArray(snapshot.trips) ? snapshot.trips : []).map((row, index) => {
+      const correction = byKey.get(`trip:${row.id || index + 1}`);
+      return correction ? { ...row, output_quantity: correction.corrected_value, total_trip_pay: correction.corrected_amount } : row;
+    });
+    nextSnapshot.output_quantity = correctedTotal;
+    nextSnapshot.logistics_total = sourceGross;
+  }
+  if (wageType === 'Hourly') nextSnapshot.hours_worked = correctedTotal;
+  if (wageType === 'Daily') {
+    const standardHours = numeric(correctedEntries[0]?.standard_hours_per_day || snapshot.policy?.standard_hours_per_day || 8) || 8;
+    nextSnapshot.hours_worked = correctedTotal;
+    nextSnapshot.days_worked = roundMoney(correctedTotal / standardHours);
+  }
+  nextSnapshot.gross_pay = sourceGross;
+  return { wageType, snapshot: nextSnapshot, entries: correctedEntries, sourceGross, correctedTotal };
+}
+
+router.get('/salary-calculations/:id/recalculation-preview', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
+  try {
+    const pool = require('../config/db');
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Valid salary calculation ID is required.' });
+    const [rows] = await pool.execute(`
+      SELECT sc.*, e.employee_code, e.first_name, e.middle_name, e.last_name, wt.name AS wage_type
+        FROM salary_calculations sc
+        JOIN employees e ON e.id = sc.employee_id
+        LEFT JOIN wage_types wt ON wt.id = sc.wage_type_id
+       WHERE sc.id = ?
+       LIMIT 1
+    `, [id]);
+    const record = rows[0];
+    if (!record) return res.status(404).json({ error: 'Salary calculation not found.' });
+    if (!REVIEWABLE_PAYROLL_STATUSES.has(record.status || '')) {
+      return res.status(409).json({ error: 'Only Draft or For Review payroll can be recalculated.' });
+    }
+    const entries = payrollRecalculationEntries(record);
+    if (!entries.length) return res.status(400).json({ error: 'No editable payroll source entries are available for this record.' });
+    res.json({
+      id,
+      employee_id: record.employee_id,
+      employee_code: record.employee_code,
+      employee_name: payrollEmployeeDisplayName(record),
+      wage_type: normalizePayrollWageType(record.wage_type),
+      status: record.status,
+      current: {
+        gross_pay: roundMoney(record.gross_pay),
+        total_deductions: roundMoney(record.total_deductions),
+        net_pay: roundMoney(record.net_pay)
+      },
+      entries
+    });
+  } catch (err) {
+    console.error('Error loading payroll recalculation preview:', err);
+    res.status(500).json({ error: 'Failed to load payroll recalculation preview.' });
+  }
+});
+
 router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   const pool = require('../config/db');
   const connection = await pool.getConnection();
   try {
     await ensurePieceRatePayrollSchema(connection);
+    await ensurePayrollRecalculationAdjustmentSchema(connection);
     await connection.beginTransaction();
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
@@ -8752,8 +8960,53 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
     let allowances = { total: 0, applied: [] };
     let payrollDeductions = { total: 0, employeeTotal: 0, employee: [], applied: [] };
     let snapshot = {};
+    const submittedCorrections = Array.isArray(req.body?.corrections) ? req.body.corrections : [];
+    const correctionReason = cleanPayrollText(req.body?.reason, 500);
+    let manualCorrection = null;
 
-    if (['Daily', 'Hourly', 'Monthly'].includes(normalizedWageType)) {
+    if (!submittedCorrections.length) {
+      throw new Error('Payroll correction entries are required before recalculation.');
+    }
+
+    if (submittedCorrections.length) {
+      if (!correctionReason || correctionReason.length < 8) {
+        throw new Error('A recalculation reason of at least 8 characters is required.');
+      }
+      manualCorrection = calculateManualPayrollCorrection(record, submittedCorrections);
+      snapshot = manualCorrection.snapshot;
+      sourceType = record.source_type || (normalizedWageType === 'Per-Piece' ? 'piece_rate_output' : isTripBasedWageType(normalizedWageType) ? 'logistics_trips' : 'attendance');
+      const parsedSourceIds = parseJsonSafe(record.source_record_ids);
+      sourceRecordIds = Array.isArray(parsedSourceIds) ? parsedSourceIds : [];
+      baseRate = numeric(record.base_rate);
+      dailyRate = numeric(record.daily_rate);
+      hourlyRate = numeric(record.hourly_rate);
+      overtimeHours = numeric(snapshot.overtime_hours || record.overtime_hours);
+      overtimePay = roundMoney(overtimeHours * hourlyRate);
+      const grossBeforeAllowances = roundMoney(manualCorrection.sourceGross + overtimePay);
+      allowances = await computeConfiguredAllowances(connection, grossBeforeAllowances, period.end);
+      totalEarning = roundMoney(grossBeforeAllowances + allowances.total);
+      payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
+        ...deductionContext,
+        payroll_type: normalizedWageType,
+        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? manualCorrection.sourceGross : totalEarning
+      });
+      const attendanceDeduction = ['Daily', 'Hourly'].includes(normalizedWageType)
+        ? payableAttendanceDeductionAmount(normalizedWageType, snapshot)
+        : 0;
+      totalDeduction = roundMoney(payrollDeductions.total + attendanceDeduction);
+      netPay = roundMoney(totalEarning - totalDeduction);
+      if (normalizedWageType === 'Hourly') {
+        hoursWorked = manualCorrection.correctedTotal;
+        quantity = hoursWorked;
+      } else if (normalizedWageType === 'Daily') {
+        hoursWorked = manualCorrection.correctedTotal;
+        daysWorked = numeric(snapshot.days_worked);
+        quantity = daysWorked;
+      } else {
+        quantity = manualCorrection.correctedTotal;
+      }
+      snapshot.allowances = allowances.applied;
+    } else if (['Daily', 'Hourly', 'Monthly'].includes(normalizedWageType)) {
       const validation = await validateDailyHourlyPayroll(connection, {
         employee_id: record.employee_id,
         payroll_period: period.month_year,
@@ -8892,19 +9145,66 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       record.employee_id
     ]);
     await clearEncryptedPayslipSnapshot(connection, id, record.payroll_run_id || 0, record.employee_id);
+    if (manualCorrection) {
+      const oldValues = {
+        quantity: numeric(record.quantity),
+        hours_worked: numeric(record.hours_worked),
+        days_worked: numeric(record.days_worked),
+        gross_pay: roundMoney(record.gross_pay),
+        total_deductions: roundMoney(record.total_deductions),
+        net_pay: roundMoney(record.net_pay)
+      };
+      const newValues = {
+        quantity: numeric(quantity),
+        hours_worked: numeric(hoursWorked),
+        days_worked: numeric(daysWorked),
+        gross_pay: roundMoney(totalEarning),
+        total_deductions: roundMoney(totalDeduction),
+        net_pay: roundMoney(netPay)
+      };
+      await connection.execute(`
+        INSERT INTO payroll_recalculation_adjustments
+          (salary_calculation_id, employee_id, wage_type, reason, old_values, new_values, corrections, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        record.employee_id,
+        normalizedWageType,
+        correctionReason,
+        JSON.stringify(oldValues),
+        JSON.stringify(newValues),
+        JSON.stringify(manualCorrection.entries),
+        currentUserId(req)
+      ]);
+    }
     await logPayrollAudit(connection, req, 'employee_payroll_recalculated', {
       employee_id: record.employee_id,
       payroll_run_id: record.payroll_run_id || null,
       salary_calculation_id: id,
-      remarks: `Recalculated ${normalizedWageType} payroll for ${record.employee_code}`,
-      metadata: { gross_pay: totalEarning, total_deductions: totalDeduction, net_pay: netPay, source_type: sourceType }
+      remarks: manualCorrection
+        ? `Manually corrected and recalculated ${normalizedWageType} payroll for ${record.employee_code}: ${correctionReason}`
+        : `Recalculated ${normalizedWageType} payroll for ${record.employee_code}`,
+      metadata: {
+        old_value: manualCorrection ? {
+          quantity: record.quantity,
+          hours_worked: record.hours_worked,
+          days_worked: record.days_worked,
+          gross_pay: record.gross_pay,
+          total_deductions: record.total_deductions,
+          net_pay: record.net_pay
+        } : null,
+        new_value: { quantity, hours_worked: hoursWorked, days_worked: daysWorked, gross_pay: totalEarning, total_deductions: totalDeduction, net_pay: netPay },
+        corrections: manualCorrection?.entries || [],
+        correction_reason: correctionReason || null,
+        source_type: sourceType
+      }
     });
     await connection.commit();
     res.json({ success: true, id, gross_pay: roundMoney(totalEarning), total_deductions: roundMoney(totalDeduction), net_pay: roundMoney(netPay) });
   } catch (err) {
     try { await connection.rollback(); } catch (_) {}
     console.error('Error recalculating payroll:', err);
-    res.status(/required|valid|approved|unsupported|payroll-ready/i.test(err.message) ? 400 : 500)
+    res.status(/required|valid|approved|unsupported|payroll-ready|change at least|correction entry|displayed payroll source|manual recalculation/i.test(err.message) ? 400 : 500)
       .json({ error: safePayrollError(err, 'Failed to recalculate payroll.') });
   } finally {
     connection.release();
