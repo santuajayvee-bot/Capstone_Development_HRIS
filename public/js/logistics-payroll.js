@@ -5,8 +5,11 @@
 
   const money = value => `PHP ${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
-  const today = () => new Date().toISOString().slice(0, 10);
-  const currentMonth = () => new Date().toISOString().slice(0, 7);
+  const today = () => window.LGSVDatePicker?.todayValue?.() || (() => {
+    const date = new Date();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  })();
+  const currentMonth = () => today().slice(0, 7);
 
   async function request(url, options) {
     const response = await apiFetch(url, options);

@@ -1737,7 +1737,7 @@ function collectSalaryData() {
     transport: parseFloat(document.getElementById('salary-transport').value) || 0,
     bonus: parseFloat(document.getElementById('salary-bonus').value) || 0,
     ot_hours: parseFloat(document.getElementById('salary-ot-hours').value) || 0,
-    calculation_date: new Date().toISOString().split('T')[0]
+    calculation_date: salaryLocalDateValue()
   };
   
   // Add wage-type specific data

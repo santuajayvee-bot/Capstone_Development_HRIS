@@ -17,7 +17,13 @@
   function toParts(value) {
     const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) return null;
-    return { year: Number(match[1]), month: Number(match[2]) - 1, day: Number(match[3]) };
+    const parts = { year: Number(match[1]), month: Number(match[2]) - 1, day: Number(match[3]) };
+    const parsed = new Date(parts.year, parts.month, parts.day);
+    return parsed.getFullYear() === parts.year
+      && parsed.getMonth() === parts.month
+      && parsed.getDate() === parts.day
+      ? parts
+      : null;
   }
 
   function toValue(year, month, day) {
@@ -74,6 +80,12 @@
     document.querySelectorAll('.lgsv-date-field.open').forEach(field => {
       if (field !== except) field.classList.remove('open');
     });
+  }
+
+  function alignPanel(field) {
+    const rect = field.getBoundingClientRect();
+    const panelWidth = Math.min(286, Math.max(0, window.innerWidth - 24));
+    field.classList.toggle('align-right', rect.left + panelWidth > window.innerWidth - 12);
   }
 
   function syncField(field) {
@@ -141,6 +153,28 @@
     fields.forEach(syncField);
   }
 
+  function getValue(input) {
+    return input && toParts(input.value) ? input.value : '';
+  }
+
+  function setValue(input, value, { emit = true } = {}) {
+    if (!input) return '';
+    const normalized = toParts(value) ? String(value) : '';
+    input.value = normalized;
+    const field = input.closest('.lgsv-date-field');
+    if (field) syncField(field);
+    if (emit) {
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return normalized;
+  }
+
+  function todayValue() {
+    const today = new Date();
+    return toValue(today.getFullYear(), today.getMonth(), today.getDate());
+  }
+
   function enhance(root = document) {
     const inputs = root.matches?.('input[type="date"]')
       ? [root]
@@ -175,6 +209,7 @@
         const base = defaultView(input);
         closeDatePickers(field);
         renderPicker(field, Number(field.dataset.year || base.getFullYear()), Number(field.dataset.month || base.getMonth()));
+        alignPanel(field);
         field.classList.add('open');
       });
 
@@ -185,6 +220,7 @@
         const month = Number(field.dataset.month || base.getMonth());
         closeDatePickers(field);
         renderPicker(field, year, month);
+        alignPanel(field);
         field.classList.toggle('open');
       });
 
@@ -254,5 +290,12 @@
   document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 0));
   setInterval(refreshChangedValues, 800);
 
-  window.LGSVDatePicker = { enhance, refresh, close: closeDatePickers };
+  window.LGSVDatePicker = {
+    enhance,
+    refresh,
+    close: closeDatePickers,
+    getValue,
+    setValue,
+    todayValue,
+  };
 })();

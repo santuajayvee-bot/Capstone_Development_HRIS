@@ -1332,7 +1332,10 @@ function escapeLeaveText(value) {
 }
 
 function renderLeaveSummary() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = window.LGSVDatePicker?.todayValue?.() || (() => {
+    const date = new Date();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  })();
   const monthPrefix = today.slice(0, 7);
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
 

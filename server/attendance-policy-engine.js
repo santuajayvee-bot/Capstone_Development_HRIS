@@ -1,6 +1,6 @@
 const { missingDtrPunches } = require('./dtr-punch');
 const { resolveEmployeePayrollAttendancePolicy } = require('./employee-payroll-policy');
-const { strictDateOnly, todayManilaDateKey } = require('./utils/dateValidation');
+const { databaseDateOnly, todayManilaDateKey } = require('./utils/dateValidation');
 
 const DEFAULT_ATTENDANCE_POLICIES = [
   ['Work Schedule Policy', 'schedule', 'work_start_time', '08:00'],
@@ -66,9 +66,8 @@ function cleanPolicyValue(value, maxLength = 500) {
 }
 
 function normalizeDate(value) {
-  const text = String(value || '').trim();
-  if (!text) return todayManilaDateKey();
-  return strictDateOnly(text, 'Effective date', { allowFuture: true });
+  if (value === null || value === undefined || value === '') return todayManilaDateKey();
+  return databaseDateOnly(value, 'Attendance policy date', { allowFuture: true });
 }
 
 async function hasColumn(pool, table, column) {

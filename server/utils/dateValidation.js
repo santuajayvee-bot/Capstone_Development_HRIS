@@ -2,6 +2,18 @@ function todayManilaDateKey() {
   return new Date(Date.now() + (8 * 60 * 60 * 1000)).toISOString().slice(0, 10);
 }
 
+function dateObjectToManilaDateKey(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const byType = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
 function isStrictDateOnly(value) {
   const text = String(value || '').trim();
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -39,6 +51,11 @@ function strictDateOnly(value, field = 'Date', options = {}) {
   return text;
 }
 
+function databaseDateOnly(value, field = 'Date', options = {}) {
+  const normalized = value instanceof Date ? dateObjectToManilaDateKey(value) : value;
+  return strictDateOnly(normalized, field, options);
+}
+
 function optionalDateOnly(value, field = 'Date', options = {}) {
   if (value === null || value === undefined || value === '') return null;
   return strictDateOnly(value, field, options);
@@ -61,6 +78,7 @@ function yearFromDateOnly(value) {
 }
 
 module.exports = {
+  databaseDateOnly,
   inclusiveDays,
   isStrictDateOnly,
   optionalDateOnly,

@@ -780,6 +780,10 @@ input.lgsv-date-native[type="date"] {
   background: #ffffff;
   box-shadow: 0 18px 42px rgba(16,24,40,.14);
 }
+.lgsv-date-field.align-right .lgsv-date-panel {
+  right: 0;
+  left: auto;
+}
 .lgsv-date-field.open .lgsv-date-panel {
   display: block;
 }

@@ -538,7 +538,11 @@ function formatDateValue(value) {
 }
 
 function dateInputValue(date) {
-  return date.toISOString().slice(0, 10);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function addDaysToIsoDate(value, days) {
@@ -4437,7 +4441,7 @@ async function viewSssTableRows(versionId) {
 
 function openDeductionBracketManager() {
   document.getElementById('sss-table-manager-modal')?.remove();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   const versionLabel = `SSS Table ${today.slice(0, 4)}`;
   const modal = document.createElement('div');
   modal.id = 'sss-table-manager-modal';
@@ -4748,7 +4752,7 @@ function resetPayrollAttendanceConfigForm() {
   if (!form) return;
   form.reset();
   form.elements.id.value = '';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (form.elements.effective_date) form.elements.effective_date.value = today;
   togglePayrollAttendanceConfigScope();
 }
@@ -4943,7 +4947,7 @@ function initializePayrollModule() {
   const splitDate = document.querySelector('#production-split-form [name="effective_date"]');
   const cashAdvanceDate = document.querySelector('#cash-advance-form [name="start_date"]');
   const loanDate = document.querySelector('#employee-loan-form [name="start_date"]');
-  const today = new Date().toISOString().split('T')[0];
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
   if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
   if (splitDate && !splitDate.value) splitDate.value = today;

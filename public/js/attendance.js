@@ -10,7 +10,6 @@ let ATT_DEVICES = [];
 let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
 let ATT_SELECTED_DETAIL_ID = null;
-let ATT_ACTIVE_DATE_PICKER = null;
 let ATT_RECORDS_PAGE = 1;
 let ATT_RECORDS_FILTER_SIGNATURE = '';
 let ATT_RECORDS_LOAD_SEQUENCE = 0;
@@ -33,12 +32,6 @@ const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 const AWS_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-AWS-001';
 const BIOMETRIC_UI_RELAY_VERSION = 'AWS relay v40';
 let LAST_BIOMETRIC_BRIDGE_ERROR = '';
-
-const ATT_DATE_PICKER_MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-const ATT_DATE_PICKER_DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 function manualAttendanceEl(id) {
   return document.querySelector(`#manual-modal #${id}`);
@@ -65,173 +58,11 @@ function parseIsoDate(value) {
   return date;
 }
 
-function closeAttendanceDatePicker() {
-  if (!ATT_ACTIVE_DATE_PICKER) return;
-  ATT_ACTIVE_DATE_PICKER.remove();
-  ATT_ACTIVE_DATE_PICKER = null;
-}
-
-function positionAttendanceDatePicker(input, picker) {
-  const rect = input.getBoundingClientRect();
-  const top = window.scrollY + rect.bottom + 4;
-  let left = window.scrollX + rect.left;
-  picker.style.top = `${top}px`;
-  picker.style.left = `${left}px`;
-
-  const pickerRect = picker.getBoundingClientRect();
-  const maxLeft = Math.max(12, window.scrollX + window.innerWidth - pickerRect.width - 12);
-  if (left > maxLeft) {
-    left = maxLeft;
-    picker.style.left = `${left}px`;
-  }
-}
-
-function renderAttendanceDatePicker(input, state) {
-  if (!ATT_ACTIVE_DATE_PICKER) return;
-
-  const currentValue = parseIsoDate(input.value);
-  const today = new Date();
-  const displayYear = state.displayDate.getFullYear();
-  const displayMonth = state.displayDate.getMonth();
-  const firstDay = new Date(displayYear, displayMonth, 1);
-  const startDay = firstDay.getDay();
-  const daysInMonth = new Date(displayYear, displayMonth + 1, 0).getDate();
-  const monthOptions = ATT_DATE_PICKER_MONTHS.map((month, index) =>
-    `<option value="${index}" ${index === displayMonth ? 'selected' : ''}>${month}</option>`
-  ).join('');
-  const yearStart = today.getFullYear() - 10;
-  const yearEnd = today.getFullYear() + 10;
-  const yearOptions = Array.from({ length: yearEnd - yearStart + 1 }, (_, offset) => {
-    const year = yearStart + offset;
-    return `<option value="${year}" ${year === displayYear ? 'selected' : ''}>${year}</option>`;
-  }).join('');
-
-  const cells = [];
-  for (let index = 0; index < startDay; index += 1) {
-    cells.push('<button type="button" class="attendance-date-picker-day is-empty" tabindex="-1" aria-hidden="true"></button>');
-  }
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const date = new Date(displayYear, displayMonth, day);
-    const iso = toIsoDate(date);
-    const isSelected = currentValue && toIsoDate(currentValue) === iso;
-    const isToday = toIsoDate(today) === iso;
-    cells.push(
-      `<button type="button" class="attendance-date-picker-day${isSelected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}" data-date="${iso}">${day}</button>`
-    );
-  }
-
-  ATT_ACTIVE_DATE_PICKER.innerHTML = `
-    <div class="attendance-date-picker-header">
-      <button type="button" class="attendance-date-picker-nav" data-nav="-1" aria-label="Previous month">&lsaquo;</button>
-      <div class="attendance-date-picker-selects">
-        <select class="attendance-date-picker-select" data-select="month">${monthOptions}</select>
-        <select class="attendance-date-picker-select" data-select="year">${yearOptions}</select>
-      </div>
-      <button type="button" class="attendance-date-picker-nav" data-nav="1" aria-label="Next month">&rsaquo;</button>
-    </div>
-    <div class="attendance-date-picker-weekdays">
-      ${ATT_DATE_PICKER_DAYS.map(day => `<span>${day}</span>`).join('')}
-    </div>
-    <div class="attendance-date-picker-grid">
-      ${cells.join('')}
-    </div>
-    <div class="attendance-date-picker-actions">
-      <button type="button" class="attendance-date-picker-action" data-action="today">Today</button>
-      <button type="button" class="attendance-date-picker-action" data-action="clear">Clear</button>
-    </div>
-  `;
-
-  positionAttendanceDatePicker(input, ATT_ACTIVE_DATE_PICKER);
-
-  ATT_ACTIVE_DATE_PICKER.querySelectorAll('[data-nav]').forEach(button => {
-    button.onclick = () => {
-      state.displayDate = new Date(displayYear, displayMonth + Number(button.dataset.nav), 1);
-      renderAttendanceDatePicker(input, state);
-    };
-  });
-
-  ATT_ACTIVE_DATE_PICKER.querySelector('[data-select="month"]').onchange = event => {
-    state.displayDate = new Date(displayYear, Number(event.target.value), 1);
-    renderAttendanceDatePicker(input, state);
-  };
-
-  ATT_ACTIVE_DATE_PICKER.querySelector('[data-select="year"]').onchange = event => {
-    state.displayDate = new Date(Number(event.target.value), displayMonth, 1);
-    renderAttendanceDatePicker(input, state);
-  };
-
-  ATT_ACTIVE_DATE_PICKER.querySelectorAll('.attendance-date-picker-day[data-date]').forEach(button => {
-    button.onclick = () => {
-      input.value = button.dataset.date || '';
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      closeAttendanceDatePicker();
-    };
-  });
-
-  ATT_ACTIVE_DATE_PICKER.querySelector('[data-action="today"]').onclick = () => {
-    input.value = toIsoDate(today);
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    closeAttendanceDatePicker();
-  };
-
-  ATT_ACTIVE_DATE_PICKER.querySelector('[data-action="clear"]').onclick = () => {
-    input.value = '';
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    closeAttendanceDatePicker();
-  };
-}
-
-function openAttendanceDatePicker(input) {
-  if (!input) return;
-  if (ATT_ACTIVE_DATE_PICKER?.dataset.inputId === input.id) {
-    closeAttendanceDatePicker();
-    return;
-  }
-
-  closeAttendanceDatePicker();
-
-  const selectedDate = parseIsoDate(input.value) || new Date();
-  const state = {
-    displayDate: new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
-  };
-  const picker = document.createElement('div');
-  picker.className = 'attendance-date-picker';
-  picker.dataset.inputId = input.id;
-  picker.addEventListener('mousedown', event => event.stopPropagation());
-  ATT_ACTIVE_DATE_PICKER = picker;
-  document.body.appendChild(picker);
-  renderAttendanceDatePicker(input, state);
-}
-
 function initAttendanceDatePickers() {
-  ['att-date-from-filter', 'att-date-to-filter', 'ot-date'].forEach(id => {
-    const input = document.getElementById(id);
-    if (!input || input.dataset.datePickerBound === '1') return;
-    input.setAttribute('autocomplete', 'off');
-    input.readOnly = true;
-    input.dataset.datePickerBound = '1';
-    input.addEventListener('click', event => {
-      event.stopPropagation();
-      if (ATT_ACTIVE_DATE_PICKER?.dataset.inputId !== input.id) {
-        openAttendanceDatePicker(input);
-      }
-    });
-    input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        openAttendanceDatePicker(input);
-      }
-      if (event.key === 'Escape') closeAttendanceDatePicker();
-    });
-  });
+  const root = document.getElementById('page-attendance') || document;
+  window.LGSVDatePicker?.enhance(root);
+  window.LGSVDatePicker?.refresh(root);
 }
-
-document.addEventListener('click', closeAttendanceDatePicker);
-window.addEventListener('resize', closeAttendanceDatePicker);
-window.addEventListener('scroll', closeAttendanceDatePicker, true);
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeAttendanceDatePicker();
-});
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -1096,7 +927,7 @@ function exportAttendanceRecords() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `attendance-records-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `attendance-records-${window.LGSVDatePicker?.todayValue?.() || toIsoDate(new Date())}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -1483,9 +1314,9 @@ async function openManualModal() {
   document.getElementById('manual-modal').style.display = 'flex';
   const dateInput = manualAttendanceEl('manual-date');
   if (dateInput && !dateInput.value) {
-    dateInput.value = toIsoDate(new Date());
-    dateInput.dispatchEvent(new Event('input', { bubbles: true }));
-    dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+    const today = window.LGSVDatePicker?.todayValue?.() || toIsoDate(new Date());
+    if (window.LGSVDatePicker?.setValue) window.LGSVDatePicker.setValue(dateInput, today);
+    else dateInput.value = today;
   }
   await loadManualAttendanceDropdown();
 }
@@ -1495,9 +1326,11 @@ function closeManualModal() {
 }
 
 async function submitManualAttendance() {
+  const dateInput = manualAttendanceEl('manual-date');
+  const selectedDate = window.LGSVDatePicker?.getValue?.(dateInput) || dateInput?.value || '';
   const body = {
     employee_id: manualAttendanceEl('manual-employee').value,
-    date: manualAttendanceEl('manual-date').value,
+    date: parseIsoDate(selectedDate) ? selectedDate : '',
     time_in: manualAttendanceEl('manual-time-in').value,
     time_out: manualAttendanceEl('manual-time-out').value,
     reason: manualAttendanceEl('manual-reason').value,
@@ -2289,7 +2122,7 @@ async function loadAttendancePolicies() {
       throw new Error(data.error || 'Failed to load attendance policies.');
     }
     const data = await res.json();
-    setPolicyValue('policy-effective-date', new Date().toISOString().slice(0, 10));
+    setPolicyValue('policy-effective-date', window.LGSVDatePicker?.todayValue?.() || toIsoDate(new Date()));
     setPolicyValue('policy-work-start-time', data.work_start_time || '08:00');
     setPolicyValue('policy-work-end-time', data.work_end_time || '17:00');
     setPolicyValue('policy-break-start-time', data.break_start_time || '12:00');
