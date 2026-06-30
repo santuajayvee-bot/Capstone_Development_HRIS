@@ -1090,6 +1090,8 @@ async function denyGenRequest(btn) {
 let LEAVE_EMPLOYEES = [];
 let LEAVE_AUDIT = [];
 let LEAVE_BALANCES = [];
+const LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS = 2;
+const LEAVE_BALANCE_EMPLOYEE_SEARCH_LIMIT = 25;
 
 function leaveStatusValue(status) {
   return status === 'Denied' ? 'Rejected' : (status || 'Pending');
@@ -1184,7 +1186,11 @@ function setupLeaveUi() {
   });
 
   document.querySelectorAll('[data-leave-tab]').forEach(tab => {
-    const visible = isLeaveManager() || EMPLOYEE_LEAVE_TABS.has(tab.dataset.leaveTab);
+    // Managers already see the balance card inside Overview. Keep the separate
+    // Balances tab only for employee self-service, where it is a distinct view.
+    const visible = isLeaveManager()
+      ? tab.dataset.leaveTab !== 'balances'
+      : EMPLOYEE_LEAVE_TABS.has(tab.dataset.leaveTab);
     tab.style.display = visible ? '' : 'none';
   });
   const activeTab = document.querySelector('[data-leave-tab].active')?.dataset.leaveTab;
@@ -1231,16 +1237,51 @@ function setupLeaveUi() {
 function renderLeaveBalanceViewerEmployeeOptions(preferredValue = '') {
   const select = document.getElementById('leave-balance-viewer-employee');
   if (!select) return;
-  const filterText = document.getElementById('leave-balance-viewer-filter')?.value || '';
-  const filteredEmployees = LEAVE_EMPLOYEES.filter(emp => leaveEmployeeMatchesFilter(emp, filterText));
+  const status = document.getElementById('leave-balance-viewer-filter-status');
+  const filterText = String(document.getElementById('leave-balance-viewer-filter')?.value || '').trim();
   const current = preferredValue || select.value;
-  select.innerHTML = leaveEmployeeOptions(filteredEmployees, 'Select employee');
+  const selectedEmployee = LEAVE_EMPLOYEES.find(emp => String(emp.id) === String(current));
+  let filteredEmployees = [];
+  let totalMatches = 0;
+  let placeholder = `Type at least ${LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS} characters to search`;
+
+  if (filterText.length >= LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS) {
+    const matches = LEAVE_EMPLOYEES
+      .filter(emp => leaveEmployeeMatchesFilter(emp, filterText))
+      .sort((a, b) => leaveEmployeeLabel(a).localeCompare(leaveEmployeeLabel(b)));
+    totalMatches = matches.length;
+    filteredEmployees = matches.slice(0, LEAVE_BALANCE_EMPLOYEE_SEARCH_LIMIT);
+    placeholder = totalMatches ? 'Select employee' : 'No matching employees';
+  } else if (filterText.length > 0) {
+    placeholder = `Enter ${LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS - filterText.length} more character`;
+  }
+
+  if (selectedEmployee && !filteredEmployees.some(emp => String(emp.id) === String(selectedEmployee.id))) {
+    filteredEmployees.unshift(selectedEmployee);
+  }
+
+  select.innerHTML = leaveEmployeeOptions(filteredEmployees, placeholder);
   if ([...select.options].some(option => option.value === current)) {
     select.value = current;
+  }
+
+  if (status) {
+    if (filterText.length < LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS) {
+      status.textContent = `Type at least ${LEAVE_BALANCE_EMPLOYEE_SEARCH_MIN_CHARS} characters to find an employee.`;
+    } else if (!totalMatches) {
+      status.textContent = 'No employees match your search.';
+    } else {
+      const shown = Math.min(totalMatches, LEAVE_BALANCE_EMPLOYEE_SEARCH_LIMIT);
+      status.textContent = totalMatches > shown
+        ? `Showing the first ${shown} of ${totalMatches} matches. Add more characters to narrow the list.`
+        : `Showing ${shown} matching employee${shown === 1 ? '' : 's'}.`;
+    }
   }
 }
 
 function filterLeaveBalanceViewerEmployees() {
+  const select = document.getElementById('leave-balance-viewer-employee');
+  if (select) select.value = '';
   renderLeaveBalanceViewerEmployeeOptions();
 }
 
@@ -1249,6 +1290,16 @@ function formatLeaveDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatLeaveDateTime(value) {
+  if (!value) return '-';
+  if (typeof formatPhilippineDateTime === 'function') {
+    return formatPhilippineDateTime(value, { timeStyle: 'short' });
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
 }
 
 function escapeLeaveText(value) {
@@ -1805,7 +1856,7 @@ function renderLeaveAudit() {
   const tbody = document.getElementById('leave-audit-tbody');
   if (!tbody) return;
   tbody.innerHTML = LEAVE_AUDIT.slice(0, 25).map(item => `
-    <tr><td>${item.created_at ? new Date(item.created_at).toLocaleString() : '-'}</td><td>${item.employee_name || '-'}</td><td>${item.action || '-'}</td><td>${item.actor_name || '-'}</td><td>${item.remarks || '-'}</td></tr>
+    <tr><td>${formatLeaveDateTime(item.created_at)}</td><td>${item.employee_name || '-'}</td><td>${item.action || '-'}</td><td>${item.actor_name || '-'}</td><td>${item.remarks || '-'}</td></tr>
   `).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">No audit records.</td></tr>';
 }
 

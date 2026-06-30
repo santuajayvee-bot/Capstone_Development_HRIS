@@ -179,9 +179,35 @@ function handleAppRoute(options = {}) {
 let topbarClockTimer = null;
 const AUTO_TABLE_PAGE_SIZE = 10;
 let autoTablePaginationId = 0;
+const LGSV_TIME_ZONE = 'Asia/Manila';
+
+function parseLgsvDateTime(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const text = String(value).trim();
+  const mysqlDateTime = text.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?$/);
+  const date = new Date(mysqlDateTime ? `${mysqlDateTime[1]}T${mysqlDateTime[2]}+08:00` : value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatPhilippineDateTime(value = new Date(), options = {}) {
+  const date = parseLgsvDateTime(value);
+  if (!date) return options.fallback || '-';
+  const formatted = date.toLocaleString(options.locale || 'en-PH', {
+    timeZone: LGSV_TIME_ZONE,
+    dateStyle: options.dateStyle || 'medium',
+    timeStyle: options.timeStyle || 'medium',
+    hour12: options.hour12 ?? true,
+  });
+  return options.includeSuffix === false ? formatted : `${formatted} PHT`;
+}
+
+window.LGSV_TIME_ZONE = LGSV_TIME_ZONE;
+window.formatPhilippineDateTime = formatPhilippineDateTime;
 
 function formatTopbarDateTime(date = new Date()) {
   return date.toLocaleString('en-US', {
+    timeZone: LGSV_TIME_ZONE,
     weekday: 'long',
     year: 'numeric',
     month: 'long',

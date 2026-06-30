@@ -348,7 +348,10 @@ function formatDate(value) {
 
 function formatDateTime(value) {
   if (!value) return '-';
-  return new Date(value).toLocaleString('en-PH');
+  if (typeof formatPhilippineDateTime === 'function') {
+    return formatPhilippineDateTime(value, { timeStyle: 'short' });
+  }
+  return `${new Date(value).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
 }
 
 function badge(value, tone = '') {

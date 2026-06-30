@@ -6,6 +6,8 @@ const mysql  = require('mysql2/promise');
 const fs     = require('fs');
 require('dotenv').config();
 
+const DB_TIME_ZONE = process.env.DB_TIME_ZONE || '+08:00';
+
 function requiredDatabaseSetting(name) {
   const value = String(process.env[name] || '').trim();
   if (value) return value;
@@ -37,9 +39,21 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit:    10,
   queueLimit:         0,
-  timezone:           '+08:00', // Philippine Standard Time
+  timezone:           DB_TIME_ZONE, // Philippine Standard Time by default
   ssl:                getSslConfig(),
 });
+
+// RDS commonly runs with a UTC global timezone. The mysql2 timezone option
+// controls JS date conversion, but SQL functions such as NOW() use the MySQL
+// session timezone. Set every new connection to Philippine time so audit rows
+// created by SQL defaults/NOW() match local operations.
+if (pool.pool && typeof pool.pool.on === 'function') {
+  pool.pool.on('connection', connection => {
+    connection.query(`SET time_zone = ${mysql.escape(DB_TIME_ZONE)}`, error => {
+      if (error) console.warn('MySQL session timezone could not be set:', error.message);
+    });
+  });
+}
 
 // Test connection on startup. Unit tests that only exercise validators/helpers
 // can import modules without requiring a live MySQL service.

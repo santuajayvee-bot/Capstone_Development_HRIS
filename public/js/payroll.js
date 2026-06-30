@@ -1348,6 +1348,16 @@ function canApproveSalaryCalculations() {
     || (Array.isArray(user?.permissions) && user.permissions.includes('payroll.approve'));
 }
 
+function canManagePayslipActions() {
+  if (typeof getUser !== 'function') return false;
+  return getUser()?.role === 'payroll_manager';
+}
+
+function enforcePayslipActionVisibility() {
+  if (canManagePayslipActions()) return;
+  document.querySelectorAll('[data-payroll-manager-payslip-action]').forEach(element => element.remove());
+}
+
 function canSubmitSalaryCalculations() {
   if (typeof getUser !== 'function') return false;
   const user = getUser();
@@ -1982,21 +1992,15 @@ function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
   const lateMinutes = payslipNumber(earnings.late_minutes);
   const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
-  const lateDeduction = payslipNumber(earnings.late_deduction);
-  const undertimeDeduction = payslipNumber(earnings.undertime_deduction);
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 || lateDeduction > 0
-        ? `${payslipMinuteLabel(lateMinutes)} / ${payslipMoney(lateDeduction)}`
-        : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 || undertimeDeduction > 0
-        ? `${payslipMinuteLabel(undertimeMinutes)} / ${payslipMoney(undertimeDeduction)}`
-        : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : ''
     }
   ];
 }
@@ -2005,7 +2009,7 @@ function payslipAttendanceTable(payslip) {
   const rows = payslipAttendanceRows(payslip);
   return `
     <div class="lgsv-payslip-attendance">
-      <h4>Late / UT</h4>
+      <h4>Attendance Adjustments</h4>
       ${rows.map(row => `
         <div class="lgsv-payslip-attendance-row">
           <span>${payrollEscape(row.label)}</span>
@@ -2514,7 +2518,7 @@ function showCalculationBreakdown(record) {
     && deductionsApplied
     ? `<button class="btn btn-outline" type="button" onclick="lockSalaryCalculation(${Number(record.id)})">Lock</button>`
     : '';
-  const payslipActions = deductionsApplied
+  const payslipActions = deductionsApplied && canManagePayslipActions()
     ? `
         <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, true)">Print Payslip</button>
         <button class="btn btn-outline" type="button" onclick="exportPayslipPdf(${Number(record.id)}, false)">Export Payslip PDF</button>
@@ -4788,7 +4792,7 @@ function renderPayrollAudit() {
         <tbody>
           ${pageRows.map(row => `
             <tr>
-              <td>${payrollEscape(row.created_at ? new Date(row.created_at).toLocaleString() : '-')}</td>
+              <td>${payrollEscape(row.created_at ? formatPayrollDateTime(row.created_at) : '-')}</td>
               <td>${payrollEscape(row.username || '-')}</td>
               <td>${payrollEscape(payrollAuditRoleLabel(row.user_role))}</td>
               <td>${payrollEscape(payrollAuditActionLabel(row.action))}</td>
@@ -4814,6 +4818,15 @@ function renderPayrollAudit() {
 function setPayrollAuditPage(page) {
   payrollAuditPage = Number(page) || 1;
   renderPayrollAudit();
+}
+
+function formatPayrollDateTime(value) {
+  if (typeof formatPhilippineDateTime === 'function') {
+    return formatPhilippineDateTime(value, { timeStyle: 'short' });
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '-');
+  return `${date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
 }
 
 function payrollAuditRoleLabel(role) {
@@ -4917,6 +4930,7 @@ function payrollAuditCompactValue(value) {
 }
 
 function initializePayrollModule() {
+  enforcePayslipActionVisibility();
   const monthInput = document.getElementById('payroll-filter-month');
   if (monthInput && !monthInput.value) {
     const today = new Date();

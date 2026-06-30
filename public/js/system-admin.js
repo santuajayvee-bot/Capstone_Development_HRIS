@@ -95,7 +95,10 @@ function sysProtectEmployeeIdentity(user) {
 
 function sysFormatDateTime(value) {
   if (!value) return '—';
-  return new Date(value).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
+  if (typeof formatPhilippineDateTime === 'function') {
+    return formatPhilippineDateTime(value, { fallback: '-', timeStyle: 'short' });
+  }
+  return `${new Date(value).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
 }
 
 function sysJsString(value) {
@@ -789,6 +792,7 @@ function auditActionText(log) {
   if (/blocked_rate_limit_exceeded/i.test(action)) return 'Rate limit exceeded';
   if (/invalid_or_tampered_jwt_attempt/i.test(action)) return 'Invalid session token attempt blocked';
   if (/expired_jwt_attempt/i.test(action)) return 'Expired session token rejected';
+  if (/log_integrity_blocked/i.test(action)) return 'Audit log tampering attempt blocked';
   if (auditLooksBackendOnly(action)) return `${auditModuleLabel(log?.module)} activity recorded`;
   return action;
 }

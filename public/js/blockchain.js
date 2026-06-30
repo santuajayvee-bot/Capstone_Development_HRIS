@@ -30,7 +30,10 @@ function bcFormatDate(value) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('en-PH');
+  if (typeof formatPhilippineDateTime === 'function') {
+    return formatPhilippineDateTime(date, { timeStyle: 'short' });
+  }
+  return `${date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
 }
 
 function bcMoney(value) {

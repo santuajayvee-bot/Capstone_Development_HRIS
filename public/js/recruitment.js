@@ -739,7 +739,7 @@ function onbAuditRows(audit) {
   return audit.map(item => `
     <div class="onb-audit">
       <div><strong>${onbEscape(item.action.replace(/_/g, ' '))}</strong><div class="onb-muted">${onbEscape(item.reason || 'System-recorded action')}</div></div>
-      <small class="onb-muted">${onbEscape(item.actor)}<br>${onbEscape(new Date(item.created_at).toLocaleString())}</small>
+      <small class="onb-muted">${onbEscape(item.actor)}<br>${onbEscape(typeof formatPhilippineDateTime === 'function' ? formatPhilippineDateTime(item.created_at, { timeStyle: 'short' }) : `${new Date(item.created_at).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`)}</small>
     </div>
   `).join('');
 }
