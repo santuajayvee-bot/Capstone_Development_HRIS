@@ -1044,6 +1044,9 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
     if (rejectUnsupportedFields(req, res, MANUAL_ATTENDANCE_ALLOWED_FIELDS)) return;
     const employeeId = positiveInteger(req.body.employee_id, 'employee_id');
     const date = cleanText(req.body.date, 10);
+    if (!isDate(date)) {
+      return res.status(400).json({ error: 'Manual attendance date must be a valid date using YYYY-MM-DD format.' });
+    }
     const policy = await getActiveAttendancePolicy(pool, date || null, { employee_id: employeeId });
     if (!policy.allow_manual_attendance) {
       return res.status(403).json({ error: 'Manual attendance is disabled by the active attendance policy.' });
@@ -1053,8 +1056,8 @@ router.post('/manual', requireAuth, requireRole(HR_ROLES), async (req, res) => {
     const timeOut = dtrTimes.time_out;
     const reason = requireReason(req.body.reason);
     const suppliedTimes = [timeIn, timeOut].filter(Boolean);
-    if (!isDate(date) || suppliedTimes.some(value => !isTime(value))) {
-      return res.status(400).json({ error: 'Valid date and time values are required.' });
+    if (suppliedTimes.some(value => !isTime(value))) {
+      return res.status(400).json({ error: 'Valid time values are required.' });
     }
     if (!suppliedTimes.length) return res.status(400).json({ error: 'At least one manual punch is required.' });
     const [employeeRows] = await pool.execute('SELECT status FROM employees WHERE id = ? LIMIT 1', [employeeId]);

@@ -15,8 +15,22 @@ function normalizeLeaveRole(role) {
     .replace(/[\s-]+/g, '_') || 'employee';
 }
 
+function currentLeaveUser() {
+  return CURRENT_USER || (typeof getUser === 'function' ? getUser() : null) || {};
+}
+
 function currentLeaveRole() {
-  return normalizeLeaveRole(CURRENT_USER?.role || CURRENT_USER?.roleName || CURRENT_USER?.role_label || CURRENT_USER?.roleLabel);
+  const user = currentLeaveUser();
+  const role = normalizeLeaveRole(user.role || user.roleName || user.role_name || user.role_label || user.roleLabel);
+  const label = String(user.roleLabel || user.role_label || user.roleName || user.role_name || '').toLowerCase();
+  const username = String(user.username || '').toLowerCase();
+  if (role === 'employee') {
+    if (label.includes('hr admin') || label.includes('human resource')) return 'hr_admin';
+    if (label.includes('hr manager')) return 'hr_manager';
+    if (username === 'hr.admin' || username.includes('hr.admin')) return 'hr_admin';
+    if (username.includes('hr.manager')) return 'hr_manager';
+  }
+  return role;
 }
 
 function isLeaveManager() {
@@ -490,13 +504,9 @@ async function denyLeave(btn) {
 // ── REQUESTS PAGE ─────────────────────────────────────────────
 async function loadAllRequests() {
   try {
-    const [leaveRes, reqRes] = await Promise.all([
-      apiFetch('/api/leave'),
-      apiFetch('/api/requests')
-    ]);
+    const leaveRes = await apiFetch('/api/leave');
     const leaves  = (leaveRes && leaveRes.ok) ? await leaveRes.json() : [];
-    const genReqs = (reqRes   && reqRes.ok)   ? await reqRes.json()   : [];
-    renderAllRequests(leaves, genReqs);
+    renderAllRequests(leaves, []);
   } catch (error) {
     console.error('Error loading requests:', error);
   }
@@ -612,6 +622,11 @@ async function saveRequest() {
   const type = selectedEl
     ? (selectedEl.getAttribute('data-type') || selectedEl.querySelector('.req-type-title')?.textContent?.trim())
     : 'Leave Request';
+
+  if (type !== 'Leave Request') {
+    alert('Only leave requests are supported in this portal.');
+    return;
+  }
 
   // For Leave Requests, check if employee is eligible based on wage type
   if (type === 'Leave Request') {
@@ -935,6 +950,10 @@ let ALL_GEN_REQUESTS = [];
 let CURRENT_GEN_TAB = 'pending';
 
 async function loadGeneralRequests() {
+  const card = document.getElementById('general-requests-card');
+  if (card) card.style.display = 'none';
+  return;
+
   try {
     const res = await apiFetch('/api/requests');
     if (!res || !res.ok) { console.error('Failed to fetch general requests'); return; }

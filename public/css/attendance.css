@@ -475,12 +475,12 @@
 }
 .att-menu-panel .att-menu-item-success .att-menu-icon { color:#15803d; }
 .att-menu-panel .att-menu-item-danger .att-menu-icon { color:#dc2626; }
-#att-payroll-policy .policy-management-card,
-#att-payroll-policy .policy-management-card .payroll-collapsible,
-#att-payroll-policy .policy-management-card .table-wrap,
-#att-payroll-policy .policy-management-card input,
-#att-payroll-policy .policy-management-card select,
-#att-payroll-policy .policy-management-card button {
+#hr-payroll-policy-card,
+#hr-payroll-policy-card .payroll-collapsible,
+#hr-payroll-policy-card .table-wrap,
+#hr-payroll-policy-card input,
+#hr-payroll-policy-card select,
+#hr-payroll-policy-card button {
   border-radius:0 !important;
 }
 .holiday-calendar-wrap {

@@ -27,7 +27,6 @@ const OFFBOARDING_DOCUMENT_TYPES = [
   ['Property_Return', 'Company property return proof'],
   ['Attendance_Timesheet', 'Final attendance / timesheet support'],
   ['Final_Pay_Computation', 'Final pay computation support'],
-  ['COE_Request', 'Certificate of Employment request/release'],
   ['Exit_Interview', 'Exit interview form'],
   ['Final_Pay_Acknowledgement', 'Final pay acknowledgement / quitclaim if used'],
   ['Other', 'Other supporting document'],
@@ -76,6 +75,19 @@ function statusClassName(status) {
 
 function statusBadgeText(status) {
   return EMPLOYMENT_STATUS_OPTIONS.includes(status) ? status : 'Active';
+}
+
+function isValidSupervisorName(value) {
+  const text = String(value || '').trim();
+  return !text || (/^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/.test(text) && /[A-Za-zÀ-ÖØ-öø-ÿÑñ]/.test(text));
+}
+
+async function validateSupervisorFieldElement(input, label = 'Immediate supervisor') {
+  if (!input || isValidSupervisorName(input.value)) return true;
+  input.classList.add('input-validation-error');
+  input.focus?.({ preventScroll: false });
+  await showAlert(`${label} must be a valid name. Numbers are not allowed.`, 'Validation Error', 'warning');
+  return false;
 }
 
 function toggleProfileOffboardingFields() {
@@ -1463,6 +1475,9 @@ function openReonboardingDrawer(employeeId) {
 async function submitLifecycleForm(event, endpoint, fallbackMessage) {
   event.preventDefault();
   const form = event.currentTarget;
+  const reonboardSupervisor = form.querySelector('[name="new_supervisor"]');
+  if (!(await validateSupervisorFieldElement(reonboardSupervisor, 'New supervisor'))) return;
+
   if (endpoint.includes('/offboard')) {
     const confirmed = confirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.');
     if (!confirmed) return;
@@ -2059,6 +2074,7 @@ async function saveEditedEmployee() {
     await showAlert('First name, last name, and email are required', 'Validation Error', 'warning');
     return;
   }
+  if (!(await validateSupervisorFieldElement(document.getElementById('edit-emp-supervisor')))) return;
 
   // Collect sewing type rates if wage type is per-piece
   let sewingRates = [];
@@ -4028,6 +4044,10 @@ async function saveProfilePageChanges() {
   const profileDeploymentStatus = document.getElementById('profile-edit-deployment-status')?.value || null;
   const profileContractStart = document.getElementById('profile-edit-contract-start-date')?.value || null;
   const profileContractEnd = document.getElementById('profile-edit-contract-end-date')?.value || null;
+  if (!(await validateSupervisorFieldElement(document.getElementById('profile-edit-supervisor')))) {
+    switchProfileTab('employment');
+    return;
+  }
   const hasProfileAgencyDetails = !!(
     profileAgencyName ||
     profileAgencyContactPerson ||

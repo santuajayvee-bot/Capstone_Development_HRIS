@@ -50,7 +50,7 @@ const PAYROLL_PERMISSIONS = {
   settings: ['payroll_officer', 'payroll_manager'],
   reports: ['payroll_officer', 'payroll_manager']
 };
-const HR_POLICY_ROLES = [...ROLES.hr_manager, ...ROLES.admin_any];
+const HR_POLICY_ROLES = ROLES.hr_manager;
 const POLICY_VIEW_ROLES = [...PAYROLL_PERMISSIONS.view, ...HR_POLICY_ROLES];
 
 const DEDUCTION_POLICY_MANAGERS = new Set(['payroll_officer', 'payroll_manager']);
@@ -91,7 +91,7 @@ const LOGISTICS_TRIP_PERMISSIONS = {
   view: PAYROLL_PERMISSIONS.view,
   encode: ROLES.payroll_any,
   approve: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
-  configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval, ...ROLES.admin_any],
+  configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
 };
 
 const MAX_DAILY_PIECE_OUTPUT_QUANTITY = 10000;

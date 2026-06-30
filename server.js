@@ -100,7 +100,7 @@ const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
 });
 const ADDRESS_DATASET_PATH = path.join(__dirname, 'data', 'philippine_provinces_cities_municipalities_and_barangays.json');
 const ADDRESS_DATASET_UNAVAILABLE = 'Philippine address dataset unavailable. Please contact the administrator.';
-const EMPLOYEE_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s.-]+$/;
+const EMPLOYEE_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/;
 const EMPLOYEE_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+:/-]+$/;
 const EMPLOYEE_SAFE_TEXT_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#()&+:/-]+$/;
 const EMPLOYEE_FORBIDDEN_PATTERN = /(<|>|<\/|script|javascript:|onerror\s*=|onload\s*=|\b(select|insert|update|delete|drop|alter|union|exec|truncate)\b|--|;)/i;
@@ -298,7 +298,6 @@ const EMPLOYEE_OFFBOARDING_DOCUMENT_TYPES = new Map([
   ['Property_Return', 'Company property return proof'],
   ['Attendance_Timesheet', 'Final attendance / timesheet support'],
   ['Final_Pay_Computation', 'Final pay computation support'],
-  ['COE_Request', 'Certificate of Employment request/release'],
   ['Exit_Interview', 'Exit interview form'],
   ['Final_Pay_Acknowledgement', 'Final pay acknowledgement / quitclaim if used'],
   ['Other', 'Other supporting document'],
@@ -1177,7 +1176,9 @@ const EMPLOYEE_FIELD_LABELS = {
   clearance_items: 'Clearance Checklist',
   base_rate: 'Basic Salary',
   allowances: 'Allowances',
-  allowance: 'Allowance'
+  allowance: 'Allowance',
+  supervisor: 'Immediate Supervisor',
+  new_supervisor: 'New Supervisor'
 };
 
 function rejectEmployeeInput(field, reason = null) {
@@ -1498,6 +1499,16 @@ function validateEmployeeTextField(body, field, { max = 120, pattern = EMPLOYEE_
   const text = validateNoDangerousText(field, value);
   if (text.length > max || !pattern.test(text)) throw rejectEmployeeInput(field);
   body[field] = text.replace(/\s+/g, ' ');
+}
+
+function validateEmployeeNameLikeField(body, field, options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return;
+  validateEmployeeTextField(body, field, options);
+  const value = body[field];
+  if (value == null) return;
+  if (!/[A-Za-zÀ-ÖØ-öø-ÿÑñ]/.test(String(value))) {
+    throw rejectEmployeeInput(field, 'Enter a valid name or title, not numbers only.');
+  }
 }
 
 function validateEmployeeEmailField(body, field, { required = false } = {}) {
@@ -1941,7 +1952,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
   try {
     [
       'first_name', 'middle_name', 'last_name', 'suffix', 'nationality', 'marital_status',
-      'place_of_birth', 'religion', 'supervisor',
+      'place_of_birth', 'religion',
       'emergency_contact_name', 'emergency_contact_relationship',
       'education_school', 'education_attainment', 'education_jhs_school',
       'education_jhs_attainment', 'education_shs_school', 'education_shs_attainment',
@@ -1949,6 +1960,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
       'education_college_school', 'education_college_attainment', 'agency_contact_person',
       'separation_reason'
     ].forEach(field => validateEmployeeTextField(body, field, { max: field.includes('school') ? 180 : 120 }));
+    validateEmployeeNameLikeField(body, 'supervisor', { max: 120 });
 
     validateEmployeeTextField(body, 'offboarding_remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
 
@@ -4287,7 +4299,7 @@ app.post('/api/employees/:id/reonboard', requireAuth, requireRole(ROLES.any), EM
       validateEmployeeDateField(req.body, 'rehire_date', { required: true });
       validateEmployeeTextField(req.body, 'new_position', { max: 120, pattern: EMPLOYEE_SAFE_TEXT_PATTERN, allowEmpty: false });
       validateEmployeeTextField(req.body, 'work_location', { max: 160, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
-      validateEmployeeTextField(req.body, 'new_supervisor', { max: 120, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
+      validateEmployeeNameLikeField(req.body, 'new_supervisor', { max: 120 });
       validateEmployeeTextField(req.body, 'remarks', { max: 500, pattern: EMPLOYEE_SAFE_TEXT_PATTERN });
       validateEmployeeEnumField(req.body, 'employment_type', EMPLOYEE_ENUMS.employment_type);
       validateEmployeeEnumField(req.body, 'hiring_type', EMPLOYEE_ENUMS.hiring_type);
@@ -6262,54 +6274,33 @@ const employeeOnlyRequestAccess = (req, res, next) => {
   next();
 };
 
-// General Requests (COE, COS, Exit) — employee self-service only.
+async function rejectRetiredGeneralRequests(req, res) {
+  await auditSecurityEvent(req, {
+    action: 'blocked_retired_general_request_endpoint',
+    module: 'GENERAL_REQUEST_SECURITY',
+    targetTable: 'general_requests',
+    targetRecord: req.params?.id || req.user?.employeeId || null,
+    newValue: {
+      path: req.originalUrl,
+      method: req.method,
+      reason: 'COE/COS/Request Exit is outside the approved capstone scope.'
+    },
+    result: 'blocked',
+  }).catch(() => {});
+  return res.status(410).json({ error: 'This request type is no longer supported. Please use Leave Request only.' });
+}
+
+// General Requests (COE, COS, Exit) are retired. Leave requests remain under /api/leave.
 app.get('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
-  try {
-    const pool = require('./config/db');
-    let q = `SELECT gr.*, e.employee_code, e.first_name, e.middle_name, e.last_name
-             FROM general_requests gr JOIN employees e ON e.id = gr.employee_id`;
-    const p = [];
-    q += ' WHERE gr.employee_id = ?';
-    p.push(req.user.employeeId);
-    q += ' ORDER BY gr.created_at DESC';
-    const [rows] = await pool.execute(q, p);
-    res.json(rows.map(row => {
-      decryptEmployeeStrictPii(row);
-      return { ...row, employee_name: employeeDisplayName(row) || row.employee_code || '-' };
-    }));
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch requests.' }); }
+  return rejectRetiredGeneralRequests(req, res);
 });
 
 app.post('/api/requests', requireAuth, employeeOnlyRequestAccess, async (req, res) => {
-  try {
-    const pool = require('./config/db');
-    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
-    const { type, reason } = req.body;
-    const empId = req.user.employeeId;
-    if (!empId) return res.status(400).json({ error: 'Your account is not linked to an employee record. Please ask the system administrator to link your account to an employee profile.' });
-    if (!['COE','COS','Request Exit'].includes(type)) return res.status(400).json({ error: 'Invalid request type.' });
-    const [result] = await pool.execute(
-      `INSERT INTO general_requests (employee_id, type, reason) VALUES (?,?,?)`,
-      [empId, type, reason || null]
-    );
-    res.json({ id: result.insertId, message: 'Request submitted.' });
-  } catch (err) { res.status(500).json({ error: 'Failed to submit request.' }); }
+  return rejectRetiredGeneralRequests(req, res);
 });
 
 app.patch('/api/requests/:id/status', requireAuth, requireRole(ROLES.hr_final_approval), async (req, res) => {
-  try {
-    const pool = require('./config/db');
-    if (await rejectUnsupportedRouteFields(req, res, GENERAL_REQUEST_STATUS_ALLOWED_FIELDS, { module: 'GENERAL_REQUEST_SECURITY' })) return;
-    const status = String(req.body.status || '').trim();
-    if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid request status.' });
-    }
-    await pool.execute(
-      `UPDATE general_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?`,
-      [status, req.user.id, req.params.id]
-    );
-    res.json({ message: 'Request status updated.' });
-  } catch (err) { res.status(500).json({ error: 'Failed to update request.' }); }
+  return rejectRetiredGeneralRequests(req, res);
 });
 
 // Payroll runs — payroll roles + admin only

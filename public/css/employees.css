@@ -509,16 +509,31 @@
 .employee-lifecycle-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+#employee-lifecycle-panel .btn {
+  width: auto;
+  min-width: 88px;
+  min-height: 36px;
+  padding: 8px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex: 0 0 auto;
 }
 
 #employee-lifecycle-panel .btn-primary {
-  background: #0f766e;
-  border-color: #0f766e;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 #employee-lifecycle-panel .btn-primary:hover {
-  background: #115e59;
-  border-color: #115e59;
+  background: #c9181f;
+  border-color: #c9181f;
 }
 
 @media (max-width: 760px) {
@@ -552,6 +567,11 @@
   .employee-lifecycle-footer,
   .employee-lifecycle-actions {
     flex-direction: column;
+  }
+
+  #employee-lifecycle-panel .btn,
+  .employee-lifecycle-actions {
+    width: 100%;
   }
 
   .employee-lifecycle-progress {

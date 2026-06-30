@@ -12,7 +12,6 @@
       <div class="tab" data-att-tab="records" onclick="switchAttTab('records', this)">Attendance Records</div>
       <div class="tab" id="att-tab-biometric" data-att-tab="biometric" onclick="switchAttTab('biometric', this)">Biometrics</div>
       <div class="tab" id="att-tab-policies" data-att-tab="policies" onclick="switchAttTab('policies', this)">Policy</div>
-      <div class="tab" id="att-tab-payroll-policy" data-att-tab="payroll-policy" onclick="switchAttTab('payroll-policy', this)">Payroll Config</div>
       <div class="tab" id="att-tab-audit" data-att-tab="audit" onclick="switchAttTab('audit', this)">Audit Log</div>
     </div>
   </div>
@@ -259,14 +258,12 @@
     </div>
     <div id="holiday-calendar-pagination" class="att-records-pagination holiday-calendar-pagination"></div>
   </div>
-</div>
 
-<div id="att-payroll-policy" style="display:none;">
   <div id="hr-payroll-policy-card" class="card policy-management-card" style="margin-top:20px;">
     <div class="att-card-heading">
       <div>
-        <h3>Employee and Group Payroll Configuration</h3>
-        <p>HR-owned schedule, workday factor, minute-rate divisor, and tardiness trigger setup.</p>
+        <h3>Employee and Group Policy Assignment</h3>
+        <p>Optional overrides for employee, department, wage type, or employment-type schedule rules.</p>
       </div>
       <button class="btn btn-outline btn-sm" type="button" onclick="loadPayrollPolicySettings()">Refresh</button>
     </div>

@@ -241,6 +241,7 @@ function esc(value) {
 
 function isHr() { return ['hr', 'hradmin', 'hr_admin', 'hr_manager', 'admin'].includes(ATT_USER?.role); }
 function isSystemAdmin() { return ['system_admin', 'admin'].includes(ATT_USER?.role); }
+function canManageAttendancePolicies() { return ['hr', 'hradmin', 'hr_admin', 'hr_manager'].includes(ATT_USER?.role); }
 function isPayrollOfficer() { return ATT_USER?.role === 'payroll_officer'; }
 function isPayrollManager() { return ATT_USER?.role === 'payroll_manager'; }
 function isPayrollAttendanceViewer() { return isPayrollOfficer() || isPayrollManager(); }
@@ -500,14 +501,18 @@ function calculateDtrHours(record) {
 
 async function switchAttTab(tab, element) {
   ATT_USER = ATT_USER || getUser();
-  if (['biometric', 'policies', 'payroll-policy', 'audit'].includes(tab)) {
+  if (['biometric', 'policies', 'audit'].includes(tab)) {
     await refreshAttendanceUserFromServer();
   }
-  if (['biometric', 'policies', 'payroll-policy', 'audit'].includes(tab) && !canManageBiometrics()) {
+  if (['biometric', 'audit'].includes(tab) && !canManageBiometrics()) {
     tab = 'overview';
     element = document.querySelector('[data-att-tab="overview"]');
   }
-  ['overview', 'records', 'biometric', 'policies', 'payroll-policy', 'audit'].forEach(name => {
+  if (tab === 'policies' && !canManageAttendancePolicies()) {
+    tab = 'overview';
+    element = document.querySelector('[data-att-tab="overview"]');
+  }
+  ['overview', 'records', 'biometric', 'policies', 'audit'].forEach(name => {
     const panel = document.getElementById(`att-${name}`);
     if (panel) panel.style.display = name === tab ? 'block' : 'none';
   });
@@ -521,8 +526,10 @@ async function switchAttTab(tab, element) {
 
   if (tab === 'records') loadAttRecords();
   if (tab === 'biometric') loadBiometricWorkspace();
-  if (tab === 'policies') loadAttendancePolicies();
-  if (tab === 'payroll-policy' && typeof loadPayrollPolicySettings === 'function') loadPayrollPolicySettings();
+  if (tab === 'policies') {
+    loadAttendancePolicies();
+    if (typeof loadPayrollPolicySettings === 'function') loadPayrollPolicySettings();
+  }
   if (tab === 'audit') loadAttendanceAuditLog();
 }
 
@@ -536,12 +543,11 @@ async function initAttendance() {
   setVisible('biometric-attendance-card', isEmployee() && !!ATT_USER.employeeId);
   setVisible('emp-summary-card', isEmployee() && !!ATT_USER.employeeId);
   setVisible('att-tab-biometric', canManageBiometrics());
-  setVisible('att-tab-policies', canManageBiometrics());
-  setVisible('att-tab-payroll-policy', isHr() || isSystemAdmin());
+  setVisible('att-tab-policies', canManageAttendancePolicies());
   setVisible('att-tab-audit', canManageBiometrics());
   setVisible('btn-manual-attendance', canManageAttendanceRecords());
   setVisible('att-select-all', canManageAttendanceRecords());
-  setVisible('hr-payroll-policy-card', isHr() || isSystemAdmin());
+  setVisible('hr-payroll-policy-card', canManageAttendancePolicies());
   document.querySelectorAll('.att-hr-record-action').forEach(button => {
     button.style.display = canManageAttendanceRecords() ? '' : 'none';
   });
@@ -1475,6 +1481,12 @@ async function encodeOvertime() {
 
 async function openManualModal() {
   document.getElementById('manual-modal').style.display = 'flex';
+  const dateInput = manualAttendanceEl('manual-date');
+  if (dateInput && !dateInput.value) {
+    dateInput.value = toIsoDate(new Date());
+    dateInput.dispatchEvent(new Event('input', { bubbles: true }));
+    dateInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
   await loadManualAttendanceDropdown();
 }
 
@@ -1491,17 +1503,22 @@ async function submitManualAttendance() {
     reason: manualAttendanceEl('manual-reason').value,
   };
   if (!body.employee_id || !body.date || body.reason.trim().length < 8) {
+    if (typeof showAlert === 'function') {
+      return showAlert('Select an employee, date, and clear reason.', 'Manual Attendance', 'warning');
+    }
     return alert('Select an employee, date, and clear reason.');
   }
   try {
     const res = await apiFetch('/api/attendance/manual', { method: 'POST', body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    alert(data.message);
+    if (typeof showAlert === 'function') await showAlert(data.message || 'Manual attendance recorded.', 'Manual Attendance', 'success');
+    else alert(data.message);
     closeManualModal();
     loadAttRecords();
   } catch (err) {
-    alert(err.message);
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Manual Attendance', 'error');
+    else alert(err.message);
   }
 }
 
@@ -1809,17 +1826,22 @@ async function saveBiometricMapping() {
 }
 
 async function disableBiometricMapping(mappingId) {
-  if (!confirm('Disable this biometric employee mapping?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Disable this biometric employee mapping?', 'Disable Fingerprint Mapping', 'Disable', 'Cancel')
+    : confirm('Disable this biometric employee mapping?');
+  if (!confirmed) return;
   try {
     const res = await apiFetch(`/api/attendance/biometric/mappings/${mappingId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    alert(data.message);
+    if (typeof showAlert === 'function') await showAlert(data.message || 'Fingerprint mapping disabled.', 'Fingerprint Mapping', 'success');
+    else alert(data.message);
     loadBiometricMappings();
     loadBiometricHealth();
     updateFingerprintEnrollmentView();
   } catch (err) {
-    alert(err.message);
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Fingerprint Mapping', 'error');
+    else alert(err.message);
   }
 }
 
@@ -1930,6 +1952,9 @@ function setAttendanceAuditPage(page) {
 function attendanceAuditActionLabel(action) {
   const raw = String(action || '').trim();
   if (!raw) return '-';
+  if (/\/api\/biometric\/bridge-commands/i.test(raw)) return 'Biometric Bridge Command Requested';
+  if (/\/api\/attendance\//i.test(raw)) return 'Attendance Activity Recorded';
+  if (/\/api\//i.test(raw)) return 'System Activity Recorded';
 
   const manualMatch = raw.match(/^MANUAL ATTENDANCE CREATED(?:\s+\[ID:(\d+)\])?(?:\s+Reason:(.*))?$/i);
   if (manualMatch) {
@@ -1976,11 +2001,17 @@ function attendanceAuditValue(value) {
   if (value === null || value === undefined) return '-';
   const raw = String(value).trim();
   if (!raw || raw === '-' || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'undefined') return '-';
+  if (attendanceAuditLooksInternal(raw)) return '-';
 
   const parsed = attendanceAuditParseValue(raw);
   if (parsed && typeof parsed === 'object') return attendanceAuditObjectSummary(parsed);
 
   return attendanceAuditTitleCase(raw);
+}
+
+function attendanceAuditLooksInternal(value) {
+  return /\/api\//i.test(String(value || ''))
+    || /\b(method|path|targetTable|targetRecord|userAgent|user_agent)\b/i.test(String(value || ''));
 }
 
 function attendanceAuditParseValue(raw) {
@@ -2002,15 +2033,21 @@ function attendanceAuditObjectSummary(value) {
     return `${value.length} item${value.length === 1 ? '' : 's'} recorded`;
   }
 
+  const internalKeys = new Set([
+    'method',
+    'path',
+    'targetTable',
+    'target_table',
+    'targetRecord',
+    'target_record',
+    'role',
+    'userAgent',
+    'user_agent',
+  ]);
   const labels = {
     reason: 'Reason',
     deviceReference: 'Device Reference',
     device_reference: 'Device Reference',
-    targetTable: 'Table',
-    target_table: 'Table',
-    targetRecord: 'Record ID',
-    target_record: 'Record ID',
-    role: 'Role',
     year: 'Year',
     country_code: 'Country',
     count: 'Count',
@@ -2031,11 +2068,6 @@ function attendanceAuditObjectSummary(value) {
     'reason',
     'deviceReference',
     'device_reference',
-    'targetTable',
-    'target_table',
-    'targetRecord',
-    'target_record',
-    'role',
     'year',
     'country_code',
     'count',
@@ -2052,8 +2084,8 @@ function attendanceAuditObjectSummary(value) {
     'employee_code',
     'device_id',
   ];
-  const keys = preferredKeys.filter(key => value[key] !== undefined && value[key] !== null && value[key] !== '');
-  const fallbackKeys = Object.keys(value).filter(key => !keys.includes(key) && value[key] !== undefined && value[key] !== null && value[key] !== '').slice(0, 4);
+  const keys = preferredKeys.filter(key => !internalKeys.has(key) && value[key] !== undefined && value[key] !== null && value[key] !== '');
+  const fallbackKeys = Object.keys(value).filter(key => !internalKeys.has(key) && !keys.includes(key) && value[key] !== undefined && value[key] !== null && value[key] !== '').slice(0, 4);
   const visibleKeys = keys.length ? keys : fallbackKeys;
 
   if (!visibleKeys.length) return '-';
@@ -2067,6 +2099,7 @@ function attendanceAuditValueScalar(value) {
   if (typeof value === 'object') return attendanceAuditObjectSummary(value);
   const raw = String(value).trim();
   if (!raw || raw.toLowerCase() === 'null') return '-';
+  if (attendanceAuditLooksInternal(raw)) return '-';
   return attendanceAuditTitleCase(raw);
 }
 

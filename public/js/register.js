@@ -65,6 +65,11 @@ function isValidManualEmployeeCode(value) {
   return /^[A-Z0-9_-]+$/i.test(String(value || '').trim());
 }
 
+function isValidEmployeeSupervisorName(value) {
+  const text = String(value || '').trim();
+  return !text || (/^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/.test(text) && /[A-Za-zÀ-ÖØ-öø-ÿÑñ]/.test(text));
+}
+
 function normalizeBankName(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
@@ -1845,6 +1850,16 @@ async function saveEmployee() {
     IS_SAVING = false;
     alert('Please select a position / job title so the system can route the employee lifecycle correctly.');
     switchFormTab('employment');
+    return;
+  }
+
+  const supervisorInput = document.querySelector('#form-employment input#emp-supervisor');
+  if (!isValidEmployeeSupervisorName(formData.supervisor)) {
+    IS_SAVING = false;
+    alert('Immediate supervisor must be a valid name. Numbers are not allowed.');
+    switchFormTab('employment');
+    supervisorInput?.classList.add('input-validation-error');
+    supervisorInput?.focus();
     return;
   }
 
