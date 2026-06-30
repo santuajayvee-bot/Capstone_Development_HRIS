@@ -314,7 +314,7 @@ function switchSysAdminTab(tabId, el) {
   }
   if (tabId === 'roles')    loadRolesGrid();
   if (tabId === 'account-requests') loadAccountCreationRequests();
-  if (tabId === 'audit')    loadAuditLog();
+  if (tabId === 'audit')    requestAnimationFrame(loadAuditLog);
   if (tabId === 'biometric-settings') loadBiometricSettings();
 }
 
@@ -339,6 +339,12 @@ function initSystemAdmin() {
   if (activeTab === 'account-requests') loadAccountCreationRequests();
   if (activeTab === 'audit') loadAuditLog();
   if (activeTab === 'biometric-settings') loadBiometricSettings();
+}
+
+function initSystemAdminIfActive() {
+  const page = document.getElementById('page-system-admin');
+  if (!page?.classList.contains('active')) return;
+  initSystemAdmin();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -496,6 +502,8 @@ function filterUserTable() {
     );
   }
 
+  const table = document.getElementById('users-table');
+  if (table) table.dataset.paginationPage = '1';
   renderUsersTable(filtered);
 }
 
@@ -608,8 +616,14 @@ function toggleRoleUsers(roleId) {
 // AUDIT LOG
 // ═══════════════════════════════════════════════════════════════
 
+function sysAuditTbody() {
+  return document.querySelector('#panel-audit #audit-tbody');
+}
+
 async function loadAuditLog() {
-  const tbody = document.getElementById('audit-tbody');
+  const tbody = sysAuditTbody();
+  const table = document.getElementById('audit-table');
+  if (table) table.dataset.paginationPage = '1';
   if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>';
 
   // Only the newest filter/refresh request may update the table. Aborting the
@@ -688,30 +702,109 @@ function auditModuleLevel(moduleName) {
   return 1;
 }
 
+function auditModuleLabel(moduleName) {
+  const labels = {
+    ACCOUNT_LIFECYCLE: 'Account lifecycle',
+    ATTENDANCE: 'Attendance',
+    BLOCKCHAIN: 'Blockchain',
+    EMPLOYEE: 'Employee records',
+    LEAVE: 'Leave management',
+    ONBOARDING: 'Onboarding',
+    PAYROLL: 'Payroll',
+    RBAC: 'Role access control',
+    RBAC_SECURITY: 'Security',
+    REPORTS: 'Reports',
+    SELF_SERVICE: 'Self-service',
+    SYSTEM: 'System',
+  };
+  const key = String(moduleName || '').trim().toUpperCase();
+  return labels[key] || (key ? key.replaceAll('_', ' ').toLowerCase() : 'System');
+}
+
+function auditLooksBackendOnly(value) {
+  const text = String(value ?? '');
+  return /\/api\//i.test(text)
+    || /\b(targetTable|targetRecord|required_roles|actual_role|statusCode|userAgent|user_agent)\b/i.test(text)
+    || /\b(method|path|endpoint|route)\s*[:=]/i.test(text);
+}
+
+function auditPublicObjectValue(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'object') return '';
+  const text = String(value);
+  return auditLooksBackendOnly(text) ? '' : text;
+}
+
+function auditPublicObjectSummary(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const hiddenKeys = new Set([
+    'actual_role',
+    'method',
+    'path',
+    'required_permission',
+    'required_roles',
+    'role',
+    'statuscode',
+    'targetrecord',
+    'targettable',
+    'user_agent',
+    'useragent',
+  ]);
+
+  return Object.entries(parsed)
+    .filter(([key]) => !hiddenKeys.has(String(key).toLowerCase()))
+    .map(([key, val]) => {
+      const safeValue = auditPublicObjectValue(val);
+      return safeValue ? `${key}: ${safeValue}` : '';
+    })
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(', ');
+}
+
 function auditShortValue(value) {
   if (value === null || value === undefined || value === '') return '';
   if (value === '[protected]') return 'Protected data';
 
   const text = String(value);
+  if (['null', 'undefined'].includes(text.trim().toLowerCase())) return '';
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === 'object') {
-      return Object.entries(parsed)
-        .slice(0, 6)
-        .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
-        .join(', ');
+      return auditPublicObjectSummary(parsed);
     }
   } catch {
     // Plain text audit values are valid.
   }
 
-  return text;
+  return auditLooksBackendOnly(text) ? '' : text;
+}
+
+function auditActionText(log) {
+  const action = String(log?.action_performed || '').trim();
+  if (!action) return '—';
+  if (/failed_unauthorized_access_attempt/i.test(action)) return 'Unauthorized access attempt blocked';
+  if (/failed_permission_check/i.test(action)) return 'Permission check failed';
+  if (/blocked_client_authority_field_tampering/i.test(action)) return 'Unauthorized request fields blocked';
+  if (/blocked_rate_limit_exceeded/i.test(action)) return 'Rate limit exceeded';
+  if (/invalid_or_tampered_jwt_attempt/i.test(action)) return 'Invalid session token attempt blocked';
+  if (/expired_jwt_attempt/i.test(action)) return 'Expired session token rejected';
+  if (auditLooksBackendOnly(action)) return `${auditModuleLabel(log?.module)} activity recorded`;
+  return action;
+}
+
+function auditSourceText(log) {
+  const source = String(log?.source_table || '').trim();
+  if (!source) return '—';
+  if (/^[a-z0-9_]+$/i.test(source)) return 'Audit log';
+  if (auditLooksBackendOnly(source)) return 'Audit log';
+  return source;
 }
 
 function auditDetails(log) {
   const parts = [];
-  if (log.field_changed) parts.push(`Field: ${log.field_changed}`);
-  if (log.details) parts.push(log.details);
+  if (log.field_changed && !auditLooksBackendOnly(log.field_changed)) parts.push(`Field: ${log.field_changed}`);
+  if (log.details && !auditLooksBackendOnly(log.details)) parts.push(log.details);
 
   const oldValue = auditShortValue(log.old_value);
   const newValue = auditShortValue(log.new_value);
@@ -731,7 +824,7 @@ function auditTarget(log) {
 }
 
 function renderAuditLog(logs) {
-  const tbody = document.getElementById('audit-tbody');
+  const tbody = sysAuditTbody();
   if (!tbody) return;
 
   if (logs.length === 0) {
@@ -750,11 +843,11 @@ function renderAuditLog(logs) {
       <tr>
         <td><small>${sysEsc(ts)}</small></td>
         <td><span class="badge-level badge-level-${moduleLevel}">${sysEsc(moduleName)}</span></td>
-        <td style="max-width:260px;word-break:break-word;"><small>${sysEsc(log.action_performed || '—')}</small></td>
+        <td style="max-width:260px;word-break:break-word;"><small>${sysEsc(auditActionText(log))}</small></td>
         <td>${sysEsc(actor)}</td>
         <td><small>${sysEsc(auditTarget(log))}</small></td>
         <td><small>${sysEsc(resultOrIp)}</small></td>
-        <td><small>${sysEsc(log.source_table || '—')}</small></td>
+        <td><small>${sysEsc(auditSourceText(log))}</small></td>
         <td><small style="color:var(--muted)">${sysEsc(auditDetails(log))}</small></td>
       </tr>
     `;
@@ -1348,6 +1441,7 @@ function showSysToast(message, type = 'info') {
 // ── Expose globally ─────────────────────────────────────────
 window.switchSysAdminTab     = switchSysAdminTab;
 window.initSystemAdmin       = initSystemAdmin;
+window.initSystemAdminIfActive = initSystemAdminIfActive;
 window.showRegisterModal     = showRegisterModal;
 window.closeRegisterModal    = closeRegisterModal;
 window.onEmployeeSelect     = onEmployeeSelect;
@@ -1375,3 +1469,6 @@ window.loadBiometricSettings = loadBiometricSettings;
 window.clearBiometricSettingsForm = clearBiometricSettingsForm;
 window.editBiometricSettings = editBiometricSettings;
 window.saveBiometricSettings = saveBiometricSettings;
+
+document.addEventListener('partialsLoaded', initSystemAdminIfActive);
+document.addEventListener('DOMContentLoaded', () => setTimeout(initSystemAdminIfActive, 0));

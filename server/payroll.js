@@ -2550,15 +2550,18 @@ async function resolvePayslipPayload(pool, record) {
 function payslipMoneyRows(payslip) {
   const isPiece = payslip.wage_type === 'Per-Piece';
   const isTrip = payslip.wage_type === 'Per-Trip';
-  const primaryLabel = isPiece ? 'Output Pay' : isTrip ? 'Trip Pay' : 'Basic Pay';
-  const earnings = [
-    { label: primaryLabel, amount: numeric(payslip.earnings.basic_pay) }
-  ];
+  const earnings = [];
 
-  if (numeric(payslip.earnings.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: numeric(payslip.earnings.rot_sot) });
-  if (numeric(payslip.earnings.add) > 0) earnings.push({ label: 'Additional Pay', amount: numeric(payslip.earnings.add) });
-  earnings.push({ label: 'Allowances', amount: numeric(payslip.earnings.allowances), blankWhenZero: true });
-  earnings.push({ label: 'Total Earnings', amount: numeric(payslip.summary.gross_pay), total: true });
+  if (isPiece) {
+    earnings.push({ label: 'Output Pay', amount: numeric(payslip.earnings?.basic_pay) });
+  } else if (isTrip) {
+    earnings.push({ label: 'Trip Pay', amount: numeric(payslip.earnings?.basic_pay) });
+  }
+
+  if (numeric(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: numeric(payslip.earnings.rot_sot) });
+  if (numeric(payslip.earnings?.add) > 0) earnings.push({ label: 'Additional Pay', amount: numeric(payslip.earnings.add) });
+  earnings.push({ label: 'Allowances', amount: numeric(payslip.earnings?.allowances), blankWhenZero: true });
+  earnings.push({ label: 'Gross Pay', amount: numeric(payslip.summary?.gross_pay), total: true });
 
   const seen = new Set();
   const deductions = [];

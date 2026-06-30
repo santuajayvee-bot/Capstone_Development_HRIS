@@ -289,14 +289,34 @@ function enhanceTablePagination(table) {
   controls.dataset.autoPagination = '1';
   controls.dataset.for = table.dataset.paginationId;
   controls.__paginationTable = table;
-  controls.innerHTML = `
-    <span>Showing ${start + 1}-${Math.min(end, rows.length)} of ${rows.length}</span>
-    <div class="table-pagination-actions">
-      <button class="btn btn-outline btn-sm" type="button" data-page-action="prev" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button>
-      <span>Page ${currentPage} of ${totalPages}</span>
-      <button class="btn btn-outline btn-sm" type="button" data-page-action="next" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
-    </div>
-  `;
+  let summary = controls.querySelector('[data-pagination-summary]');
+  let previousButton = controls.querySelector('[data-page-action="prev"]');
+  let pageLabel = controls.querySelector('[data-pagination-page]');
+  let nextButton = controls.querySelector('[data-page-action="next"]');
+
+  // Keep the same button nodes between observer passes. Replacing the markup
+  // repeatedly can discard a hover/click in progress and make paging stutter.
+  if (!summary || !previousButton || !pageLabel || !nextButton) {
+    controls.innerHTML = `
+      <span data-pagination-summary></span>
+      <div class="table-pagination-actions">
+        <button class="btn btn-outline btn-sm" type="button" data-page-action="prev">Previous</button>
+        <span data-pagination-page></span>
+        <button class="btn btn-outline btn-sm" type="button" data-page-action="next">Next</button>
+      </div>
+    `;
+    summary = controls.querySelector('[data-pagination-summary]');
+    previousButton = controls.querySelector('[data-page-action="prev"]');
+    pageLabel = controls.querySelector('[data-pagination-page]');
+    nextButton = controls.querySelector('[data-page-action="next"]');
+  }
+
+  const summaryText = `Showing ${start + 1}-${Math.min(end, rows.length)} of ${rows.length}`;
+  const pageText = `Page ${currentPage} of ${totalPages}`;
+  if (summary.textContent !== summaryText) summary.textContent = summaryText;
+  if (pageLabel.textContent !== pageText) pageLabel.textContent = pageText;
+  previousButton.disabled = currentPage <= 1;
+  nextButton.disabled = currentPage >= totalPages;
   if (controls.dataset.paginationBound !== '1') {
     controls.addEventListener('click', event => {
       const button = event.target.closest('[data-page-action]');

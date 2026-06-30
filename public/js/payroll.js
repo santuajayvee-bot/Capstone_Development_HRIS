@@ -2017,18 +2017,20 @@ function payslipAttendanceTable(payslip) {
 }
 
 function payslipRows(payslip) {
-  const primaryLabel = payslip.wage_type === 'Per-Piece'
-    ? 'Output Pay'
-    : payslip.wage_type === 'Per-Trip'
-      ? 'Trip Pay'
-      : 'Basic Pay';
-  const earnings = [
-    { label: primaryLabel, amount: payslipNumber(payslip.earnings?.basic_pay) }
-  ];
+  const isPiece = payslip.wage_type === 'Per-Piece';
+  const isTrip = payslip.wage_type === 'Per-Trip';
+  const earnings = [];
+
+  if (isPiece) {
+    earnings.push({ label: 'Output Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
+  } else if (isTrip) {
+    earnings.push({ label: 'Trip Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
+  }
+
   if (payslipNumber(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: payslipNumber(payslip.earnings.rot_sot) });
   if (payslipNumber(payslip.earnings?.add) > 0) earnings.push({ label: 'Additional Pay', amount: payslipNumber(payslip.earnings.add) });
   earnings.push({ label: 'Allowances', amount: payslipNumber(payslip.earnings?.allowances), blankWhenZero: true });
-  earnings.push({ label: 'Total Earnings', amount: payslipNumber(payslip.summary?.gross_pay), total: true });
+  earnings.push({ label: 'Gross Pay', amount: payslipNumber(payslip.summary?.gross_pay), total: true });
 
   const seen = new Set();
   const deductions = [];
