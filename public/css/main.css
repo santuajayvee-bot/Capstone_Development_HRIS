@@ -1954,6 +1954,7 @@ input.lgsv-date-native[type="date"] {
 }
 .table-pagination > span,
 .table-pagination > div:first-child {
+  flex: 1 1 180px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1963,18 +1964,24 @@ input.lgsv-date-native[type="date"] {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
+  flex: 0 0 auto;
   min-width: 0;
 }
 .table-pagination-actions > span {
-  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
   color: var(--muted);
   font-size: 12px;
   text-align: center;
   white-space: nowrap;
 }
 .table-pagination-actions .btn {
-  flex: 0 1 auto;
+  flex: 0 0 74px;
   min-width: 74px;
+  min-height: 30px;
+  justify-content: center;
   white-space: nowrap;
 }
 .table-pagination-auto {
@@ -1983,7 +1990,9 @@ input.lgsv-date-native[type="date"] {
   border-radius: 0 0 8px 8px;
   margin-top: -1px;
 }
-.table-wrap + .table-pagination-auto {
+.table-wrap + .table-pagination-auto,
+.sysadmin-table-wrapper + .table-pagination-auto,
+.audit-trail-table-wrap + .table-pagination-auto {
   margin-bottom: 12px;
 }
 .table-pagination .btn[disabled] {
@@ -2103,6 +2112,7 @@ input.lgsv-date-native[type="date"] {
   .table-pagination-actions {
     display: grid;
     grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr);
+    align-items: center;
     width: 100%;
   }
   .table-pagination-actions > span {
@@ -2159,6 +2169,7 @@ input.lgsv-date-native[type="date"] {
   }
   .table-pagination-actions > span {
     grid-column: 1 / -1;
+    min-width: 100%;
     order: -1;
     text-align: center;
   }

@@ -277,7 +277,7 @@ function enhanceTablePagination(table) {
   const tbody = table.tBodies?.[0];
   if (!tbody) return;
   const pageSize = Number(table.dataset.pageSize || AUTO_TABLE_PAGE_SIZE);
-  const paginationAnchor = table.closest('.table-wrap') || table;
+  const paginationAnchor = table.closest('.table-wrap, .sysadmin-table-wrapper, .audit-trail-table-wrap') || table;
   const inlinePagination = table.nextElementSibling;
   const anchoredPagination = paginationAnchor.nextElementSibling;
   let rows = [...tbody.rows].filter(row => !row.classList.contains('table-empty'));

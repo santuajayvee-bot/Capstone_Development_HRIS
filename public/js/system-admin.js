@@ -783,8 +783,39 @@ function auditShortValue(value) {
   return auditLooksBackendOnly(text) ? '' : text;
 }
 
+function auditJsonObject(value) {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function auditWriteMetadata(log) {
+  const action = String(log?.action_performed || '');
+  const metadata = auditJsonObject(log?.new_value) || {};
+  const path = String(metadata.path || metadata.targetTable || '');
+  const method = String(metadata.method || '');
+  const pathMatch = path.match(/^\/api\/employees\/(\d+)$/i);
+  const actionMatch = action.match(/\bDELETE\s+\/api\/employees\/(\d+)/i);
+  const targetId = log?.target_employee_id || metadata.targetRecord || pathMatch?.[1] || actionMatch?.[1] || null;
+  return {
+    action,
+    metadata,
+    method,
+    path,
+    statusCode: metadata.statusCode,
+    employeeDeleteTargetId: targetId && (pathMatch || actionMatch || /EMPLOYEE_SOFT_DELETED/i.test(action)) ? targetId : null,
+    isEmployeeDelete: Boolean(pathMatch || actionMatch || /EMPLOYEE_SOFT_DELETED/i.test(action)),
+  };
+}
+
 function auditActionText(log) {
   const action = String(log?.action_performed || '').trim();
+  const write = auditWriteMetadata(log);
+  if (write.isEmployeeDelete) return 'Employee record deletion requested';
   if (!action) return '—';
   if (/failed_unauthorized_access_attempt/i.test(action)) return 'Unauthorized access attempt blocked';
   if (/failed_permission_check/i.test(action)) return 'Permission check failed';
@@ -807,6 +838,8 @@ function auditSourceText(log) {
 
 function auditDetails(log) {
   const parts = [];
+  const write = auditWriteMetadata(log);
+  if (write.isEmployeeDelete && write.statusCode) parts.push(`Status: ${write.statusCode}`);
   if (log.field_changed && !auditLooksBackendOnly(log.field_changed)) parts.push(`Field: ${log.field_changed}`);
   if (log.details && !auditLooksBackendOnly(log.details)) parts.push(log.details);
 
@@ -822,6 +855,8 @@ function auditDetails(log) {
 }
 
 function auditTarget(log) {
+  const write = auditWriteMetadata(log);
+  if (write.employeeDeleteTargetId) return `Employee #${write.employeeDeleteTargetId}`;
   if (log.target_employee_id) return `Employee #${log.target_employee_id}`;
   if (log.employee_id) return `Employee #${log.employee_id}`;
   return '—';
