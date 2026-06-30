@@ -131,7 +131,7 @@
     <div class="att-card-heading">
       <div>
         <h3>Biometric Diagnostics</h3>
-        <p>Checks the local ZK9500 bridge, HRIS device registration, fingerprint mappings, and recent scan result.</p>
+        <p>Checks the ZK9500 station link, HRIS device registration, fingerprint mappings, and latest AWS scan.</p>
       </div>
       <div class="att-actions">
         <button class="btn btn-outline btn-sm" onclick="runBiometricDiagnostics()">Run Check</button>
@@ -139,12 +139,12 @@
       </div>
     </div>
     <div class="bio-diagnostic-grid">
-      <div class="bio-diagnostic-item"><label>Local Bridge</label><div id="bio-diag-bridge" class="bio-pill bio-warning">Not checked</div><small id="bio-diag-bridge-detail">ZK9500 bridge at localhost:8787</small></div>
+      <div class="bio-diagnostic-item"><label id="bio-diag-bridge-label">Scanner Bridge</label><div id="bio-diag-bridge" class="bio-pill bio-warning">Not checked</div><small id="bio-diag-bridge-detail">Waiting for station status</small></div>
       <div class="bio-diagnostic-item"><label>HRIS Device</label><div id="bio-diag-device" class="bio-pill bio-warning">Not checked</div><small id="bio-diag-device-detail">Device reference ZK9500-LOCAL-001</small></div>
       <div class="bio-diagnostic-item"><label>Enrollments</label><div id="bio-diag-mappings" class="bio-pill bio-warning">Not checked</div><small id="bio-diag-mappings-detail">Active employee fingerprint mappings</small></div>
       <div class="bio-diagnostic-item"><label>Latest Scan</label><div id="bio-diag-scan" class="bio-pill bio-warning">Not checked</div><small id="bio-diag-scan-detail">No scan checked yet</small></div>
     </div>
-    <div id="bio-action-status" class="att-note">Run Check before enrolling or scanning. If the bridge is offline, start the ZK9500 bridge as Administrator.</div>
+    <div id="bio-action-status" class="att-note">Run Check to confirm the station link, enrollments, and latest accepted scan.</div>
   </div>
 
   <div class="card">

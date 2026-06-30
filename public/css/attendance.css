@@ -358,6 +358,18 @@
   font-weight:800;
   white-space:normal;
 }
+.att-biometric-diagnostics .att-card-heading p,
+.att-biometric-diagnostics .bio-diagnostic-item small {
+  color:#334155 !important;
+  font-weight:500;
+}
+.att-biometric-diagnostics .bio-diagnostic-item label {
+  color:#475569 !important;
+}
+#bio-action-status {
+  color:#1f2937 !important;
+  font-weight:500;
+}
 #bio-events-table {
   table-layout: fixed;
   min-width: 760px;

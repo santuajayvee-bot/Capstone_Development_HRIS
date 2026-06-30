@@ -8,14 +8,16 @@
   </div>
 </div>
 
-<div class="payroll-nav-groups payroll-nav-dropdowns" role="tablist">
-  <details class="payroll-nav-dropdown active" data-payroll-group="processing">
+<div class="payroll-workspace">
+  <aside class="payroll-nav-groups payroll-nav-dropdowns payroll-module-sidebar" role="tablist" aria-label="Payroll navigation">
+    <div class="payroll-module-sidebar-title">Payroll Module</div>
+
+  <details class="payroll-nav-dropdown active" data-payroll-group="processing" open>
     <summary>
       <span>
-        <small>Payroll Module</small>
         <strong>Payroll Processing</strong>
+        <em id="payroll-processing-current">Dashboard</em>
       </span>
-      <em id="payroll-processing-current">Dashboard</em>
     </summary>
     <div class="payroll-dropdown-menu">
       <button class="payroll-tab active" data-payroll-tab="dashboard" onclick="switchPayrollTab('dashboard')">Dashboard</button>
@@ -31,10 +33,9 @@
   <details class="payroll-nav-dropdown" data-payroll-group="configuration">
     <summary>
       <span>
-        <small>Payroll Module</small>
         <strong>Payroll Configuration</strong>
+        <em id="payroll-configuration-current">Select setup</em>
       </span>
-      <em id="payroll-configuration-current">Select setup</em>
     </summary>
     <div class="payroll-dropdown-menu">
       <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowances</button>
@@ -44,7 +45,9 @@
       <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
     </div>
   </details>
-</div>
+  </aside>
+
+  <div class="payroll-module-content">
 
 <section class="payroll-panel" id="payroll-tab-run">
   <section class="table-wrap weekly-payroll-generator payroll-run-card">
@@ -678,3 +681,5 @@
   </details>
   <div class="table-wrap"><div id="allowance-settings-grid"></div></div>
 </section>
+  </div>
+</div>

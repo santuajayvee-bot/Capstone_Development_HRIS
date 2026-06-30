@@ -26,8 +26,13 @@ const ATT_RECORDS_PAGE_SIZE = 10;
 const ATT_BIOMETRIC_EVENTS_PAGE_SIZE = 5;
 const ATT_HOLIDAYS_PAGE_SIZE = 10;
 const ATT_AUDIT_LOG_PAGE_SIZE = 10;
-const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://localhost:8787';
+// Use the explicit loopback address so Chrome can classify the bridge as a
+// local target before DNS resolution and request Local Network Access cleanly.
+const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://127.0.0.1:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
+const AWS_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-AWS-001';
+const BIOMETRIC_UI_RELAY_VERSION = 'AWS relay v40';
+let LAST_BIOMETRIC_BRIDGE_ERROR = '';
 
 const ATT_DATE_PICKER_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -294,10 +299,46 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    // Chrome 142+ requires an explicit Local Network Access annotation before
+    // an HTTPS HRIS page may request permission to reach the localhost bridge.
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      targetAddressSpace: 'local',
+    });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function createBiometricBridgeCommand(commandType, employeeId, deviceId) {
+  const res = await apiFetch('/api/biometric/bridge-commands', {
+    method: 'POST',
+    body: JSON.stringify({
+      command_type: commandType,
+      employee_id: Number(employeeId),
+      device_id: Number(deviceId),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to create biometric station command.');
+  return data;
+}
+
+async function waitForBiometricBridgeCommand(commandId, { timeoutMs = 95000, intervalMs = 1500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await apiFetch(`/api/biometric/bridge-commands/${commandId}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to read biometric station command.');
+    if (['COMPLETED', 'FAILED', 'EXPIRED'].includes(data.command_status)) return data;
+    await delay(intervalMs);
+  }
+  throw new Error('Biometric station did not respond before the request timed out.');
 }
 
 function formatDate(value) {
@@ -1512,33 +1553,83 @@ function populateDeviceSelect() {
   select.value = ATT_DEVICES[0]?.device_id || '';
 }
 
-async function checkLocalBiometricBridge() {
+function isRemoteBiometricPage() {
+  const host = String(window.location.hostname || '').toLowerCase();
+  return window.location.protocol === 'https:' && !['localhost', '127.0.0.1', '::1'].includes(host);
+}
+
+async function checkLocalBiometricBridge(context = null) {
+  const device = context?.device || null;
+  const latestScan = context?.latestScan || null;
+  const label = document.getElementById('bio-diag-bridge-label');
+
+  // An HTTPS AWS page cannot directly fetch an HTTP localhost endpoint due to
+  // browser mixed-content/private-network protections. In deployed mode, use
+  // the authenticated HRIS heartbeat and latest accepted scan as the source of
+  // truth instead of showing a false "Offline" result.
+  if (isRemoteBiometricPage() && context) {
+    if (label) label.textContent = 'AWS Station Link';
+    const lastSeen = latestScan?.scan_timestamp || device?.last_success_at || null;
+    if (device && Number(device.is_active) === 1 && lastSeen) {
+      setBiometricDiagnostic('bridge', 'ok', 'Connected', `AWS relay confirmed at ${formatDateTime(lastSeen)}.`);
+      return { ok: true, remoteMode: true, lastSeen };
+    }
+    if (device && Number(device.is_active) === 1) {
+      setBiometricDiagnostic('bridge', 'warn', 'Awaiting scan', 'AWS device is registered. Scan once to confirm the station link.');
+      return { ok: true, remoteMode: true, lastSeen: null };
+    }
+    setBiometricDiagnostic('bridge', 'bad', 'Disconnected', 'No active AWS biometric station is registered.');
+    return null;
+  }
+
+  if (label && !isRemoteBiometricPage()) label.textContent = 'Local Bridge';
+  LAST_BIOMETRIC_BRIDGE_ERROR = '';
   try {
-    const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/health`, {}, 2500);
+    // Give Chrome enough time to display and resolve its Local Network Access
+    // permission prompt. A short timeout can abort the request before the user
+    // sees the browser permission UI.
+    const permissionTimeoutMs = isRemoteBiometricPage() ? 20000 : 2500;
+    const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/health`, {}, permissionTimeoutMs);
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || 'Bridge health check failed.');
     setBiometricDiagnostic('bridge', 'ok', 'Online', `${data.device_id || LOCAL_BIOMETRIC_DEVICE_REFERENCE} - ${data.status || 'Bridge running'}`);
     return data;
   } catch (err) {
-    setBiometricDiagnostic('bridge', 'bad', 'Offline', 'Start tools/biometric-bridge/start-bridge-admin.ps1 as Administrator.');
+    LAST_BIOMETRIC_BRIDGE_ERROR = isRemoteBiometricPage()
+      ? 'Chrome blocked access to the local scanner. Allow Local network access for lgsvhr.com in Chrome Site settings, then try again.'
+      : `Local bridge connection failed${err?.message ? `: ${err.message}` : '.'}`;
+    setBiometricDiagnostic('bridge', 'bad', 'Browser blocked', LAST_BIOMETRIC_BRIDGE_ERROR);
     return null;
   }
 }
 
 async function runBiometricDiagnostics() {
-  setBiometricActionStatus('Checking biometric setup...');
+  setBiometricActionStatus(`Checking biometric setup... (${BIOMETRIC_UI_RELAY_VERSION})`);
   const button = document.getElementById('bio-local-device-button');
-  if (button) button.style.display = isSystemAdmin() ? '' : 'none';
+  if (button) button.style.display = isSystemAdmin() && !isRemoteBiometricPage() ? '' : 'none';
 
-  const bridge = await checkLocalBiometricBridge();
   if (!ATT_DEVICES.length) await loadBiometricHealth();
-  const localDevice = ATT_DEVICES.find(device => device.device_reference === LOCAL_BIOMETRIC_DEVICE_REFERENCE) || ATT_DEVICES[0] || null;
-  if (!localDevice) {
-    setBiometricDiagnostic('device', 'bad', 'Missing', 'Register the local ZK9500 device in HRIS.');
-  } else if (!Number(localDevice.is_active)) {
-    setBiometricDiagnostic('device', 'bad', 'Inactive', `${localDevice.device_name || localDevice.device_reference} is disabled.`);
+  const stationDevice = ATT_DEVICES.find(device => device.device_reference === AWS_BIOMETRIC_DEVICE_REFERENCE)
+    || ATT_DEVICES.find(device => device.device_reference === LOCAL_BIOMETRIC_DEVICE_REFERENCE)
+    || ATT_DEVICES[0]
+    || null;
+
+  let latestScan = null;
+  try {
+    const res = await apiFetch('/api/biometric/status');
+    const data = await res.json();
+    latestScan = data.latest_scan || null;
+  } catch (err) {
+    console.warn('Unable to load latest biometric scan:', err);
+  }
+
+  const bridge = await checkLocalBiometricBridge({ device: stationDevice, latestScan });
+  if (!stationDevice) {
+    setBiometricDiagnostic('device', 'bad', 'Missing', 'Register the ZK9500 attendance station in HRIS.');
+  } else if (!Number(stationDevice.is_active)) {
+    setBiometricDiagnostic('device', 'bad', 'Inactive', `${stationDevice.device_name || stationDevice.device_reference} is disabled.`);
   } else {
-    setBiometricDiagnostic('device', localDevice.last_error_message ? 'warn' : 'ok', localDevice.last_error_message ? 'Warning' : 'Registered', localDevice.last_error_message || `${localDevice.device_name || 'ZK9500'} is active.`);
+    setBiometricDiagnostic('device', stationDevice.last_error_message ? 'warn' : 'ok', stationDevice.last_error_message ? 'Warning' : 'Registered', stationDevice.last_error_message || `${stationDevice.device_name || 'ZK9500'} is active.`);
   }
 
   if (!ATT_BIOMETRIC_MAPPINGS.length) await loadBiometricMappings();
@@ -1550,27 +1641,24 @@ async function runBiometricDiagnostics() {
     activeMappings > 0 ? `${activeMappings} active fingerprint enrollment(s).` : 'Enroll at least one employee fingerprint.'
   );
 
-  try {
-    const res = await apiFetch('/api/biometric/status');
-    const data = await res.json();
-    const latest = data.latest_scan || null;
-    if (latest) {
-      setBiometricDiagnostic('scan', latest.error_message ? 'warn' : 'ok', latest.verification_status || 'Recorded', `${latest.employee_name || latest.employee_code || 'Unknown'} - ${formatDateTime(latest.scan_timestamp)}`);
-    } else {
-      setBiometricDiagnostic('scan', 'warn', 'No scans', 'No biometric scan has reached HRIS yet.');
-    }
-  } catch (err) {
-    setBiometricDiagnostic('scan', 'warn', 'Unknown', 'Could not load latest biometric scan.');
+  if (latestScan) {
+    setBiometricDiagnostic('scan', latestScan.error_message ? 'warn' : 'ok', latestScan.verification_status || 'Recorded', `${latestScan.employee_name || latestScan.employee_code || 'Employee'} - ${formatDateTime(latestScan.scan_timestamp)}`);
+  } else {
+    setBiometricDiagnostic('scan', 'warn', 'No scans', 'No biometric scan has reached HRIS yet.');
   }
 
   if (!bridge) {
-    setBiometricActionStatus('Bridge is offline. Start the ZK9500 bridge as Administrator, then run the check again.', 'att-error');
-  } else if (!localDevice) {
-    setBiometricActionStatus('Bridge is online, but HRIS has no local ZK9500 device. Use Local ZK9500 or register it in System Administration.', 'att-error');
+    setBiometricActionStatus(isRemoteBiometricPage()
+      ? 'AWS station link is unavailable. Confirm the registered device and run the check again.'
+      : 'Bridge is offline. Start the ZK9500 bridge as Administrator, then run the check again.', 'att-error');
+  } else if (!stationDevice) {
+    setBiometricActionStatus('The bridge is ready, but HRIS has no registered ZK9500 device.', 'att-error');
   } else if (!activeMappings) {
     setBiometricActionStatus('Device is ready. Select an employee and enroll their fingerprint before scanning attendance.');
+  } else if (bridge.remoteMode && latestScan) {
+    setBiometricActionStatus(`AWS biometric station is connected. Latest scan reached HRIS at ${formatDateTime(latestScan.scan_timestamp)}.`, 'att-success');
   } else {
-    setBiometricActionStatus('Biometric setup looks ready. You can enroll, verify, or use the Attendance Station.');
+    setBiometricActionStatus(`Biometric setup looks ready. ${BIOMETRIC_UI_RELAY_VERSION} is active.`);
   }
 }
 
@@ -2010,9 +2098,26 @@ async function enrollFingerprintFromBridge() {
   const codeMatch = selectedText.match(/\(([^)]+)\)/);
 
   try {
+    if (isRemoteBiometricPage()) {
+      setBiometricStep(2);
+      setBiometricActionStatus('Sending enrollment request to the AWS biometric station. Place the employee finger on the ZK9500 when prompted.');
+      const command = await createBiometricBridgeCommand('ENROLL', employeeId, deviceId);
+      setBiometricActionStatus('Enrollment request sent. Capture requires three clean reads on the ZK9500 scanner.');
+      const completed = await waitForBiometricBridgeCommand(command.command_id, { timeoutMs: 120000, intervalMs: 1500 });
+      if (completed.command_status !== 'COMPLETED') throw new Error(completed.error_message || completed.result?.error || 'Fingerprint enrollment failed.');
+      setBiometricStep(4);
+      await loadBiometricMappings();
+      await loadBiometricHealth();
+      updateFingerprintEnrollmentView();
+      setBiometricActionStatus('Fingerprint enrolled and securely mapped through the AWS station.', 'att-success');
+      alert('Fingerprint enrollment saved.');
+      runBiometricDiagnostics();
+      return;
+    }
+
     setBiometricActionStatus('Checking local bridge before enrollment...');
     const bridge = await checkLocalBiometricBridge();
-    if (!bridge) throw new Error('Local ZK9500 bridge is offline.');
+    if (!bridge) throw new Error(LAST_BIOMETRIC_BRIDGE_ERROR || 'Local ZK9500 bridge is unavailable.');
     setBiometricStep(2);
     setBiometricActionStatus('Place the employee finger on the scanner. Capture requires three clean reads.');
     const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/enroll`, {
@@ -2046,10 +2151,31 @@ async function verifyBiometricEnrollment() {
   if (!employeeId || !deviceId) return alert('Select an employee first. Make sure the scanner is connected.');
 
   const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
+
+  if (isRemoteBiometricPage()) {
+    try {
+      setBiometricActionStatus('Sending verification request to the AWS biometric station. Place the enrolled finger on the ZK9500 scanner.');
+      const command = await createBiometricBridgeCommand('VERIFY', employeeId, deviceId);
+      const completed = await waitForBiometricBridgeCommand(command.command_id, { timeoutMs: 95000, intervalMs: 1500 });
+      if (completed.command_status !== 'COMPLETED') throw new Error(completed.error_message || completed.result?.error || 'Fingerprint verification failed.');
+      const data = completed.result || {};
+      if (!data.matched) {
+        setBiometricActionStatus(data.message || 'Fingerprint did not match the selected employee.', 'att-error');
+        return alert(`${data.message || 'Fingerprint did not match the selected employee.'}\n\nSelected: ${selectedText}\nMatched: ${data.employee_name || data.employee_id || 'No enrolled match'}\nScore: ${data.score ?? '-'}`);
+      }
+      setBiometricActionStatus(`Fingerprint verified through AWS station. Score: ${data.score}`, 'att-success');
+      alert(`Fingerprint verified successfully.\n\nEmployee: ${selectedText}\nScore: ${data.score}`);
+    } catch (err) {
+      setBiometricActionStatus(`Verification failed: ${err.message}`, 'att-error');
+      alert(`Bridge verification failed: ${err.message}\n\nMake sure the AWS biometric bridge is running and the employee fingerprint is enrolled.`);
+    }
+    return;
+  }
+
   try {
     setBiometricActionStatus('Checking local bridge before verification...');
     const bridge = await checkLocalBiometricBridge();
-    if (!bridge) throw new Error('Local ZK9500 bridge is offline.');
+    if (!bridge) throw new Error(LAST_BIOMETRIC_BRIDGE_ERROR || 'Local ZK9500 bridge is unavailable.');
     setBiometricActionStatus('Place the enrolled finger on the scanner to verify.');
     const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/verify`, {
       method: 'POST',

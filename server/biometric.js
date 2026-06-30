@@ -25,8 +25,11 @@ const { classifyDtrPunch, dtrUpdateValues } = require('./dtr-punch');
 const router = express.Router();
 
 const HR_ROLES = ['hr_admin', 'hr_manager', 'admin', 'system_admin'];
+const BIOMETRIC_ADMIN_ROLES = HR_ROLES;
 const BRIDGE_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 const BIOMETRIC_ATTENDANCE_STATUSES = "ENUM('PENDING_VALIDATION','VALIDATED','REJECTED','CORRECTED_BY_HR','NEEDS_REVIEW','PAYROLL_READY','INCOMPLETE') NOT NULL DEFAULT 'PENDING_VALIDATION'";
+const BRIDGE_COMMAND_TYPES = new Set(['VERIFY', 'ENROLL']);
+const BRIDGE_COMMAND_STATUSES = new Set(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'EXPIRED']);
 
 function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>]/g, '').slice(0, maxLength);
@@ -225,6 +228,29 @@ async function ensureBiometricAttendanceSchema() {
   `);
 
   await pool.execute(`
+    CREATE TABLE IF NOT EXISTS biometric_bridge_command (
+      command_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      device_id INT NOT NULL,
+      employee_id INT NULL,
+      command_type ENUM('VERIFY','ENROLL') NOT NULL,
+      command_status ENUM('PENDING','IN_PROGRESS','COMPLETED','FAILED','EXPIRED') NOT NULL DEFAULT 'PENDING',
+      requested_by INT NULL,
+      claimed_at DATETIME NULL,
+      completed_at DATETIME NULL,
+      expires_at DATETIME NOT NULL,
+      result_json TEXT NULL,
+      error_message VARCHAR(500) NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES biometric_device(device_id) ON DELETE CASCADE,
+      FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL,
+      INDEX idx_bridge_command_device_status (device_id, command_status, expires_at),
+      INDEX idx_bridge_command_requested_by (requested_by, created_at),
+      INDEX idx_bridge_command_employee (employee_id, created_at)
+    )
+  `);
+
+  await pool.execute(`
     CREATE TABLE IF NOT EXISTS attendance_summary (
       summary_id BIGINT AUTO_INCREMENT PRIMARY KEY,
       employee_id INT NOT NULL,
@@ -365,6 +391,32 @@ async function writeBiometricAudit(req, employeeId, action, oldValue = null, new
   } catch (err) {
     console.warn('[biometric/audit]', err.message);
   }
+}
+
+function parseCommandResult(row) {
+  if (!row) return row;
+  let result = null;
+  if (row.result_json) {
+    try {
+      result = JSON.parse(row.result_json);
+    } catch (_) {
+      result = null;
+    }
+  }
+  return {
+    command_id: row.command_id,
+    device_id: row.device_id,
+    employee_id: row.employee_id,
+    command_type: row.command_type,
+    command_status: row.command_status,
+    error_message: row.error_message,
+    result,
+    expires_at: row.expires_at,
+    claimed_at: row.claimed_at,
+    completed_at: row.completed_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 async function validateDeviceAuth(req, device) {
@@ -801,6 +853,245 @@ async function recordBiometricAttendance(req, res, options = {}) {
 
 router.post('/attendance', requireAuth, requireRole(ROLES.any), async (req, res) => {
   return recordBiometricAttendance(req, res);
+});
+
+router.post('/bridge-commands', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
+  try {
+    await ensureBiometricAttendanceSchema();
+    const commandType = cleanText(req.body.command_type, 20).toUpperCase();
+    if (!BRIDGE_COMMAND_TYPES.has(commandType)) {
+      return res.status(400).json({ error: 'command_type must be VERIFY or ENROLL.' });
+    }
+
+    const employeeId = Number(req.body.employee_id);
+    const requestedDeviceId = req.body.device_id ? Number(req.body.device_id) : null;
+    if (!Number.isInteger(employeeId) || employeeId <= 0) {
+      return res.status(400).json({ error: 'employee_id is required.' });
+    }
+    if (requestedDeviceId != null && (!Number.isInteger(requestedDeviceId) || requestedDeviceId <= 0)) {
+      return res.status(400).json({ error: 'device_id is invalid.' });
+    }
+
+    const [employees] = await pool.execute(
+      'SELECT id, employee_code, status FROM employees WHERE id = ? LIMIT 1',
+      [employeeId]
+    );
+    if (!employees.length || String(employees[0].status || '').toLowerCase() !== 'active') {
+      return res.status(400).json({ error: 'An active employee is required.' });
+    }
+
+    const [devices] = await pool.execute(
+      `SELECT device_id, device_reference, device_name
+         FROM biometric_device
+        WHERE is_active = 1
+          ${requestedDeviceId ? 'AND device_id = ?' : ''}
+        ORDER BY device_reference = ? DESC, device_name
+        LIMIT 1`,
+      requestedDeviceId ? [requestedDeviceId, BRIDGE_DEVICE_REFERENCE] : [BRIDGE_DEVICE_REFERENCE]
+    );
+    if (!devices.length) {
+      return res.status(400).json({ error: 'No active biometric station is registered.' });
+    }
+
+    await pool.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = 'EXPIRED', error_message = 'Command expired before station pickup.'
+        WHERE command_status IN ('PENDING','IN_PROGRESS') AND expires_at < NOW()`
+    );
+
+    const [result] = await pool.execute(
+      `INSERT INTO biometric_bridge_command
+         (device_id, employee_id, command_type, command_status, requested_by, expires_at)
+       VALUES (?, ?, ?, 'PENDING', ?, DATE_ADD(NOW(), INTERVAL 90 SECOND))`,
+      [devices[0].device_id, employeeId, commandType, req.user.id || null]
+    );
+    await writeBiometricAudit(req, employeeId, `BIOMETRIC ${commandType} COMMAND CREATED [ID:${result.insertId}]`, null, {
+      device_id: devices[0].device_id,
+      device_reference: devices[0].device_reference,
+    });
+    res.status(201).json({
+      command_id: result.insertId,
+      command_status: 'PENDING',
+      command_type: commandType,
+      device: devices[0],
+    });
+  } catch (err) {
+    console.error('[biometric/bridge-command-create]', err.message);
+    res.status(500).json({ error: 'Failed to create biometric bridge command.' });
+  }
+});
+
+router.get('/bridge-commands/:commandId', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
+  try {
+    await ensureBiometricAttendanceSchema();
+    const commandId = Number(req.params.commandId);
+    if (!Number.isInteger(commandId) || commandId <= 0) return res.status(400).json({ error: 'Invalid command id.' });
+    await pool.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = 'EXPIRED', error_message = 'Command expired before station pickup.'
+        WHERE command_status IN ('PENDING','IN_PROGRESS') AND expires_at < NOW()`
+    );
+    const [rows] = await pool.execute(
+      'SELECT * FROM biometric_bridge_command WHERE command_id = ? LIMIT 1',
+      [commandId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Biometric command not found.' });
+    res.json(parseCommandResult(rows[0]));
+  } catch (err) {
+    console.error('[biometric/bridge-command-status]', err.message);
+    res.status(500).json({ error: 'Failed to load biometric bridge command.' });
+  }
+});
+
+router.post('/station-command/next', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await ensureBiometricAttendanceSchema();
+    const deviceReference = cleanText(req.body.device_id || BRIDGE_DEVICE_REFERENCE, 120);
+    const [devices] = await pool.execute(
+      'SELECT * FROM biometric_device WHERE device_reference = ? AND is_active = 1 LIMIT 1',
+      [deviceReference]
+    );
+    if (!devices.length) return res.status(404).json({ error: 'Registered active biometric device not found.' });
+    const device = devices[0];
+    if (!(await validateDeviceAuth(req, device))) {
+      return res.status(401).json({ error: 'Biometric device authentication failed.' });
+    }
+
+    await conn.beginTransaction();
+    await conn.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = 'EXPIRED', error_message = 'Command expired before station pickup.'
+        WHERE command_status IN ('PENDING','IN_PROGRESS') AND expires_at < NOW()`
+    );
+    const [commands] = await conn.execute(
+      `SELECT bbc.command_id, bbc.command_type, bbc.employee_id,
+              e.employee_code, e.first_name, e.middle_name, e.last_name
+         FROM biometric_bridge_command bbc
+         JOIN employees e ON e.id = bbc.employee_id
+        WHERE bbc.device_id = ?
+          AND bbc.command_status = 'PENDING'
+          AND bbc.expires_at >= NOW()
+        ORDER BY bbc.created_at
+        LIMIT 1
+        FOR UPDATE`,
+      [device.device_id]
+    );
+    if (!commands.length) {
+      await conn.commit();
+      return res.json({ command: null });
+    }
+    const command = commands[0];
+    await conn.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = 'IN_PROGRESS', claimed_at = NOW()
+        WHERE command_id = ?`,
+      [command.command_id]
+    );
+    await conn.commit();
+    res.json({
+      command: {
+        command_id: command.command_id,
+        command_type: command.command_type,
+        employee_id: command.employee_id,
+        employee_code: command.employee_code,
+        employee_name: biometricEmployeeName(command),
+      },
+    });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    console.error('[biometric/station-command-next]', err.message);
+    res.status(500).json({ error: 'Failed to claim biometric command.' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/station-command/:commandId/complete', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await ensureBiometricAttendanceSchema();
+    const commandId = Number(req.params.commandId);
+    if (!Number.isInteger(commandId) || commandId <= 0) return res.status(400).json({ error: 'Invalid command id.' });
+
+    await conn.beginTransaction();
+    const [commands] = await conn.execute(
+      `SELECT bbc.*, bd.device_reference, bd.auth_type, bd.auth_header_name, bd.auth_secret_encrypted
+         FROM biometric_bridge_command bbc
+         JOIN biometric_device bd ON bd.device_id = bbc.device_id
+        WHERE bbc.command_id = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [commandId]
+    );
+    if (!commands.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Biometric command not found.' });
+    }
+    const command = commands[0];
+    if (!(await validateDeviceAuth(req, command))) {
+      await conn.rollback();
+      return res.status(401).json({ error: 'Biometric device authentication failed.' });
+    }
+    if (!['PENDING', 'IN_PROGRESS'].includes(command.command_status)) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Biometric command is no longer active.' });
+    }
+
+    const ok = req.body.ok === true || req.body.ok === 1 || req.body.ok === 'true';
+    const payload = req.body.result && typeof req.body.result === 'object' ? req.body.result : {};
+    const errorMessage = ok ? null : cleanText(req.body.error || payload.error || 'Biometric command failed.', 500);
+
+    if (ok && command.command_type === 'ENROLL') {
+      const referenceId = cleanText(payload.reference_id, 190);
+      if (!referenceId) throw new Error('Enrollment result is missing reference_id.');
+      const userHash = sha256(referenceId);
+      const encryptedId = encryptAES256(referenceId);
+      await conn.execute(
+        `INSERT INTO biometric_employee_mapping
+           (device_id, employee_id, biometric_user_hash, biometric_user_id_encrypted, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           employee_id = VALUES(employee_id),
+           biometric_user_id_encrypted = VALUES(biometric_user_id_encrypted),
+           is_active = 1,
+           updated_by = VALUES(updated_by)`,
+        [command.device_id, command.employee_id, userHash, encryptedId, command.requested_by, command.requested_by]
+      );
+    }
+
+    const resultJson = JSON.stringify({
+      ...payload,
+      reference_id: payload.reference_id ? cleanText(payload.reference_id, 190) : undefined,
+    });
+    await conn.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = ?, completed_at = NOW(), result_json = ?, error_message = ?
+        WHERE command_id = ?`,
+      [ok ? 'COMPLETED' : 'FAILED', resultJson, errorMessage, commandId]
+    );
+    await conn.execute(
+      `INSERT INTO system_audit_log
+         (user_id, employee_id, target_employee_id, action_performed, module, old_value, new_value, ip_address, user_agent)
+       VALUES (?, NULL, ?, ?, 'ATTENDANCE', NULL, ?, ?, ?)`,
+      [
+        command.requested_by || null,
+        command.employee_id,
+        `BIOMETRIC ${command.command_type} COMMAND ${ok ? 'COMPLETED' : 'FAILED'} [ID:${commandId}]`,
+        JSON.stringify({ ok, score: payload.score || null, matched: payload.matched ?? null, error: errorMessage }),
+        clientIp(req),
+        cleanText(req.headers['user-agent'], 500),
+      ]
+    );
+    await conn.commit();
+    res.json({ message: 'Biometric command result saved.' });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    console.error('[biometric/station-command-complete]', err.message);
+    res.status(400).json({ error: 'Failed to complete biometric command.' });
+  } finally {
+    conn.release();
+  }
 });
 
 router.post('/station-attendance', async (req, res) => {

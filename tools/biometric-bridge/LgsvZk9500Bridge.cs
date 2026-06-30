@@ -46,6 +46,20 @@ public class BridgeConfig
     public string listener_prefix { get; set; }
 }
 
+public class BridgeCommandPollResponse
+{
+    public BridgeCommand command { get; set; }
+}
+
+public class BridgeCommand
+{
+    public int command_id { get; set; }
+    public string command_type { get; set; }
+    public int employee_id { get; set; }
+    public string employee_code { get; set; }
+    public string employee_name { get; set; }
+}
+
 public class Program
 {
     const string DefaultDeviceReference = "ZK9500-LOCAL-001";
@@ -68,10 +82,12 @@ public class Program
     static BridgeConfig config;
     static readonly object DeviceLock = new object();
     static readonly Dictionary<int, DateTime> LastPostedByEmployee = new Dictionary<int, DateTime>();
+    static volatile bool CommandInProgress = false;
 
     public static void Main(string[] args)
     {
         Console.Title = "LGSV HR ZK9500 Biometric Bridge";
+        ConfigureSecureTransport();
         Directory.CreateDirectory(StoreDir);
         config = ReadConfig();
         InitializeDevice();
@@ -85,11 +101,21 @@ public class Program
             Log("Background scanner mode started. Posting to " + config.hris_attendance_url);
         }
 
+        var commandWorker = new Thread(BridgeCommandLoop);
+        commandWorker.IsBackground = true;
+        commandWorker.Start();
+        Log("AWS command polling started. Polling " + BuildStationCommandUrl("/next"));
+
         using (var listener = new HttpListener())
         {
             listener.Prefixes.Add(config.listener_prefix);
+            var loopbackPrefix = BuildLoopbackListenerPrefix(config.listener_prefix);
+            if (!string.Equals(loopbackPrefix, config.listener_prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                listener.Prefixes.Add(loopbackPrefix);
+            }
             listener.Start();
-            Console.WriteLine("LGSV ZK9500 bridge running at " + config.listener_prefix);
+            Console.WriteLine("LGSV ZK9500 bridge running at " + string.Join(", ", listener.Prefixes.Cast<string>()));
             Console.WriteLine("Endpoints: GET /health, POST /enroll, POST /verify, POST /scan");
 
             while (true)
@@ -97,6 +123,58 @@ public class Program
                 var context = listener.GetContext();
                 ThreadPool.QueueUserWorkItem(_ => HandleRequest(context));
             }
+        }
+    }
+
+    static string BuildLoopbackListenerPrefix(string configuredPrefix)
+    {
+        Uri configuredUri;
+        if (!Uri.TryCreate(configuredPrefix, UriKind.Absolute, out configuredUri))
+        {
+            return "http://127.0.0.1:8787/";
+        }
+
+        var builder = new UriBuilder(configuredUri)
+        {
+            Host = "127.0.0.1"
+        };
+        return builder.Uri.AbsoluteUri;
+    }
+
+    static string BuildStationCommandUrl(string suffix)
+    {
+        var attendanceUrl = string.IsNullOrWhiteSpace(config.hris_attendance_url)
+            ? "http://localhost:3000/api/biometric/station-attendance"
+            : config.hris_attendance_url.Trim();
+
+        var marker = "/station-attendance";
+        var index = attendanceUrl.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            return attendanceUrl.Substring(0, index) + "/station-command" + suffix;
+        }
+
+        Uri uri;
+        if (Uri.TryCreate(attendanceUrl, UriKind.Absolute, out uri))
+        {
+            return uri.GetLeftPart(UriPartial.Authority) + "/api/biometric/station-command" + suffix;
+        }
+        return "http://localhost:3000/api/biometric/station-command" + suffix;
+    }
+
+    static void ConfigureSecureTransport()
+    {
+        // .NET Framework can otherwise default to obsolete TLS versions on
+        // older Windows installations. Prefer TLS 1.3 when SChannel supports
+        // it, while retaining TLS 1.2 for the AWS HTTPS compatibility floor.
+        const SecurityProtocolType Tls13 = (SecurityProtocolType)12288;
+        try
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | Tls13;
+        }
+        catch (NotSupportedException)
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         }
     }
 
@@ -290,7 +368,9 @@ public class Program
     {
         try
         {
-            AddCors(context.Response);
+            var origin = context.Request.Headers["Origin"] ?? "-";
+            Log("HTTP " + context.Request.HttpMethod + " " + context.Request.Url.AbsolutePath + " origin=" + origin);
+            AddCors(context);
             if (context.Request.HttpMethod == "OPTIONS")
             {
                 Respond(context, 204, new { ok = true });
@@ -301,6 +381,11 @@ public class Program
             if (context.Request.HttpMethod == "GET" && path == "health")
             {
                 Respond(context, 200, new { ok = true, device_id = config.device_reference, status = "ZK9500 bridge running", background_scanner_enabled = config.background_scanner_enabled });
+                return;
+            }
+            if (context.Request.HttpMethod == "GET" && path == "verify-page")
+            {
+                VerifyPage(context);
                 return;
             }
             if (context.Request.HttpMethod == "POST" && path == "enroll")
@@ -325,6 +410,56 @@ public class Program
         {
             Console.WriteLine("ERROR: " + ex.Message);
             Respond(context, 500, new { error = ex.Message });
+        }
+    }
+
+    static void VerifyPage(HttpListenerContext context)
+    {
+        int expectedEmployeeId;
+        if (!int.TryParse(context.Request.QueryString["employee_id"], out expectedEmployeeId) || expectedEmployeeId <= 0)
+        {
+            RespondHtml(context, 400, BuildVerifyPage("Missing employee", false, "employee_id is required.", ""));
+            return;
+        }
+
+        try
+        {
+            int captureSize;
+            var template = CaptureTemplate(out captureSize);
+            int fid = 0;
+            int score = 0;
+            int result;
+            lock (DeviceLock)
+            {
+                result = device.Identify(template, ref fid, ref score);
+            }
+
+            if (result != 0 || fid <= 0)
+            {
+                Log("VERIFY PAGE no match. expected_employee_id=" + expectedEmployeeId + " score=" + score);
+                RespondHtml(context, 200, BuildVerifyPage("No match", false, "Fingerprint was not matched to an enrolled employee.", "Score: " + score));
+                return;
+            }
+
+            var store = ReadStore();
+            var record = store.templates.FirstOrDefault(t => t.employee_id == fid && t.is_active);
+            bool matched = fid == expectedEmployeeId;
+            Log("VERIFY PAGE matched employee " + fid + " expected " + expectedEmployeeId + " score " + score);
+            var employeeLabel = record == null
+                ? ("Employee ID " + fid)
+                : ((record.employee_name ?? "").Trim() + " " + (string.IsNullOrWhiteSpace(record.employee_code) ? "" : "(" + record.employee_code + ")")).Trim();
+            var detail = "Expected employee ID: " + expectedEmployeeId + "<br>Matched: " + EscapeHtml(employeeLabel) + "<br>Score: " + score;
+            RespondHtml(context, 200, BuildVerifyPage(
+                matched ? "Fingerprint verified" : "Different employee matched",
+                matched,
+                matched ? "Fingerprint matched the selected employee." : "The scanned finger belongs to a different enrolled employee.",
+                detail
+            ));
+        }
+        catch (Exception ex)
+        {
+            Log("VERIFY PAGE error. expected_employee_id=" + expectedEmployeeId + " error=" + ex.Message);
+            RespondHtml(context, 500, BuildVerifyPage("Verification failed", false, EscapeHtml(ex.Message), "Make sure the scanner is connected and your finger is placed cleanly."));
         }
     }
 
@@ -434,12 +569,149 @@ public class Program
         Respond(context, 200, new { message = "Biometric scan posted to HRIS.", employee_id = fid, score = score, hris_response = response });
     }
 
+    static void BridgeCommandLoop()
+    {
+        while (true)
+        {
+            try
+            {
+                var payload = new Dictionary<string, object>();
+                payload["device_id"] = config.device_reference;
+                var response = PostJson(BuildStationCommandUrl("/next"), Json.Serialize(payload), "");
+                var poll = Json.Deserialize<BridgeCommandPollResponse>(response);
+                if (poll != null && poll.command != null && poll.command.command_id > 0)
+                {
+                    ProcessBridgeCommand(poll.command);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("COMMAND POLL error. " + ex.Message);
+                Thread.Sleep(5000);
+                continue;
+            }
+            Thread.Sleep(2000);
+        }
+    }
+
+    static void ProcessBridgeCommand(BridgeCommand command)
+    {
+        CommandInProgress = true;
+        try
+        {
+            Log("COMMAND " + command.command_id + " started. type=" + command.command_type + " employee_id=" + command.employee_id);
+            var commandType = (command.command_type ?? "").ToUpperInvariant();
+            if (commandType == "VERIFY")
+            {
+                CompleteBridgeCommand(command.command_id, true, VerifyForCommand(command), "");
+                return;
+            }
+            if (commandType == "ENROLL")
+            {
+                CompleteBridgeCommand(command.command_id, true, EnrollForCommand(command), "");
+                return;
+            }
+            CompleteBridgeCommand(command.command_id, false, null, "Unsupported command type.");
+        }
+        catch (Exception ex)
+        {
+            Log("COMMAND " + command.command_id + " failed. " + ex.Message);
+            CompleteBridgeCommand(command.command_id, false, null, ex.Message);
+        }
+        finally
+        {
+            CommandInProgress = false;
+        }
+    }
+
+    static Dictionary<string, object> VerifyForCommand(BridgeCommand command)
+    {
+        int captureSize;
+        var template = CaptureTemplate(out captureSize);
+        int fid = 0;
+        int score = 0;
+        int result;
+        lock (DeviceLock)
+        {
+            result = device.Identify(template, ref fid, ref score);
+        }
+
+        var payload = new Dictionary<string, object>();
+        payload["expected_employee_id"] = command.employee_id;
+        payload["employee_id"] = fid;
+        payload["score"] = score;
+        payload["sdk_result"] = result;
+
+        if (result != 0 || fid <= 0)
+        {
+            payload["matched"] = false;
+            payload["error"] = "Fingerprint was not matched to an enrolled employee.";
+            payload["message"] = "Fingerprint was not matched to an enrolled employee.";
+            return payload;
+        }
+
+        var store = ReadStore();
+        var record = store.templates.FirstOrDefault(t => t.employee_id == fid && t.is_active);
+        var selectedEmployeeMatched = fid == command.employee_id;
+        payload["matched"] = selectedEmployeeMatched;
+        payload["employee_code"] = record == null ? "" : record.employee_code;
+        payload["employee_name"] = record == null ? "" : record.employee_name;
+        payload["message"] = selectedEmployeeMatched ? "Fingerprint matched selected employee." : "Fingerprint matched a different employee.";
+        Log("COMMAND " + command.command_id + " verify matched employee " + fid + " expected " + command.employee_id + " score " + score);
+        return payload;
+    }
+
+    static Dictionary<string, object> EnrollForCommand(BridgeCommand command)
+    {
+        var template = EnrollTemplate();
+        var store = ReadStore();
+        store.templates.RemoveAll(t => t.employee_id == command.employee_id);
+        var record = new TemplateRecord
+        {
+            employee_id = command.employee_id,
+            employee_code = command.employee_code ?? "",
+            employee_name = command.employee_name ?? "",
+            reference_id = "ZK9500-" + command.employee_id,
+            template_base64 = Convert.ToBase64String(template),
+            is_active = true,
+            enrolled_at = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+        };
+        store.templates.Add(record);
+        WriteStore(store);
+        LoadTemplatesIntoMatcher();
+
+        var payload = new Dictionary<string, object>();
+        payload["employee_id"] = command.employee_id;
+        payload["employee_code"] = record.employee_code;
+        payload["employee_name"] = record.employee_name;
+        payload["reference_id"] = record.reference_id;
+        payload["message"] = "Fingerprint enrolled.";
+        Log("COMMAND " + command.command_id + " enrolled employee " + command.employee_id);
+        return payload;
+    }
+
+    static void CompleteBridgeCommand(int commandId, bool ok, Dictionary<string, object> result, string error)
+    {
+        var payload = new Dictionary<string, object>();
+        payload["device_id"] = config.device_reference;
+        payload["ok"] = ok;
+        payload["result"] = result ?? new Dictionary<string, object>();
+        payload["error"] = error ?? "";
+        var response = PostJson(BuildStationCommandUrl("/" + commandId + "/complete"), Json.Serialize(payload), "");
+        Log("COMMAND " + commandId + " completion posted. " + response);
+    }
+
     static void BackgroundScannerLoop()
     {
         while (true)
         {
             try
             {
+                if (CommandInProgress)
+                {
+                    Thread.Sleep(500);
+                    continue;
+                }
                 int captureSize;
                 var template = TryCaptureTemplateOnce(out captureSize);
                 if (template == null)
@@ -541,11 +813,59 @@ public class Program
         }
     }
 
-    static void AddCors(HttpListenerResponse response)
+    static void AddCors(HttpListenerContext context)
     {
-        response.Headers["Access-Control-Allow-Origin"] = "*";
+        var response = context.Response;
+        var origin = context.Request.Headers["Origin"] ?? "";
+        var allowedOrigin = origin == "https://lgsvhr.com"
+            || origin == "https://www.lgsvhr.com"
+            || origin.StartsWith("http://localhost:", StringComparison.OrdinalIgnoreCase)
+            || origin.StartsWith("http://127.0.0.1:", StringComparison.OrdinalIgnoreCase);
+
+        if (allowedOrigin)
+        {
+            response.Headers["Access-Control-Allow-Origin"] = origin;
+            response.Headers["Vary"] = "Origin";
+        }
         response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
         response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+        response.Headers["Access-Control-Allow-Private-Network"] = "true";
+        response.Headers["Access-Control-Max-Age"] = "600";
+    }
+
+    static string EscapeHtml(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        return value
+            .Replace("&", "&amp;")
+            .Replace("<", "&lt;")
+            .Replace(">", "&gt;")
+            .Replace("\"", "&quot;")
+            .Replace("'", "&#39;");
+    }
+
+    static string BuildVerifyPage(string title, bool ok, string message, string detail)
+    {
+        var color = ok ? "#00875a" : "#d32f2f";
+        var background = ok ? "#e8fff4" : "#fff0f0";
+        return "<!doctype html><html><head><meta charset=\"utf-8\"><title>LGSV ZK9500 Verification</title>"
+            + "<style>body{font-family:Arial,sans-serif;background:#f6f8fb;color:#111827;margin:0;padding:40px;}"
+            + ".card{max-width:620px;margin:0 auto;background:#fff;border:1px solid #d8dee9;padding:28px;box-shadow:0 12px 30px rgba(15,23,42,.08);}"
+            + ".badge{display:inline-block;padding:8px 12px;border:1px solid " + color + ";background:" + background + ";color:" + color + ";font-weight:700;margin-bottom:16px;}"
+            + "h1{font-size:24px;margin:0 0 12px;}p{line-height:1.5;}small{color:#475569;}button{margin-top:18px;padding:10px 14px;border:1px solid #cbd5e1;background:#fff;cursor:pointer;}</style></head><body>"
+            + "<div class=\"card\"><div class=\"badge\">" + (ok ? "Verified" : "Needs attention") + "</div>"
+            + "<h1>" + EscapeHtml(title) + "</h1><p>" + message + "</p><p><small>" + detail + "</small></p>"
+            + "<button onclick=\"window.close()\">Close tab</button></div></body></html>";
+    }
+
+    static void RespondHtml(HttpListenerContext context, int status, string html)
+    {
+        var bytes = Encoding.UTF8.GetBytes(html);
+        context.Response.StatusCode = status;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        context.Response.ContentLength64 = bytes.Length;
+        context.Response.OutputStream.Write(bytes, 0, bytes.Length);
+        context.Response.OutputStream.Close();
     }
 
     static void Respond(HttpListenerContext context, int status, object payload)

@@ -2592,7 +2592,8 @@ function updatePayrollDropdownNav(activeTab) {
   document.querySelectorAll('.payroll-nav-dropdown').forEach(dropdown => {
     const isActive = dropdown.dataset.payrollGroup === activeGroup;
     dropdown.classList.toggle('active', isActive);
-    if (!isActive || dropdown.open) dropdown.removeAttribute('open');
+    if (isActive) dropdown.setAttribute('open', '');
+    else dropdown.removeAttribute('open');
   });
 
   const processingCurrent = document.getElementById('payroll-processing-current');
