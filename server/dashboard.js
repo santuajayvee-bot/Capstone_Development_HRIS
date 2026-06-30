@@ -83,6 +83,10 @@ function formatAuditMessage(actionPerformed, moduleName) {
   const action = String(actionPerformed || '').trim();
   if (!action) return 'A system activity was recorded.';
 
+  if (isInternalApiAuditAction(action)) {
+    return `${formalModuleLabel(moduleName)} activity was recorded.`;
+  }
+
   if (/^ACCOUNT_CREATED:/i.test(action)) {
     const username = extractQuotedValue(action);
     const employeeCode = extractEmployeeCode(action);
@@ -134,7 +138,21 @@ function formatAuditMessage(actionPerformed, moduleName) {
     .toLowerCase();
 
   if (!label) return `${formalModuleLabel(moduleName)} activity was recorded.`;
+  if (/\/api\//i.test(label) || /\bapi\b/i.test(label)) return `${formalModuleLabel(moduleName)} activity was recorded.`;
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
+}
+
+function isInternalApiAuditAction(actionPerformed) {
+  const action = String(actionPerformed || '');
+  return /(?:^|:\s*)[A-Z_]*API:\s*(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(action)
+    || /\b(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(action)
+    || /\/api\//i.test(action);
+}
+
+function isUserFacingNotification(row) {
+  if (!row?.action_performed) return false;
+  if (isInternalApiAuditAction(row.action_performed)) return false;
+  return true;
 }
 
 function auditNotification(row) {
@@ -261,10 +279,13 @@ async function sharedWidgets(role, profile, permissions) {
        FROM system_audit_log
       WHERE module IN ('LEAVE', 'PAYROLL', 'ATTENDANCE', 'ONBOARDING', 'RBAC', 'EMPLOYEE')
       ORDER BY timestamp DESC
-      LIMIT 5`
+      LIMIT 25`
   );
 
-  const notifications = notificationRows.map(auditNotification);
+  const notifications = notificationRows
+    .filter(isUserFacingNotification)
+    .slice(0, 5)
+    .map(auditNotification);
 
   return {
     notifications,
