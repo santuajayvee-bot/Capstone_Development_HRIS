@@ -18,6 +18,10 @@ const { decryptAuditValue, encryptAuditValue } = require('./privacy-protection')
 const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
 const { optionalDateOnly } = require('./utils/dateValidation');
+const {
+  PAYROLL_SCHEDULE_LABELS,
+  normalizePayrollScheduleValue,
+} = require('./utils/payrollSchedule');
 
 const router = express.Router();
 const HR_ROLES = ['hr_admin', 'hr_manager', 'admin'];
@@ -50,7 +54,7 @@ const SHIFT_SCHEDULES = [
   'Flexible',
 ];
 const EMPLOYEE_LEVELS = ['Rank and File', 'Supervisor', 'Manager', 'Executive'];
-const PAYROLL_SCHEDULES = ['Monthly', 'Semi-monthly', 'Bi-weekly', 'Weekly'];
+const PAYROLL_SCHEDULES = PAYROLL_SCHEDULE_LABELS;
 const DIRECT_ROUTE_KEYWORDS = ['manager', 'supervisor', 'office staff', 'admin staff', 'hr staff', 'hr officer', 'hr manager'];
 const ONBOARDING_ROUTE_KEYWORDS = [
   'operator', 'production worker', 'production staff', 'piece-rate worker',
@@ -175,6 +179,14 @@ function optionalChoice(value, field, choices) {
   if (!cleaned) return '';
   if (!choices.includes(cleaned)) throw new Error(`Invalid ${field}.`);
   return cleaned;
+}
+
+function optionalPayrollSchedule(value) {
+  const cleaned = cleanText(value, 100);
+  if (!cleaned) return '';
+  const normalized = normalizePayrollScheduleValue(cleaned);
+  if (!normalized) throw new Error('Invalid payroll schedule.');
+  return normalized;
 }
 
 function optionalNonNegativeNumber(value, field) {
@@ -555,7 +567,7 @@ async function createOnboardingApplicantRecord(connection, req, rawBody, options
     supervisor: cleanText(body.supervisor, 180),
     shift_schedule: optionalChoice(body.shift_schedule, 'shift schedule', SHIFT_SCHEDULES),
     employee_level: optionalChoice(body.employee_level, 'employee level', EMPLOYEE_LEVELS),
-    payroll_schedule: optionalChoice(body.payroll_schedule, 'payroll schedule', PAYROLL_SCHEDULES),
+    payroll_schedule: optionalPayrollSchedule(body.payroll_schedule),
     allowances: optionalNonNegativeNumber(body.allowances, 'Allowances'),
     employment_history: cleanText(body.employment_history, 1000),
     salary_grade: cleanText(body.salary_grade, 100),
@@ -926,7 +938,7 @@ router.get('/applicants/:applicantId', async (req, res) => {
       supervisor: pii.supervisor || '',
       shift_schedule: pii.shift_schedule || '',
       employee_level: pii.employee_level || '',
-      payroll_schedule: pii.payroll_schedule || '',
+      payroll_schedule: normalizePayrollScheduleValue(pii.payroll_schedule) || pii.payroll_schedule || '',
       allowances: pii.allowances ?? null,
       sss_number: pii.sss_number || '',
       philhealth_number: pii.philhealth_number || '',
@@ -1161,7 +1173,7 @@ async function transferApprovedApplicant(connection, req, applicant, reason, emp
       applicant.department_id, applicant.applied_position, employmentType, applicant.contract_end_date || null, nullable(pii.supervisor),
       applicant.branch, nullable(pii.shift_schedule), nullable(pii.employee_level), nullable(pii.employment_history),
       initialPasswordHash,
-      nullable(pii.salary_grade), pii.allowances == null ? null : pii.allowances, nullable(pii.payroll_schedule), employeePiiDb(pii.sss_number), employeePiiDb(pii.philhealth_number),
+      nullable(pii.salary_grade), pii.allowances == null ? null : pii.allowances, normalizePayrollScheduleValue(pii.payroll_schedule), employeePiiDb(pii.sss_number), employeePiiDb(pii.philhealth_number),
       employeePiiDb(pii.pagibig_number), employeePiiDb(pii.tin), employeePiiDb(pii.tax_status), employeePiiDb(pii.bank_name), employeePiiDb(pii.bank_account),
       nullable(pii.residential_address_lat), nullable(pii.residential_address_lng), nullable(pii.current_address_lat), nullable(pii.current_address_lng),
       pii.current_address_same_as_home ? 1 : 0, nullable(pii.mailing_address_lat), nullable(pii.mailing_address_lng), pii.mailing_address_same_as_home ? 1 : 0,

@@ -59,8 +59,32 @@ function normalizeSalaryWageType(value) {
   if (/trip|logistics/i.test(name)) return 'Per-Trip';
   if (/hour/i.test(name)) return 'Hourly';
   if (/day|daily/i.test(name)) return 'Daily';
-  if (/base|salary/i.test(name)) return 'Base Salary';
+  if (/base|salary|month/i.test(name)) return 'Base Salary';
   return name;
+}
+
+function salaryUsesAttendanceValidation(value) {
+  return ['Base Salary', 'Daily', 'Hourly'].includes(normalizeSalaryWageType(value));
+}
+
+async function salaryApiError(response, fallbackMessage) {
+  const text = await response.text().catch(() => '');
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch (_error) {
+    payload = null;
+  }
+
+  const validationErrors = Array.isArray(payload?.validation?.errors)
+    ? payload.validation.errors.filter(Boolean)
+    : [];
+  const messages = validationErrors.length
+    ? validationErrors
+    : [payload?.error || payload?.message || text || fallbackMessage];
+  const error = new Error([...new Set(messages.map(item => String(item).trim()).filter(Boolean))].join('\n') || fallbackMessage);
+  error.payload = payload;
+  return error;
 }
 
 // Init when DOM ready
@@ -232,11 +256,14 @@ function renderSalaryPayrollValidation(validation) {
   const metric = validation.wage_type === 'Hourly'
     ? `Hours Worked: ${Number(validation.hours_worked || 0).toFixed(2)}`
     : `Days Worked: ${Number(validation.days_worked || 0).toFixed(2)}`;
+  const rateSummary = validation.wage_type === 'Monthly'
+    ? `Monthly Salary: ₱${Number(validation.monthly_salary || 0).toFixed(2)} · Daily Equivalent: ₱${Number(validation.daily_rate || 0).toFixed(2)}`
+    : `Rate: ₱${Number(validation.rate || 0).toFixed(2)}`;
   box.innerHTML = `
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
       <div>
         <div style="color:${ok ? '#34d399' : '#fb7185'};font-size:12px;">${ok ? 'Payroll validation ready' : 'Payroll validation blocked'}</div>
-        <div style="color:var(--muted);margin-top:4px;">${salaryEscape(validation.date_from)} to ${salaryEscape(validation.date_to)} · ${metric} · Rate: ₱${Number(validation.rate || 0).toFixed(2)}</div>
+        <div style="color:var(--muted);margin-top:4px;">${salaryEscape(validation.date_from)} to ${salaryEscape(validation.date_to)} · ${metric} · ${rateSummary}</div>
       </div>
       <div style="color:var(--muted);white-space:nowrap;">${salaryEscape(validation.validation_status || '-')}</div>
     </div>
@@ -246,7 +273,7 @@ function renderSalaryPayrollValidation(validation) {
 }
 
 async function loadSalaryPayrollValidation() {
-  if (!currentSalaryEmployee || !['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+  if (!currentSalaryEmployee || !salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
     salaryPayrollValidation = null;
     renderSalaryPayrollValidation(null);
     return null;
@@ -260,7 +287,9 @@ async function loadSalaryPayrollValidation() {
     salaryPayrollValidation = validation;
     renderSalaryPayrollValidation(validation);
     if (validation.ok) {
-      currentSalaryEmployee.rate = Number(validation.rate || currentSalaryEmployee.rate || 0);
+      currentSalaryEmployee.rate = currentSalaryEmployee.wageType === 'Base Salary'
+        ? Number(validation.monthly_salary || currentSalaryEmployee.rate || 0)
+        : Number(validation.rate || currentSalaryEmployee.rate || 0);
       const rateEl = document.getElementById('salary-rate');
       if (rateEl) rateEl.textContent = `₱${currentSalaryEmployee.rate.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
       if (currentSalaryEmployee.wageType === 'Daily') {
@@ -271,12 +300,13 @@ async function loadSalaryPayrollValidation() {
         const input = document.getElementById('salary-hours-worked');
         if (input) input.value = Number(validation.hours_worked || 0).toFixed(2);
       }
-      calculateSalaryNow();
     }
+    calculateSalaryNow();
     return validation;
   } catch (err) {
     salaryPayrollValidation = { ok: false, errors: [err.message], warnings: [] };
     renderSalaryPayrollValidation(salaryPayrollValidation);
+    calculateSalaryNow();
     return salaryPayrollValidation;
   }
 }
@@ -1269,7 +1299,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     document.getElementById('salary-bonus').value = '0';
     document.getElementById('salary-ot-hours').value = '0';
 
-    if (['Daily', 'Hourly'].includes(normalizedWageType)) {
+    if (salaryUsesAttendanceValidation(normalizedWageType)) {
       await loadSalaryPayrollValidation();
     } else {
       calculateSalaryNow();
@@ -1464,6 +1494,7 @@ function calculateSalaryNow() {
   
   let qty = 0;
   let actualRate = currentSalaryEmployee.rate;
+  let validatedBasePay = null;
   let calculationNote = '';
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
     calculatePieceSalaryNow();
@@ -1550,10 +1581,19 @@ function calculateSalaryNow() {
     calculationNote = `${daysWorked} days @ ₱${actualRate}/day`;
     
   } else if (currentSalaryEmployee.wageType === 'Base Salary') {
-    // For Base Salary, the rate is the monthly salary
-    qty = 1;
-    console.log(`📊 Base Salary: ₱${actualRate.toFixed(2)} per month`);
-    calculationNote = 'Monthly salary';
+    if (salaryPayrollValidation?.ok) {
+      qty = Number(salaryPayrollValidation.days_worked || 0);
+      validatedBasePay = Number(salaryPayrollValidation.gross_pay || salaryPayrollValidation.base_gross_pay || 0);
+      calculationNote = `${qty.toFixed(2)} validated day(s) · server-computed monthly payroll`;
+    } else if (salaryPayrollValidation) {
+      qty = 0;
+      validatedBasePay = 0;
+      calculationNote = 'Blocked until attendance is payroll ready';
+    } else {
+      qty = 1;
+      calculationNote = 'Monthly salary';
+    }
+    console.log(`📊 Base Salary validation preview: ₱${Number(validatedBasePay ?? actualRate).toFixed(2)}`);
   }
   
   const housing = parseFloat(document.getElementById('salary-housing').value) || 0;
@@ -1561,7 +1601,9 @@ function calculateSalaryNow() {
   const transport = parseFloat(document.getElementById('salary-transport').value) || 0;
   const bonus = parseFloat(document.getElementById('salary-bonus').value) || 0;
   
-  const base = currentSalaryEmployee.wageType === 'Per-Piece' && currentSalaryEmployee.piecePreview
+  const base = currentSalaryEmployee.wageType === 'Base Salary' && validatedBasePay !== null
+    ? validatedBasePay
+    : currentSalaryEmployee.wageType === 'Per-Piece' && currentSalaryEmployee.piecePreview
     ? currentSalaryEmployee.piecePreview.final_gross_pay
     : currentSalaryEmployee.wageType === 'Per-Trip'
       ? actualRate
@@ -1608,7 +1650,7 @@ function attachSalaryInputListeners() {
     periodInput.dataset.validationListenerAttached = '1';
     periodInput.addEventListener('change', () => {
       const workDate = syncSalaryWorkDateFields();
-      if (currentSalaryEmployee && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+      if (currentSalaryEmployee && salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
         loadSalaryPayrollValidation();
       }
       if (currentSalaryEmployee && ['Per-Piece', 'Per-Trip'].includes(currentSalaryEmployee.wageType)
@@ -1685,7 +1727,11 @@ async function saveSalaryAsDraft() {
   setSalarySaveBusy(true, 'draft');
   setSalarySaveStatus('Saving draft...', '');
   try {
-    await saveSalaryRecord('Draft');
+    const saved = await saveSalaryRecord('Draft');
+    if (saved === false) {
+      setSalarySaveStatus('Draft was not saved. Review the highlighted requirements.', 'error');
+      return;
+    }
     setSalarySaveStatus('Draft saved.', 'success');
   } catch (e) {
     console.error('Error saving salary draft:', e);
@@ -1775,12 +1821,17 @@ async function saveCalculation() {
   setSalarySaveBusy(true, 'submit');
   setSalarySaveStatus('Submitting calculation...', '');
   try {
-    await saveSalaryRecord('Submitted');
+    const saved = await saveSalaryRecord('Submitted');
+    if (saved === false) {
+      setSalarySaveStatus('Submission blocked. Review the payroll validation requirements.', 'error');
+      return;
+    }
     setSalarySaveStatus('Submitted. Opening Payroll Records...', 'success');
   } catch (e) {
     console.error('❌ Error during save:', e);
     setSalarySaveStatus(e.message || 'Submit failed.', 'error');
-    alert('Error: ' + e.message);
+    if (typeof showAlert === 'function') await showAlert(e.message || 'Submit failed.', 'Payroll Submission Blocked', 'warning');
+    else alert(e.message || 'Payroll submission was blocked.');
   } finally {
     setSalarySaveBusy(false, 'submit');
   }
@@ -1820,8 +1871,7 @@ async function saveProductionTransaction() {
     alert(`✅ Transaction saved!\n${result.message}`);
     resetCalculationForm();
   } else {
-    const errText = await res.text();
-    throw new Error(errText || 'Failed to save transaction');
+    throw await salaryApiError(res, 'Failed to save transaction');
   }
 }
 
@@ -1864,8 +1914,7 @@ async function saveLogisticsTransaction() {
     alert(`✅ Transaction saved!\n${result.message}`);
     resetCalculationForm();
   } else {
-    const errText = await res.text();
-    throw new Error(errText || 'Failed to save transaction');
+    throw await salaryApiError(res, 'Failed to save transaction');
   }
 }
 
@@ -1874,14 +1923,14 @@ async function saveSalaryRecord(status = 'Submitted') {
   console.log(`📊 ${currentSalaryEmployee.wageType}: ₱${currentSalaryEmployee.rate}`);
 
   const salaryPage = document.getElementById('page-salary-calculation') || document.getElementById('salary-calculation-root');
-  if (window.LGSVValidation && salaryPage && !window.LGSVValidation.validateScope(salaryPage)) return;
+  if (window.LGSVValidation && salaryPage && !window.LGSVValidation.validateScope(salaryPage)) return false;
 
-  if (status !== 'Draft' && ['Daily', 'Hourly'].includes(currentSalaryEmployee.wageType)) {
+  if (status !== 'Draft' && salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
     const validation = await loadSalaryPayrollValidation();
     if (!validation?.ok) {
       const message = (validation?.errors || ['Payroll validation failed.']).join('\n');
       await showAlert(message, 'Payroll Validation Blocked', 'warning');
-      return;
+      return false;
     }
   }
   
@@ -1904,7 +1953,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     
     if (status !== 'Draft' && hoursWorked === 0) {
       await showAlert('Please enter hours worked', 'Warning', 'warning');
-      return;
+      return false;
     }
   } else if (currentSalaryEmployee.wageType === 'Daily') {
     daysWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.days_worked || 0) : parseFloat(document.getElementById('salary-days-worked').value) || 0;
@@ -1912,7 +1961,17 @@ async function saveSalaryRecord(status = 'Submitted') {
     
     if (status !== 'Draft' && daysWorked === 0) {
       await showAlert('Please enter days worked', 'Warning', 'warning');
-      return;
+      return false;
+    }
+  } else if (currentSalaryEmployee.wageType === 'Base Salary') {
+    daysWorked = salaryPayrollValidation?.ok ? Number(salaryPayrollValidation.days_worked || 0) : 0;
+    basePayAmount = salaryPayrollValidation?.ok
+      ? Number(salaryPayrollValidation.gross_pay || salaryPayrollValidation.base_gross_pay || 0)
+      : currentSalaryEmployee.rate;
+
+    if (status !== 'Draft' && daysWorked === 0) {
+      await showAlert('No validated payroll-ready attendance exists for this payroll period.', 'Payroll Validation Blocked', 'warning');
+      return false;
     }
   } else if (currentSalaryEmployee.wageType === 'Per-Piece') {
     calculateSalaryNow();
@@ -1921,7 +1980,7 @@ async function saveSalaryRecord(status = 'Submitted') {
       pairPayload = getPieceOutputPairPayload();
     } catch (error) {
       await showAlert(error.message, 'Warning', 'warning');
-      return;
+      return false;
     }
     const pieceRows = getSalaryPieceRows();
     const invalidRows = pieceRows.filter(row => row.sew_type_code || row.size_range || row.quantity_produced > 0)
@@ -1929,13 +1988,13 @@ async function saveSalaryRecord(status = 'Submitted') {
     quantity = pieceRows.reduce((sum, row) => sum + (row.piece_rate > 0 ? row.quantity_produced : 0), 0);
     if (invalidRows.length || !currentSalaryEmployee.piecePreview) {
       await showAlert('Please complete at least one valid Type of Sew, Size Range, and quantity row with an active configured rate.', 'Warning', 'warning');
-      return;
+      return false;
     }
     basePayAmount = currentSalaryEmployee.piecePreview.final_gross_pay;
 
     if (quantity === 0) {
       await showAlert('Please enter pieces completed', 'Warning', 'warning');
-      return;
+      return false;
     }
   } else if (currentSalaryEmployee.wageType === 'Per-Trip') {
     const logistics = updateLogisticsPreview();
@@ -1943,24 +2002,24 @@ async function saveSalaryRecord(status = 'Submitted') {
     basePayAmount = logistics.selectedGross;
     if (!logistics.truckTypeId) {
       await showAlert('Please select the truck used for this delivery.', 'Truck Required', 'warning');
-      return;
+      return false;
     }
     if (!logistics.locationId) {
       await showAlert('Please select the configured delivery location.', 'Delivery Location Required', 'warning');
-      return;
+      return false;
     }
     if (!logistics.driverId || !logistics.helper1Id) {
       await showAlert('Select the Driver and Delivery Helper 1. Delivery Helper 2 is optional.', 'Delivery Crew Required', 'warning');
-      return;
+      return false;
     }
     const crewIds = [logistics.driverId, logistics.helper1Id, logistics.helper2Id].filter(Boolean);
     if (new Set(crewIds).size !== crewIds.length) {
       await showAlert('Driver and helpers cannot be the same employee.', 'Warning', 'warning');
-      return;
+      return false;
     }
     if (!(basePayAmount > 0)) {
       await showAlert(currentSalaryEmployee.logisticsRateError || 'The selected employee must be part of the delivery crew and active Driver and Helper rates must be configured.', 'Logistics Rate Required', 'warning');
-      return;
+      return false;
     }
   }
   
@@ -2029,7 +2088,7 @@ async function saveSalaryRecord(status = 'Submitted') {
     resetCalculationForm({ preserveTripConfiguration: true });
     await openPayrollRecordsAfterSave();
     await showAlert(`${logisticsResult.message}\n\nCrew Status: ${logisticsResult.crew_status}\nMissing Helper Share: ${salaryMoney(logisticsResult.missing_helper_share)}`, 'Success', 'success');
-    return;
+    return true;
   }
   if (currentSalaryEmployee.wageType === 'Per-Piece') {
     payload.base_rate = 0;
@@ -2089,7 +2148,7 @@ async function saveSalaryRecord(status = 'Submitted') {
       submitted ? 'Output Submitted' : 'Output Draft Saved',
       'success'
     );
-    return;
+    return true;
   }
   
   
@@ -2122,9 +2181,9 @@ async function saveSalaryRecord(status = 'Submitted') {
       loadSalaryCalculations();
       await showAlert(`Salary calculation saved as draft.\n\nEmployee: ${savedEmployeeName}\nWage Type: ${savedWageType}\n${wageDetails}Gross Pay: ₱${grossPay.toLocaleString('en-US', {minimumFractionDigits: 2})}\nNet Pay: ₱${netPay.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 'Success', 'success');
     }
+    return true;
   } else {
-    const errText = await res.text();
-    throw new Error(errText || 'Failed to save salary calculation');
+    throw await salaryApiError(res, 'Failed to save salary calculation');
   }
 }
 

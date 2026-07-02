@@ -44,6 +44,10 @@ const {
   yearFromDateOnly,
 }                                             = require('./server/utils/dateValidation');
 const {
+  PAYROLL_SCHEDULE_LABELS,
+  normalizePayrollScheduleValue,
+}                                             = require('./server/utils/payrollSchedule');
+const {
   auditSecurityEvent,
   createRateLimiter,
   multerFileFilter,
@@ -114,7 +118,7 @@ const EMPLOYEE_ENUMS = {
   deployment_status: new Set(['Pending Deployment', 'Deployed', 'On Hold', 'Ended']),
   employee_level: new Set(['Rank and File', 'Supervisor', 'Manager', 'Executive']),
   status: new Set(['Active', 'Inactive', 'Resigned', 'Terminated', 'End of Contract', 'Suspended', 'Retired', 'Offboarded', 'Rehired']),
-  payroll_schedule: new Set(['weekly', 'semi_monthly', 'monthly', 'Weekly', 'Semi-Monthly', 'Monthly']),
+  payroll_schedule: new Set(PAYROLL_SCHEDULE_LABELS),
   tax_status: new Set(['Single', 'Married', 'Head of Family', 'Exempt']),
 };
 const EMPLOYEE_PAYROLL_PROTECTED_FIELDS = new Set([
@@ -1145,7 +1149,11 @@ function maskEmployeeDetail(row) {
 }
 
 function visibleEmployeeDetail(row) {
-  return { ...row, sensitive_fields_masked: false };
+  return {
+    ...row,
+    payroll_schedule: normalizePayrollScheduleValue(row?.payroll_schedule) || row?.payroll_schedule || null,
+    sensitive_fields_masked: false,
+  };
 }
 
 function normalizeBlank(value) {
@@ -1588,9 +1596,8 @@ function validateEmployeeEnumField(body, field, allowed = EMPLOYEE_ENUMS[field])
 }
 
 function normalizePayrollSchedule(value) {
-  const text = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (text === 'semi_monthly' || text === 'semimonthly') return 'semi_monthly';
-  if (text === 'weekly' || text === 'monthly') return text;
+  const normalized = normalizePayrollScheduleValue(value);
+  if (normalized) return normalized;
   throw rejectEmployeeInput('payroll_schedule');
 }
 
