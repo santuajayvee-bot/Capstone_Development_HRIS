@@ -80,6 +80,27 @@ test('complete time in and time out compute worked minutes without lunch', () =>
   assert.strictEqual(result.netWorkedMinutes, 480);
 });
 
+test('overtime flag appears only after minimum overtime minutes are met', () => {
+  const overtimePolicy = {
+    ...basePolicy,
+    enable_overtime: true,
+    minimum_overtime_minutes: 30,
+  };
+  const belowMinimum = computeAttendanceMetrics({
+    time_in: '08:08',
+    time_out: '17:09',
+  }, overtimePolicy);
+  assert.strictEqual(belowMinimum.overtimeMinutes, 9);
+  assert.ok(!belowMinimum.flags.includes('Overtime'));
+
+  const meetsMinimum = computeAttendanceMetrics({
+    time_in: '08:00',
+    time_out: '17:30',
+  }, overtimePolicy);
+  assert.strictEqual(meetsMinimum.overtimeMinutes, 30);
+  assert.ok(meetsMinimum.flags.includes('Overtime'));
+});
+
 test('missing time out produces zero regular minutes', () => {
   const result = computeAttendanceMetrics({
     time_in: '08:00',

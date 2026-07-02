@@ -6,7 +6,10 @@ let attendanceAjaxRefreshTimer = null;
 let attendanceAjaxRefreshing = false;
 let attendanceRealtimeListenerReady = false;
 let attendanceBroadcastChannel = null;
-const ATTENDANCE_AJAX_REFRESH_MS = 5000;
+let attendanceLastRealtimeRefreshAt = 0;
+const ATTENDANCE_FAST_REFRESH_MS = 1500;
+const ATTENDANCE_BACKGROUND_REFRESH_MS = 5000;
+const ATTENDANCE_MIN_REFRESH_GAP_MS = 700;
 const ATTENDANCE_SCAN_CHANNEL = 'lgsv-attendance-scan';
 
 function currentPageId() {
@@ -40,33 +43,48 @@ function attendanceRealtimeToast(message) {
   }, 3200);
 }
 
-async function reloadAttendanceRealtimeSurfaces(forceDashboard = true) {
+function attendanceRefreshDelayForPage(page) {
+  return ['dashboard', 'attendance', 'employee-dashboard'].includes(page)
+    ? ATTENDANCE_FAST_REFRESH_MS
+    : ATTENDANCE_BACKGROUND_REFRESH_MS;
+}
+
+async function reloadAttendanceRealtimeSurfaces(forceDashboard = true, options = {}) {
   const page = currentPageId();
   if (attendanceAjaxRefreshing) return;
+  if (!options.force) {
+    const elapsed = Date.now() - attendanceLastRealtimeRefreshAt;
+    if (elapsed < ATTENDANCE_MIN_REFRESH_GAP_MS) return;
+  }
   attendanceAjaxRefreshing = true;
+  attendanceLastRealtimeRefreshAt = Date.now();
 
   try {
+    const refreshTasks = [];
+
     if (page === 'dashboard' && typeof loadDashboard === 'function') {
-      await loadDashboard({ force: forceDashboard });
+      refreshTasks.push(loadDashboard({ force: forceDashboard }));
     }
 
     if (page === 'attendance') {
-      if (typeof loadClockStatus === 'function') loadClockStatus();
-      if (typeof loadBiometricAttendanceStatus === 'function') loadBiometricAttendanceStatus();
-      if (typeof loadOverviewStats === 'function') loadOverviewStats();
-      if (typeof loadMySummary === 'function') loadMySummary();
-      if (typeof loadAttRecords === 'function') loadAttRecords();
-      if (typeof loadBiometricEvents === 'function') loadBiometricEvents();
-      if (typeof loadBiometricExceptions === 'function') loadBiometricExceptions();
+      if (typeof loadClockStatus === 'function') refreshTasks.push(loadClockStatus());
+      if (typeof loadBiometricAttendanceStatus === 'function') refreshTasks.push(loadBiometricAttendanceStatus());
+      if (typeof loadOverviewStats === 'function') refreshTasks.push(loadOverviewStats());
+      if (typeof loadMySummary === 'function') refreshTasks.push(loadMySummary());
+      if (typeof loadAttRecords === 'function') refreshTasks.push(loadAttRecords());
+      if (typeof loadBiometricEvents === 'function') refreshTasks.push(loadBiometricEvents());
+      if (typeof loadBiometricExceptions === 'function') refreshTasks.push(loadBiometricExceptions());
     }
 
     if (page === 'payroll' && typeof loadPayrollRecords === 'function') {
-      loadPayrollRecords();
+      refreshTasks.push(loadPayrollRecords());
     }
 
     if (page === 'employee-dashboard' && typeof initEmployeeDashboard === 'function') {
-      initEmployeeDashboard();
+      refreshTasks.push(initEmployeeDashboard());
     }
+
+    await Promise.allSettled(refreshTasks);
   } finally {
     attendanceAjaxRefreshing = false;
   }
@@ -77,7 +95,7 @@ function handleAttendanceScanNotification(payload = {}) {
   const scan = payload.data || payload;
   const action = String(scan.action || scan.attendance_type || 'scan').replace(/_/g, ' ').toLowerCase();
   attendanceRealtimeToast(`Attendance ${action} received. Refreshing records...`);
-  reloadAttendanceRealtimeSurfaces(true);
+  reloadAttendanceRealtimeSurfaces(true, { force: true });
 }
 
 function startAttendanceRealtimeListeners() {
@@ -99,23 +117,32 @@ function startAttendanceRealtimeListeners() {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) reloadAttendanceRealtimeSurfaces(false);
+    if (!document.hidden) reloadAttendanceRealtimeSurfaces(false, { force: true });
   });
 }
 
 function startAttendanceAjaxRefresh() {
   if (attendanceAjaxRefreshTimer) return;
-  attendanceAjaxRefreshTimer = window.setInterval(() => {
-    if (document.hidden) return;
+  const tick = () => {
     const page = currentPageId();
-    if (!['dashboard', 'attendance', 'payroll', 'employee-dashboard'].includes(page)) return;
-    reloadAttendanceRealtimeSurfaces(false);
-  }, ATTENDANCE_AJAX_REFRESH_MS);
+    const delay = attendanceRefreshDelayForPage(page);
+
+    if (!document.hidden && ['dashboard', 'attendance', 'payroll', 'employee-dashboard'].includes(page)) {
+      reloadAttendanceRealtimeSurfaces(false);
+    }
+
+    attendanceAjaxRefreshTimer = window.setTimeout(tick, delay);
+  };
+
+  attendanceAjaxRefreshTimer = window.setTimeout(() => {
+    reloadAttendanceRealtimeSurfaces(false, { force: true });
+    tick();
+  }, 250);
 }
 
 function stopAttendanceAjaxRefresh() {
   if (!attendanceAjaxRefreshTimer) return;
-  window.clearInterval(attendanceAjaxRefreshTimer);
+  window.clearTimeout(attendanceAjaxRefreshTimer);
   attendanceAjaxRefreshTimer = null;
 }
 

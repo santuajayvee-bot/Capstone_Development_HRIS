@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Technology and manufacturing background</title>
+  <desc id="desc">Soft blue circuit paths, upward arrows, and mechanical gears on a light background.</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="0.52" stop-color="#eef9fc"/>
+      <stop offset="1" stop-color="#cdeaf0"/>
+    </linearGradient>
+    <radialGradient id="hub" cx="42%" cy="36%" r="70%">
+      <stop offset="0" stop-color="#d9f4f3"/>
+      <stop offset="0.52" stop-color="#72b8c5"/>
+      <stop offset="1" stop-color="#3079a1"/>
+    </radialGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fdff"/>
+      <stop offset="0.5" stop-color="#b7dce3"/>
+      <stop offset="1" stop-color="#5d9eb4"/>
+    </linearGradient>
+    <filter id="gear-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#1d668f" flood-opacity=".2"/>
+    </filter>
+    <pattern id="dots" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="1.8" fill="#2c8abd" opacity=".22"/>
+    </pattern>
+    <g id="cog-teeth">
+      <rect x="-16" y="-188" width="32" height="48" rx="4"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(22.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(45)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(67.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(90)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(112.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(135)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(157.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(180)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(202.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(225)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(247.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(270)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(292.5)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(315)"/>
+      <rect x="-16" y="-188" width="32" height="48" rx="4" transform="rotate(337.5)"/>
+    </g>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#page)"/>
+  <rect width="1600" height="1000" fill="url(#dots)" opacity=".42"/>
+
+  <g fill="none" stroke="#2385b7" stroke-width="3" opacity=".3">
+    <path d="M0 122h270l58 58h160l82 82h188"/>
+    <path d="M96 0v206l76 76v274l92 92v220"/>
+    <path d="M364 0v110l70 70v195l70 70v244"/>
+    <path d="M650 0v150l68 68v220l104 104"/>
+    <path d="M842 0v100l62 62v186l72 72v168"/>
+    <path d="M0 420h202l72-72h206l76 76h196"/>
+    <path d="M0 696h228l90-90h188l86 86h258"/>
+    <path d="M0 870h322l68-68h242l82-82h160"/>
+    <path d="M1060 0v216l62 62v136"/>
+    <path d="M1238 0v160l64 64v162"/>
+    <path d="M1410 0v206l54 54v172"/>
+  </g>
+  <g fill="#2b91bd" opacity=".45">
+    <circle cx="270" cy="122" r="7"/><circle cx="328" cy="180" r="6"/>
+    <circle cx="96" cy="206" r="7"/><circle cx="172" cy="282" r="6"/>
+    <circle cx="364" cy="110" r="7"/><circle cx="434" cy="180" r="6"/>
+    <circle cx="650" cy="150" r="7"/><circle cx="718" cy="218" r="6"/>
+    <circle cx="202" cy="420" r="7"/><circle cx="274" cy="348" r="6"/>
+    <circle cx="228" cy="696" r="7"/><circle cx="318" cy="606" r="6"/>
+    <circle cx="1060" cy="216" r="7"/><circle cx="1122" cy="278" r="6"/>
+    <circle cx="1238" cy="160" r="7"/><circle cx="1302" cy="224" r="6"/>
+    <circle cx="1410" cy="206" r="7"/><circle cx="1464" cy="260" r="6"/>
+  </g>
+
+  <g fill="none" stroke="#2186b8" stroke-linecap="round" opacity=".34">
+    <path d="M490 305v-112m0 0-30 35m30-35 30 35" stroke-width="5"/>
+    <path d="M782 390V226m0 0-38 44m38-44 38 44" stroke-width="6"/>
+    <path d="M1180 350V150m0 0-42 48m42-48 42 48" stroke-width="7"/>
+    <path d="M1370 470V276m0 0-38 44m38-44 38 44" stroke-width="6"/>
+  </g>
+
+  <g filter="url(#gear-shadow)">
+    <g transform="translate(1285 760)" fill="url(#metal)" stroke="#2a7da6" stroke-width="5">
+      <use href="#cog-teeth"/>
+      <circle r="152"/>
+      <circle r="118" fill="#f5fcfd" stroke-width="3"/>
+      <circle r="82" fill="url(#hub)"/>
+      <circle r="42" fill="#d5efef" opacity=".62" stroke="none"/>
+    </g>
+    <g transform="translate(1015 680) scale(.72)" fill="url(#metal)" stroke="#2a7da6" stroke-width="6">
+      <use href="#cog-teeth"/>
+      <circle r="152"/>
+      <circle r="112" fill="#f7fcfd" stroke-width="4"/>
+      <circle r="72" fill="url(#hub)"/>
+    </g>
+    <g transform="translate(1115 465) scale(.42)" fill="url(#metal)" stroke="#2a7da6" stroke-width="9">
+      <use href="#cog-teeth"/>
+      <circle r="150"/>
+      <circle r="82" fill="url(#hub)"/>
+    </g>
+    <g transform="translate(1480 535) scale(.34)" fill="url(#metal)" stroke="#2a7da6" stroke-width="10">
+      <use href="#cog-teeth"/>
+      <circle r="148"/>
+      <circle r="76" fill="url(#hub)"/>
+    </g>
+  </g>
+</svg>

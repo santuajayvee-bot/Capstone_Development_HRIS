@@ -243,16 +243,54 @@ function formatMinutes(value) {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
+function overtimeMinimumMinutes(record) {
+  const value = Number(record?.minimum_overtime_minutes);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : 30;
+}
+
+function detectedOvertimeMinutes(record) {
+  const logValue = Number(record?.overtime_minutes ?? NaN);
+  if (Number.isFinite(logValue)) return Math.max(0, Math.round(logValue));
+  return minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+}
+
+function payableOvertimeMinutes(record) {
+  return minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+}
+
+function overtimeMeetsMinimum(record) {
+  const minutes = detectedOvertimeMinutes(record);
+  return minutes > 0 && minutes >= overtimeMinimumMinutes(record);
+}
+
+function overtimeReviewStatus(record) {
+  const raw = String(record?.summary_overtime_status || record?.overtime_status || '').toUpperCase();
+  if (['APPROVED', 'REJECTED', 'PENDING', 'NONE'].includes(raw)) return raw;
+  return overtimeMeetsMinimum(record) ? 'PENDING' : 'NONE';
+}
+
+function overtimeStatusLabel(record) {
+  const status = overtimeReviewStatus(record);
+  if (status === 'APPROVED') return 'Approved';
+  if (status === 'REJECTED') return 'Rejected';
+  if (status === 'PENDING') return 'Pending HR approval';
+  return 'Not applicable';
+}
+
+function overtimeDisplayText(record) {
+  if (!overtimeMeetsMinimum(record)) return '-';
+  return `${formatMinutes(detectedOvertimeMinutes(record))} (${overtimeStatusLabel(record)})`;
+}
+
 function attendanceFlagBadges(record) {
   const flags = [];
   const status = record.attendance_status || record.status || 'Present';
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
-  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
   if (status && !['Late', 'Undertime', 'Overtime'].includes(status)) flags.push(status);
   if (lateMinutes > 0) flags.push('Late');
   if (undertimeMinutes > 0) flags.push('Undertime');
-  if (overtimeMinutes > 0) flags.push('Overtime');
+  if (overtimeMeetsMinimum(record)) flags.push('Overtime');
   return [...new Set(flags.length ? flags : [status || '-'])].map(flag => attendanceBadge(flag)).join(' ');
 }
 
@@ -269,7 +307,8 @@ function primaryAttendanceStatus(record) {
 function attendanceSummary(record) {
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
-  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+  const overtimeMinutes = overtimeMeetsMinimum(record) ? detectedOvertimeMinutes(record) : 0;
+  const payableMinutes = payableOvertimeMinutes(record);
   const items = [
     { label: 'Late', value: formatMinutes(lateMinutes), tone: lateMinutes > 0 ? 'warn' : 'neutral' },
     { label: 'Undertime', value: formatMinutes(undertimeMinutes), tone: undertimeMinutes > 0 ? 'bad' : 'neutral' },
@@ -278,7 +317,7 @@ function attendanceSummary(record) {
   return {
     items,
     text: items.length ? items.map(item => `${item.label} ${item.value}`).join(' · ') : 'Normal',
-    title: `Late: ${formatMinutes(lateMinutes)} | Undertime: ${formatMinutes(undertimeMinutes)} | Overtime: ${formatMinutes(overtimeMinutes)}`
+    title: `Late: ${formatMinutes(lateMinutes)} | Undertime: ${formatMinutes(undertimeMinutes)} | Detected OT: ${formatMinutes(overtimeMinutes)} | Payable OT: ${formatMinutes(payableMinutes)} | OT Status: ${overtimeStatusLabel(record)}`
   };
 }
 
@@ -613,6 +652,16 @@ function isIncompleteDtr(record) {
   return missingDtrPunches(record).length > 0;
 }
 
+function overtimeReviewMenuItems(record, attendanceId) {
+  if (!overtimeMeetsMinimum(record)) return '';
+  const status = overtimeReviewStatus(record);
+  const id = Number(attendanceId);
+  return `
+    ${status !== 'APPROVED' ? `<button type="button" class="att-menu-item att-menu-item-success" role="menuitem" onclick="reviewAttendanceOvertime(${id}, 'APPROVED')">${attendanceMenuIcon('validate')}<span>Approve OT</span></button>` : ''}
+    ${status !== 'REJECTED' ? `<button type="button" class="att-menu-item att-menu-item-danger" role="menuitem" onclick="reviewAttendanceOvertime(${id}, 'REJECTED')">${attendanceMenuIcon('reject')}<span>Reject OT</span></button>` : ''}
+  `;
+}
+
 function populateAttendanceDepartmentFilter() {
   const select = document.getElementById('att-department-filter');
   if (!select || select.dataset.loaded === '1') return;
@@ -657,6 +706,7 @@ function renderAttRecords() {
              <button type="button" class="att-menu-item" role="menuitem" onclick="openAttendanceDetail(${Number(attendanceId)})">${attendanceMenuIcon('view')}<span>View details</span></button>
              ${dtrMissing ? '' : `<button type="button" class="att-menu-item att-menu-item-success" role="menuitem" onclick="verifyAttendance(${Number(attendanceId)}, 'VALIDATED')">${attendanceMenuIcon('validate')}<span>Validate</span></button>`}
              <button type="button" class="att-menu-item att-menu-item-danger" role="menuitem" onclick="verifyAttendance(${Number(attendanceId)}, 'REJECTED')">${attendanceMenuIcon('reject')}<span>Reject</span></button>
+             ${overtimeReviewMenuItems(record, attendanceId)}
              <button type="button" class="att-menu-item" role="menuitem" onclick="openOverrideModal(${Number(attendanceId)})">${attendanceMenuIcon('correct')}<span>Correct entry</span></button>
            </div>
          </div>`
@@ -687,7 +737,6 @@ function renderAttRecords() {
       const status = primaryAttendanceStatus(record);
       const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
       const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
-      const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
       return `
         <article class="att-mobile-record">
           <div class="att-mobile-record-head">
@@ -702,7 +751,7 @@ function renderAttRecords() {
           <div class="att-mobile-record-meta">
             <span>Late ${esc(formatMinutes(lateMinutes))}</span>
             <span>Undertime ${esc(formatMinutes(undertimeMinutes))}</span>
-            <span>Overtime ${esc(formatMinutes(overtimeMinutes))}</span>
+            <span>Overtime ${esc(overtimeDisplayText(record))}</span>
           </div>
         </article>`;
     }).join('');
@@ -956,7 +1005,7 @@ function openAttendanceDetail(attendanceId) {
     : calculateDtrHours(record);
   const lateMinutes = minuteValue(record, 'summary_late_minutes', 'late_minutes');
   const undertimeMinutes = minuteValue(record, 'summary_undertime_minutes', 'undertime_minutes');
-  const overtimeMinutes = minuteValue(record, 'summary_overtime_minutes', 'overtime_minutes');
+  const payableOtMinutes = payableOvertimeMinutes(record);
   const dtrMissing = missingDtrPunches(record);
   const detailValidateButton = document.getElementById('attendance-detail-validate-button');
   if (detailValidateButton) detailValidateButton.style.display = canManage && !dtrMissing.length ? '' : 'none';
@@ -979,7 +1028,8 @@ function openAttendanceDetail(attendanceId) {
         ${dtrMissing.length ? `<tr><th>Missing DTR Punches</th><td colspan="3">${esc(dtrMissing.join(', '))}</td></tr>` : ''}
         <tr><th>Attendance Status</th><td>${attendanceFlagBadges(record)}</td><th>Payroll Ready</th><td>${badge(isPayrollReadyRecord(record) ? 'Ready' : 'Not Ready')}</td></tr>
         <tr><th>Late Minutes</th><td>${esc(formatMinutes(lateMinutes))}</td><th>Undertime Minutes</th><td>${esc(formatMinutes(undertimeMinutes))}</td></tr>
-        <tr><th>Overtime Minutes</th><td>${esc(formatMinutes(overtimeMinutes))}</td><th></th><td></td></tr>
+        <tr><th>Detected Overtime</th><td>${esc(overtimeDisplayText(record))}</td><th>Payable Overtime</th><td>${esc(formatMinutes(payableOtMinutes))}</td></tr>
+        <tr><th>Minimum OT Minutes</th><td>${esc(formatMinutes(overtimeMinimumMinutes(record)))}</td><th>OT Review</th><td>${badge(overtimeStatusLabel(record), overtimeReviewStatus(record) === 'REJECTED' ? 'red' : overtimeReviewStatus(record) === 'APPROVED' ? 'green' : overtimeReviewStatus(record) === 'PENDING' ? 'yellow' : 'neutral')}</td></tr>
       </tbody></table>
     </section>`;
 
@@ -1101,6 +1151,40 @@ async function verifyAttendance(attendanceId, verificationStatus, options = {}) 
   } catch (err) {
     if (!options.silent) alert(err.message);
     else console.error(err);
+  }
+}
+
+async function reviewAttendanceOvertime(attendanceId, decision) {
+  if (!canManageAttendanceRecords()) return alert('Only HR can review overtime.');
+  closeAttendanceActionMenus();
+  const normalizedDecision = String(decision || '').toUpperCase();
+  if (!['APPROVED', 'REJECTED'].includes(normalizedDecision)) return;
+  const record = ATT_RECORDS.find(item => Number(item.attendance_id) === Number(attendanceId));
+  if (!record || !overtimeMeetsMinimum(record)) {
+    return alert(`Overtime must meet the minimum ${formatMinutes(overtimeMinimumMinutes(record))} before HR review.`);
+  }
+
+  let reason = '';
+  if (normalizedDecision === 'REJECTED') {
+    reason = prompt('Reason for rejecting this overtime:');
+    if (!reason) return;
+  } else if (!confirm(`Approve ${formatMinutes(detectedOvertimeMinutes(record))} overtime for payroll? Standard working hours will not be changed.`)) {
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`/api/attendance/${Number(attendanceId)}/overtime-review`, {
+      method: 'PATCH',
+      body: JSON.stringify({ decision: normalizedDecision, reason })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to review overtime.');
+    alert(data.message || `Overtime ${normalizedDecision.toLowerCase()}.`);
+    loadAttRecords();
+    loadOverviewStats();
+    loadMySummary();
+  } catch (err) {
+    alert(err.message);
   }
 }
 
@@ -2390,6 +2474,7 @@ window.openOverrideModal = openOverrideModal;
 window.closeOverrideModal = closeOverrideModal;
 window.submitOverride = submitOverride;
 window.verifyAttendance = verifyAttendance;
+window.reviewAttendanceOvertime = reviewAttendanceOvertime;
 window.verifyIntegrity = verifyIntegrity;
 window.encodeOvertime = encodeOvertime;
 window.openManualModal = openManualModal;

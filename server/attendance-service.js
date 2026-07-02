@@ -63,7 +63,7 @@ async function ensureAttendanceSummaryPolicyColumns(conn) {
        FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE()
         AND TABLE_NAME = 'attendance_summary'
-        AND COLUMN_NAME IN ('undertime_minutes','policy_snapshot_json')`
+        AND COLUMN_NAME IN ('undertime_minutes','policy_snapshot_json','overtime_status')`
   );
   const existing = new Set(columns.map((row) => row.COLUMN_NAME));
   if (!existing.has('undertime_minutes')) {
@@ -71,6 +71,9 @@ async function ensureAttendanceSummaryPolicyColumns(conn) {
   }
   if (!existing.has('policy_snapshot_json')) {
     await conn.execute('ALTER TABLE attendance_summary ADD COLUMN policy_snapshot_json JSON NULL AFTER integrity_hash');
+  }
+  if (!existing.has('overtime_status')) {
+    await conn.execute("ALTER TABLE attendance_summary ADD COLUMN overtime_status ENUM('NONE','PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'NONE' AFTER overtime_minutes");
   }
 }
 
@@ -80,7 +83,7 @@ async function ensureAttendanceLogMetricColumns(conn) {
        FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE()
         AND TABLE_NAME = 'attendance_log'
-        AND COLUMN_NAME IN ('late_minutes','undertime_minutes','overtime_minutes')`
+        AND COLUMN_NAME IN ('late_minutes','undertime_minutes','overtime_minutes','overtime_status','overtime_reviewed_by','overtime_reviewed_at','overtime_review_reason')`
   );
   const existing = new Set(columns.map((row) => row.COLUMN_NAME));
   if (!existing.has('late_minutes')) {
@@ -91,6 +94,18 @@ async function ensureAttendanceLogMetricColumns(conn) {
   }
   if (!existing.has('overtime_minutes')) {
     await conn.execute('ALTER TABLE attendance_log ADD COLUMN overtime_minutes INT NOT NULL DEFAULT 0 AFTER undertime_minutes');
+  }
+  if (!existing.has('overtime_status')) {
+    await conn.execute("ALTER TABLE attendance_log ADD COLUMN overtime_status ENUM('NONE','PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'NONE' AFTER overtime_minutes");
+  }
+  if (!existing.has('overtime_reviewed_by')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN overtime_reviewed_by BIGINT NULL AFTER overtime_status');
+  }
+  if (!existing.has('overtime_reviewed_at')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN overtime_reviewed_at DATETIME NULL AFTER overtime_reviewed_by');
+  }
+  if (!existing.has('overtime_review_reason')) {
+    await conn.execute('ALTER TABLE attendance_log ADD COLUMN overtime_review_reason VARCHAR(500) NULL AFTER overtime_reviewed_at');
   }
 }
 
@@ -283,7 +298,7 @@ async function refreshSummary(conn, attendanceId) {
   const [rows] = await conn.execute(
     `SELECT attendance_id, employee_id, date, time_in, time_out,
             am_time_in, am_time_out, pm_time_in, pm_time_out, overtime_hours,
-            status, verification_status, integrity_hash
+            overtime_status, status, verification_status, integrity_hash
        FROM attendance_log
       WHERE attendance_id = ?`,
     [attendanceId]
@@ -296,7 +311,16 @@ async function refreshSummary(conn, attendanceId) {
   const policy = await getActiveAttendancePolicy(conn, row.date, { employee_id: row.employee_id });
   const holiday = policy.enable_holiday_rules ? await getHolidayForDate(conn, row.date, 'PH') : null;
   const metrics = computeAttendanceMetrics(row, policy);
-  const { regularMinutes, overtimeMinutes, lateMinutes, undertimeMinutes, attendanceStatus } = metrics;
+  const { regularMinutes, overtimeMinutes: detectedOvertimeMinutes, lateMinutes, undertimeMinutes, attendanceStatus } = metrics;
+  const minimumOvertimeMinutes = Math.max(0, Math.round(Number(policy.minimum_overtime_minutes || 0)));
+  const overtimeStatus = !policy.enable_overtime || detectedOvertimeMinutes <= 0 || detectedOvertimeMinutes < minimumOvertimeMinutes
+    ? 'NONE'
+    : !policy.overtime_approval_required
+      ? 'APPROVED'
+      : ['APPROVED', 'REJECTED', 'PENDING'].includes(String(row.overtime_status || '').toUpperCase())
+        ? String(row.overtime_status || '').toUpperCase()
+        : 'PENDING';
+  const payableOvertimeMinutes = overtimeStatus === 'APPROVED' ? detectedOvertimeMinutes : 0;
   const statusReady = policy.payroll_attendance_source === 'validated'
     ? PAYROLL_READY_STATUSES.has(row.verification_status)
     : row.verification_status === 'PAYROLL_READY';
@@ -309,7 +333,11 @@ async function refreshSummary(conn, attendanceId) {
     standard_work_hours: policy.standard_work_hours,
     grace_period_minutes: policy.grace_period_minutes,
     overtime_threshold_minutes: policy.overtime_threshold_minutes,
+    minimum_overtime_minutes: minimumOvertimeMinutes,
     overtime_approval_required: policy.overtime_approval_required,
+    detected_overtime_minutes: detectedOvertimeMinutes,
+    payable_overtime_minutes: payableOvertimeMinutes,
+    overtime_status: overtimeStatus,
     payroll_attendance_source: policy.payroll_attendance_source,
     missing_timeout_handling: policy.missing_timeout_handling,
     payroll_config_id: policy.payroll_config_id || null,
@@ -337,20 +365,22 @@ async function refreshSummary(conn, attendanceId) {
     `UPDATE attendance_log
         SET late_minutes = ?,
             undertime_minutes = ?,
-            overtime_minutes = ?
+            overtime_minutes = ?,
+            overtime_status = ?
       WHERE attendance_id = ?`,
-    [lateMinutes, undertimeMinutes, overtimeMinutes, row.attendance_id]
+    [lateMinutes, undertimeMinutes, detectedOvertimeMinutes, overtimeStatus, row.attendance_id]
   );
 
   await conn.execute(
     `INSERT INTO attendance_summary
-       (employee_id, attendance_date, attendance_id, regular_minutes, overtime_minutes,
+       (employee_id, attendance_date, attendance_id, regular_minutes, overtime_minutes, overtime_status,
         late_minutes, undertime_minutes, attendance_status, verification_status, payroll_eligible, integrity_hash, policy_snapshot_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        attendance_id = VALUES(attendance_id),
        regular_minutes = VALUES(regular_minutes),
        overtime_minutes = VALUES(overtime_minutes),
+       overtime_status = VALUES(overtime_status),
        late_minutes = VALUES(late_minutes),
        undertime_minutes = VALUES(undertime_minutes),
        attendance_status = VALUES(attendance_status),
@@ -363,7 +393,8 @@ async function refreshSummary(conn, attendanceId) {
       row.date,
       row.attendance_id,
       regularMinutes,
-      overtimeMinutes,
+      payableOvertimeMinutes,
+      overtimeStatus,
       lateMinutes,
       undertimeMinutes,
       attendanceStatus,

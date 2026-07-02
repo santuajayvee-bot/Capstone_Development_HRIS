@@ -33,6 +33,7 @@ const { auditSecurityEvent } = require('./security-controls');
 const { isStrictDateOnly } = require('./utils/dateValidation');
 const {
   ensureAttendancePolicySettings,
+  computeAttendanceMetrics,
   getActiveAttendancePolicy,
   getAttendanceStatusForTimeIn,
   saveAttendancePolicyValues,
@@ -70,6 +71,7 @@ const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_i
 const ATTENDANCE_OVERRIDE_ALLOWED_FIELDS = new Set(['time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
 const ATTENDANCE_VERIFY_ALLOWED_FIELDS = new Set(['verification_status', 'reason']);
 const ATTENDANCE_OVERTIME_ALLOWED_FIELDS = new Set(['overtime_hours', 'reason']);
+const ATTENDANCE_OVERTIME_REVIEW_ALLOWED_FIELDS = new Set(['decision', 'reason']);
 const GEOFENCE_ALLOWED_FIELDS = new Set(['site_name', 'latitude', 'longitude', 'radius_meters', 'is_active']);
 
 function includesRole(roles, req) {
@@ -713,11 +715,14 @@ router.get('/my-records', requireAuth, requireRole(ROLES.any), async (req, res) 
       `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
               al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out, al.overtime_hours,
               al.late_minutes, al.undertime_minutes, al.overtime_minutes,
+              al.overtime_status, al.overtime_reviewed_at, al.overtime_review_reason,
               al.absences, al.status, al.verification_status,
               ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
+              ats.overtime_status AS summary_overtime_status,
               ats.late_minutes AS summary_late_minutes,
               ats.undertime_minutes AS summary_undertime_minutes,
-              ats.attendance_status, ats.payroll_eligible
+              ats.attendance_status, ats.payroll_eligible,
+              COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(ats.policy_snapshot_json, '$.minimum_overtime_minutes')) AS UNSIGNED), 30) AS minimum_overtime_minutes
          FROM attendance_log al
          LEFT JOIN attendance_summary ats ON ats.attendance_id = al.attendance_id
         WHERE al.employee_id = ?
@@ -872,12 +877,15 @@ router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async
       `SELECT al.attendance_id, al.employee_id, al.date, al.time_in, al.time_out,
               al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out,
               al.overtime_hours, al.late_minutes, al.undertime_minutes, al.overtime_minutes,
+              al.overtime_status, al.overtime_reviewed_at, al.overtime_review_reason,
               al.absences, al.status, al.verification_status,
               al.source, al.integrity_hash, al.device_id,
               ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
+              ats.overtime_status AS summary_overtime_status,
               ats.late_minutes AS summary_late_minutes,
               ats.undertime_minutes AS summary_undertime_minutes,
               ats.attendance_status, ats.payroll_eligible,
+              COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(ats.policy_snapshot_json, '$.minimum_overtime_minutes')) AS UNSIGNED), 30) AS minimum_overtime_minutes,
               e.first_name, e.middle_name, e.last_name,
               e.employee_code, d.name AS department, e.position
          FROM attendance_log al
@@ -1261,9 +1269,8 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
     if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
       return res.status(400).json({ error: 'overtime_hours must be between 0 and 24.' });
     }
-    if (hours > 0 && Math.round(hours * 60) < policy.minimum_overtime_minutes) {
-      return res.status(400).json({ error: `Overtime must be at least ${policy.minimum_overtime_minutes} minutes.` });
-    }
+    await ensureAttendanceLogMetricColumns(conn);
+    await ensureAttendanceSummaryPolicyColumns(conn);
     await conn.beginTransaction();
     const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);
     if (!rows.length) {
@@ -1276,21 +1283,123 @@ router.patch('/:id/overtime', requireAuth, requireRole(HR_ROLES), async (req, re
       await conn.rollback();
       return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
     }
-    await conn.execute('UPDATE attendance_log SET overtime_hours = ? WHERE attendance_id = ?', [hours, attendanceId]);
+    if (hours > 0 && Math.round(hours * 60) < policy.minimum_overtime_minutes) {
+      await conn.rollback();
+      return res.status(400).json({ error: `Overtime must be at least ${policy.minimum_overtime_minutes} minutes.` });
+    }
+    const overtimeStatus = hours <= 0
+      ? 'NONE'
+      : policy.overtime_approval_required ? 'PENDING' : 'APPROVED';
+    await conn.execute(
+      `UPDATE attendance_log
+          SET overtime_hours = ?,
+              overtime_status = ?,
+              overtime_reviewed_by = NULL,
+              overtime_reviewed_at = NULL,
+              overtime_review_reason = NULL
+        WHERE attendance_id = ?`,
+      [hours, overtimeStatus, attendanceId]
+    );
     await conn.execute(
       `INSERT INTO attendance_adjustment
          (attendance_id, employee_id, adjustment_type, reason, old_value, new_value,
           requested_by, approved_by, approved_at)
        VALUES (?, ?, 'OVERTIME', ?, ?, ?, ?, ?, NOW())`,
-      [attendanceId, record.employee_id, reason, safeJson({ overtime_hours: record.overtime_hours }), safeJson({ overtime_hours: hours }), req.user.id, req.user.id]
+      [
+        attendanceId,
+        record.employee_id,
+        reason,
+        safeJson({ overtime_hours: record.overtime_hours, overtime_status: record.overtime_status }),
+        safeJson({ overtime_hours: hours, overtime_status: overtimeStatus }),
+        req.user.id,
+        req.user.id,
+      ]
     );
     await appendIntegrityEntry(conn, attendanceId, 'HR_OVERTIME_ADJUSTMENT');
     await conn.commit();
     await writeAuditLog(req.user.id, record.employee_id, `OVERTIME UPDATED [ID:${attendanceId}] Reason:${reason}`, String(record.overtime_hours), String(hours), req);
+    await emitAttendanceRealtimeById(attendanceId, 'OVERTIME_UPDATED');
     res.json({ message: `Overtime updated to ${hours} hours with audit trail.` });
   } catch (err) {
     await conn.rollback();
     res.status(400).json({ error: safeClientError(err, 'Failed to update overtime.') });
+  } finally {
+    conn.release();
+  }
+});
+
+router.patch('/:id/overtime-review', requireAuth, requireRole(HR_ROLES), async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    if (rejectUnsupportedFields(req, res, ATTENDANCE_OVERTIME_REVIEW_ALLOWED_FIELDS)) return;
+    const attendanceId = positiveInteger(req.params.id, 'id');
+    const decision = cleanText(req.body.decision, 20).toUpperCase();
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be APPROVED or REJECTED.' });
+    }
+    const reason = decision === 'APPROVED'
+      ? (cleanText(req.body.reason, 500) || 'Overtime approved by HR.')
+      : requireReason(req.body.reason);
+
+    await ensureAttendanceLogMetricColumns(conn);
+    await ensureAttendanceSummaryPolicyColumns(conn);
+    await conn.beginTransaction();
+    const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);
+    if (!rows.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Attendance record not found.' });
+    }
+    const record = rows[0];
+    const policy = await getActiveAttendancePolicy(pool, record.date || null, { employee_id: record.employee_id });
+    if (!policy.enable_overtime) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Overtime is disabled by the active attendance policy.' });
+    }
+
+    const detectedOvertimeMinutes = Math.max(0, Math.round(Number(computeAttendanceMetrics(record, policy).overtimeMinutes || 0)));
+    const minimumOvertimeMinutes = Math.max(0, Math.round(Number(policy.minimum_overtime_minutes || 0)));
+    if (detectedOvertimeMinutes <= 0 || detectedOvertimeMinutes < minimumOvertimeMinutes) {
+      await conn.rollback();
+      return res.status(400).json({ error: `Overtime must reach at least ${minimumOvertimeMinutes} minutes before HR review.` });
+    }
+
+    await conn.execute(
+      `UPDATE attendance_log
+          SET overtime_status = ?,
+              overtime_reviewed_by = ?,
+              overtime_reviewed_at = NOW(),
+              overtime_review_reason = ?
+        WHERE attendance_id = ?`,
+      [decision, req.user.id, reason, attendanceId]
+    );
+    await conn.execute(
+      `INSERT INTO attendance_adjustment
+         (attendance_id, employee_id, adjustment_type, reason, old_value, new_value,
+          requested_by, approved_by, approved_at)
+       VALUES (?, ?, 'OVERTIME_REVIEW', ?, ?, ?, ?, ?, NOW())`,
+      [
+        attendanceId,
+        record.employee_id,
+        reason,
+        safeJson({ overtime_status: record.overtime_status, overtime_minutes: detectedOvertimeMinutes }),
+        safeJson({ overtime_status: decision, overtime_minutes: detectedOvertimeMinutes }),
+        req.user.id,
+        req.user.id,
+      ]
+    );
+    await appendIntegrityEntry(conn, attendanceId, `HR_OVERTIME_${decision}`);
+    await conn.commit();
+    await writeAuditLog(req.user.id, record.employee_id, `OVERTIME ${decision} [ID:${attendanceId}] Reason:${reason}`, record.overtime_status, decision, req);
+    await emitAttendanceRealtimeById(attendanceId, `OVERTIME_${decision}`);
+    res.json({
+      message: decision === 'APPROVED'
+        ? 'Overtime approved. Standard working hours were not changed.'
+        : 'Overtime rejected. Standard working hours were not changed.',
+      overtime_status: decision,
+    });
+  } catch (err) {
+    await conn.rollback();
+    res.status(400).json({ error: safeClientError(err, 'Failed to review overtime.') });
   } finally {
     conn.release();
   }

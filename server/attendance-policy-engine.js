@@ -373,7 +373,7 @@ function computeAttendanceMetrics(record, policy) {
   if (attendanceStatus === 'Present' || attendanceStatus === 'Half Day') flags.push(attendanceStatus);
   if (lateMinutes > 0) flags.push('Late');
   if (undertimeMinutes > 0) flags.push('Undertime');
-  if (overtimeMinutes > 0) flags.push('Overtime');
+  if (overtimeMinutes > 0 && overtimeMinutes >= Math.max(0, Number(policy.minimum_overtime_minutes || 0))) flags.push('Overtime');
   if (!flags.length) flags.push(attendanceStatus);
 
   return {
