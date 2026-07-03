@@ -10,7 +10,8 @@
    
    Environment Variable Required:
      AES_ENCRYPTION_KEY — 64-character hex string (256 bits)
-     If not set, a deterministic key is derived from JWT_SECRET
+     AES_256_SECRET_KEY — optional base64-encoded 32-byte key
+     If neither is set, a deterministic key is derived from JWT_SECRET
      using PBKDF2 (for development convenience only).
    ============================================================ */
 
@@ -21,12 +22,7 @@ const IV_LENGTH   = 16;   // 128-bit IV for GCM
 const TAG_LENGTH  = 16;   // 128-bit authentication tag
 const ENCODING    = 'hex';
 
-/**
- * Derive the 256-bit encryption key.
- * Priority: AES_ENCRYPTION_KEY env var > derived from JWT_SECRET.
- * @returns {Buffer} 32-byte key
- */
-function getEncryptionKey() {
+function hexEnvKey() {
   if (process.env.AES_ENCRYPTION_KEY) {
     const key = Buffer.from(process.env.AES_ENCRYPTION_KEY, 'hex');
     if (key.length !== 32) {
@@ -34,14 +30,57 @@ function getEncryptionKey() {
     }
     return key;
   }
+  return null;
+}
 
-  // Fallback: derive from JWT_SECRET using PBKDF2 (development only)
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error('Neither AES_ENCRYPTION_KEY nor JWT_SECRET is set. Cannot derive encryption key.');
+function base64EnvKey() {
+  if (process.env.AES_256_SECRET_KEY) {
+    const key = Buffer.from(process.env.AES_256_SECRET_KEY, 'base64');
+    if (key.length !== 32) {
+      throw new Error('AES_256_SECRET_KEY must decode to exactly 32 bytes (256 bits).');
+    }
+    return key;
   }
+  return null;
+}
+
+function jwtDerivedKey() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return null;
 
   return crypto.pbkdf2Sync(secret, 'lgsv-hr-pii-salt', 100000, 32, 'sha512');
+}
+
+function uniqueKeys(keys) {
+  const seen = new Set();
+  return keys.filter(key => {
+    if (!key) return false;
+    const fingerprint = key.toString('hex');
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
+    return true;
+  });
+}
+
+/**
+ * Derive the primary 256-bit encryption key.
+ * Priority: AES_ENCRYPTION_KEY > AES_256_SECRET_KEY > JWT_SECRET-derived key.
+ * @returns {Buffer} 32-byte key
+ */
+function getEncryptionKey() {
+  const key = hexEnvKey() || base64EnvKey() || jwtDerivedKey();
+  if (!key) {
+    throw new Error('Neither AES_ENCRYPTION_KEY, AES_256_SECRET_KEY, nor JWT_SECRET is set. Cannot derive encryption key.');
+  }
+  return key;
+}
+
+function getDecryptionKeys() {
+  const keys = uniqueKeys([hexEnvKey(), base64EnvKey(), jwtDerivedKey()]);
+  if (!keys.length) {
+    throw new Error('Neither AES_ENCRYPTION_KEY, AES_256_SECRET_KEY, nor JWT_SECRET is set. Cannot derive decryption key.');
+  }
+  return keys;
 }
 
 /**
@@ -84,17 +123,24 @@ function decryptAES256(encryptedPayload) {
   }
 
   const [ivHex, authTagHex, ciphertext] = parts;
-  const key     = getEncryptionKey();
   const iv      = Buffer.from(ivHex, ENCODING);
   const authTag = Buffer.from(authTagHex, ENCODING);
+  let lastError = null;
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: TAG_LENGTH });
-  decipher.setAuthTag(authTag);
+  for (const key of getDecryptionKeys()) {
+    try {
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: TAG_LENGTH });
+      decipher.setAuthTag(authTag);
 
-  let decrypted = decipher.update(ciphertext, ENCODING, 'utf8');
-  decrypted += decipher.final('utf8');
+      let decrypted = decipher.update(ciphertext, ENCODING, 'utf8');
+      decrypted += decipher.final('utf8');
+      return decrypted;
+    } catch (error) {
+      lastError = error;
+    }
+  }
 
-  return decrypted;
+  throw lastError;
 }
 
 /**
