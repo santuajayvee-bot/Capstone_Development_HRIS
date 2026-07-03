@@ -3,7 +3,15 @@
    ============================================================ */
 
 const pool = require('../config/db');
-const { decryptColumnValue, decryptNullable } = require('./data-protection');
+const { decryptColumnValue } = require('./data-protection');
+
+function safeUserDecrypt(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_error) {
+    return '';
+  }
+}
 
 /**
  * Find a user by username, joining their role name.
@@ -70,7 +78,12 @@ async function getLinkedEmployeeProfile(employeeId) {
       LIMIT 1`,
     [employeeId]
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (!row) return null;
+  row.first_name = safeUserDecrypt(row.first_name);
+  row.last_name = safeUserDecrypt(row.last_name);
+  row.employee_name = [row.first_name, row.last_name].filter(Boolean).join(' ') || row.employee_code || `Employee #${row.id}`;
+  return row;
 }
 
 /**
@@ -113,11 +126,11 @@ async function getUserProfile(userId) {
   );
   const row = rows[0] || null;
   if (row) {
-    row.first_name = decryptColumnValue(row.first_name);
-    row.last_name = decryptColumnValue(row.last_name);
+    row.first_name = safeUserDecrypt(row.first_name);
+    row.last_name = safeUserDecrypt(row.last_name);
     row.email = row.email_encrypted
-      ? decryptNullable(row.email_encrypted)
-      : decryptColumnValue(row.legacy_user_email || row.employee_email_encrypted);
+      ? safeUserDecrypt(row.email_encrypted)
+      : safeUserDecrypt(row.legacy_user_email || row.employee_email_encrypted);
     delete row.legacy_user_email;
     delete row.email_encrypted;
     delete row.employee_email_encrypted;
