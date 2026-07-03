@@ -21,6 +21,7 @@ const ALGORITHM   = 'aes-256-gcm';
 const IV_LENGTH   = 16;   // 128-bit IV for GCM
 const TAG_LENGTH  = 16;   // 128-bit authentication tag
 const ENCODING    = 'hex';
+const warnedInvalidDecryptionKeys = new Set();
 
 function hexEnvKey() {
   if (process.env.AES_ENCRYPTION_KEY) {
@@ -76,11 +77,27 @@ function getEncryptionKey() {
 }
 
 function getDecryptionKeys() {
-  const keys = uniqueKeys([hexEnvKey(), base64EnvKey(), jwtDerivedKey()]);
+  const keys = uniqueKeys([
+    optionalDecryptionKey(hexEnvKey, 'AES_ENCRYPTION_KEY'),
+    optionalDecryptionKey(base64EnvKey, 'AES_256_SECRET_KEY'),
+    jwtDerivedKey(),
+  ]);
   if (!keys.length) {
     throw new Error('Neither AES_ENCRYPTION_KEY, AES_256_SECRET_KEY, nor JWT_SECRET is set. Cannot derive decryption key.');
   }
   return keys;
+}
+
+function optionalDecryptionKey(loader, label) {
+  try {
+    return loader();
+  } catch (error) {
+    if (!warnedInvalidDecryptionKeys.has(label)) {
+      warnedInvalidDecryptionKeys.add(label);
+      console.warn(`[crypto] Ignoring invalid ${label} for legacy decryption fallback: ${error.message}`);
+    }
+    return null;
+  }
 }
 
 /**

@@ -43,6 +43,10 @@ try {
   const primaryEncrypted = encryptAES256('Primary employee name');
   assert.strictEqual(decryptAES256(primaryEncrypted), 'Primary employee name');
 
+  process.env.AES_256_SECRET_KEY = 'not-a-valid-32-byte-base64-key';
+  assert.strictEqual(decryptAES256(primaryEncrypted), 'Primary employee name');
+  assert.strictEqual(decryptAES256(jwtEncrypted), 'JWT legacy employee name');
+
   console.log('Crypto key fallback checks passed.');
 } finally {
   restoreEnv();
