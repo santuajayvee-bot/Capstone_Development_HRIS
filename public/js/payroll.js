@@ -80,28 +80,6 @@ function payrollEscape(value) {
   }[char]));
 }
 
-function payrollLooksEncryptedText(value) {
-  const text = String(value || '').trim();
-  return /^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]+$/i.test(text);
-}
-
-function payrollSafeText(value) {
-  const text = String(value || '').trim();
-  return text && !payrollLooksEncryptedText(text) ? text : '';
-}
-
-function payrollReadableEmployeeName(employee = {}) {
-  const employeeName = payrollSafeText(employee.employee_name || employee.name);
-  if (employeeName) return employeeName;
-  const parts = [
-    payrollSafeText(employee.first_name),
-    payrollSafeText(employee.middle_name),
-    payrollSafeText(employee.last_name)
-  ].filter(Boolean);
-  if (parts.length) return parts.join(' ');
-  return `Employee #${employee.id || employee.employee_id || '-'}`;
-}
-
 function payrollOffboardingCaseId(row) {
   const id = Number(row?.offboarding_case_id);
   return Number.isFinite(id) && id > 0 ? id : null;
@@ -762,11 +740,12 @@ function renderWeeklyPayrollEmployeeOptions() {
     .filter(employee => weeklyPayTypeMatches(employee, payType))
     .sort((a, b) =>
       String(a.department || '').localeCompare(String(b.department || ''))
-      || payrollReadableEmployeeName(a).localeCompare(payrollReadableEmployeeName(b))
+      || String(a.last_name || '').localeCompare(String(b.last_name || ''))
+      || String(a.first_name || '').localeCompare(String(b.first_name || ''))
       || String(a.employee_code || '').localeCompare(String(b.employee_code || ''))
     );
   select.innerHTML = '<option value="">All employees in selected filters</option>' + rows.map(employee => {
-    const label = `${payrollSafeText(employee.employee_code) || 'No Code'} - ${payrollReadableEmployeeName(employee)} (${employee.department || 'No Department'} / ${employee.wage_type || 'No Pay Type'})`;
+    const label = `${employee.employee_code || 'No Code'} — ${employee.employee_name || `${employee.first_name || ''} ${employee.last_name || ''}`.trim()} (${employee.department || 'No Department'} / ${employee.wage_type || 'No Pay Type'})`;
     return `<option value="${Number(employee.id)}">${payrollEscape(label)}</option>`;
   }).join('');
   if (rows.some(employee => String(employee.id) === String(current))) {
@@ -3930,7 +3909,7 @@ async function ensureEmployeeDeductionDropdowns() {
 }
 
 function employeeDeductionName(emp) {
-  return payrollReadableEmployeeName(emp);
+  return emp.name || [emp.first_name, emp.middle_name, emp.last_name].filter(Boolean).join(' ') || emp.employee_name || `Employee ${emp.id}`;
 }
 
 function employeeDeductionCode(emp) {
@@ -4819,7 +4798,7 @@ function renderPayrollAttendanceConfigOptions() {
     employee.innerHTML = payrollSelectOptions(
       employeeRows,
       'id',
-      row => `${payrollSafeText(row.employee_code) || 'No Code'} - ${payrollReadableEmployeeName(row)}`,
+      row => `${row.employee_code || ''} - ${row.employee_name || row.first_name || row.last_name || 'Employee'}`,
       'Select employee'
     );
     if ([...employee.options].some(option => option.value === selectedEmployee)) employee.value = selectedEmployee;
