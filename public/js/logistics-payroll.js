@@ -11,9 +11,15 @@
   const currentMonth = () => today().slice(0, 7);
 
   const currentUser = () => (typeof getUser === 'function' ? getUser() : null) || {};
-  const currentRole = () => String(currentUser().role || '').toLowerCase();
-  const canConfigureLogistics = () => currentRole() === 'payroll_manager';
-  const canApproveLogistics = () => currentRole() === 'payroll_manager';
+  const currentRole = () => {
+    const user = currentUser();
+    const rawRole = user.role || user.roleName || user.role_label || user.roleLabel || '';
+    if (typeof normalizeClientRole === 'function') return normalizeClientRole(rawRole);
+    return String(rawRole).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  };
+  const logisticsManagerRoles = new Set(['payroll_manager', 'hr_manager', 'hr_admin']);
+  const canConfigureLogistics = () => logisticsManagerRoles.has(currentRole());
+  const canApproveLogistics = () => logisticsManagerRoles.has(currentRole());
 
   function periodRange(month) {
     const safeMonth = /^\d{4}-\d{2}$/.test(month || '') ? month : currentMonth();

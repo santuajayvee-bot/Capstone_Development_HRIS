@@ -13,7 +13,8 @@ assert.match(payrollApi, /dt\.status IN \('Payroll Ready', 'Approved', 'Included
 assert.match(payrollPage, /id="delivery-trip-form"/, 'The Logistics Trips tab must expose the delivery-trip encoding form.');
 assert.match(payrollPage, /data-logistics-configure-only/, 'Manager-only rate configuration must be distinguishable from trip encoding.');
 assert.doesNotMatch(logisticsUi, /removeDeliveryTripSections/, 'The frontend must not remove the Payroll Officer delivery-trip workflow.');
-assert.match(logisticsUi, /currentRole\(\) === 'payroll_manager'/, 'Configuration and approval controls must stay manager-only.');
+assert.match(logisticsUi, /normalizeClientRole\(rawRole\)/, 'Logistics role checks must normalize AWS role labels before hiding configuration.');
+assert.match(logisticsUi, /new Set\(\['payroll_manager', 'hr_manager', 'hr_admin'\]\)/, 'Configuration and approval controls must match backend manager roles.');
 assert.match(logisticsUi, /saveDeliveryTrip, submitDeliveryTripForm/, 'Payroll Officer trip encoding functions must be available to the page.');
 
 console.log('Logistics trip Payroll Officer access tests: PASS');
