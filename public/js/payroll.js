@@ -2772,7 +2772,8 @@ function updatePayrollDropdownNav(activeTab) {
 }
 
 function switchPayrollTab(tab, options = {}) {
-  const targetTab = tab === 'payslips' ? 'records' : tab;
+  const requestedTab = tab === 'payslips' ? 'records' : tab;
+  const targetTab = ['allowances', 'employee-deductions'].includes(requestedTab) ? 'deductions' : requestedTab;
   document.querySelectorAll('.payroll-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.payrollTab === targetTab);
   });
@@ -2793,8 +2794,6 @@ function switchPayrollTab(tab, options = {}) {
     loadPayrollSettings('deduction');
     refreshSssContributionTableVisibility({ loadWhenVisible: true });
   }
-  if (targetTab === 'employee-deductions') loadEmployeeDeductionAccounts('all');
-  if (targetTab === 'allowances') loadPayrollSettings('allowance');
   if (targetTab === 'policies') loadPayrollPolicySettings();
   if (targetTab === 'records') loadSalaryCalculations();
   if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
@@ -5115,16 +5114,10 @@ function initializePayrollModule() {
   setDefaultWeeklyPayrollDates();
 
   const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
-  const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
   const splitDate = document.querySelector('#production-split-form [name="effective_date"]');
-  const cashAdvanceDate = document.querySelector('#cash-advance-form [name="start_date"]');
-  const loanDate = document.querySelector('#employee-loan-form [name="start_date"]');
   const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
-  if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
   if (splitDate && !splitDate.value) splitDate.value = today;
-  if (cashAdvanceDate && !cashAdvanceDate.value) cashAdvanceDate.value = today;
-  if (loanDate && !loanDate.value) loanDate.value = today;
   const attConfigDate = document.querySelector('#payroll-attendance-config-form [name="effective_date"]');
   if (attConfigDate && !attConfigDate.value) attConfigDate.value = today;
   validateWeeklyPayrollDates({ adjustEnd: true });

@@ -38,9 +38,7 @@
       </span>
     </summary>
     <div class="payroll-dropdown-menu">
-      <button class="payroll-tab" data-payroll-tab="allowances" onclick="switchPayrollTab('allowances')">Allowances</button>
       <button class="payroll-tab" data-payroll-tab="deductions" onclick="switchPayrollTab('deductions')">Deductions</button>
-      <button class="payroll-tab" data-payroll-tab="employee-deductions" onclick="switchPayrollTab('employee-deductions')">Cash Advance</button>
       <button class="payroll-tab" data-payroll-tab="piece-config" onclick="switchPayrollTab('piece-config')">Piece Rate</button>
       <button class="payroll-tab" data-payroll-tab="logistics" onclick="switchPayrollTab('logistics')">Logistics Trips</button>
     </div>
@@ -621,88 +619,5 @@
   <div class="table-wrap"><div id="deduction-settings-grid"></div></div>
 </section>
 
-<section class="payroll-panel" id="payroll-tab-employee-deductions">
-  <div class="payroll-deduction-forms">
-    <details class="payroll-collapsible" open>
-      <summary>Assign Employee Cash Advance</summary>
-      <form id="cash-advance-form" class="form-grid" onsubmit="saveEmployeeDeductionAccount(event, 'cash_advance')">
-        <input type="hidden" name="id" />
-        <div class="form-group span-2">
-          <label>Employee</label>
-          <div class="employee-deduction-picker" data-picker-for="cash-advance-form">
-            <input type="hidden" name="employee_id" class="employee-deduction-employee" required />
-            <input type="search" class="employee-deduction-search" placeholder="Search employee ID or name" autocomplete="off" />
-            <div class="employee-deduction-results" hidden></div>
-          </div>
-        </div>
-        <div class="form-group"><label>Deduction Name</label><input name="deduction_name" value="Cash Advance" required /></div>
-        <div class="form-group"><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></div>
-        <div class="form-group"><label>Remaining Balance</label><input name="remaining_balance" type="number" min="0" step="0.01" placeholder="Defaults to amount" /></div>
-        <div class="form-group"><label>Installment Amount</label><input name="installment_amount" type="number" min="0.01" step="0.01" required /></div>
-        <div class="form-group"><label>Start Date</label><input name="start_date" type="date" required /></div>
-        <div class="form-group"><label>End Date</label><input name="end_date" type="date" /></div>
-        <div class="form-group"><label>Status</label><select name="status"><option>Active</option><option>Paused</option><option>Paid</option><option>Cancelled</option></select></div>
-        <div class="form-group span-2"><label>Remarks</label><input name="remarks" placeholder="Optional notes" /></div>
-        <div class="form-actions">
-          <span class="payroll-form-status" id="cash-advance-save-status" aria-live="polite"></span>
-          <button class="btn btn-outline" type="reset">Clear</button>
-          <button class="btn btn-primary" type="submit">Save Cash Advance</button>
-        </div>
-      </form>
-    </details>
-
-    <details class="payroll-collapsible">
-      <summary>Assign Employee Loan</summary>
-      <form id="employee-loan-form" class="form-grid" onsubmit="saveEmployeeDeductionAccount(event, 'loan')">
-        <input type="hidden" name="id" />
-        <div class="form-group span-2">
-          <label>Employee</label>
-          <div class="employee-deduction-picker" data-picker-for="employee-loan-form">
-            <input type="hidden" name="employee_id" class="employee-deduction-employee" required />
-            <input type="search" class="employee-deduction-search" placeholder="Search employee ID or name" autocomplete="off" />
-            <div class="employee-deduction-results" hidden></div>
-          </div>
-        </div>
-        <div class="form-group"><label>Loan Type</label><select name="loan_type"><option>Employee Loan</option><option>Cooperative Loan</option><option>Salary Loan</option><option>Equipment Loan</option><option>Other Loan</option></select></div>
-        <div class="form-group"><label>Deduction Name</label><input name="deduction_name" value="Employee Loan" required /></div>
-        <div class="form-group"><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></div>
-        <div class="form-group"><label>Remaining Balance</label><input name="remaining_balance" type="number" min="0" step="0.01" placeholder="Defaults to amount" /></div>
-        <div class="form-group"><label>Installment Amount</label><input name="installment_amount" type="number" min="0.01" step="0.01" required /></div>
-        <div class="form-group"><label>Start Date</label><input name="start_date" type="date" required /></div>
-        <div class="form-group"><label>End Date</label><input name="end_date" type="date" /></div>
-        <div class="form-group"><label>Status</label><select name="status"><option>Active</option><option>Paused</option><option>Paid</option><option>Cancelled</option></select></div>
-        <div class="form-group span-2"><label>Remarks</label><input name="remarks" placeholder="Optional notes" /></div>
-        <div class="form-actions">
-          <span class="payroll-form-status" id="employee-loan-save-status" aria-live="polite"></span>
-          <button class="btn btn-outline" type="reset">Clear</button>
-          <button class="btn btn-primary" type="submit">Save Loan</button>
-        </div>
-      </form>
-    </details>
-  </div>
-  <div class="table-wrap"><div id="employee-deductions-grid"></div></div>
-</section>
-
-<section class="payroll-panel" id="payroll-tab-allowances">
-  <details class="payroll-collapsible" open>
-    <summary>Allowance Catalog</summary>
-    <form id="allowance-setting-form" class="form-grid" onsubmit="savePayrollSetting(event, 'allowance')">
-      <input type="hidden" name="id" />
-      <div class="form-group"><label>Allowance Name</label><input name="name" required placeholder="Meal Allowance" /></div>
-      <div class="form-group"><label>Type</label><select name="allowance_type"><option>Fixed</option><option>Percentage</option><option>Manual</option></select></div>
-      <div class="form-group"><label>Reference Amount or Rate</label><input name="amount_or_rate" type="number" min="0" step="0.01" value="0" /></div>
-      <div class="form-group"><label>Taxable</label><select name="is_taxable"><option value="0">No</option><option value="1">Yes</option></select></div>
-      <div class="form-group"><label>Status</label><select name="is_active"><option value="1">Active</option><option value="0">Inactive</option></select></div>
-      <div class="form-group"><label>Effective Date</label><input name="effective_date" type="date" required /></div>
-      <div class="form-note payroll-form-wide">Allowance catalog entries are not applied to every employee automatically. Add the actual allowance amount during employee payroll calculation or an employee-specific allowance workflow.</div>
-      <div class="form-actions">
-        <span class="payroll-form-status" id="allowance-save-status" aria-live="polite"></span>
-        <button class="btn btn-outline" type="reset">Clear</button>
-        <button class="btn btn-primary" type="submit">Save Allowance Type</button>
-      </div>
-    </form>
-  </details>
-  <div class="table-wrap"><div id="allowance-settings-grid"></div></div>
-</section>
   </div>
 </div>
