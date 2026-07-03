@@ -272,6 +272,7 @@ async function loadLeaveRequests() {
         // Update dropdown
         const select = document.getElementById('manual-employee');
         if (select) {
+          const currentEmployeeId = select.value;
           select.innerHTML = '<option value="">-- Select Employee --</option>';
           employees.forEach(emp => {
             const option = document.createElement('option');
@@ -279,6 +280,9 @@ async function loadLeaveRequests() {
             option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
             select.appendChild(option);
           });
+          if ([...select.options].some(option => option.value === currentEmployeeId)) {
+            select.value = currentEmployeeId;
+          }
         }
       }
     } catch (err) {
@@ -772,6 +776,7 @@ async function loadEmployeesForDropdown() {
     // Populate the dropdown
     const select = document.getElementById('manual-employee');
     if (select) {
+      const currentEmployeeId = select.value;
       select.innerHTML = '<option value="">-- Select Employee --</option>';
       if (employees.length === 0) {
         const option = document.createElement('option');
@@ -785,6 +790,9 @@ async function loadEmployeesForDropdown() {
           option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
           select.appendChild(option);
         });
+        if ([...select.options].some(option => option.value === currentEmployeeId)) {
+          select.value = currentEmployeeId;
+        }
       }
     }
   } catch (error) {
@@ -1222,7 +1230,11 @@ function setupLeaveUi() {
 
   const employeeSelect = document.getElementById('manual-employee');
   if (employeeSelect) {
+    const currentEmployeeId = employeeSelect.value;
     employeeSelect.innerHTML = leaveEmployeeOptions(LEAVE_EMPLOYEES);
+    if ([...employeeSelect.options].some(option => option.value === currentEmployeeId)) {
+      employeeSelect.value = currentEmployeeId;
+    }
   }
 
   const balanceCard = document.getElementById('leave-balance-config-card');
@@ -1731,13 +1743,19 @@ async function updateLeaveRequestBalancePreview() {
   renderBalancePreview(targetId, balance, requestedLeaveDays('req'), 'Balance After Request');
 }
 
+let MANUAL_BALANCE_PREVIEW_REQUEST_ID = 0;
+
 async function updateManualBalancePreview() {
   const targetId = 'manual-leave-balance-preview';
   if (!document.getElementById(targetId)) return;
   const employeeId = document.getElementById('manual-employee')?.value;
   const leaveTypeId = document.getElementById('manual-leave-type')?.value;
   const year = new Date(document.getElementById('manual-start-date')?.value || Date.now()).getFullYear();
+  const requestId = ++MANUAL_BALANCE_PREVIEW_REQUEST_ID;
   const balances = employeeId ? await loadEmployeeLeaveBalances(employeeId, year) : [];
+  if (requestId !== MANUAL_BALANCE_PREVIEW_REQUEST_ID) return;
+  if (String(document.getElementById('manual-employee')?.value || '') !== String(employeeId || '')) return;
+  if (String(document.getElementById('manual-leave-type')?.value || '') !== String(leaveTypeId || '')) return;
   const balance = balances.find(row => String(row.leave_type_id) === String(leaveTypeId));
   renderBalancePreview(targetId, balance, requestedLeaveDays('manual'), 'Balance After Save', { mode: 'manual' });
 }
@@ -1758,8 +1776,18 @@ function initializeLeaveBalancePreviews() {
     const grid = manualForm.querySelector('.leave-form-grid');
     if (grid) grid.appendChild(preview);
   }
-  ['req-leave-type', 'req-start', 'req-end'].forEach(id => document.getElementById(id)?.addEventListener('change', updateLeaveRequestBalancePreview));
-  ['manual-employee', 'manual-leave-type', 'manual-start-date', 'manual-end-date', 'manual-duration'].forEach(id => document.getElementById(id)?.addEventListener('change', updateManualBalancePreview));
+  ['req-leave-type', 'req-start', 'req-end'].forEach(id => {
+    const field = document.getElementById(id);
+    if (!field || field.dataset.leaveBalancePreviewBound === '1') return;
+    field.dataset.leaveBalancePreviewBound = '1';
+    field.addEventListener('change', updateLeaveRequestBalancePreview);
+  });
+  ['manual-employee', 'manual-leave-type', 'manual-start-date', 'manual-end-date', 'manual-duration'].forEach(id => {
+    const field = document.getElementById(id);
+    if (!field || field.dataset.leaveBalancePreviewBound === '1') return;
+    field.dataset.leaveBalancePreviewBound = '1';
+    field.addEventListener('change', updateManualBalancePreview);
+  });
   updateLeaveRequestBalancePreview();
   updateManualBalancePreview();
 }

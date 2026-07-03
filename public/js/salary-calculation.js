@@ -1302,6 +1302,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     if (salaryUsesAttendanceValidation(normalizedWageType)) {
       await loadSalaryPayrollValidation();
     } else {
+      renderSalaryPayrollValidation(null);
       calculateSalaryNow();
     }
     
@@ -1410,6 +1411,7 @@ function showWageStructureForm(wageType) {
     console.log('✅ Showing Per-Trip form...');
     perPieceSection.style.display = 'none';
     perTripSection.style.display = 'block';
+    renderSalaryPayrollValidation(null);
     const hourlySection = document.getElementById('hourly-section');
     const dailySection = document.getElementById('daily-section');
     if (hourlySection) hourlySection.style.display = 'none';
@@ -1652,6 +1654,8 @@ function attachSalaryInputListeners() {
       const workDate = syncSalaryWorkDateFields();
       if (currentSalaryEmployee && salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
         loadSalaryPayrollValidation();
+      } else if (currentSalaryEmployee?.wageType === 'Per-Trip') {
+        renderSalaryPayrollValidation(null);
       }
       if (currentSalaryEmployee && ['Per-Piece', 'Per-Trip'].includes(currentSalaryEmployee.wageType)
         && periodInput.dataset.activeEncodingPeriod

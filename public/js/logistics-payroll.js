@@ -1,7 +1,6 @@
-/* Trip-based logistics payroll setup UI. Delivery trip encoding/queue/summary
-   blocks are intentionally removed from the Payroll screen. */
+/* Trip-based logistics payroll UI. Financial values are calculated server-side. */
 (function logisticsPayrollModule() {
-  const state = { truckTypes: [], locations: [], rates: [], ratesPage: 1, ratesPageSize: 10 };
+  const state = { truckTypes: [], locations: [], rates: [], employees: [], ratesPage: 1, ratesPageSize: 10 };
 
   const money = value => `PHP ${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -10,6 +9,19 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   })();
   const currentMonth = () => today().slice(0, 7);
+
+  const currentUser = () => (typeof getUser === 'function' ? getUser() : null) || {};
+  const currentRole = () => {
+    const user = currentUser();
+    const rawRole = user.role || user.roleName || user.role_label || user.roleLabel || '';
+    if (typeof normalizeClientRole === 'function') return normalizeClientRole(rawRole);
+    return String(rawRole).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  };
+  const logisticsConfigurationRoles = new Set(['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin']);
+  const hasPermission = permission => Array.isArray(currentUser().permissions)
+    && currentUser().permissions.includes(permission);
+  const canConfigureLogistics = () => logisticsConfigurationRoles.has(currentRole())
+    || hasPermission('payroll.settings.manage');
 
   async function request(url, options) {
     const response = await apiFetch(url, options);
@@ -29,18 +41,15 @@
     return window.confirm(message);
   }
 
-  function removeElementSection(id) {
-    const element = document.getElementById(id);
-    if (!element) return;
-    const section = element.closest('details, .table-wrap, .payroll-settings-section, .logistics-trip-section');
-    (section || element).remove();
-  }
-
-  function removeDeliveryTripSections() {
-    ['delivery-trip-form', 'delivery-trips-grid', 'logistics-payroll-summary-grid'].forEach(removeElementSection);
+  function applyLogisticsRoleAccess() {
+    document.querySelectorAll('[data-logistics-configure-only]').forEach(element => {
+      element.style.display = canConfigureLogistics() ? '' : 'none';
+    });
   }
 
   function setDefaultDates() {
+    const tripDate = document.getElementById('delivery-trip-date');
+    if (tripDate && !tripDate.value) tripDate.value = today();
     const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');
     if (rateDate && !rateDate.value) rateDate.value = today();
     const registryPeriod = document.getElementById('swr-fxr-period');
@@ -60,6 +69,9 @@
     const activeLocations = state.locations.filter(row => Number(row.is_active) === 1);
     fillSelect('logistics-rate-truck-type', activeTrucks, 'id', row => row.name, 'Select truck type');
     fillSelect('logistics-rate-location', activeLocations, 'id', row => `${row.location_category} - ${row.name}`, 'Select location');
+    fillSelect('delivery-trip-truck-type', activeTrucks, 'id', row => row.name, 'Select truck type');
+    fillSelect('delivery-trip-location', activeLocations, 'id', row => `${row.location_category} - ${row.name}`, 'Select location');
+    fillSelect('delivery-trip-employee', state.employees, 'id', row => `${row.employee_code || '-'} - ${row.employee_name || [row.last_name, row.first_name].filter(Boolean).join(', ')} (${row.position || 'No position'})`, 'Select employee');
   }
 
   function actionButton(label, action, id, kind = 'outline') {
@@ -121,24 +133,77 @@
   }
 
   async function loadLogisticsPayrollModule() {
-    removeDeliveryTripSections();
+    applyLogisticsRoleAccess();
     setDefaultDates();
     try {
-      const [truckTypes, locations, rates] = await Promise.all([
+      const [truckTypes, locations, rates, employees] = await Promise.all([
         request('/api/payroll/logistics/truck-types?include_inactive=1'),
         request('/api/payroll/logistics/locations?include_inactive=1'),
-        request('/api/payroll/logistics/rates?include_inactive=1')
+        request('/api/payroll/logistics/rates?include_inactive=1'),
+        request('/api/payroll/logistics/employees')
       ]);
       state.truckTypes = truckTypes;
       state.locations = locations;
       state.rates = rates;
+      state.employees = employees;
       populateSelectors();
       renderTruckTypes();
       renderLocations();
       renderRates();
+      await refreshTripPreview();
     } catch (error) {
-      const target = document.getElementById('logistics-rates-grid') || document.getElementById('logistics-truck-types-grid');
+      const target = document.getElementById('logistics-rates-grid');
       if (target) target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  function getTripFormPayload(status) {
+    const form = document.getElementById('delivery-trip-form');
+    if (!form) throw new Error('Delivery trip form is unavailable.');
+    const data = Object.fromEntries(new FormData(form).entries());
+    data.status = status;
+    return { form, data };
+  }
+
+  async function saveDeliveryTrip(event, status = 'Draft') {
+    if (event) event.preventDefault();
+    try {
+      const { form, data } = getTripFormPayload(status);
+      const existingTripId = Number(data.id || 0);
+      await request(existingTripId ? `/api/payroll/logistics/trips/${existingTripId}` : '/api/payroll/logistics/trips', {
+        method: existingTripId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+      });
+      if (existingTripId && status === 'Payroll Ready') {
+        await request(`/api/payroll/logistics/trips/${existingTripId}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      }
+      form.reset();
+      const tripDate = document.getElementById('delivery-trip-date');
+      if (tripDate) tripDate.value = today();
+      await loadLogisticsPayrollModule();
+      await showMessage(status === 'Payroll Ready' ? 'Delivery trip encoded and marked Payroll Ready.' : 'Delivery trip saved as draft.');
+    } catch (error) { await showMessage(error.message, 'error'); }
+  }
+
+  async function submitDeliveryTripForm() { await saveDeliveryTrip(null, 'Payroll Ready'); }
+
+  async function refreshTripPreview() {
+    const truck = document.getElementById('delivery-trip-truck-type')?.value;
+    const location = document.getElementById('delivery-trip-location')?.value;
+    const tripType = document.getElementById('delivery-trip-type')?.value;
+    const role = document.getElementById('delivery-trip-role')?.value;
+    const tripDate = document.getElementById('delivery-trip-date')?.value;
+    const quantity = Math.max(1, Number(document.querySelector('#delivery-trip-form [name="output_quantity"]')?.value || 1));
+    const rateLabel = document.getElementById('delivery-trip-rate-preview');
+    const payLabel = document.getElementById('delivery-trip-pay-preview');
+    if (!truck || !location || !tripType || !role || !tripDate) return;
+    try {
+      const params = new URLSearchParams({ truck_type_id: truck, location_id: location, trip_type: tripType, role, trip_date: tripDate });
+      const rate = await request(`/api/payroll/logistics/rates/preview?${params}`);
+      if (rateLabel) rateLabel.textContent = `(${money(rate.base_rate)} x ${Number(rate.multiplier).toFixed(2)}) + ${money(rate.additional_rate)}${rate.special_rule_description ? ` - ${rate.special_rule_description}` : ''}`;
+      if (payLabel) payLabel.textContent = money(Number(rate.total_trip_pay || 0) * quantity);
+    } catch (error) {
+      if (rateLabel) rateLabel.textContent = error.message;
+      if (payLabel) payLabel.textContent = money(0);
     }
   }
 
@@ -173,10 +238,16 @@
   async function saveLogisticsRate(event) {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form).entries());
+    const formData = new FormData(form);
+    const rateId = Number(formData.get('id') || 0);
+    const fields = [
+      'truck_type_id', 'location_id', 'trip_type', 'role', 'base_rate',
+      'additional_rate', 'multiplier', 'special_rule_description', 'status', 'effective_date'
+    ];
+    const data = Object.fromEntries(fields.map(field => [field, formData.get(field) ?? '']));
     try {
-      await request(data.id ? `/api/payroll/logistics/rates/${Number(data.id)}` : '/api/payroll/logistics/rates', {
-        method: data.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+      await request(rateId ? `/api/payroll/logistics/rates/${rateId}` : '/api/payroll/logistics/rates', {
+        method: rateId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
       form.reset();
       const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');
@@ -383,8 +454,19 @@
   }
 
   function initialize() {
-    removeDeliveryTripSections();
+    applyLogisticsRoleAccess();
     setDefaultDates();
+    ['delivery-trip-truck-type', 'delivery-trip-location', 'delivery-trip-date', 'delivery-trip-type', 'delivery-trip-role'].forEach(id => {
+      const element = document.getElementById(id);
+      if (!element || element.dataset.logisticsBound === '1') return;
+      element.dataset.logisticsBound = '1';
+      element.addEventListener('change', refreshTripPreview);
+    });
+    const quantity = document.querySelector('#delivery-trip-form [name="output_quantity"]');
+    if (quantity && quantity.dataset.logisticsBound !== '1') {
+      quantity.dataset.logisticsBound = '1';
+      quantity.addEventListener('input', refreshTripPreview);
+    }
   }
 
   document.addEventListener('click', handleLogisticsActionClick);
@@ -393,8 +475,10 @@
 
   Object.assign(window, {
     loadLogisticsPayrollModule, saveLogisticsTruckType, saveLogisticsLocation, saveLogisticsRate,
+    saveDeliveryTrip, submitDeliveryTripForm, refreshTripPreview,
     editLogisticsTruckType, editLogisticsLocation, editLogisticsRate, deactivateLogisticsTruckType,
-    deactivateLogisticsLocation, deactivateLogisticsRate, prepareSwrFxrRegistry, generateSwrFxrRegistry,
+    deactivateLogisticsLocation, deactivateLogisticsRate,
+    prepareSwrFxrRegistry, generateSwrFxrRegistry,
     changeLogisticsRatesPage, loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
   });
 })();

@@ -123,11 +123,11 @@ const EMPLOYEE_ENUMS = {
   tax_status: new Set(['Single', 'Married', 'Head of Family', 'Exempt']),
 };
 const EMPLOYEE_PAYROLL_PROTECTED_FIELDS = new Set([
-  'wage_type', 'wage_type_id', 'base_rate', 'sewingRates', 'allowances', 'allowance',
+  'wage_type', 'wage_type_id', 'base_rate', 'wage_effective_date', 'sewingRates', 'allowances', 'allowance',
   'payroll_schedule', 'salary_grade', 'sss_number', 'philhealth_number',
   'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account'
 ]);
-const EMPLOYEE_WAGE_CONFIG_FIELDS = new Set(['wage_type', 'wage_type_id', 'base_rate', 'sewingRates']);
+const EMPLOYEE_WAGE_CONFIG_FIELDS = new Set(['wage_type', 'wage_type_id', 'base_rate', 'wage_effective_date', 'sewingRates']);
 const EMPLOYEE_GOVERNMENT_ID_FIELDS = new Set(['sss_number', 'philhealth_number', 'pagibig_number', 'tin']);
 const EMPLOYEE_PAYROLL_ONLY_FIELDS = new Set(['allowances', 'allowance', 'payroll_schedule', 'salary_grade', 'tax_status', 'bank_name', 'bank_account']);
 const EMPLOYEE_BANK_ACCOUNT_FORMATS = [
@@ -175,7 +175,7 @@ const EMPLOYEE_UPDATE_ALLOWED_FIELDS = new Set([
   'supervisor', 'work_location', 'shift_schedule', 'employee_level', 'employment_history',
   'status', 'employment_status', 'separation_date', 'separation_reason', 'offboarding_remarks',
   'lifecycle_action', 'lifecycle_note', 'requires_onboarding', 'requires_training',
-  'wage_type', 'wage_type_id', 'base_rate', 'sewingRates',
+  'wage_type', 'wage_type_id', 'base_rate', 'wage_effective_date', 'sewingRates',
   'salary_grade', 'allowances', 'allowance', 'payroll_schedule',
   'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'tax_status', 'bank_name', 'bank_account'
 ]);
@@ -1102,6 +1102,7 @@ function employeeReferencePayload(employee, options = {}) {
       wage_type_id: employee.wage_type_id || null,
       wage_type: employee.wage_type || null,
       basic_salary: employee.basic_salary ?? null,
+      wage_effective_date: employee.wage_effective_date || null,
     } : {}),
   };
 }
@@ -1914,7 +1915,10 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
 
   const isHrOrAdmin = employeeHasRole(req, [...ROLES.hr_manager, ...ROLES.admin_any]);
   const isPayrollOrAdmin = employeeHasRole(req, [...ROLES.payroll_any, ...ROLES.admin_any]);
-  const canManagePayrollSetup = isPayrollOrAdmin || (mode === 'create' && isHrOrAdmin);
+  // HR owns employee onboarding and compensation setup. This permission is
+  // limited to employee master-data fields; payroll generation, approval,
+  // finalization, and report export remain protected by payroll-only routes.
+  const canManagePayrollSetup = isPayrollOrAdmin || isHrOrAdmin;
   let existingForUpdate = null;
   if (mode === 'update') {
     const [existingRows] = await pool.execute('SELECT * FROM employees WHERE id = ? OR employee_code = ? LIMIT 1', [req.params.id, req.params.id]);
@@ -2005,7 +2009,7 @@ async function validateEmployeeRequestBody(req, res, pool, { mode = 'update' } =
     ['gender', 'nationality', 'marital_status', 'blood_type', 'employment_type', 'hiring_type', 'deployment_status', 'employee_level', 'status', 'tax_status']
       .forEach(field => validateEmployeeEnumField(body, field));
 
-    ['date_of_birth', 'date_hired', 'end_of_contract', 'contract_start_date', 'contract_end_date', 'separation_date'].forEach(field => {
+    ['date_of_birth', 'date_hired', 'end_of_contract', 'contract_start_date', 'contract_end_date', 'separation_date', 'wage_effective_date'].forEach(field => {
       validateEmployeeDateField(body, field, { noFuture: field === 'date_of_birth' });
     });
     validateDateOrder(body, 'date_hired', 'end_of_contract');
@@ -3097,9 +3101,20 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
                 SELECT ewr.rate
                 FROM employee_wage_rates ewr
                 WHERE ewr.employee_id = e.id
+                  AND ewr.end_date IS NULL
+                  AND COALESCE(ewr.is_active, 1) = 1
                 ORDER BY ewr.effective_date DESC, ewr.id DESC
                 LIMIT 1
-              ) AS basic_salary
+              ) AS basic_salary,
+              (
+                SELECT DATE_FORMAT(ewr.effective_date, '%Y-%m-%d')
+                FROM employee_wage_rates ewr
+                WHERE ewr.employee_id = e.id
+                  AND ewr.end_date IS NULL
+                  AND COALESCE(ewr.is_active, 1) = 1
+                ORDER BY ewr.effective_date DESC, ewr.id DESC
+                LIMIT 1
+              ) AS wage_effective_date
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
@@ -3141,7 +3156,8 @@ app.get('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     }
     const [rows] = await pool.execute(`
       SELECT e.*, d.name AS department, wt.name AS wage_type,
-             (SELECT ewr.rate FROM employee_wage_rates ewr WHERE ewr.employee_id = e.id ORDER BY ewr.effective_date DESC, ewr.id DESC LIMIT 1) AS basic_salary
+             (SELECT ewr.rate FROM employee_wage_rates ewr WHERE ewr.employee_id = e.id AND ewr.end_date IS NULL AND COALESCE(ewr.is_active, 1) = 1 ORDER BY ewr.effective_date DESC, ewr.id DESC LIMIT 1) AS basic_salary,
+             (SELECT DATE_FORMAT(ewr.effective_date, '%Y-%m-%d') FROM employee_wage_rates ewr WHERE ewr.employee_id = e.id AND ewr.end_date IS NULL AND COALESCE(ewr.is_active, 1) = 1 ORDER BY ewr.effective_date DESC, ewr.id DESC LIMIT 1) AS wage_effective_date
         FROM employees e
         LEFT JOIN departments d ON d.id = e.department_id
         LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
@@ -3199,7 +3215,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
     await ensureEmployeeAuthColumns(pool);
     const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'create' });
     if (validationResponse) return validationResponse;
-    const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
+    const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, wage_effective_date, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
     const normalizedEmployeeStatus = normalizeEmploymentStatus(employment_status || status);
     
     console.log('\n=== POST /api/employees ===');
@@ -3548,8 +3564,8 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
           if (base_rate !== undefined && base_rate !== null && base_rate !== '') {
             // Insert new base rate with wage_type_id
             await pool.execute(
-              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, NOW())',
-              [employee_id, wage_type_id, parseFloat(base_rate)]
+              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, COALESCE(?, CURDATE()))',
+              [employee_id, wage_type_id, parseFloat(base_rate), wage_effective_date || date_hired || null]
             );
             
           }
@@ -3631,7 +3647,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
       return res.status(404).json({ error: 'Employee not found.' });
     }
     applyEmployeeUpdateDefaults(req.body, existingEmployee);
-    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
+    const { employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, wage_effective_date, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account } = req.body;
     const normalizedEmployeeStatus = normalizeEmploymentStatus(employment_status || status);
     
     console.log('\n=== PUT /api/employees/:id ===');
@@ -3815,8 +3831,8 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
             
             // Insert new base rate with wage_type_id
             await pool.execute(
-              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, NOW())',
-              [id, wage_type_id, parseFloat(base_rate)]
+              'INSERT INTO employee_wage_rates (employee_id, wage_type_id, rate, effective_date) VALUES (?, ?, ?, COALESCE(?, CURDATE()))',
+              [id, wage_type_id, parseFloat(base_rate), wage_effective_date || date_hired || null]
             );
             
           }

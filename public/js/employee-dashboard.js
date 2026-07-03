@@ -109,7 +109,6 @@ function empEscape(value) {
 
 async function loadEmpDashboard() {
   try {
-    resetEmpDashboardPayslipUi();
     const res = await apiFetch('/api/employee/dashboard');
     if (!res) return;
     if (!res.ok) {

@@ -36,6 +36,15 @@ vm.runInContext(source, context, { filename: sourcePath });
   assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Piece'), false);
   assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Trip'), false);
 
+  const noticeBox = { style: {}, innerHTML: 'stale content' };
+  context.document = {
+    getElementById(id) {
+      return id === 'salary-payroll-validation' ? noticeBox : null;
+    },
+  };
+  assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Trip'), false);
+  assert.doesNotMatch(source, /Per-trip output payroll|Attendance is for tracking only|Output-based/);
+
   const error = await api.salaryApiError({
     text: async () => JSON.stringify({
       error: 'No validated payroll-ready attendance exists. Days Worked must be greater than zero.',

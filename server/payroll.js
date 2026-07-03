@@ -10,10 +10,14 @@ const XLSX = require('xlsx');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
-const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
+const {
+  computeLateUndertimeDeductions,
+  computeScheduledHourlyBase,
+} = require('./payroll-attendance-deductions');
 const {
   deductionMonthlyProjectionDivisor,
   percentageDeductionAmount: statutoryPercentageDeductionAmount,
+  usesWeeklyStatutoryProration,
 } = require('./statutory-percentage-deduction');
 const {
   ensurePayrollAttendanceConfigurationSchema,
@@ -40,6 +44,7 @@ const {
   COMPUTED_PAYROLL_FIELDS,
   auditSecurityEvent,
   rejectForbiddenFields,
+  rejectUnexpectedFields,
 } = require('./security-controls');
 
 const PAYROLL_PERMISSIONS = {
@@ -91,7 +96,7 @@ const LOGISTICS_TRIP_PERMISSIONS = {
   view: PAYROLL_PERMISSIONS.view,
   encode: ROLES.payroll_any,
   approve: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
-  configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
+  configure: [...ROLES.payroll_any, ...ROLES.hr_final_approval],
 };
 
 const MAX_DAILY_PIECE_OUTPUT_QUANTITY = 10000;
@@ -125,6 +130,27 @@ const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIE
   action: 'blocked_payroll_settings_parameter_tampering_attempt',
   module: 'PAYROLL_SECURITY',
 });
+
+const LOGISTICS_RATE_ALLOWED_FIELDS = new Set([
+  'truck_type_id',
+  'location_id',
+  'trip_type',
+  'role',
+  'base_rate',
+  'additional_rate',
+  'multiplier',
+  'special_rule_description',
+  'status',
+  'effective_date',
+]);
+
+const LOGISTICS_RATE_SETTINGS_GUARD = rejectUnexpectedFields(
+  LOGISTICS_RATE_ALLOWED_FIELDS,
+  {
+    action: 'blocked_payroll_settings_parameter_tampering_attempt',
+    module: 'PAYROLL_SECURITY',
+  }
+);
 
 const PAYROLL_CLEARANCE_ALLOWED_FIELDS = new Set([
   'final_attendance_cutoff',
@@ -204,10 +230,17 @@ function todayManilaDateKey() {
   return new Date(Date.now() + (8 * 60 * 60 * 1000)).toISOString().slice(0, 10);
 }
 
+function payrollValidationError(message) {
+  const err = new Error(message);
+  err.status = 400;
+  err.statusCode = 400;
+  return err;
+}
+
 function strictPayrollDate(value, label = 'Date', { allowFuture = false } = {}) {
   const text = String(value || '').trim();
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) throw new Error(`${label} must use YYYY-MM-DD.`);
+  if (!match) throw payrollValidationError(`${label} must use YYYY-MM-DD.`);
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -215,8 +248,8 @@ function strictPayrollDate(value, label = 'Date', { allowFuture = false } = {}) 
   const validCalendarDate = parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
-  if (!validCalendarDate) throw new Error(`${label} is not a valid calendar date.`);
-  if (!allowFuture && text > todayManilaDateKey()) throw new Error(`${label} cannot be in the future.`);
+  if (!validCalendarDate) throw payrollValidationError(`${label} is not a valid calendar date.`);
+  if (!allowFuture && text > todayManilaDateKey()) throw payrollValidationError(`${label} cannot be in the future.`);
   return text;
 }
 
@@ -1238,17 +1271,20 @@ async function computeConfiguredDeductions(pool, employeeId, grossPay, deduction
   for (const setting of selectCurrentDeductionSettings(settings)) {
     if (!deductionAppliesToEmployee(setting, employee)) continue;
     const statutoryKey = context.statutory_true_up === false ? '' : statutoryContributionKey(setting);
+    const weeklyStatutoryProration = statutoryKey && usesWeeklyStatutoryProration(context);
     const variableOutputApplies = statutoryKey
       ? variableOutputStatutoryDeductionApplies(employee, context)
       : null;
     const frequencyApplies = variableOutputApplies !== null
       ? variableOutputApplies
       : statutoryKey
-        ? statutoryTrueUpFrequencyApplies(setting, context)
+        ? weeklyStatutoryProration
+          ? deductionFrequencyApplies(setting, context)
+          : statutoryTrueUpFrequencyApplies(setting, context)
         : deductionFrequencyApplies(setting, context);
     if (!frequencyApplies) continue;
     let amount = 0;
-    if (statutoryKey && variableOutputApplies === true) {
+    if (statutoryKey && (variableOutputApplies === true || weeklyStatutoryProration)) {
       if (setting.computation_type === 'Percentage') {
         amount = percentageDeductionAmount(setting, grossPay, context);
       } else if (setting.computation_type === 'Table Lookup / Matrix Bracket') {
@@ -1338,7 +1374,16 @@ async function computeEmployeeDeductions(pool, employeeId, deductionContext, ava
 
 async function computePayrollDeductions(pool, employeeId, grossPay, deductionContext) {
   const configured = await computeConfiguredDeductions(pool, employeeId, grossPay, deductionContext);
-  const employee = await computeEmployeeDeductions(pool, employeeId, deductionContext, numeric(grossPay) - numeric(configured.total));
+  // Client rule: deductions come from Basic Pay. Non-taxable allowances are
+  // added after deductions and must not increase the amount available for
+  // statutory, loan, or other employee deductions.
+  const deductionAvailablePay = statutoryDeductionBaseAmount(grossPay, deductionContext);
+  const employee = await computeEmployeeDeductions(
+    pool,
+    employeeId,
+    deductionContext,
+    numeric(deductionAvailablePay) - numeric(configured.total)
+  );
   return {
     total: configured.total + employee.total,
     statutoryTotal: configured.total,
@@ -1442,10 +1487,27 @@ async function calculateSalaryDeductionSnapshot(pool, employeeId, grossPay, dedu
   };
 }
 
-async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
-  // Allowance settings are a catalog/configuration list only. Do not apply
-  // these rows globally because allowance amounts can differ per employee.
-  return { total: 0, applied: [] };
+async function computeConfiguredAllowances(pool, employeeId, grossPay, calculationDate) {
+  // Global allowance settings are a catalog only. The employee master record
+  // carries the assigned non-taxable allowance for each payroll run.
+  if (!employeeId) return { total: 0, applied: [] };
+  const [rows] = await pool.execute(
+    'SELECT allowances FROM employees WHERE id = ? LIMIT 1',
+    [employeeId]
+  );
+  const amount = roundMoney(rows[0]?.allowances || 0);
+  if (!(amount > 0)) return { total: 0, applied: [] };
+  return {
+    total: amount,
+    applied: [{
+      name: 'Employee Allowance',
+      allowance_type: 'Employee Assigned',
+      amount,
+      is_taxable: 0,
+      calculation_date: calculationDate || null,
+      gross_pay_before_allowance: roundMoney(grossPay || 0)
+    }]
+  };
 }
 
 async function applyEmployeeDeductionBalances(pool, req, employeeId, salaryCalculationId, payrollPeriod, employeeDeductions) {
@@ -1515,11 +1577,10 @@ function normalizePayrollWageType(value) {
 }
 
 function payableAttendanceDeductionAmount(wageType, validation) {
-  // Hourly payroll is already paid from approved hours worked, so missed
-  // minutes from late or undertime are naturally unpaid in gross pay.
-  return normalizePayrollWageType(wageType) === 'Hourly'
-    ? 0
-    : numeric(validation?.tardy_ut_deduction);
+  const normalizedWageType = normalizePayrollWageType(wageType);
+  return ['Daily', 'Monthly'].includes(normalizedWageType)
+    ? numeric(validation?.tardy_ut_deduction)
+    : 0;
 }
 
 function normalizedPayrollBatchAction(payrollType) {
@@ -1561,6 +1622,12 @@ function payrollDate(value, label = 'Date') {
   return strictPayrollDate(value, label);
 }
 
+function payrollDateSpanDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
 function weeklyPayrollKey(startDate, endDate) {
   const start = payrollDate(startDate, 'Payroll start date');
   const end = payrollDate(endDate, 'Payroll end date');
@@ -1573,6 +1640,10 @@ function payrollPeriodFromRequest(body = {}) {
   const end = body.end_date ? payrollDate(body.end_date, 'Payroll end date') : requestedMonth.end;
   if (start > end) throw new Error('Period start must be before or equal to period end.');
   const hasExplicitWeek = Boolean(body.start_date || body.end_date || body.weekly);
+  const payrollFrequency = String(body.payroll_frequency || body.frequency || (hasExplicitWeek ? 'Weekly' : 'Monthly')).trim();
+  if (payrollFrequency === 'Weekly' && payrollDateSpanDays(start, end) > 7) {
+    throw new Error('Weekly payroll period must not exceed 7 calendar days.');
+  }
   const key = String(body.payroll_period || body.period_key || (hasExplicitWeek ? weeklyPayrollKey(start, end) : requestedMonth.month_year)).trim();
   if (!/^\d{4}-\d{2}(?:-W[1-5])?$/.test(key)) throw new Error('Payroll period must use YYYY-MM or YYYY-MM-W# format.');
   return {
@@ -1580,7 +1651,7 @@ function payrollPeriodFromRequest(body = {}) {
     base_month: start.slice(0, 7),
     start,
     end,
-    payroll_frequency: String(body.payroll_frequency || body.frequency || (hasExplicitWeek ? 'Weekly' : 'Monthly')).trim(),
+    payroll_frequency: payrollFrequency,
     period_label: `${start} to ${end}`,
     is_weekly: hasExplicitWeek || /-W[1-5]$/.test(key)
   };
@@ -1884,6 +1955,7 @@ function payrollPeriodBase(value) {
 }
 
 function payrollSourceEntry(kind, row) {
+  const regularHours = numeric(row.regular_hours);
   return {
     kind,
     id: row.id,
@@ -1896,7 +1968,8 @@ function payrollSourceEntry(kind, row) {
     details: row.details || '',
     quantity: numeric(row.quantity),
     quantity_unit: row.quantity_unit || '',
-    regular_hours: numeric(row.regular_hours),
+    regular_hours: regularHours,
+    regular_minutes: Math.max(0, Math.round(numeric(row.regular_minutes) || (regularHours * 60))),
     overtime_hours: numeric(row.overtime_hours),
     late_minutes: numeric(row.late_minutes),
     undertime_minutes: numeric(row.undertime_minutes),
@@ -1920,7 +1993,11 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
   for (const record of records) {
     const wageType = normalizePayrollWageType(record.wage_type);
     const periodSeed = record.payroll_period || payrollDateKey(record.calculation_date).slice(0, 7);
-    const period = monthRange(periodSeed);
+    const explicitStart = payrollDateKey(record.period_start);
+    const explicitEnd = payrollDateKey(record.period_end);
+    const period = explicitStart && explicitEnd
+      ? { start: explicitStart, end: explicitEnd, month_year: payrollPeriodBase(explicitStart) || periodSeed }
+      : monthRange(periodSeed);
     const baseMonth = payrollPeriodBase(periodSeed) || period.month_year;
     const snapshot = parseJsonSafe(record.validation_snapshot);
     const entries = [];
@@ -1946,6 +2023,7 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
             quantity: wageType === 'Hourly' ? regularHours : (regularHours > 0 ? 1 : 0),
             quantity_unit: wageType === 'Hourly' ? 'hours' : 'day',
             regular_hours: regularHours,
+            regular_minutes: row.regular_minutes,
             overtime_hours: overtimeHours,
             late_minutes: row.late_minutes,
             undertime_minutes: row.undertime_minutes,
@@ -1993,6 +2071,7 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
             quantity: wageType === 'Hourly' ? regularHours : (regularHours > 0 ? 1 : 0),
             quantity_unit: wageType === 'Hourly' ? 'hours' : 'day',
             regular_hours: regularHours,
+            regular_minutes: row.regular_minutes,
             overtime_hours: overtimeHours,
             late_minutes: row.late_minutes,
             undertime_minutes: row.undertime_minutes,
@@ -2279,13 +2358,18 @@ function buildPayslipPayload(record) {
   const lateDeduction = numeric(snapshot.late_deduction);
   const undertimeDeduction = numeric(snapshot.undertime_deduction);
   const tardyUtDeduction = lateDeduction + undertimeDeduction;
-  const knownPlusDetailed = knownTotal + configuredOtherTotal + employeeDeductionAmount + tardyUtDeduction;
+  const attendanceDeductionEmbeddedInBase = Boolean(snapshot.attendance_deduction_embedded_in_base)
+    || (wageType === 'Hourly' && numeric(snapshot.net_credited_hours) > 0);
+  const visibleLateDeduction = attendanceDeductionEmbeddedInBase ? 0 : lateDeduction;
+  const visibleUndertimeDeduction = attendanceDeductionEmbeddedInBase ? 0 : undertimeDeduction;
+  const visibleTardyUtDeduction = visibleLateDeduction + visibleUndertimeDeduction;
+  const knownPlusDetailed = knownTotal + configuredOtherTotal + employeeDeductionAmount + visibleTardyUtDeduction;
   const otherAmount = Math.max(0, totalDeductions - knownPlusDetailed);
   const deductionRows = [
     ...knownDeductions,
-    { key: 'late_deduction', label: 'Late Deduction', amount: lateDeduction },
-    { key: 'undertime_deduction', label: 'Undertime Deduction', amount: undertimeDeduction },
-    { key: 'tardy_ut_total', label: 'Total Tardy/UT', amount: tardyUtDeduction },
+    { key: 'late_deduction', label: 'Late Deduction', amount: visibleLateDeduction },
+    { key: 'undertime_deduction', label: 'Undertime Deduction', amount: visibleUndertimeDeduction },
+    { key: 'tardy_ut_total', label: 'Total Tardy/UT', amount: visibleTardyUtDeduction },
     ...configuredRows,
     ...(employeeDeductionAmount > 0 ? [{ key: 'employee_deductions', label: 'Cash Advance / Loans', amount: employeeDeductionAmount }] : []),
     ...(otherAmount > 0 ? [{ key: 'other', label: 'Other Deductions', amount: otherAmount }] : []),
@@ -2311,6 +2395,9 @@ function buildPayslipPayload(record) {
     earnings: {
       days_worked: numeric(record.days_worked) || snapshot.days_worked || 0,
       hours_worked: numeric(record.hours_worked) || snapshot.hours_worked || 0,
+      net_credited_minutes: numeric(snapshot.net_credited_minutes),
+      scheduled_minutes: numeric(snapshot.scheduled_minutes),
+      approved_regular_minutes: numeric(snapshot.approved_regular_minutes),
       employee_minute_rate: numeric(snapshot.minute_rate),
       basic_pay: basePay,
       rot_sot: numeric(record.overtime_amount),
@@ -2327,7 +2414,7 @@ function buildPayslipPayload(record) {
       tardy_ut: tardyUtDeduction,
       grace_period_minutes: numeric(snapshot.policy?.grace_period_minutes),
       attendance_pay_basis: wageType === 'Hourly' && (numeric(snapshot.late_minutes) > 0 || numeric(snapshot.undertime_minutes) > 0)
-        ? 'Late and undertime are reflected through approved paid hours for hourly payroll; no separate Late/UT deduction is added.'
+        ? 'Hourly Base Pay is already net of approved late and undertime using the employee minute rate.'
         : '',
       allowances,
       gross_pay: grossPay,
@@ -2550,12 +2637,18 @@ async function resolvePayslipPayload(pool, record) {
 function payslipMoneyRows(payslip) {
   const isPiece = payslip.wage_type === 'Per-Piece';
   const isTrip = payslip.wage_type === 'Per-Trip';
+  const isHourly = payslip.wage_type === 'Hourly';
   const earnings = [];
 
   if (isPiece) {
     earnings.push({ label: 'Output Pay', amount: numeric(payslip.earnings?.basic_pay) });
   } else if (isTrip) {
     earnings.push({ label: 'Trip Pay', amount: numeric(payslip.earnings?.basic_pay) });
+  } else {
+    earnings.push({
+      label: isHourly && String(payslip.earnings?.attendance_pay_basis || '').trim() ? 'Adjusted Base Pay' : 'Basic Pay',
+      amount: numeric(payslip.earnings?.basic_pay)
+    });
   }
 
   if (numeric(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: numeric(payslip.earnings.rot_sot) });
@@ -2567,7 +2660,9 @@ function payslipMoneyRows(payslip) {
   const deductions = [];
   for (const item of Array.isArray(payslip.deductions) ? payslip.deductions : []) {
     const amount = numeric(item.amount);
-    if (amount <= 0 || item.key === 'tardy_ut_total') continue;
+    const rowKey = String(item.key || '').toLowerCase();
+    const alwaysShow = ['sss', 'hdmf', 'phic'].includes(rowKey);
+    if ((!alwaysShow && amount <= 0) || item.key === 'tardy_ut_total') continue;
     const label = String(item.label || 'Deduction')
       .replace(/^HDMF\s*\/\s*/i, '')
       .replace(/^PHIC\s*\/\s*/i, '');
@@ -2592,8 +2687,26 @@ function payslipWorkLabel(payslip) {
 function payslipWorkValue(payslip) {
   if (payslip.wage_type === 'Per-Piece') return numeric(payslip.earnings.quantity);
   if (payslip.wage_type === 'Per-Trip') return numeric(payslip.earnings.trip_count);
-  if (numeric(payslip.earnings.hours_worked) > 0) return numeric(payslip.earnings.hours_worked);
+  if (numeric(payslip.earnings.hours_worked) > 0) {
+    return payslipExactHourLabel(
+      numeric(payslip.earnings.hours_worked),
+      numeric(payslip.earnings.net_credited_minutes) || Math.round(numeric(payslip.earnings.hours_worked) * 60)
+    );
+  }
   return numeric(payslip.earnings.days_worked);
+}
+
+function payslipExactHourLabel(hours, minutes = null) {
+  const totalMinutes = Number.isFinite(Number(minutes)) && Number(minutes) >= 0
+    ? Math.round(Number(minutes))
+    : Math.max(0, Math.round(numeric(hours) * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  const decimalHours = totalMinutes / 60;
+  return `${wholeHours}h${remainderMinutes ? ` ${remainderMinutes}m` : ''} (${decimalHours.toLocaleString('en-US', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  })} hrs)`;
 }
 
 function payslipMinuteLabel(value) {
@@ -2613,19 +2726,22 @@ function payslipAttendanceRows(payslip) {
   const undertimeMinutes = numeric(earnings.undertime_minutes);
   const lateDeduction = numeric(earnings.late_deduction);
   const undertimeDeduction = numeric(earnings.undertime_deduction);
+  const adjustmentNote = String(earnings.attendance_pay_basis || '').trim()
+    ? 'Included in adjusted base'
+    : '';
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 || lateDeduction > 0
-        ? `${payslipMinuteLabel(lateMinutes)} / ${peso(lateDeduction)}`
-        : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : '',
+      amount: lateDeduction > 0 ? peso(lateDeduction) : '',
+      note: lateDeduction > 0 ? adjustmentNote : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 || undertimeDeduction > 0
-        ? `${payslipMinuteLabel(undertimeMinutes)} / ${peso(undertimeDeduction)}`
-        : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : '',
+      amount: undertimeDeduction > 0 ? peso(undertimeDeduction) : '',
+      note: undertimeDeduction > 0 ? adjustmentNote : ''
     }
   ];
 }
@@ -2690,97 +2806,112 @@ function drawPayslipPdf(doc, payslip) {
   const table = (title, rows, y) => {
     const amountWidth = 118;
     const labelWidth = width - amountWidth;
-    const headerHeight = 24;
-    const rowHeight = 21;
+    const headerHeight = 22;
+    const rowHeight = 19;
     doc.rect(left, y, labelWidth, headerHeight).fillAndStroke(headerFill, border);
     doc.rect(left + labelWidth, y, amountWidth, headerHeight).fillAndStroke(headerFill, border);
     doc.font('Helvetica-Bold').fontSize(13).fillColor(ink)
-      .text(title, left, y + 6, { width: labelWidth, align: 'center' })
-      .text('Amount', left + labelWidth, y + 6, { width: amountWidth, align: 'center' });
+      .text(title, left, y + 5, { width: labelWidth, align: 'center' })
+      .text('Amount', left + labelWidth, y + 5, { width: amountWidth, align: 'center' });
     y += headerHeight;
 
     for (const row of rows) {
       doc.rect(left, y, labelWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
       doc.rect(left + labelWidth, y, amountWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.font(row.total ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5).fillColor(ink)
-        .text(row.label, left + 6, y + 5, { width: labelWidth - 12, align: row.total ? 'right' : 'left', ellipsis: true })
-        .text(row.blankWhenZero && numeric(row.amount) <= 0 ? '' : peso(row.amount), left + labelWidth + 6, y + 5, { width: amountWidth - 12, align: 'right' });
+      doc.font(row.total ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).fillColor(ink)
+        .text(row.label, left + 6, y + 4, { width: labelWidth - 12, align: row.total ? 'right' : 'left', ellipsis: true })
+        .text(row.blankWhenZero && numeric(row.amount) <= 0 ? '' : peso(row.amount), left + labelWidth + 6, y + 4, { width: amountWidth - 12, align: 'right' });
       y += rowHeight;
     }
     return y;
   };
 
-  const detailTable = (title, rows, y) => {
-    if (!rows.length) return y;
-    const labelWidth = 168;
-    const valueWidth = width - labelWidth;
-    const headerHeight = 22;
-    const rowHeight = 20;
+  const attendanceTable = (rows, y) => {
+    const headerHeight = 20;
+    const rowHeight = 22;
+    const labelWidth = 78;
+    const minutesWidth = 118;
+    const amountWidth = 112;
+    const noteWidth = width - labelWidth - minutesWidth - amountWidth;
     doc.rect(left, y, width, headerHeight).fillAndStroke(headerFill, border);
-    doc.font('Helvetica-Bold').fontSize(12).fillColor(ink)
-      .text(title, left + 6, y + 5, { width: width - 12, align: 'center' });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(ink)
+      .text('Attendance Adjustments', left + 6, y + 4, { width: width - 12, align: 'center' });
     y += headerHeight;
 
     for (const row of rows) {
-      doc.rect(left, y, labelWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.rect(left + labelWidth, y, valueWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.font('Helvetica').fontSize(9.5).fillColor(ink)
-        .text(row.label, left + 6, y + 5, { width: labelWidth - 12, ellipsis: true })
-        .text(row.value, left + labelWidth + 6, y + 5, { width: valueWidth - 12, ellipsis: true });
+      const columns = [
+        { width: labelWidth, value: row.label || '', bold: true },
+        { width: minutesWidth, value: row.value || '' },
+        { width: amountWidth, value: row.amount || '' },
+        { width: noteWidth, value: row.note || '' },
+      ];
+      let x = left;
+      for (const column of columns) {
+        doc.rect(x, y, column.width, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
+        doc.font(column.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(ink)
+          .text(column.value, x + 6, y + 5, { width: column.width - 12, ellipsis: true });
+        x += column.width;
+      }
       y += rowHeight;
     }
     return y;
   };
 
-  let y = 32;
+  let y = 28;
   doc.font('Helvetica-Bold').fontSize(17).fillColor(ink).text('Payslip', left, y, { width, align: 'center' });
-  y += 26;
+  y += 22;
   doc.font('Helvetica').fontSize(13).text('Marulas Industrial Corporation', left, y, { width, align: 'center' });
-  y += 20;
+  y += 17;
   doc.font('Helvetica').fontSize(11).text('LGSV HR Payroll System', left, y, { width, align: 'center' });
-  y += 58;
+  y += 38;
 
   const half = width / 2;
   const leftLabel = 118;
   const rightLabel = 118;
   detail('Date Hired', payslip.employee.date_hired, left, y, leftLabel, half - leftLabel - 28);
   detail('Employee Name', payslip.employee.name, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 24;
+  y += 20;
   detail('Pay Period', payslip.payroll_period, left, y, leftLabel, half - leftLabel - 28);
   detail('Designation', payslip.employee.position, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 24;
+  y += 20;
   detail(payslipWorkLabel(payslip), payslipWorkValue(payslip), left, y, leftLabel, half - leftLabel - 28);
   detail('Department', payslip.employee.department, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 22;
+  y += 20;
   detail('Wage Type', payslip.wage_type, left, y, leftLabel, half - leftLabel - 28);
   detail('Reference No.', payslip.reference_no, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 36;
-
-  y = detailTable('Late / UT', attendanceRows, y);
   y += 26;
 
+  y = attendanceTable(attendanceRows, y);
+  y += 14;
+
   y = table('Earnings', earnings, y);
-  y += 28;
+  y += 16;
   y = table('Deductions', deductions, y);
-  if (y > doc.page.height - 245) {
+  const footerY = doc.page.height - doc.page.margins.bottom - 14;
+  if (y > footerY - 150) {
     doc.addPage();
     y = doc.page.margins.top;
   }
-  y += 44;
+  y += 24;
 
   doc.font('Helvetica').fontSize(12).fillColor(ink).text(peso(payslip.summary.net_due), left, y, { width, align: 'center' });
-  y += 20;
+  y += 18;
   doc.font('Helvetica').fontSize(11).text(amountToWords(payslip.summary.net_due), left, y, { width, align: 'center' });
+  y += 18;
 
-  const signY = Math.max(y + 74, doc.page.height - 155);
+  const signY = Math.min(y + 52, footerY - 26);
   const lineWidth = 170;
-  doc.font('Helvetica').fontSize(11).text('Employer Signature', left + 62, signY - 34, { width: lineWidth, align: 'center' });
-  doc.text('Employee Signature', right - lineWidth - 62, signY - 34, { width: lineWidth, align: 'center' });
-  doc.moveTo(left + 62, signY + 42).lineTo(left + 62 + lineWidth, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
-  doc.moveTo(right - lineWidth - 62, signY + 42).lineTo(right - 62, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
+  doc.font('Helvetica').fontSize(10.5).text('Employer Signature', left + 62, signY - 28, { width: lineWidth, align: 'center' });
+  doc.text('Employee Signature', right - lineWidth - 62, signY - 28, { width: lineWidth, align: 'center' });
+  doc.moveTo(left + 62, signY).lineTo(left + 62 + lineWidth, signY).strokeColor(border).lineWidth(0.8).stroke();
+  doc.moveTo(right - lineWidth - 62, signY).lineTo(right - 62, signY).strokeColor(border).lineWidth(0.8).stroke();
 
-  doc.font('Helvetica').fontSize(8).text(`Generated: ${generated} | Prepared by: ${payslip.prepared_by || 'Payroll'}`, left, doc.page.height - 58, { width, align: 'center' });
-  doc.font('Helvetica').fontSize(10).text('This is a system generated payslip', left, doc.page.height - 36, { width, align: 'center' });
+  doc.font('Helvetica').fontSize(8).text(
+    `Generated: ${generated} | Prepared by: ${payslip.prepared_by || 'Payroll'} | System-generated payslip`,
+    left,
+    footerY,
+    { width, align: 'center', ellipsis: true, lineBreak: false }
+  );
 }
 
 function renderPayslipPdfBuffer(payslip) {
@@ -2907,11 +3038,6 @@ function applyHourRoundOff(hours, rule) {
   return value;
 }
 
-function payrollClockMinutes(value) {
-  const match = String(value || '').match(/(?:T|\s|^)(\d{1,2}):(\d{2})/);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
-}
-
 async function validateDailyHourlyPayroll(pool, options) {
   if (!options.schema_ready) {
     await ensurePieceRatePayrollSchema(pool);
@@ -2991,7 +3117,7 @@ async function validateDailyHourlyPayroll(pool, options) {
   const attendanceWhere = [
     'ats.employee_id = ?',
     'ats.attendance_date BETWEEN ? AND ?',
-    "ats.verification_status = 'PAYROLL_READY'",
+    "ats.verification_status IN ('PAYROLL_READY', 'VALIDATED')",
     'COALESCE(ats.payroll_eligible, 0) = 1',
     'ats.payroll_run_id IS NULL'
   ];
@@ -3060,16 +3186,7 @@ async function validateDailyHourlyPayroll(pool, options) {
     };
   }).filter(row => row.amount > 0);
   const holidayPremium = holidayRows.reduce((sum, row) => sum + row.amount, 0);
-  const activePolicy = (isDaily || isMonthly) ? policy.daily : policy.hourly;
-  const scheduledStartMinutes = payrollClockMinutes(activePolicy.work_start_time);
-  const graceCreditHours = isHourly && activePolicy.late_apply_grace_period
-    ? attendanceRows.reduce((sum, row) => {
-      const actualStartMinutes = payrollClockMinutes(row.time_in);
-      if (scheduledStartMinutes == null || actualStartMinutes == null) return sum;
-      const late = Math.max(0, actualStartMinutes - scheduledStartMinutes);
-      return sum + (late > 0 && late <= Number(activePolicy.grace_period_minutes || 0) ? late / 60 : 0);
-    }, 0)
-    : 0;
+  const hourlyBase = computeScheduledHourlyBase({ attendanceRows, policy: policy.hourly });
   const attendanceDeductions = computeLateUndertimeDeductions({
     attendanceRows,
     policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
@@ -3084,9 +3201,19 @@ async function validateDailyHourlyPayroll(pool, options) {
       return sum + (hours > 0 && hours < policy.daily.half_day_threshold_hours ? 0.5 : 1);
     }, 0);
   }
-  const breakDeduction = isHourly ? attendanceDays * Number(policy.hourly.break_deduction_hours || 0) : 0;
-  let hoursWorked = isHourly ? Math.max(0, rawRegularHours + graceCreditHours - breakDeduction) : 0;
+  // Hourly basic pay starts from scheduled hours for each approved attendance
+  // day, then approved late and undertime are absorbed into the basic pay
+  // itself. This keeps Base Pay already net of tardy/UT and prevents a second
+  // Late/UT row from double-deducting hourly employees. Grace time remains
+  // payable because deductible_late_minutes contains only beyond-grace late.
+  const hourlyTardyUtMinutes = isHourly
+    ? Math.max(0, numeric(attendanceDeductions.deductible_late_minutes) + numeric(attendanceDeductions.undertime_minutes))
+    : 0;
+  const hourlyScheduledMinutes = isHourly ? Math.max(0, Math.round(hourlyBase.scheduled_hours * 60)) : 0;
+  const hourlyNetCreditedMinutes = isHourly ? Math.max(0, hourlyScheduledMinutes - hourlyTardyUtMinutes) : 0;
+  let hoursWorked = isHourly ? hourlyNetCreditedMinutes / 60 : 0;
   hoursWorked = applyHourRoundOff(hoursWorked, policy.hourly.round_off_rule);
+  const roundedNetCreditedMinutes = isHourly ? Math.max(0, Math.round(hoursWorked * 60)) : 0;
 
   if ((isDaily || isMonthly) && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
@@ -3124,8 +3251,16 @@ async function validateDailyHourlyPayroll(pool, options) {
     late_days: lateDays,
     undertime_days: undertimeDays,
     undertime_hours: Number(undertimeHours.toFixed(2)),
-    hours_worked: Number(hoursWorked.toFixed(2)),
-    regular_hours: Number(hoursWorked.toFixed(2)),
+    hours_worked: Number(hoursWorked.toFixed(4)),
+    regular_hours: Number(hoursWorked.toFixed(4)),
+    approved_regular_hours: Number(rawRegularHours.toFixed(4)),
+    approved_regular_minutes: attendanceRows.reduce((sum, row) => sum + Math.max(0, Number(row.regular_minutes || 0)), 0),
+    scheduled_hours: Number(hourlyBase.scheduled_hours.toFixed(4)),
+    scheduled_hours_per_day: Number(hourlyBase.scheduled_hours_per_day.toFixed(4)),
+    scheduled_minutes: hourlyScheduledMinutes,
+    net_credited_hours: Number(hoursWorked.toFixed(4)),
+    net_credited_minutes: roundedNetCreditedMinutes,
+    attendance_deduction_embedded_in_base: isHourly,
     overtime_hours: Number(overtimeHours.toFixed(2)),
     holiday_premium: roundMoney(holidayPremium),
     holiday_rows: holidayRows,
@@ -3149,6 +3284,7 @@ async function validateDailyHourlyPayroll(pool, options) {
       verification_status: row.verification_status,
       payroll_eligible: Number(row.payroll_eligible || 0) === 1,
       regular_hours: Number(row.regular_minutes || 0) / 60,
+      regular_minutes: Number(row.regular_minutes || 0),
       overtime_hours: Number(row.overtime_minutes || 0) / 60,
       late_minutes: Number(row.late_minutes || 0),
       undertime_minutes: Number(row.undertime_minutes || 0),
@@ -3361,7 +3497,7 @@ async function ensurePieceRatePayrollSchema(pool) {
   await ensureColumn('payroll_runs', 'processed_by', 'INT NULL AFTER created_by');
   await ensureColumn('payroll_runs', 'processed_at', 'DATETIME NULL AFTER processed_by');
   await ensureColumn('payroll_runs', 'source_summary', 'TEXT NULL AFTER processed_at');
-  await ensureColumn('payroll_deduction_settings', 'proration_mode', "ENUM('Fixed Divisor','Calendar-Based Payroll Date Range') NOT NULL DEFAULT 'Fixed Divisor' AFTER apply_schedule");
+  await ensureColumn('payroll_deduction_settings', 'proration_mode', "ENUM('Fixed Divisor','Calendar-Based Payroll Date Range') NOT NULL DEFAULT 'Calendar-Based Payroll Date Range' AFTER apply_schedule");
   await ensureColumn('payroll_deduction_settings', 'fixed_divisor', 'DECIMAL(10,2) NULL AFTER proration_mode');
   await ensureBlockchainAuditSchema(pool);
   await ensureColumn('employee_wage_rates', 'monthly_salary', 'DECIMAL(12,2) NULL AFTER base_rate');
@@ -4820,7 +4956,7 @@ router.get('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
   }
 });
 
-router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
+router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), LOGISTICS_RATE_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -4838,7 +4974,7 @@ router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
   }
 });
 
-router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
+router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), LOGISTICS_RATE_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -5125,7 +5261,7 @@ router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP
              COUNT(*) AS approved_trip_count, COALESCE(SUM(dt.total_trip_pay), 0) AS total_logistics_pay
         FROM delivery_trips dt
         JOIN employees e ON e.id = dt.employee_id
-       WHERE dt.status IN ('Approved', 'Included in Payroll', 'Paid')
+       WHERE dt.status IN ('Payroll Ready', 'Approved', 'Included in Payroll', 'Paid')
          AND dt.trip_date BETWEEN ? AND ?
        GROUP BY dt.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position
        ORDER BY e.last_name, e.first_name
@@ -5222,6 +5358,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       wage_type: wageTypeToReturn || null,
       current_rate: currentRate,
       wage_type_id: emp.wage_type_id_val,
+      effective_date: rates[0]?.effective_date || null,
       // Also include nested structure for reference
       employee: emp,
       rates: rates,
@@ -5240,6 +5377,9 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
     const pool = require('../config/db');
     const empId = req.params.id;
     const { wage_type_id, rates } = req.body;
+    const effectiveDate = req.body.effective_date
+      ? payrollDate(req.body.effective_date, 'Compensation effective date')
+      : null;
 
     console.log('\n=== POST /api/payroll/employees/:id/wage-config ===');
     console.log('Employee ID:', empId);
@@ -5291,7 +5431,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
       const [insertRes] = await pool.execute(`
         INSERT INTO employee_wage_rates 
         (employee_id, wage_type_id, base_rate, hourly_rate, overtime_rate, sewing_type_id, logistics_region_id, rate, effective_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURDATE()))
       `, [
         empId,
         wage_type_id,
@@ -5300,7 +5440,8 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
         rate.overtime_rate || null,
         rate.sewing_type_id || null,
         rate.logistics_region_id || null,
-        rate.rate
+        rate.rate,
+        effectiveDate
       ]);
       
       console.log('✅ Rate inserted. ID:', insertRes.insertId);
@@ -5313,6 +5454,15 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
     );
     
     console.log('✅ Verification - Active rates count:', verifyRates.length);
+
+    await logPayrollAudit(pool, req, 'employee_wage_configuration_updated', {
+      employee_id: Number(empId),
+      metadata: {
+        wage_type_id: Number(wage_type_id),
+        effective_date: effectiveDate,
+        rates_saved: verifyRates.length
+      }
+    });
 
     res.json({ success: true, message: 'Wage configuration updated', ratesSaved: verifyRates.length });
   } catch (err) {
@@ -7253,7 +7403,7 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
       `SELECT COUNT(DISTINCT employee_id) AS value
          FROM attendance_summary
         WHERE attendance_date BETWEEN ? AND ?
-          AND verification_status = 'PAYROLL_READY'
+          AND verification_status IN ('PAYROLL_READY', 'VALIDATED')
           AND COALESCE(payroll_eligible, 0) = 1`,
       [period.start, period.end]
     );
@@ -7655,7 +7805,7 @@ async function payrollGenerationSourceEmployeeSets(pool, period) {
       SELECT DISTINCT employee_id
         FROM attendance_summary
        WHERE attendance_date BETWEEN ? AND ?
-         AND verification_status = 'PAYROLL_READY'
+         AND verification_status IN ('PAYROLL_READY', 'VALIDATED')
          AND COALESCE(payroll_eligible, 0) = 1
          AND payroll_run_id IS NULL
     `, [period.start, period.end]);
@@ -7725,7 +7875,12 @@ async function filterEmployeesWithPayrollSources(pool, employees, period, body =
     if (['Daily', 'Hourly', 'Monthly'].includes(wageType)) return sourceSets.attendance.has(employeeId);
     if (wageType === 'Per-Piece') return sourceSets.piece.has(employeeId);
     if (isTripBasedWageType(emp.wage_type)) return sourceSets.trip.has(employeeId);
-    return false;
+    // Keep source-backed employees with missing/unsupported wage configuration
+    // in the preview so Payroll sees an actionable skipped reason instead of
+    // a misleading zero-employee result.
+    return sourceSets.attendance.has(employeeId)
+      || sourceSets.piece.has(employeeId)
+      || sourceSets.trip.has(employeeId);
   });
 }
 
@@ -7959,10 +8114,10 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
       continue;
     }
 
-    const allowanceKey = `${roundMoney(piecePayroll.total)}|${period.end}`;
+    const allowanceKey = `${emp.id}|${roundMoney(piecePayroll.total)}|${period.end}`;
     let allowances = allowanceCache.get(allowanceKey);
     if (!allowances) {
-      allowances = await computeConfiguredAllowances(pool, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, piecePayroll.total, period.end);
       allowanceCache.set(allowanceKey, allowances);
     }
 
@@ -7970,7 +8125,7 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
     const payrollDeductions = await computePreviewPayrollDeductions(pool, deductionCache, emp, totalEarning, {
       ...deductionContext,
       payroll_type: normalizedWageType,
-      statutory_base_pay: totalEarning
+      statutory_base_pay: piecePayroll.total
     }, {
       employeesWithActiveDeductions,
       hasSelectedEmployeeDeductionSettings: selectedEmployeeDeductionSettings
@@ -7994,7 +8149,7 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
       deductions: roundMoney(totalDeduction),
       statutory_deductions: roundMoney(payrollDeductions.total),
       attendance_deductions: 0,
-      net_pay: roundMoney(totalEarning - totalDeduction),
+      net_pay: roundMoney((piecePayroll.total - totalDeduction) + allowances.total),
       payroll_status: 'Preview',
       processed_by: '-',
       date_processed: null
@@ -8059,6 +8214,7 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       });
     };
 
+    try {
     if (payrollRunId) {
       const [duplicate] = await pool.execute(
         "SELECT id, status FROM salary_calculations WHERE payroll_run_id = ? AND employee_id = ? AND status <> 'Superseded' LIMIT 1",
@@ -8110,16 +8266,16 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       }
       const overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
       const baseGross = numeric(validation.gross_pay) + overtimePay;
-      allowances = await computeConfiguredAllowances(pool, baseGross, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, baseGross, period.end);
       totalEarning = baseGross + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : totalEarning
+        statutory_base_pay: baseGross
       });
       attendanceDeductionTotal = payableAttendanceDeductionAmount(normalizedWageType, validation);
       totalDeduction = payrollDeductions.total + attendanceDeductionTotal;
-      netPay = totalEarning - totalDeduction;
+      netPay = (baseGross - totalDeduction) + allowances.total;
       quantity = normalizedWageType === 'Hourly' ? validation.hours_worked : validation.days_worked;
       daysWorked = validation.days_worked;
       hoursWorked = validation.hours_worked;
@@ -8129,15 +8285,15 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
         skipEmployee(await describePieceRatePayrollSkip(pool, emp.id, period));
         continue;
       }
-      allowances = await computeConfiguredAllowances(pool, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, piecePayroll.total, period.end);
       totalEarning = piecePayroll.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: piecePayroll.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (piecePayroll.total - totalDeduction) + allowances.total;
       quantity = piecePayroll.quantity;
     } else if (isTripBasedWageType(emp.wage_type)) {
       await assertLogisticsTripSchema(pool);
@@ -8146,15 +8302,15 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
         skipEmployee('No approved delivery trips exist for this payroll period.');
         continue;
       }
-      allowances = await computeConfiguredAllowances(pool, approvedTrips.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, approvedTrips.total, period.end);
       totalEarning = approvedTrips.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: approvedTrips.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (approvedTrips.total - totalDeduction) + allowances.total;
       quantity = approvedTrips.quantity || approvedTrips.trips.length;
     } else {
       skipEmployee(`Unsupported or unconfigured pay type: ${emp.wage_type || 'Not set'}.`);
@@ -8183,6 +8339,10 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       processed_by: '-',
       date_processed: null
     });
+    } catch (previewErr) {
+      console.error(`Error previewing payroll for employee ${emp.id}:`, previewErr);
+      skipEmployee(safePayrollError(previewErr, 'Unable to preview this employee for the selected period.'));
+    }
   }
 
   return payrollPreviewResponse({ period, employees, rows, skipped });
@@ -8225,7 +8385,7 @@ router.post('/generate/preview', requireAuth, requireRole(ROLES.payroll_any), PA
       payrollPeriod: payrollPeriodForPerformance,
       status: 'failed',
     });
-    const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
+    const status = Number(err.status || err.statusCode) === 400 || /required|must|period|invalid|future|date/i.test(err.message) ? 400 : 500;
     res.status(status).json({ error: status === 400 ? err.message : 'Failed to preview payroll generation.' });
   }
 });
@@ -8458,17 +8618,17 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
 
           overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
           const baseGross = numeric(validation.gross_pay) + overtimePay;
-          allowances = await computeConfiguredAllowances(connection, baseGross, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, baseGross, period.end);
           const grossWithAllowances = baseGross + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, grossWithAllowances, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : grossWithAllowances
+            statutory_base_pay: baseGross
           });
           totalEarning = grossWithAllowances;
           attendanceDeductionTotal = payableAttendanceDeductionAmount(normalizedWageType, validation);
           totalDeduction = payrollDeductions.total + attendanceDeductionTotal;
-          netPay = totalEarning - totalDeduction;
+          netPay = (baseGross - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'attendance';
           sourceRecordIds = sourceIdList(validation.attendance_rows || [], 'attendance:');
@@ -8493,15 +8653,15 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
             skipEmployee(await describePieceRatePayrollSkip(connection, emp.id, period));
             continue;
           }
-          allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, piecePayroll.total, period.end);
           totalEarning = piecePayroll.total + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: totalEarning
+            statutory_base_pay: piecePayroll.total
           });
           totalDeduction = payrollDeductions.total;
-          netPay = totalEarning - totalDeduction;
+          netPay = (piecePayroll.total - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'piece_rate_output';
           sourceRecordIds = [
@@ -8527,15 +8687,15 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
             skipEmployee('No approved delivery trips exist for this payroll period.');
             continue;
           }
-          allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, approvedTrips.total, period.end);
           totalEarning = approvedTrips.total + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: totalEarning
+            statutory_base_pay: approvedTrips.total
           });
           totalDeduction = payrollDeductions.total;
-          netPay = totalEarning - totalDeduction;
+          netPay = (approvedTrips.total - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'logistics_trips';
           sourceRecordIds = sourceIdList(approvedTrips.trips, 'trip:');
@@ -9036,18 +9196,18 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       overtimeHours = numeric(snapshot.overtime_hours || record.overtime_hours);
       overtimePay = roundMoney(overtimeHours * hourlyRate);
       const grossBeforeAllowances = roundMoney(manualCorrection.sourceGross + overtimePay);
-      allowances = await computeConfiguredAllowances(connection, grossBeforeAllowances, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, grossBeforeAllowances, period.end);
       totalEarning = roundMoney(grossBeforeAllowances + allowances.total);
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? manualCorrection.sourceGross : totalEarning
+        statutory_base_pay: grossBeforeAllowances
       });
       const attendanceDeduction = ['Daily', 'Hourly'].includes(normalizedWageType)
         ? payableAttendanceDeductionAmount(normalizedWageType, snapshot)
         : 0;
       totalDeduction = roundMoney(payrollDeductions.total + attendanceDeduction);
-      netPay = roundMoney(totalEarning - totalDeduction);
+      netPay = roundMoney((grossBeforeAllowances - totalDeduction) + allowances.total);
       if (normalizedWageType === 'Hourly') {
         hoursWorked = manualCorrection.correctedTotal;
         quantity = hoursWorked;
@@ -9071,15 +9231,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       if (!validation.ok) throw new Error(validation.errors.join(' ') || 'Attendance is not payroll-ready.');
       overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
       const baseGross = numeric(validation.gross_pay) + overtimePay;
-      allowances = await computeConfiguredAllowances(connection, baseGross, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, baseGross, period.end);
       totalEarning = baseGross + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : totalEarning
+        statutory_base_pay: baseGross
       });
       totalDeduction = payrollDeductions.total + payableAttendanceDeductionAmount(normalizedWageType, validation);
-      netPay = totalEarning - totalDeduction;
+      netPay = (baseGross - totalDeduction) + allowances.total;
       sourceType = 'attendance';
       sourceRecordIds = sourceIdList(validation.attendance_rows || [], 'attendance:');
       quantity = normalizedWageType === 'Hourly' ? validation.hours_worked : validation.days_worked;
@@ -9093,15 +9253,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
     } else if (normalizedWageType === 'Per-Piece') {
       const piecePayroll = await getApprovedPieceRatePayroll(connection, record.employee_id, period);
       if (!piecePayroll.records.length) throw new Error('No approved payroll-ready piece output exists for this period.');
-      allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, piecePayroll.total, period.end);
       totalEarning = piecePayroll.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: piecePayroll.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (piecePayroll.total - totalDeduction) + allowances.total;
       sourceType = 'piece_rate_output';
       sourceRecordIds = [
         ...sourceIdList(piecePayroll.outputs, 'output:'),
@@ -9114,15 +9274,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
     } else if (isTripBasedWageType(record.wage_type)) {
       const approvedTrips = await getApprovedDeliveryTripPayroll(connection, record.employee_id, period);
       if (!approvedTrips.trips.length) throw new Error('No approved payroll-ready trip logs exist for this period.');
-      allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, approvedTrips.total, period.end);
       totalEarning = approvedTrips.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: approvedTrips.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (approvedTrips.total - totalDeduction) + allowances.total;
       sourceType = 'logistics_trips';
       sourceRecordIds = sourceIdList(approvedTrips.trips, 'trip:');
       quantity = approvedTrips.quantity || approvedTrips.trips.length;
@@ -9598,6 +9758,8 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
         sc.status,
         sc.calculation_date,
         sc.payroll_period,
+        sc.period_start,
+        sc.period_end,
         sc.source_type,
         sc.source_record_ids,
         sc.agency_name,
@@ -9830,7 +9992,7 @@ router.post('/payslips/encryption/backfill', requireAuth, requireRole(ROLES.admi
 });
 
 // Convert pending salary calculations to payslips for a specific period
-router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
+router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_manager), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -10187,8 +10349,8 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       computation_type: computation_type || 'Manual Amount',
       rate_or_amount: rate_or_amount || 0,
       apply_schedule: apply_schedule || 'Every Payroll',
-      proration_mode: body.proration_mode || 'Fixed Divisor',
-      fixed_divisor: body.fixed_divisor || null,
+      proration_mode: body.proration_mode || 'Calendar-Based Payroll Date Range',
+      fixed_divisor: body.fixed_divisor === undefined || body.fixed_divisor === '' ? null : body.fixed_divisor,
       priority_order: body.priority_order || 5,
       applicability_scope: body.applicability_scope || 'All Employees',
       is_active: is_active === '0' || is_active === 0 ? 0 : 1,
@@ -10216,6 +10378,15 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     if (payload.applicability_scope && !DEDUCTION_APPLICABILITY_SCOPES.has(payload.applicability_scope)) return res.status(400).json({ error: 'Invalid applicability scope.' });
     if (payload.deduction_base_rate && !DEDUCTION_BASE_RATES.has(payload.deduction_base_rate)) return res.status(400).json({ error: 'Invalid deduction base rate.' });
     if (payload.proration_mode && !DEDUCTION_PRORATION_MODES.has(payload.proration_mode)) return res.status(400).json({ error: 'Invalid deduction proration mode.' });
+    if (payload.proration_mode === 'Calendar-Based Payroll Date Range') {
+      payload.fixed_divisor = null;
+    } else {
+      const manualDivisor = Number(payload.fixed_divisor);
+      if (!Number.isInteger(manualDivisor) || manualDivisor <= 0) {
+        return res.status(400).json({ error: 'Manual divisor must be a positive whole number.' });
+      }
+      payload.fixed_divisor = manualDivisor;
+    }
     const contributionNumericFields = [
       ['rate_or_amount', 'Rate or amount'],
       ['employee_share_rate', 'Employee share rate'],
@@ -10252,7 +10423,7 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     for (const key of allowedFields) {
       if (!columns.has(key) || payload[key] === undefined) continue;
       fields.push(key);
-      values.push(numericFields.has(key) ? numeric(payload[key]) : payload[key]);
+      values.push(numericFields.has(key) && payload[key] !== null ? numeric(payload[key]) : payload[key]);
     }
     if (columns.has('created_by')) {
       fields.push('created_by');
@@ -10581,7 +10752,7 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [records] = await connection.execute(`
-      SELECT sc.id, sc.employee_id, sc.payroll_run_id, sc.gross_pay, sc.calculation_date, sc.payroll_period,
+      SELECT sc.id, sc.employee_id, sc.payroll_run_id, sc.gross_pay, sc.total_allowances, sc.calculation_date, sc.payroll_period,
              sc.period_start, sc.period_end, sc.status,
              sc.validation_snapshot, sc.source_record_ids,
              wt.name AS wage_type
@@ -10653,7 +10824,9 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
 
     if (status === 'Approved') {
       const existingSnapshot = parseJsonSafe(record.validation_snapshot);
-      const shouldApplyAttendanceDeductions = normalizePayrollWageType(existingSnapshot.wage_type) !== 'Hourly';
+      const existingWageType = normalizePayrollWageType(existingSnapshot.wage_type);
+      const shouldApplyAttendanceDeductions = ['Daily', 'Monthly'].includes(existingWageType)
+        || (existingWageType === 'Hourly' && !existingSnapshot.attendance_deduction_embedded_in_base);
       const extraDeductionRows = [
         ...(shouldApplyAttendanceDeductions && numeric(existingSnapshot.late_deduction) > 0 ? [{
           name: 'Late Deduction',
@@ -10679,9 +10852,7 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
           payroll_frequency: record.payroll_period && /-W[1-5]$/.test(String(record.payroll_period)) ? 'Weekly' : '',
           payroll_period: record.payroll_period || '',
           payroll_type: normalizePayrollWageType(existingSnapshot.wage_type || record.wage_type),
-          statutory_base_pay: ['Daily', 'Hourly'].includes(normalizePayrollWageType(existingSnapshot.wage_type || record.wage_type))
-            ? numeric(existingSnapshot.gross_pay || existingSnapshot.basic_pay || record.gross_pay)
-            : record.gross_pay,
+          statutory_base_pay: Math.max(0, numeric(record.gross_pay) - numeric(record.total_allowances)),
           salary_calculation_id: id
         },
         extraDeductionRows

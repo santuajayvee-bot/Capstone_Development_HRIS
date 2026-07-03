@@ -1,3 +1,12 @@
+-- Some existing/RDS databases predate the runtime-created overtime minute
+-- columns. Create the core columns first so the review migration is safe on
+-- both fresh and already-running MySQL installations.
+ALTER TABLE attendance_log
+  ADD COLUMN IF NOT EXISTS overtime_minutes INT NOT NULL DEFAULT 0;
+
+ALTER TABLE attendance_summary
+  ADD COLUMN IF NOT EXISTS overtime_minutes INT NOT NULL DEFAULT 0;
+
 ALTER TABLE attendance_log
   ADD COLUMN IF NOT EXISTS overtime_status ENUM('NONE','PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'NONE' AFTER overtime_minutes,
   ADD COLUMN IF NOT EXISTS overtime_reviewed_by BIGINT NULL AFTER overtime_status,

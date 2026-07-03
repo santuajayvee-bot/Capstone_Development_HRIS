@@ -45,6 +45,31 @@ function pieceRateMoney(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
 }
 
+function payrollExactHourLabel(hours, minutes = null) {
+  const numericMinutes = Number(minutes);
+  const totalMinutes = Number.isFinite(numericMinutes) && numericMinutes >= 0
+    ? Math.round(numericMinutes)
+    : Math.max(0, Math.round(Number(hours || 0) * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  const decimalHours = totalMinutes / 60;
+  const minuteLabel = `${wholeHours}h${remainderMinutes ? ` ${remainderMinutes}m` : ''}`;
+  return `${minuteLabel} (${decimalHours.toLocaleString('en-US', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  })} hrs)`;
+}
+
+function payrollSnapshot(record) {
+  try {
+    return record?.validation_snapshot
+      ? (typeof record.validation_snapshot === 'string' ? JSON.parse(record.validation_snapshot) : record.validation_snapshot)
+      : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function payrollEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
@@ -553,6 +578,24 @@ function addDaysToIsoDate(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function payrollDateSpanDays(startValue, endValue) {
+  const startMatch = String(startValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const endMatch = String(endValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!startMatch || !endMatch) return 0;
+  const utcValue = match => Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Math.floor((utcValue(endMatch) - utcValue(startMatch)) / 86400000) + 1;
+}
+
+function syncWeeklyPayrollEndDate() {
+  const startInput = document.getElementById('weekly-payroll-start');
+  const endInput = document.getElementById('weekly-payroll-end');
+  const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
+  if (!startInput?.value || !endInput || frequency !== 'Weekly') return;
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
+  const synchronizedEnd = addDaysToIsoDate(startInput.value, 5) || startInput.value;
+  endInput.value = synchronizedEnd > today ? today : synchronizedEnd;
+}
+
 function payrollWeekKeyFromDates(startDate, endDate) {
   const match = String(startDate || endDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return `${String(startDate || endDate).slice(0, 7)}-W1`;
@@ -574,8 +617,10 @@ function setDefaultWeeklyPayrollDates() {
   start.setDate(now.getDate() - day + 1);
   const end = new Date(start);
   end.setDate(start.getDate() + 5);
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   startInput.value = dateInputValue(start);
-  endInput.value = dateInputValue(end);
+  const defaultEnd = dateInputValue(end);
+  endInput.value = defaultEnd > today ? today : defaultEnd;
 }
 
 function validateWeeklyPayrollDates({ adjustEnd = false } = {}) {
@@ -583,17 +628,41 @@ function validateWeeklyPayrollDates({ adjustEnd = false } = {}) {
   const endInput = document.getElementById('weekly-payroll-end');
   const submitButton = document.querySelector('#weekly-payroll-form button[type="submit"]');
   if (!startInput || !endInput) return true;
+  const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (startInput.value) endInput.min = startInput.value;
+  startInput.max = today;
+  endInput.max = today;
   if (adjustEnd && startInput.value && (!endInput.value || endInput.value < startInput.value)) {
-    endInput.value = addDaysToIsoDate(startInput.value, 6) || startInput.value;
+    const adjustedEnd = addDaysToIsoDate(startInput.value, frequency === 'Weekly' ? 5 : 6) || startInput.value;
+    endInput.value = adjustedEnd > today ? today : adjustedEnd;
   }
-  const valid = Boolean(startInput.value && endInput.value && startInput.value <= endInput.value);
+  const startFuture = Boolean(startInput.value && startInput.value > today);
+  const endFuture = Boolean(endInput.value && endInput.value > today);
+  const dateOrderValid = Boolean(startInput.value && endInput.value && startInput.value <= endInput.value);
+  const weeklyRangeValid = frequency !== 'Weekly'
+    || (dateOrderValid && payrollDateSpanDays(startInput.value, endInput.value) <= 7);
+  const futureDateValid = !startFuture && !endFuture;
+  const valid = dateOrderValid && weeklyRangeValid && futureDateValid;
   if (submitButton) submitButton.disabled = !valid;
-  if (!valid && startInput.value && endInput.value) {
+  if (startFuture) {
+    setWeeklyPayrollStatus('Payroll start date cannot be in the future.');
+  } else if (endFuture) {
+    setWeeklyPayrollStatus('Payroll end date cannot be in the future.');
+  } else if (!dateOrderValid && startInput.value && endInput.value) {
     setWeeklyPayrollStatus('Period start must be before or equal to period end.');
+  } else if (!weeklyRangeValid) {
+    setWeeklyPayrollStatus('Weekly payroll range must not exceed 7 calendar days.');
   } else {
     const status = document.getElementById('weekly-payroll-result');
-    if (status?.textContent === 'Period start must be before or equal to period end.') status.textContent = '';
+    if ([
+      'Payroll start date cannot be in the future.',
+      'Payroll end date cannot be in the future.',
+      'Period start must be before or equal to period end.',
+      'Weekly payroll range must not exceed 7 calendar days.'
+    ].includes(status?.textContent || '')) {
+      status.textContent = '';
+    }
   }
   return valid;
 }
@@ -1174,7 +1243,8 @@ function renderSalaryCalculations(records) {
           // Build calculation details string
           let calcDetails = '';
           if (r.wage_type === 'Hourly' && r.hours_worked > 0) {
-            calcDetails = `${r.hours_worked} hrs`;
+            const snapshot = payrollSnapshot(r);
+            calcDetails = payrollExactHourLabel(r.hours_worked, Number(snapshot.net_credited_minutes || 0) || null);
           } else if (r.wage_type === 'Daily' && r.days_worked > 0) {
             calcDetails = `${r.days_worked} days`;
           } else if (r.wage_type === 'Per-Piece' && (Number(r.quantity) > 0 || Number(r.source_output_quantity) > 0)) {
@@ -1781,7 +1851,7 @@ function showCalculationBreakdown(record) {
             ${record.wage_type === 'Hourly' ? `
               <div>
                 <span style="color: var(--muted);">Hours Worked:</span>
-                <span style="color: var(--text); font-weight: 600;">${parseFloat(record.hours_worked || 0).toLocaleString('en-US', {minimumFractionDigits: 1})} hrs</span>
+                <span style="color: var(--text); font-weight: 600;">${payrollEscape(payrollExactHourLabel(record.hours_worked, Number(snapshot.net_credited_minutes || 0) || null))}</span>
               </div>
             ` : record.wage_type === 'Daily' ? `
               <div>
@@ -1807,7 +1877,9 @@ function showCalculationBreakdown(record) {
             <!-- Base Pay -->
             <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
               <span style="color: var(--muted);">Base Pay</span>
-              <span style="color: var(--text); font-weight: 600;">₱${(parseFloat(record.base_rate || 0) * (record.hours_worked || record.days_worked || record.quantity || 1)).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+              <span style="color: var(--text); font-weight: 600;">₱${(record.wage_type === 'Hourly' && Number(snapshot.net_credited_minutes || 0) > 0
+                ? parseFloat(record.base_rate || 0) * (Number(snapshot.net_credited_minutes || 0) / 60)
+                : parseFloat(record.base_rate || 0) * (record.hours_worked || record.days_worked || record.quantity || 1)).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
             </div>
 
             <!-- Allowances -->
@@ -1977,7 +2049,13 @@ function payslipWorkLabel(payslip) {
 function payslipWorkValue(payslip) {
   if (payslip.wage_type === 'Per-Piece') return payslipNumber(payslip.earnings?.quantity);
   if (payslip.wage_type === 'Per-Trip') return payslipNumber(payslip.earnings?.trip_count);
-  if (payslipNumber(payslip.earnings?.hours_worked) > 0) return payslipNumber(payslip.earnings?.hours_worked);
+  if (payslipNumber(payslip.earnings?.hours_worked) > 0) {
+    return payrollExactHourLabel(
+      payslipNumber(payslip.earnings?.hours_worked),
+      payslipNumber(payslip.earnings?.net_credited_minutes)
+        || Math.round(payslipNumber(payslip.earnings?.hours_worked) * 60)
+    );
+  }
   return payslipNumber(payslip.earnings?.days_worked);
 }
 
@@ -1996,15 +2074,24 @@ function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
   const lateMinutes = payslipNumber(earnings.late_minutes);
   const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
+  const lateDeduction = payslipNumber(earnings.late_deduction);
+  const undertimeDeduction = payslipNumber(earnings.undertime_deduction);
+  const adjustmentNote = String(earnings.attendance_pay_basis || '').trim()
+    ? 'Included in adjusted base'
+    : '';
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : '',
+      amount: lateDeduction > 0 ? payslipMoney(lateDeduction) : '',
+      note: lateDeduction > 0 ? adjustmentNote : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : '',
+      amount: undertimeDeduction > 0 ? payslipMoney(undertimeDeduction) : '',
+      note: undertimeDeduction > 0 ? adjustmentNote : ''
     }
   ];
 }
@@ -2018,6 +2105,8 @@ function payslipAttendanceTable(payslip) {
         <div class="lgsv-payslip-attendance-row">
           <span>${payrollEscape(row.label)}</span>
           <strong>${payrollEscape(row.value)}</strong>
+          <strong>${payrollEscape(row.amount)}</strong>
+          <strong>${payrollEscape(row.note)}</strong>
         </div>
       `).join('')}
     </div>
@@ -2027,12 +2116,18 @@ function payslipAttendanceTable(payslip) {
 function payslipRows(payslip) {
   const isPiece = payslip.wage_type === 'Per-Piece';
   const isTrip = payslip.wage_type === 'Per-Trip';
+  const isHourly = payslip.wage_type === 'Hourly';
   const earnings = [];
 
   if (isPiece) {
     earnings.push({ label: 'Output Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
   } else if (isTrip) {
     earnings.push({ label: 'Trip Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
+  } else {
+    earnings.push({
+      label: isHourly && String(payslip.earnings?.attendance_pay_basis || '').trim() ? 'Adjusted Base Pay' : 'Basic Pay',
+      amount: payslipNumber(payslip.earnings?.basic_pay)
+    });
   }
 
   if (payslipNumber(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: payslipNumber(payslip.earnings.rot_sot) });
@@ -2044,7 +2139,9 @@ function payslipRows(payslip) {
   const deductions = [];
   (Array.isArray(payslip.deductions) ? payslip.deductions : []).forEach(item => {
     const amount = payslipNumber(item.amount);
-    if (amount <= 0 || item.key === 'tardy_ut_total') return;
+    const rowKey = String(item.key || '').toLowerCase();
+    const alwaysShow = ['sss', 'hdmf', 'phic'].includes(rowKey);
+    if ((!alwaysShow && amount <= 0) || item.key === 'tardy_ut_total') return;
     const label = String(item.label || 'Deduction')
       .replace(/^HDMF\s*\/\s*/i, '')
       .replace(/^PHIC\s*\/\s*/i, '');
@@ -2188,7 +2285,7 @@ function showPayslipPreview(payslip) {
         }
         .lgsv-payslip-attendance-row {
           display: grid;
-          grid-template-columns: 210px minmax(0, 1fr);
+          grid-template-columns: 130px minmax(0, 1fr) 150px minmax(0, 1fr);
           border-bottom: 1px solid #111111;
           min-height: 30px;
         }
@@ -2203,6 +2300,9 @@ function showPayslipPreview(payslip) {
         .lgsv-payslip-attendance-row span {
           border-right: 1px solid #111111;
           font-weight: 700;
+        }
+        .lgsv-payslip-attendance-row strong:not(:last-child) {
+          border-right: 1px solid #111111;
         }
         .lgsv-payslip-attendance-row strong {
           font-weight: 400;
@@ -2258,7 +2358,8 @@ function showPayslipPreview(payslip) {
           .lgsv-payslip-table th:last-child,
           .lgsv-payslip-table td:last-child { width: 118px; }
           .lgsv-payslip-attendance-row { grid-template-columns: 1fr; }
-          .lgsv-payslip-attendance-row span { border-right: 0; border-bottom: 1px solid #111111; }
+          .lgsv-payslip-attendance-row span,
+          .lgsv-payslip-attendance-row strong { border-right: 0; border-bottom: 1px solid #111111; }
           .lgsv-payslip-signatures { gap: 24px; margin-left: 0; margin-right: 0; }
         }
       </style>
@@ -2339,6 +2440,7 @@ function showCalculationBreakdown(record) {
   const totalAllowances = number(record.total_allowances)
     || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
   const sourceEntries = Array.isArray(record.source_entries) ? record.source_entries : [];
+  const attendanceEntries = sourceEntries.filter(entry => entry.kind === 'attendance');
   const sourceOutputEntries = sourceEntries.filter(entry => entry.kind !== 'attendance');
   const sourceOutputQuantity = number(record.source_output_quantity)
     || sourceOutputEntries.reduce((sum, entry) => sum + number(entry.quantity), 0);
@@ -2352,9 +2454,43 @@ function showCalculationBreakdown(record) {
   const baseRateField = isPieceRate
     ? ''
     : `<label>Base Rate<input value="${fmt(record.base_rate)}" readonly /></label>`;
-  const basePayLabel = isPieceRate ? 'Piece Earnings' : 'Base Pay';
+  const hourlyLateEmbeddedInBase = record.wage_type === 'Hourly' && Boolean(snapshot.attendance_deduction_embedded_in_base);
+  const basePayLabel = isPieceRate ? 'Piece Earnings' : hourlyLateEmbeddedInBase ? 'Adjusted Base Pay' : 'Base Pay';
+  const approvedRegularHours = (() => {
+    const explicitNoGraceHours = number(snapshot.approved_regular_hours);
+    if (explicitNoGraceHours > 0) return explicitNoGraceHours;
+    const sourceHours = attendanceEntries.reduce((sum, entry) => sum + number(entry.regular_hours), 0);
+    if (sourceHours > 0) return sourceHours;
+    const snapshotRows = Array.isArray(snapshot.attendance_rows) ? snapshot.attendance_rows : [];
+    const snapshotHours = snapshotRows.reduce((sum, entry) => sum + number(entry.regular_hours), 0);
+    if (snapshotHours > 0) return snapshotHours;
+    return number(record.hours_worked);
+  })();
+  const approvedRegularMinutes = number(snapshot.approved_regular_minutes)
+    || attendanceEntries.reduce((sum, entry) => sum + number(entry.regular_minutes), 0)
+    || (Array.isArray(snapshot.attendance_rows)
+      ? snapshot.attendance_rows.reduce((sum, entry) => sum + number(entry.regular_minutes), 0)
+      : 0);
+  const scheduledHoursPerDay = Math.max(0, number(snapshot.policy?.standard_hours_per_day || snapshot.policy?.standard_work_hours) || 8)
+    - Math.max(0, number(snapshot.policy?.break_deduction_hours));
+  const attendanceDayCount = attendanceEntries.filter(entry => number(entry.regular_hours) > 0).length
+    || (Array.isArray(snapshot.attendance_rows)
+      ? snapshot.attendance_rows.filter(entry => number(entry.regular_hours) > 0).length
+      : 0);
+  const scheduledBasisHours = number(snapshot.scheduled_hours) || (attendanceDayCount > 0
+    ? attendanceDayCount * (scheduledHoursPerDay > 0 ? scheduledHoursPerDay : 8)
+    : number(snapshot.hours_worked) || number(record.hours_worked));
+  const scheduledBasisMinutes = number(snapshot.scheduled_minutes) || Math.round(scheduledBasisHours * 60);
+  const payrollBasisHours = scheduledBasisHours || number(snapshot.hours_worked) || number(record.hours_worked);
+  const deductibleLateMinutes = Object.prototype.hasOwnProperty.call(snapshot, 'deductible_late_minutes')
+    ? number(snapshot.deductible_late_minutes)
+    : number(snapshot.late_minutes);
+  const deductibleUndertimeMinutes = number(snapshot.undertime_minutes);
+  const netCreditedMinutes = number(snapshot.net_credited_minutes)
+    || Math.max(0, scheduledBasisMinutes - deductibleLateMinutes - deductibleUndertimeMinutes);
+  const netCreditedHours = netCreditedMinutes / 60;
   const workOutput = record.wage_type === 'Hourly'
-    ? `${number(record.hours_worked).toLocaleString('en-US')} hours`
+    ? payrollExactHourLabel(netCreditedHours, netCreditedMinutes)
     : record.wage_type === 'Daily'
       ? `${number(record.days_worked).toLocaleString('en-US')} days`
       : record.wage_type === 'Per-Trip'
@@ -2362,6 +2498,14 @@ function showCalculationBreakdown(record) {
         : record.wage_type === 'Per-Piece'
           ? `${(number(record.quantity) || sourceOutputQuantity).toLocaleString('en-US')} pieces`
           : '-';
+  const hourlyWorkOutputAuditFields = record.wage_type === 'Hourly'
+    ? `
+        <label>Scheduled Basis Hours<input value="${payrollEscape(payrollExactHourLabel(payrollBasisHours, scheduledBasisMinutes))}" readonly /></label>
+        <label>Clocked Regular Hrs<input value="${payrollEscape(payrollExactHourLabel(approvedRegularHours, approvedRegularMinutes || null))}" readonly /></label>
+        <label>Grace Treatment<input value="${payrollEscape('Included in work output; only beyond-grace late is deducted')}" readonly /></label>
+        <label>Deductible Late / UT<input value="${payrollEscape(`${deductibleLateMinutes.toLocaleString('en-US')} / ${deductibleUndertimeMinutes.toLocaleString('en-US')} min`)}" readonly /></label>
+      `
+    : '';
   const formatSourceDate = value => {
     if (!value) return '-';
     const text = String(value);
@@ -2407,8 +2551,8 @@ function showCalculationBreakdown(record) {
       <td>${formatSourceTime(entry.time_in)}</td>
       <td>${formatSourceTime(entry.time_out)}</td>
       <td>${payrollEscape(entry.type || '-')}<br><span class="muted-small">${payrollEscape(entry.details || '')}</span></td>
-      <td class="text-right">${number(entry.regular_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      <td class="text-right">${number(entry.overtime_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="text-right">${payrollEscape(payrollExactHourLabel(number(entry.regular_hours), number(entry.regular_minutes) || null))}</td>
+      <td class="text-right">${payrollEscape(payrollExactHourLabel(number(entry.overtime_hours)))}</td>
       <td class="text-right">${number(entry.late_minutes).toLocaleString('en-US')} / ${number(entry.undertime_minutes).toLocaleString('en-US')}</td>
       <td>${payrollEscape(entry.status || '-')}</td>
     </tr>
@@ -2481,12 +2625,25 @@ function showCalculationBreakdown(record) {
     ['SSS', number(record.sss_deduction)],
     ['Pag-IBIG', number(record.pagibig_deduction)],
     ['PhilHealth', number(record.philhealth_deduction)],
-    ['Late Deduction', number(snapshot.late_deduction)],
-    ['Undertime Deduction', number(snapshot.undertime_deduction)]
+    ['Late Deduction', hourlyLateEmbeddedInBase ? 0 : number(snapshot.late_deduction)],
+    ['Undertime Deduction', hourlyLateEmbeddedInBase ? 0 : number(snapshot.undertime_deduction)]
   ].filter(([, amount]) => deductionsApplied && amount > 0);
   if (deductionsApplied && !deductionRows.length && totalDeductions > 0) {
     deductionRows.push(['Configured Deductions', totalDeductions]);
   }
+  const lateDeductionAmount = number(snapshot.late_deduction);
+  const undertimeDeductionAmount = number(snapshot.undertime_deduction);
+  const attendanceDeductionAmount = lateDeductionAmount + undertimeDeductionAmount;
+  const hasLateUtSummary = deductionsApplied
+    && (deductibleLateMinutes > 0 || deductibleUndertimeMinutes > 0 || attendanceDeductionAmount > 0);
+  const lateUtSummaryValue = (() => {
+    const minutesLabel = `${deductibleLateMinutes.toLocaleString('en-US')} / ${deductibleUndertimeMinutes.toLocaleString('en-US')} min`;
+    if (hourlyLateEmbeddedInBase && attendanceDeductionAmount > 0) {
+      return `${minutesLabel} (${fmt(attendanceDeductionAmount)} included in adjusted base)`;
+    }
+    if (attendanceDeductionAmount > 0) return `${minutesLabel} (- ${fmt(attendanceDeductionAmount)})`;
+    return minutesLabel;
+  })();
 
   const row = (label, value, className = '') => `
     <tr class="${className}">
@@ -2551,6 +2708,7 @@ function showCalculationBreakdown(record) {
         <label>Wage Type<input value="${payrollEscape(record.wage_type || '-')}" readonly /></label>
         ${baseRateField}
         <label>Work Output<input value="${payrollEscape(workOutput)}" readonly /></label>
+        ${hourlyWorkOutputAuditFields}
         <label>${deductionsApplied ? 'Payroll Calculation Date' : 'Work / Output Date(s)'}<input value="${payrollEscape(calculationDate)}" readonly /></label>
       </div>
 
@@ -2564,6 +2722,7 @@ function showCalculationBreakdown(record) {
             ${row('Allowances', fmt(totalAllowances))}
             ${row(deductionsApplied ? 'Gross Pay' : 'Encoded Source Total', fmt(displayGrossPay), 'is-positive')}
             ${deductionsApplied ? `
+              ${hasLateUtSummary ? row('Late / UT', payrollEscape(lateUtSummaryValue), hourlyLateEmbeddedInBase ? '' : 'is-deduction') : ''}
               ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
               ${row('Total Deductions', `- ${fmt(totalDeductions)}`, 'is-deduction')}
               ${row('Net Pay', fmt(displayNetPay), 'is-net')}
@@ -2613,7 +2772,8 @@ function updatePayrollDropdownNav(activeTab) {
 }
 
 function switchPayrollTab(tab, options = {}) {
-  const targetTab = tab === 'payslips' ? 'records' : tab;
+  const requestedTab = tab === 'payslips' ? 'records' : tab;
+  const targetTab = ['allowances', 'employee-deductions'].includes(requestedTab) ? 'deductions' : requestedTab;
   document.querySelectorAll('.payroll-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.payrollTab === targetTab);
   });
@@ -2634,8 +2794,6 @@ function switchPayrollTab(tab, options = {}) {
     loadPayrollSettings('deduction');
     refreshSssContributionTableVisibility({ loadWhenVisible: true });
   }
-  if (targetTab === 'employee-deductions') loadEmployeeDeductionAccounts('all');
-  if (targetTab === 'allowances') loadPayrollSettings('allowance');
   if (targetTab === 'policies') loadPayrollPolicySettings();
   if (targetTab === 'records') loadSalaryCalculations();
   if (targetTab === 'offboarding-clearance') loadOffboardingClearance();
@@ -2752,21 +2910,64 @@ function openPayrollClearanceReview(caseId) {
     loadOffboardingClearance();
     return;
   }
+  const checklistFields = [
+    ['last_payroll_period_checked', 'Last Payroll Period'],
+    ['attendance_checked', 'Attendance'],
+    ['leave_balance_checked', 'Leave Balance'],
+    ['deductions_checked', 'Deductions'],
+    ['benefits_or_13th_month_checked', 'Benefits / 13th Month'],
+  ];
+  const moneyField = (label, name, value) => `
+    <label class="payroll-clearance-field">
+      <span class="payroll-clearance-label">${label}</span>
+      <span class="payroll-clearance-money"><span>PHP</span><input name="${name}" type="number" min="0" step="0.01" value="${payrollEscape(value || '0.00')}" /></span>
+    </label>
+  `;
+  const checklist = checklistFields.map(([field, label]) => `
+    <label class="payroll-clearance-toggle-row">
+      <span>${label}</span>
+      <span class="payroll-clearance-toggle">
+        <input type="hidden" name="${field}" value="No" />
+        <input type="checkbox" name="${field}" value="Yes" ${row[field] === 'Yes' ? 'checked' : ''} aria-label="${label} checked" />
+        <span class="payroll-clearance-toggle-track" aria-hidden="true"></span>
+      </span>
+    </label>
+  `).join('');
   payrollModal('payroll-clearance-modal', 'Payroll Clearance Review', `
     ${offboardingReadonlyBlock(row)}
-    <form id="payroll-clearance-form" class="payroll-breakdown-grid" onsubmit="submitPayrollClearance(event, ${caseId})">
-      <label>final attendance cutoff<input name="final_attendance_cutoff" type="date" value="${payrollEscape(row.final_attendance_cutoff || '')}" /></label>
-      <label>unpaid salary<input name="unpaid_salary" type="number" min="0" step="0.01" value="${payrollEscape(row.unpaid_salary || '0.00')}" /></label>
-      <label>deductions<input name="final_deductions" type="number" min="0" step="0.01" value="${payrollEscape(row.final_deductions || '0.00')}" /></label>
-      <label>allowances<input name="final_allowances" type="number" min="0" step="0.01" value="${payrollEscape(row.final_allowances || '0.00')}" /></label>
-      <label>pending benefits<input name="pending_benefits" type="number" min="0" step="0.01" value="${payrollEscape(row.pending_benefits || '0.00')}" /></label>
-      ${['last_payroll_period_checked','attendance_checked','leave_balance_checked','deductions_checked','benefits_or_13th_month_checked'].map(field => `
-        <label>${field.replace(/_/g, ' ')}<select name="${field}"><option ${row[field] === 'No' ? 'selected' : ''}>No</option><option ${row[field] === 'Yes' ? 'selected' : ''}>Yes</option></select></label>
-      `).join('')}
-      <label>loans or cash advances checked<select name="loans_or_cash_advances_checked"><option ${row.loans_or_cash_advances_checked === 'No' ? 'selected' : ''}>No</option><option ${row.loans_or_cash_advances_checked === 'Yes' ? 'selected' : ''}>Yes</option><option ${row.loans_or_cash_advances_checked === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option></select></label>
-      <label>payroll clearance status<select name="payroll_clearance_status"><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select></label>
-      <label style="grid-column:1/-1;">payroll remarks<textarea name="payroll_remarks" rows="3">${payrollEscape(row.payroll_remarks || '')}</textarea></label>
-      <div class="payroll-breakdown-actions" style="grid-column:1/-1;"><button class="btn btn-outline" type="button" onclick="document.getElementById('payroll-clearance-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+    <form id="payroll-clearance-form" class="payroll-clearance-form" onsubmit="submitPayrollClearance(event, ${caseId})">
+      <section class="payroll-clearance-section">
+        <h3>Final Pay Inputs</h3>
+        <div class="payroll-clearance-grid">
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Final Attendance Cutoff</span>
+            <input name="final_attendance_cutoff" type="date" value="${payrollEscape(row.final_attendance_cutoff || '')}" />
+          </label>
+          ${moneyField('Unpaid Salary', 'unpaid_salary', row.unpaid_salary)}
+          ${moneyField('Deductions', 'final_deductions', row.final_deductions)}
+          ${moneyField('Allowances', 'final_allowances', row.final_allowances)}
+          ${moneyField('Pending Benefits', 'pending_benefits', row.pending_benefits)}
+        </div>
+      </section>
+      <section class="payroll-clearance-section">
+        <h3>Clearance Checklist</h3>
+        <div class="payroll-clearance-grid payroll-clearance-checklist">
+          ${checklist}
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Loans / Cash Advances</span>
+            <select name="loans_or_cash_advances_checked"><option ${row.loans_or_cash_advances_checked === 'No' ? 'selected' : ''}>No</option><option ${row.loans_or_cash_advances_checked === 'Yes' ? 'selected' : ''}>Yes</option><option ${row.loans_or_cash_advances_checked === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option></select>
+          </label>
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Clearance Status</span>
+            <select name="payroll_clearance_status"><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select>
+          </label>
+          <label class="payroll-clearance-field payroll-clearance-field-wide">
+            <span class="payroll-clearance-label">Payroll Remarks</span>
+            <textarea name="payroll_remarks" rows="3" placeholder="Add payroll clearance notes">${payrollEscape(row.payroll_remarks || '')}</textarea>
+          </label>
+        </div>
+      </section>
+      <div class="payroll-breakdown-actions payroll-clearance-actions"><button class="btn btn-outline" type="button" onclick="document.getElementById('payroll-clearance-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save Changes</button></div>
     </form>
   `);
   document.querySelector('#payroll-clearance-form [name="payroll_clearance_status"]').value = row.payroll_clearance_status || 'Pending';
@@ -3598,18 +3799,18 @@ function calendarBasedDivisorText(schedule = '') {
   if (['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(normalized)) {
     return 'Auto divisor: 2 for semi-monthly payroll.';
   }
-  return 'Auto divisor: 4 or 5 for weekly payroll, based on the payroll start month.';
+  return 'Auto divisor: 4 or 5 for weekly payroll, based on the number of cutoff dates in the payroll end month.';
 }
 
 function renderDeductionProration(row = {}) {
-  const mode = String(row.proration_mode || 'Fixed Divisor');
+  const mode = String(row.proration_mode || 'Calendar-Based Payroll Date Range');
   if (mode === 'Calendar-Based Payroll Date Range') {
     return `
       ${payrollEscape(mode)}
       <span class="payroll-deduction-detail">${payrollEscape(calendarBasedDivisorText(row.apply_schedule))}</span>
     `;
   }
-  return `${payrollEscape(mode)}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}`;
+  return `Manual Divisor${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}`;
 }
 
 function renderDeductionSettings(rows) {
@@ -3982,10 +4183,16 @@ async function savePayrollSetting(event, type) {
       data.computation_type = 'Percentage';
       data.rate_or_amount = data.employee_share_rate || data.rate_or_amount || 0;
     }
-    if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
-      data.fixed_divisor = data.apply_schedule === 'Monthly' ? 1
-        : ['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(data.apply_schedule) ? 2
-        : 4;
+    if (data.proration_mode === 'Calendar-Based Payroll Date Range') {
+      delete data.fixed_divisor;
+    } else if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
+      const message = 'Enter a manual divisor before saving.';
+      if (statusEl) {
+        statusEl.className = 'payroll-form-status error';
+        statusEl.textContent = message;
+      }
+      if (typeof showAlert === 'function') await showAlert(message, 'Manual Divisor Required', 'error');
+      return;
     }
     if (data.percentage_rate && !data.rate_or_amount) data.rate_or_amount = data.percentage_rate;
     if (data.employee_share_percentage && !data.employee_share_rate) data.employee_share_rate = data.employee_share_percentage;
@@ -4111,14 +4318,21 @@ function toggleDeductionFormSections() {
   const computationSelect = document.getElementById('deduction-computation-type');
   const rateInput = document.querySelector('#deduction-setting-form [name="rate_or_amount"]');
   const rateGroup = rateInput?.closest('.form-group');
-  const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Fixed Divisor';
+  const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Calendar-Based Payroll Date Range';
   const fixedDivisorGroup = document.getElementById('deduction-fixed-divisor-group');
+  const fixedDivisorInput = fixedDivisorGroup?.querySelector('[name="fixed_divisor"]');
   const calendarDivisorGroup = document.getElementById('deduction-calendar-divisor-group');
   const calendarDivisorHelp = document.getElementById('deduction-calendar-divisor-help');
   const applySchedule = document.getElementById('deduction-apply-schedule')?.value
     || document.querySelector('#deduction-setting-form [name="apply_schedule"]')?.value
     || '';
-  if (fixedDivisorGroup) fixedDivisorGroup.style.display = prorationMode === 'Fixed Divisor' ? '' : 'none';
+  const manualDivisor = prorationMode === 'Fixed Divisor';
+  if (fixedDivisorGroup) fixedDivisorGroup.style.display = manualDivisor ? '' : 'none';
+  if (fixedDivisorInput) {
+    fixedDivisorInput.disabled = !manualDivisor;
+    fixedDivisorInput.required = manualDivisor;
+    if (!manualDivisor) fixedDivisorInput.value = '';
+  }
   if (calendarDivisorGroup) calendarDivisorGroup.style.display = prorationMode === 'Calendar-Based Payroll Date Range' ? '' : 'none';
   if (calendarDivisorHelp) calendarDivisorHelp.textContent = calendarBasedDivisorText(applySchedule);
   const deductionName = String(getSelectedDeductionName()).trim();
@@ -4943,30 +5157,34 @@ function initializePayrollModule() {
   setDefaultWeeklyPayrollDates();
 
   const deductionDate = document.querySelector('#deduction-setting-form [name="effective_date"]');
-  const allowanceDate = document.querySelector('#allowance-setting-form [name="effective_date"]');
   const splitDate = document.querySelector('#production-split-form [name="effective_date"]');
-  const cashAdvanceDate = document.querySelector('#cash-advance-form [name="start_date"]');
-  const loanDate = document.querySelector('#employee-loan-form [name="start_date"]');
   const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (deductionDate && !deductionDate.value) deductionDate.value = today;
-  if (allowanceDate && !allowanceDate.value) allowanceDate.value = today;
   if (splitDate && !splitDate.value) splitDate.value = today;
-  if (cashAdvanceDate && !cashAdvanceDate.value) cashAdvanceDate.value = today;
-  if (loanDate && !loanDate.value) loanDate.value = today;
   const attConfigDate = document.querySelector('#payroll-attendance-config-form [name="effective_date"]');
   if (attConfigDate && !attConfigDate.value) attConfigDate.value = today;
   validateWeeklyPayrollDates({ adjustEnd: true });
   const weeklyDepartment = document.getElementById('weekly-payroll-department');
   const weeklyPayType = document.getElementById('weekly-payroll-pay-type');
   const weeklyEmployee = document.getElementById('weekly-payroll-employee');
+  const weeklyFrequency = document.getElementById('weekly-payroll-frequency');
   const weeklyStart = document.getElementById('weekly-payroll-start');
   const weeklyEnd = document.getElementById('weekly-payroll-end');
   if (weeklyStart && !weeklyStart.dataset.dateGuardBound) {
     weeklyStart.addEventListener('change', () => {
-      validateWeeklyPayrollDates({ adjustEnd: true });
+      syncWeeklyPayrollEndDate();
+      validateWeeklyPayrollDates();
       loadWeeklyPayrollRegistry();
     });
     weeklyStart.dataset.dateGuardBound = '1';
+  }
+  if (weeklyFrequency && !weeklyFrequency.dataset.dateGuardBound) {
+    weeklyFrequency.addEventListener('change', () => {
+      if (weeklyFrequency.value === 'Weekly') syncWeeklyPayrollEndDate();
+      validateWeeklyPayrollDates();
+      loadWeeklyPayrollRegistry();
+    });
+    weeklyFrequency.dataset.dateGuardBound = '1';
   }
   if (weeklyEnd && !weeklyEnd.dataset.dateGuardBound) {
     weeklyEnd.addEventListener('change', () => {

@@ -66,7 +66,16 @@ function isPayrollWageType(idOrName, target) {
 }
 
 function usesPayrollBaseRate(idOrName) {
-  return isPayrollWageType(idOrName, 'Daily') || isPayrollWageType(idOrName, 'Hourly');
+  return isPayrollWageType(idOrName, 'Base Salary')
+    || isPayrollWageType(idOrName, 'Daily')
+    || isPayrollWageType(idOrName, 'Hourly');
+}
+
+function profileCompensationRateLabel(wageType) {
+  const normalized = normalizeWageTypeName(wageType);
+  if (normalized === 'Hourly') return 'Hourly Rate';
+  if (normalized === 'Daily') return 'Daily Rate';
+  return 'Basic Salary';
 }
 
 function statusClassName(status) {
@@ -3250,7 +3259,8 @@ function renderProfileTabs(employee) {
         <h2 class="profile-section-title">Salary Configuration</h2>
         <div class="profile-field-grid">
           ${field('Wage Type', employee.wage_type)}
-          ${field('Basic Salary', employee.basic_salary || employee.base_rate)}
+          ${field(profileCompensationRateLabel(employee.wage_type), employee.basic_salary || employee.base_rate)}
+          ${dateField('Compensation Effective Date', employee.wage_effective_date)}
           ${field('Allowances', employee.allowances)}
           ${field('Payroll Schedule', employee.payroll_schedule)}
         </div>
@@ -3844,6 +3854,7 @@ function populateProfileEditForm(employee) {
     'profile-edit-education-college-year-graduated': employee.education_college_year_graduated || employee.education_year_graduated,
     'profile-edit-wage-type': employee.wage_type,
     'profile-edit-basic-salary': employee.basic_salary || employee.base_rate,
+    'profile-edit-wage-effective-date': formatValue(employee.wage_effective_date) === '-' ? '' : formatValue(employee.wage_effective_date),
     'profile-edit-allowances': employee.allowances,
     'profile-edit-payroll-schedule': employee.payroll_schedule,
     'profile-edit-bank-name': employee.bank_name,
@@ -3906,31 +3917,37 @@ function updateProfileBaseSalaryVisibility() {
   const wageType = document.getElementById('profile-edit-wage-type')?.value || '';
   const field = document.getElementById('profile-edit-basic-salary-field');
   const input = document.getElementById('profile-edit-basic-salary');
+  const label = document.getElementById('profile-edit-rate-label');
   const shouldShow = usesPayrollBaseRate(wageType);
   if (field) field.style.display = shouldShow ? '' : 'none';
+  if (label) label.textContent = profileCompensationRateLabel(wageType);
   if (!shouldShow && input) input.value = '';
 }
 
 const PROFILE_PAYROLL_ONLY_FIELDS = [
-  'wage_type', 'base_rate', 'allowances', 'payroll_schedule',
+  'wage_type', 'base_rate', 'wage_effective_date', 'allowances', 'payroll_schedule',
   'tax_status', 'bank_name', 'bank_account'
 ];
 
 function canManageProfilePayrollFields() {
-  return ['payroll_officer', 'payroll_manager', 'admin', 'system_admin'].includes(getUser()?.role);
+  return [
+    'hr_admin', 'hr_manager',
+    'payroll_officer', 'payroll_manager',
+    'admin', 'system_admin'
+  ].includes(getUser()?.role);
 }
 
 function applyProfilePayrollFieldAccess() {
   const canManage = canManageProfilePayrollFields();
   [
-    'profile-edit-wage-type', 'profile-edit-basic-salary', 'profile-edit-allowances',
+    'profile-edit-wage-type', 'profile-edit-basic-salary', 'profile-edit-wage-effective-date', 'profile-edit-allowances',
     'profile-edit-payroll-schedule', 'profile-edit-bank-name', 'profile-edit-bank-account',
     'profile-edit-tax-status'
   ].forEach(id => {
     const field = document.getElementById(id);
     if (!field) return;
     field.disabled = !canManage;
-    field.title = canManage ? '' : 'Managed by Payroll or System Administration.';
+    field.title = canManage ? '' : 'Managed by HR, Payroll, or System Administration.';
   });
 }
 
@@ -4133,6 +4150,7 @@ async function saveProfilePageChanges() {
     base_rate: usesPayrollBaseRate(document.getElementById('profile-edit-wage-type')?.value || '')
       ? (document.getElementById('profile-edit-basic-salary')?.value || null)
       : null,
+    wage_effective_date: document.getElementById('profile-edit-wage-effective-date')?.value || null,
     allowances: document.getElementById('profile-edit-allowances')?.value || null,
     payroll_schedule: document.getElementById('profile-edit-payroll-schedule')?.value || null,
     sss_number: document.getElementById('profile-edit-sss')?.value || null,
@@ -4143,6 +4161,12 @@ async function saveProfilePageChanges() {
     bank_name: document.getElementById('profile-edit-bank-name')?.value || null,
     bank_account: document.getElementById('profile-edit-bank-account')?.value || null
   };
+  if (canManageProfilePayrollFields() && payload.wage_type && !payload.wage_effective_date) {
+    switchProfileTab('bank-tax');
+    document.getElementById('profile-edit-wage-effective-date')?.focus();
+    await showAlert('Compensation Effective Date is required so payroll can select the correct rate for the payroll period.', 'Effective Date Required', 'warning');
+    return;
+  }
   removeUnauthorizedProfilePayrollFields(payload);
 
   try {
