@@ -10,7 +10,10 @@ const XLSX = require('xlsx');
 const router = express.Router();
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { getActiveAttendancePolicy } = require('./attendance-policy-engine');
-const { computeLateUndertimeDeductions } = require('./payroll-attendance-deductions');
+const {
+  computeLateUndertimeDeductions,
+  computeScheduledHourlyBase,
+} = require('./payroll-attendance-deductions');
 const {
   deductionMonthlyProjectionDivisor,
   percentageDeductionAmount: statutoryPercentageDeductionAmount,
@@ -126,6 +129,14 @@ const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIE
   action: 'blocked_payroll_settings_parameter_tampering_attempt',
   module: 'PAYROLL_SECURITY',
 });
+
+const LOGISTICS_RATE_SETTINGS_GUARD = rejectForbiddenFields(
+  new Set([...PAYROLL_SETTINGS_TAMPER_FIELDS].filter(field => field !== 'role')),
+  {
+    action: 'blocked_payroll_settings_parameter_tampering_attempt',
+    module: 'PAYROLL_SECURITY',
+  }
+);
 
 const PAYROLL_CLEARANCE_ALLOWED_FIELDS = new Set([
   'final_attendance_cutoff',
@@ -1545,11 +1556,10 @@ function normalizePayrollWageType(value) {
 }
 
 function payableAttendanceDeductionAmount(wageType, validation) {
-  // Hourly payroll is already paid from approved hours worked, so missed
-  // minutes from late or undertime are naturally unpaid in gross pay.
-  return normalizePayrollWageType(wageType) === 'Hourly'
-    ? 0
-    : numeric(validation?.tardy_ut_deduction);
+  const normalizedWageType = normalizePayrollWageType(wageType);
+  return ['Daily', 'Monthly'].includes(normalizedWageType)
+    ? numeric(validation?.tardy_ut_deduction)
+    : 0;
 }
 
 function normalizedPayrollBatchAction(payrollType) {
@@ -1924,6 +1934,7 @@ function payrollPeriodBase(value) {
 }
 
 function payrollSourceEntry(kind, row) {
+  const regularHours = numeric(row.regular_hours);
   return {
     kind,
     id: row.id,
@@ -1936,7 +1947,8 @@ function payrollSourceEntry(kind, row) {
     details: row.details || '',
     quantity: numeric(row.quantity),
     quantity_unit: row.quantity_unit || '',
-    regular_hours: numeric(row.regular_hours),
+    regular_hours: regularHours,
+    regular_minutes: Math.max(0, Math.round(numeric(row.regular_minutes) || (regularHours * 60))),
     overtime_hours: numeric(row.overtime_hours),
     late_minutes: numeric(row.late_minutes),
     undertime_minutes: numeric(row.undertime_minutes),
@@ -1960,7 +1972,11 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
   for (const record of records) {
     const wageType = normalizePayrollWageType(record.wage_type);
     const periodSeed = record.payroll_period || payrollDateKey(record.calculation_date).slice(0, 7);
-    const period = monthRange(periodSeed);
+    const explicitStart = payrollDateKey(record.period_start);
+    const explicitEnd = payrollDateKey(record.period_end);
+    const period = explicitStart && explicitEnd
+      ? { start: explicitStart, end: explicitEnd, month_year: payrollPeriodBase(explicitStart) || periodSeed }
+      : monthRange(periodSeed);
     const baseMonth = payrollPeriodBase(periodSeed) || period.month_year;
     const snapshot = parseJsonSafe(record.validation_snapshot);
     const entries = [];
@@ -1986,6 +2002,7 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
             quantity: wageType === 'Hourly' ? regularHours : (regularHours > 0 ? 1 : 0),
             quantity_unit: wageType === 'Hourly' ? 'hours' : 'day',
             regular_hours: regularHours,
+            regular_minutes: row.regular_minutes,
             overtime_hours: overtimeHours,
             late_minutes: row.late_minutes,
             undertime_minutes: row.undertime_minutes,
@@ -2033,6 +2050,7 @@ async function attachSalaryCalculationSourceEntries(pool, records = []) {
             quantity: wageType === 'Hourly' ? regularHours : (regularHours > 0 ? 1 : 0),
             quantity_unit: wageType === 'Hourly' ? 'hours' : 'day',
             regular_hours: regularHours,
+            regular_minutes: row.regular_minutes,
             overtime_hours: overtimeHours,
             late_minutes: row.late_minutes,
             undertime_minutes: row.undertime_minutes,
@@ -2319,13 +2337,18 @@ function buildPayslipPayload(record) {
   const lateDeduction = numeric(snapshot.late_deduction);
   const undertimeDeduction = numeric(snapshot.undertime_deduction);
   const tardyUtDeduction = lateDeduction + undertimeDeduction;
-  const knownPlusDetailed = knownTotal + configuredOtherTotal + employeeDeductionAmount + tardyUtDeduction;
+  const attendanceDeductionEmbeddedInBase = Boolean(snapshot.attendance_deduction_embedded_in_base)
+    || (wageType === 'Hourly' && numeric(snapshot.net_credited_hours) > 0);
+  const visibleLateDeduction = attendanceDeductionEmbeddedInBase ? 0 : lateDeduction;
+  const visibleUndertimeDeduction = attendanceDeductionEmbeddedInBase ? 0 : undertimeDeduction;
+  const visibleTardyUtDeduction = visibleLateDeduction + visibleUndertimeDeduction;
+  const knownPlusDetailed = knownTotal + configuredOtherTotal + employeeDeductionAmount + visibleTardyUtDeduction;
   const otherAmount = Math.max(0, totalDeductions - knownPlusDetailed);
   const deductionRows = [
     ...knownDeductions,
-    { key: 'late_deduction', label: 'Late Deduction', amount: lateDeduction },
-    { key: 'undertime_deduction', label: 'Undertime Deduction', amount: undertimeDeduction },
-    { key: 'tardy_ut_total', label: 'Total Tardy/UT', amount: tardyUtDeduction },
+    { key: 'late_deduction', label: 'Late Deduction', amount: visibleLateDeduction },
+    { key: 'undertime_deduction', label: 'Undertime Deduction', amount: visibleUndertimeDeduction },
+    { key: 'tardy_ut_total', label: 'Total Tardy/UT', amount: visibleTardyUtDeduction },
     ...configuredRows,
     ...(employeeDeductionAmount > 0 ? [{ key: 'employee_deductions', label: 'Cash Advance / Loans', amount: employeeDeductionAmount }] : []),
     ...(otherAmount > 0 ? [{ key: 'other', label: 'Other Deductions', amount: otherAmount }] : []),
@@ -2351,6 +2374,9 @@ function buildPayslipPayload(record) {
     earnings: {
       days_worked: numeric(record.days_worked) || snapshot.days_worked || 0,
       hours_worked: numeric(record.hours_worked) || snapshot.hours_worked || 0,
+      net_credited_minutes: numeric(snapshot.net_credited_minutes),
+      scheduled_minutes: numeric(snapshot.scheduled_minutes),
+      approved_regular_minutes: numeric(snapshot.approved_regular_minutes),
       employee_minute_rate: numeric(snapshot.minute_rate),
       basic_pay: basePay,
       rot_sot: numeric(record.overtime_amount),
@@ -2367,7 +2393,7 @@ function buildPayslipPayload(record) {
       tardy_ut: tardyUtDeduction,
       grace_period_minutes: numeric(snapshot.policy?.grace_period_minutes),
       attendance_pay_basis: wageType === 'Hourly' && (numeric(snapshot.late_minutes) > 0 || numeric(snapshot.undertime_minutes) > 0)
-        ? 'Late and undertime are reflected through approved paid hours for hourly payroll; no separate Late/UT deduction is added.'
+        ? 'Hourly Base Pay is already net of approved late and undertime using the employee minute rate.'
         : '',
       allowances,
       gross_pay: grossPay,
@@ -2632,8 +2658,26 @@ function payslipWorkLabel(payslip) {
 function payslipWorkValue(payslip) {
   if (payslip.wage_type === 'Per-Piece') return numeric(payslip.earnings.quantity);
   if (payslip.wage_type === 'Per-Trip') return numeric(payslip.earnings.trip_count);
-  if (numeric(payslip.earnings.hours_worked) > 0) return numeric(payslip.earnings.hours_worked);
+  if (numeric(payslip.earnings.hours_worked) > 0) {
+    return payslipExactHourLabel(
+      numeric(payslip.earnings.hours_worked),
+      numeric(payslip.earnings.net_credited_minutes) || Math.round(numeric(payslip.earnings.hours_worked) * 60)
+    );
+  }
   return numeric(payslip.earnings.days_worked);
+}
+
+function payslipExactHourLabel(hours, minutes = null) {
+  const totalMinutes = Number.isFinite(Number(minutes)) && Number(minutes) >= 0
+    ? Math.round(Number(minutes))
+    : Math.max(0, Math.round(numeric(hours) * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  const decimalHours = totalMinutes / 60;
+  return `${wholeHours}h${remainderMinutes ? ` ${remainderMinutes}m` : ''} (${decimalHours.toLocaleString('en-US', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  })} hrs)`;
 }
 
 function payslipMinuteLabel(value) {
@@ -2651,21 +2695,15 @@ function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
   const lateMinutes = numeric(earnings.late_minutes);
   const undertimeMinutes = numeric(earnings.undertime_minutes);
-  const lateDeduction = numeric(earnings.late_deduction);
-  const undertimeDeduction = numeric(earnings.undertime_deduction);
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 || lateDeduction > 0
-        ? `${payslipMinuteLabel(lateMinutes)} / ${peso(lateDeduction)}`
-        : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 || undertimeDeduction > 0
-        ? `${payslipMinuteLabel(undertimeMinutes)} / ${peso(undertimeDeduction)}`
-        : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : ''
     }
   ];
 }
@@ -2730,97 +2768,107 @@ function drawPayslipPdf(doc, payslip) {
   const table = (title, rows, y) => {
     const amountWidth = 118;
     const labelWidth = width - amountWidth;
-    const headerHeight = 24;
-    const rowHeight = 21;
+    const headerHeight = 22;
+    const rowHeight = 19;
     doc.rect(left, y, labelWidth, headerHeight).fillAndStroke(headerFill, border);
     doc.rect(left + labelWidth, y, amountWidth, headerHeight).fillAndStroke(headerFill, border);
     doc.font('Helvetica-Bold').fontSize(13).fillColor(ink)
-      .text(title, left, y + 6, { width: labelWidth, align: 'center' })
-      .text('Amount', left + labelWidth, y + 6, { width: amountWidth, align: 'center' });
+      .text(title, left, y + 5, { width: labelWidth, align: 'center' })
+      .text('Amount', left + labelWidth, y + 5, { width: amountWidth, align: 'center' });
     y += headerHeight;
 
     for (const row of rows) {
       doc.rect(left, y, labelWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
       doc.rect(left + labelWidth, y, amountWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.font(row.total ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5).fillColor(ink)
-        .text(row.label, left + 6, y + 5, { width: labelWidth - 12, align: row.total ? 'right' : 'left', ellipsis: true })
-        .text(row.blankWhenZero && numeric(row.amount) <= 0 ? '' : peso(row.amount), left + labelWidth + 6, y + 5, { width: amountWidth - 12, align: 'right' });
+      doc.font(row.total ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).fillColor(ink)
+        .text(row.label, left + 6, y + 4, { width: labelWidth - 12, align: row.total ? 'right' : 'left', ellipsis: true })
+        .text(row.blankWhenZero && numeric(row.amount) <= 0 ? '' : peso(row.amount), left + labelWidth + 6, y + 4, { width: amountWidth - 12, align: 'right' });
       y += rowHeight;
     }
     return y;
   };
 
-  const detailTable = (title, rows, y) => {
-    if (!rows.length) return y;
-    const labelWidth = 168;
-    const valueWidth = width - labelWidth;
-    const headerHeight = 22;
-    const rowHeight = 20;
+  const attendanceTable = (rows, y) => {
+    const headerHeight = 20;
+    const rowHeight = 22;
+    const labelWidth = 78;
+    const valueWidth = (width - (labelWidth * 2)) / 2;
     doc.rect(left, y, width, headerHeight).fillAndStroke(headerFill, border);
-    doc.font('Helvetica-Bold').fontSize(12).fillColor(ink)
-      .text(title, left + 6, y + 5, { width: width - 12, align: 'center' });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(ink)
+      .text('Attendance Adjustments', left + 6, y + 4, { width: width - 12, align: 'center' });
     y += headerHeight;
 
-    for (const row of rows) {
-      doc.rect(left, y, labelWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.rect(left + labelWidth, y, valueWidth, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.font('Helvetica').fontSize(9.5).fillColor(ink)
-        .text(row.label, left + 6, y + 5, { width: labelWidth - 12, ellipsis: true })
-        .text(row.value, left + labelWidth + 6, y + 5, { width: valueWidth - 12, ellipsis: true });
-      y += rowHeight;
+    const columns = [
+      { width: labelWidth, value: rows[0]?.label || 'Late', bold: true },
+      { width: valueWidth, value: rows[0]?.value || '' },
+      { width: labelWidth, value: rows[1]?.label || 'Undertime', bold: true },
+      { width: valueWidth, value: rows[1]?.value || '' },
+    ];
+    let x = left;
+    for (const column of columns) {
+      doc.rect(x, y, column.width, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
+      doc.font(column.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9.5).fillColor(ink)
+        .text(column.value, x + 6, y + 5, { width: column.width - 12, ellipsis: true });
+      x += column.width;
     }
-    return y;
+    return y + rowHeight;
   };
 
-  let y = 32;
+  let y = 28;
   doc.font('Helvetica-Bold').fontSize(17).fillColor(ink).text('Payslip', left, y, { width, align: 'center' });
-  y += 26;
+  y += 22;
   doc.font('Helvetica').fontSize(13).text('Marulas Industrial Corporation', left, y, { width, align: 'center' });
-  y += 20;
+  y += 17;
   doc.font('Helvetica').fontSize(11).text('LGSV HR Payroll System', left, y, { width, align: 'center' });
-  y += 58;
+  y += 38;
 
   const half = width / 2;
   const leftLabel = 118;
   const rightLabel = 118;
   detail('Date Hired', payslip.employee.date_hired, left, y, leftLabel, half - leftLabel - 28);
   detail('Employee Name', payslip.employee.name, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 24;
+  y += 20;
   detail('Pay Period', payslip.payroll_period, left, y, leftLabel, half - leftLabel - 28);
   detail('Designation', payslip.employee.position, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 24;
+  y += 20;
   detail(payslipWorkLabel(payslip), payslipWorkValue(payslip), left, y, leftLabel, half - leftLabel - 28);
   detail('Department', payslip.employee.department, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 22;
+  y += 20;
   detail('Wage Type', payslip.wage_type, left, y, leftLabel, half - leftLabel - 28);
   detail('Reference No.', payslip.reference_no, left + half + 14, y, rightLabel, half - rightLabel - 14);
-  y += 36;
-
-  y = detailTable('Late / UT', attendanceRows, y);
   y += 26;
 
+  y = attendanceTable(attendanceRows, y);
+  y += 14;
+
   y = table('Earnings', earnings, y);
-  y += 28;
+  y += 16;
   y = table('Deductions', deductions, y);
-  if (y > doc.page.height - 245) {
+  const footerY = doc.page.height - doc.page.margins.bottom - 14;
+  if (y > footerY - 150) {
     doc.addPage();
     y = doc.page.margins.top;
   }
-  y += 44;
+  y += 24;
 
   doc.font('Helvetica').fontSize(12).fillColor(ink).text(peso(payslip.summary.net_due), left, y, { width, align: 'center' });
-  y += 20;
+  y += 18;
   doc.font('Helvetica').fontSize(11).text(amountToWords(payslip.summary.net_due), left, y, { width, align: 'center' });
+  y += 18;
 
-  const signY = Math.max(y + 74, doc.page.height - 155);
+  const signY = Math.min(y + 52, footerY - 26);
   const lineWidth = 170;
-  doc.font('Helvetica').fontSize(11).text('Employer Signature', left + 62, signY - 34, { width: lineWidth, align: 'center' });
-  doc.text('Employee Signature', right - lineWidth - 62, signY - 34, { width: lineWidth, align: 'center' });
-  doc.moveTo(left + 62, signY + 42).lineTo(left + 62 + lineWidth, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
-  doc.moveTo(right - lineWidth - 62, signY + 42).lineTo(right - 62, signY + 42).strokeColor(border).lineWidth(0.8).stroke();
+  doc.font('Helvetica').fontSize(10.5).text('Employer Signature', left + 62, signY - 28, { width: lineWidth, align: 'center' });
+  doc.text('Employee Signature', right - lineWidth - 62, signY - 28, { width: lineWidth, align: 'center' });
+  doc.moveTo(left + 62, signY).lineTo(left + 62 + lineWidth, signY).strokeColor(border).lineWidth(0.8).stroke();
+  doc.moveTo(right - lineWidth - 62, signY).lineTo(right - 62, signY).strokeColor(border).lineWidth(0.8).stroke();
 
-  doc.font('Helvetica').fontSize(8).text(`Generated: ${generated} | Prepared by: ${payslip.prepared_by || 'Payroll'}`, left, doc.page.height - 58, { width, align: 'center' });
-  doc.font('Helvetica').fontSize(10).text('This is a system generated payslip', left, doc.page.height - 36, { width, align: 'center' });
+  doc.font('Helvetica').fontSize(8).text(
+    `Generated: ${generated} | Prepared by: ${payslip.prepared_by || 'Payroll'} | System-generated payslip`,
+    left,
+    footerY,
+    { width, align: 'center', ellipsis: true, lineBreak: false }
+  );
 }
 
 function renderPayslipPdfBuffer(payslip) {
@@ -2945,11 +2993,6 @@ function applyHourRoundOff(hours, rule) {
   if (rule === 'nearest_quarter') return Math.round(value * 4) / 4;
   if (rule === 'nearest_half') return Math.round(value * 2) / 2;
   return value;
-}
-
-function payrollClockMinutes(value) {
-  const match = String(value || '').match(/(?:T|\s|^)(\d{1,2}):(\d{2})/);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
 }
 
 async function validateDailyHourlyPayroll(pool, options) {
@@ -3100,16 +3143,7 @@ async function validateDailyHourlyPayroll(pool, options) {
     };
   }).filter(row => row.amount > 0);
   const holidayPremium = holidayRows.reduce((sum, row) => sum + row.amount, 0);
-  const activePolicy = (isDaily || isMonthly) ? policy.daily : policy.hourly;
-  const scheduledStartMinutes = payrollClockMinutes(activePolicy.work_start_time);
-  const graceCreditHours = isHourly && activePolicy.late_apply_grace_period
-    ? attendanceRows.reduce((sum, row) => {
-      const actualStartMinutes = payrollClockMinutes(row.time_in);
-      if (scheduledStartMinutes == null || actualStartMinutes == null) return sum;
-      const late = Math.max(0, actualStartMinutes - scheduledStartMinutes);
-      return sum + (late > 0 && late <= Number(activePolicy.grace_period_minutes || 0) ? late / 60 : 0);
-    }, 0)
-    : 0;
+  const hourlyBase = computeScheduledHourlyBase({ attendanceRows, policy: policy.hourly });
   const attendanceDeductions = computeLateUndertimeDeductions({
     attendanceRows,
     policy: (isDaily || isMonthly) ? policy.daily : policy.hourly,
@@ -3124,9 +3158,19 @@ async function validateDailyHourlyPayroll(pool, options) {
       return sum + (hours > 0 && hours < policy.daily.half_day_threshold_hours ? 0.5 : 1);
     }, 0);
   }
-  const breakDeduction = isHourly ? attendanceDays * Number(policy.hourly.break_deduction_hours || 0) : 0;
-  let hoursWorked = isHourly ? Math.max(0, rawRegularHours + graceCreditHours - breakDeduction) : 0;
+  // Hourly basic pay starts from scheduled hours for each approved attendance
+  // day, then approved late and undertime are absorbed into the basic pay
+  // itself. This keeps Base Pay already net of tardy/UT and prevents a second
+  // Late/UT row from double-deducting hourly employees. Grace time remains
+  // payable because deductible_late_minutes contains only beyond-grace late.
+  const hourlyTardyUtMinutes = isHourly
+    ? Math.max(0, numeric(attendanceDeductions.deductible_late_minutes) + numeric(attendanceDeductions.undertime_minutes))
+    : 0;
+  const hourlyScheduledMinutes = isHourly ? Math.max(0, Math.round(hourlyBase.scheduled_hours * 60)) : 0;
+  const hourlyNetCreditedMinutes = isHourly ? Math.max(0, hourlyScheduledMinutes - hourlyTardyUtMinutes) : 0;
+  let hoursWorked = isHourly ? hourlyNetCreditedMinutes / 60 : 0;
   hoursWorked = applyHourRoundOff(hoursWorked, policy.hourly.round_off_rule);
+  const roundedNetCreditedMinutes = isHourly ? Math.max(0, Math.round(hoursWorked * 60)) : 0;
 
   if ((isDaily || isMonthly) && !(daysWorked > 0)) errors.push('Days Worked must be greater than zero.');
   if (isHourly && !(hoursWorked > 0)) errors.push('Hours Worked must be greater than zero.');
@@ -3164,8 +3208,16 @@ async function validateDailyHourlyPayroll(pool, options) {
     late_days: lateDays,
     undertime_days: undertimeDays,
     undertime_hours: Number(undertimeHours.toFixed(2)),
-    hours_worked: Number(hoursWorked.toFixed(2)),
-    regular_hours: Number(hoursWorked.toFixed(2)),
+    hours_worked: Number(hoursWorked.toFixed(4)),
+    regular_hours: Number(hoursWorked.toFixed(4)),
+    approved_regular_hours: Number(rawRegularHours.toFixed(4)),
+    approved_regular_minutes: attendanceRows.reduce((sum, row) => sum + Math.max(0, Number(row.regular_minutes || 0)), 0),
+    scheduled_hours: Number(hourlyBase.scheduled_hours.toFixed(4)),
+    scheduled_hours_per_day: Number(hourlyBase.scheduled_hours_per_day.toFixed(4)),
+    scheduled_minutes: hourlyScheduledMinutes,
+    net_credited_hours: Number(hoursWorked.toFixed(4)),
+    net_credited_minutes: roundedNetCreditedMinutes,
+    attendance_deduction_embedded_in_base: isHourly,
     overtime_hours: Number(overtimeHours.toFixed(2)),
     holiday_premium: roundMoney(holidayPremium),
     holiday_rows: holidayRows,
@@ -3189,6 +3241,7 @@ async function validateDailyHourlyPayroll(pool, options) {
       verification_status: row.verification_status,
       payroll_eligible: Number(row.payroll_eligible || 0) === 1,
       regular_hours: Number(row.regular_minutes || 0) / 60,
+      regular_minutes: Number(row.regular_minutes || 0),
       overtime_hours: Number(row.overtime_minutes || 0) / 60,
       late_minutes: Number(row.late_minutes || 0),
       undertime_minutes: Number(row.undertime_minutes || 0),
@@ -4860,7 +4913,7 @@ router.get('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIO
   }
 });
 
-router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
+router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), LOGISTICS_RATE_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -4878,7 +4931,7 @@ router.post('/logistics/rates', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSI
   }
 });
 
-router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), PAYROLL_SETTINGS_GUARD, async (req, res) => {
+router.put('/logistics/rates/:id', requireAuth, requireRole(LOGISTICS_TRIP_PERMISSIONS.configure), LOGISTICS_RATE_SETTINGS_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await assertLogisticsTripSchema(pool);
@@ -8118,6 +8171,7 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       });
     };
 
+    try {
     if (payrollRunId) {
       const [duplicate] = await pool.execute(
         "SELECT id, status FROM salary_calculations WHERE payroll_run_id = ? AND employee_id = ? AND status <> 'Superseded' LIMIT 1",
@@ -8242,6 +8296,10 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       processed_by: '-',
       date_processed: null
     });
+    } catch (previewErr) {
+      console.error(`Error previewing payroll for employee ${emp.id}:`, previewErr);
+      skipEmployee(safePayrollError(previewErr, 'Unable to preview this employee for the selected period.'));
+    }
   }
 
   return payrollPreviewResponse({ period, employees, rows, skipped });
@@ -9657,6 +9715,8 @@ router.get('/salary-calculations', requireAuth, requireRole(PAYROLL_PERMISSIONS.
         sc.status,
         sc.calculation_date,
         sc.payroll_period,
+        sc.period_start,
+        sc.period_end,
         sc.source_type,
         sc.source_record_ids,
         sc.agency_name,
@@ -9889,7 +9949,7 @@ router.post('/payslips/encryption/backfill', requireAuth, requireRole(ROLES.admi
 });
 
 // Convert pending salary calculations to payslips for a specific period
-router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
+router.post('/convert-calculations-to-payslips', requireAuth, requireRole(ROLES.payroll_manager), PAYROLL_COMPUTED_FIELD_GUARD, async (req, res) => {
   try {
     const pool = require('../config/db');
     await ensurePieceRatePayrollSchema(pool);
@@ -10721,7 +10781,9 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
 
     if (status === 'Approved') {
       const existingSnapshot = parseJsonSafe(record.validation_snapshot);
-      const shouldApplyAttendanceDeductions = normalizePayrollWageType(existingSnapshot.wage_type) !== 'Hourly';
+      const existingWageType = normalizePayrollWageType(existingSnapshot.wage_type);
+      const shouldApplyAttendanceDeductions = ['Daily', 'Monthly'].includes(existingWageType)
+        || (existingWageType === 'Hourly' && !existingSnapshot.attendance_deduction_embedded_in_base);
       const extraDeductionRows = [
         ...(shouldApplyAttendanceDeductions && numeric(existingSnapshot.late_deduction) > 0 ? [{
           name: 'Late Deduction',

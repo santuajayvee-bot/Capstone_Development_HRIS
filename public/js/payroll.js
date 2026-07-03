@@ -45,6 +45,31 @@ function pieceRateMoney(value) {
   return `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
 }
 
+function payrollExactHourLabel(hours, minutes = null) {
+  const numericMinutes = Number(minutes);
+  const totalMinutes = Number.isFinite(numericMinutes) && numericMinutes >= 0
+    ? Math.round(numericMinutes)
+    : Math.max(0, Math.round(Number(hours || 0) * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  const decimalHours = totalMinutes / 60;
+  const minuteLabel = `${wholeHours}h${remainderMinutes ? ` ${remainderMinutes}m` : ''}`;
+  return `${minuteLabel} (${decimalHours.toLocaleString('en-US', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  })} hrs)`;
+}
+
+function payrollSnapshot(record) {
+  try {
+    return record?.validation_snapshot
+      ? (typeof record.validation_snapshot === 'string' ? JSON.parse(record.validation_snapshot) : record.validation_snapshot)
+      : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function payrollEscape(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
@@ -1198,7 +1223,8 @@ function renderSalaryCalculations(records) {
           // Build calculation details string
           let calcDetails = '';
           if (r.wage_type === 'Hourly' && r.hours_worked > 0) {
-            calcDetails = `${r.hours_worked} hrs`;
+            const snapshot = payrollSnapshot(r);
+            calcDetails = payrollExactHourLabel(r.hours_worked, Number(snapshot.net_credited_minutes || 0) || null);
           } else if (r.wage_type === 'Daily' && r.days_worked > 0) {
             calcDetails = `${r.days_worked} days`;
           } else if (r.wage_type === 'Per-Piece' && (Number(r.quantity) > 0 || Number(r.source_output_quantity) > 0)) {
@@ -1805,7 +1831,7 @@ function showCalculationBreakdown(record) {
             ${record.wage_type === 'Hourly' ? `
               <div>
                 <span style="color: var(--muted);">Hours Worked:</span>
-                <span style="color: var(--text); font-weight: 600;">${parseFloat(record.hours_worked || 0).toLocaleString('en-US', {minimumFractionDigits: 1})} hrs</span>
+                <span style="color: var(--text); font-weight: 600;">${payrollEscape(payrollExactHourLabel(record.hours_worked, Number(snapshot.net_credited_minutes || 0) || null))}</span>
               </div>
             ` : record.wage_type === 'Daily' ? `
               <div>
@@ -1831,7 +1857,9 @@ function showCalculationBreakdown(record) {
             <!-- Base Pay -->
             <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border);">
               <span style="color: var(--muted);">Base Pay</span>
-              <span style="color: var(--text); font-weight: 600;">₱${(parseFloat(record.base_rate || 0) * (record.hours_worked || record.days_worked || record.quantity || 1)).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+              <span style="color: var(--text); font-weight: 600;">₱${(record.wage_type === 'Hourly' && Number(snapshot.net_credited_minutes || 0) > 0
+                ? parseFloat(record.base_rate || 0) * (Number(snapshot.net_credited_minutes || 0) / 60)
+                : parseFloat(record.base_rate || 0) * (record.hours_worked || record.days_worked || record.quantity || 1)).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
             </div>
 
             <!-- Allowances -->
@@ -2001,7 +2029,13 @@ function payslipWorkLabel(payslip) {
 function payslipWorkValue(payslip) {
   if (payslip.wage_type === 'Per-Piece') return payslipNumber(payslip.earnings?.quantity);
   if (payslip.wage_type === 'Per-Trip') return payslipNumber(payslip.earnings?.trip_count);
-  if (payslipNumber(payslip.earnings?.hours_worked) > 0) return payslipNumber(payslip.earnings?.hours_worked);
+  if (payslipNumber(payslip.earnings?.hours_worked) > 0) {
+    return payrollExactHourLabel(
+      payslipNumber(payslip.earnings?.hours_worked),
+      payslipNumber(payslip.earnings?.net_credited_minutes)
+        || Math.round(payslipNumber(payslip.earnings?.hours_worked) * 60)
+    );
+  }
   return payslipNumber(payslip.earnings?.days_worked);
 }
 
@@ -2363,6 +2397,7 @@ function showCalculationBreakdown(record) {
   const totalAllowances = number(record.total_allowances)
     || number(record.housing_allowance) + number(record.meal_allowance) + number(record.transport_allowance) + number(record.bonus_allowance);
   const sourceEntries = Array.isArray(record.source_entries) ? record.source_entries : [];
+  const attendanceEntries = sourceEntries.filter(entry => entry.kind === 'attendance');
   const sourceOutputEntries = sourceEntries.filter(entry => entry.kind !== 'attendance');
   const sourceOutputQuantity = number(record.source_output_quantity)
     || sourceOutputEntries.reduce((sum, entry) => sum + number(entry.quantity), 0);
@@ -2376,9 +2411,43 @@ function showCalculationBreakdown(record) {
   const baseRateField = isPieceRate
     ? ''
     : `<label>Base Rate<input value="${fmt(record.base_rate)}" readonly /></label>`;
-  const basePayLabel = isPieceRate ? 'Piece Earnings' : 'Base Pay';
+  const hourlyLateEmbeddedInBase = record.wage_type === 'Hourly' && Boolean(snapshot.attendance_deduction_embedded_in_base);
+  const basePayLabel = isPieceRate ? 'Piece Earnings' : hourlyLateEmbeddedInBase ? 'Adjusted Base Pay' : 'Base Pay';
+  const approvedRegularHours = (() => {
+    const explicitNoGraceHours = number(snapshot.approved_regular_hours);
+    if (explicitNoGraceHours > 0) return explicitNoGraceHours;
+    const sourceHours = attendanceEntries.reduce((sum, entry) => sum + number(entry.regular_hours), 0);
+    if (sourceHours > 0) return sourceHours;
+    const snapshotRows = Array.isArray(snapshot.attendance_rows) ? snapshot.attendance_rows : [];
+    const snapshotHours = snapshotRows.reduce((sum, entry) => sum + number(entry.regular_hours), 0);
+    if (snapshotHours > 0) return snapshotHours;
+    return number(record.hours_worked);
+  })();
+  const approvedRegularMinutes = number(snapshot.approved_regular_minutes)
+    || attendanceEntries.reduce((sum, entry) => sum + number(entry.regular_minutes), 0)
+    || (Array.isArray(snapshot.attendance_rows)
+      ? snapshot.attendance_rows.reduce((sum, entry) => sum + number(entry.regular_minutes), 0)
+      : 0);
+  const scheduledHoursPerDay = Math.max(0, number(snapshot.policy?.standard_hours_per_day || snapshot.policy?.standard_work_hours) || 8)
+    - Math.max(0, number(snapshot.policy?.break_deduction_hours));
+  const attendanceDayCount = attendanceEntries.filter(entry => number(entry.regular_hours) > 0).length
+    || (Array.isArray(snapshot.attendance_rows)
+      ? snapshot.attendance_rows.filter(entry => number(entry.regular_hours) > 0).length
+      : 0);
+  const scheduledBasisHours = number(snapshot.scheduled_hours) || (attendanceDayCount > 0
+    ? attendanceDayCount * (scheduledHoursPerDay > 0 ? scheduledHoursPerDay : 8)
+    : number(snapshot.hours_worked) || number(record.hours_worked));
+  const scheduledBasisMinutes = number(snapshot.scheduled_minutes) || Math.round(scheduledBasisHours * 60);
+  const payrollBasisHours = scheduledBasisHours || number(snapshot.hours_worked) || number(record.hours_worked);
+  const deductibleLateMinutes = Object.prototype.hasOwnProperty.call(snapshot, 'deductible_late_minutes')
+    ? number(snapshot.deductible_late_minutes)
+    : number(snapshot.late_minutes);
+  const deductibleUndertimeMinutes = number(snapshot.undertime_minutes);
+  const netCreditedMinutes = number(snapshot.net_credited_minutes)
+    || Math.max(0, scheduledBasisMinutes - deductibleLateMinutes - deductibleUndertimeMinutes);
+  const netCreditedHours = netCreditedMinutes / 60;
   const workOutput = record.wage_type === 'Hourly'
-    ? `${number(record.hours_worked).toLocaleString('en-US')} hours`
+    ? payrollExactHourLabel(netCreditedHours, netCreditedMinutes)
     : record.wage_type === 'Daily'
       ? `${number(record.days_worked).toLocaleString('en-US')} days`
       : record.wage_type === 'Per-Trip'
@@ -2386,6 +2455,14 @@ function showCalculationBreakdown(record) {
         : record.wage_type === 'Per-Piece'
           ? `${(number(record.quantity) || sourceOutputQuantity).toLocaleString('en-US')} pieces`
           : '-';
+  const hourlyWorkOutputAuditFields = record.wage_type === 'Hourly'
+    ? `
+        <label>Scheduled Basis Hours<input value="${payrollEscape(payrollExactHourLabel(payrollBasisHours, scheduledBasisMinutes))}" readonly /></label>
+        <label>Clocked Regular Hrs<input value="${payrollEscape(payrollExactHourLabel(approvedRegularHours, approvedRegularMinutes || null))}" readonly /></label>
+        <label>Grace Treatment<input value="${payrollEscape('Included in work output; only beyond-grace late is deducted')}" readonly /></label>
+        <label>Deductible Late / UT<input value="${payrollEscape(`${deductibleLateMinutes.toLocaleString('en-US')} / ${deductibleUndertimeMinutes.toLocaleString('en-US')} min`)}" readonly /></label>
+      `
+    : '';
   const formatSourceDate = value => {
     if (!value) return '-';
     const text = String(value);
@@ -2431,8 +2508,8 @@ function showCalculationBreakdown(record) {
       <td>${formatSourceTime(entry.time_in)}</td>
       <td>${formatSourceTime(entry.time_out)}</td>
       <td>${payrollEscape(entry.type || '-')}<br><span class="muted-small">${payrollEscape(entry.details || '')}</span></td>
-      <td class="text-right">${number(entry.regular_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      <td class="text-right">${number(entry.overtime_hours).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="text-right">${payrollEscape(payrollExactHourLabel(number(entry.regular_hours), number(entry.regular_minutes) || null))}</td>
+      <td class="text-right">${payrollEscape(payrollExactHourLabel(number(entry.overtime_hours)))}</td>
       <td class="text-right">${number(entry.late_minutes).toLocaleString('en-US')} / ${number(entry.undertime_minutes).toLocaleString('en-US')}</td>
       <td>${payrollEscape(entry.status || '-')}</td>
     </tr>
@@ -2505,8 +2582,8 @@ function showCalculationBreakdown(record) {
     ['SSS', number(record.sss_deduction)],
     ['Pag-IBIG', number(record.pagibig_deduction)],
     ['PhilHealth', number(record.philhealth_deduction)],
-    ['Late Deduction', number(snapshot.late_deduction)],
-    ['Undertime Deduction', number(snapshot.undertime_deduction)]
+    ['Late Deduction', hourlyLateEmbeddedInBase ? 0 : number(snapshot.late_deduction)],
+    ['Undertime Deduction', hourlyLateEmbeddedInBase ? 0 : number(snapshot.undertime_deduction)]
   ].filter(([, amount]) => deductionsApplied && amount > 0);
   if (deductionsApplied && !deductionRows.length && totalDeductions > 0) {
     deductionRows.push(['Configured Deductions', totalDeductions]);
@@ -2575,6 +2652,7 @@ function showCalculationBreakdown(record) {
         <label>Wage Type<input value="${payrollEscape(record.wage_type || '-')}" readonly /></label>
         ${baseRateField}
         <label>Work Output<input value="${payrollEscape(workOutput)}" readonly /></label>
+        ${hourlyWorkOutputAuditFields}
         <label>${deductionsApplied ? 'Payroll Calculation Date' : 'Work / Output Date(s)'}<input value="${payrollEscape(calculationDate)}" readonly /></label>
       </div>
 

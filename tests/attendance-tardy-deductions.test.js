@@ -1,5 +1,8 @@
 const assert = require('assert');
-const { computeLateUndertimeDeductions } = require('../server/payroll-attendance-deductions');
+const {
+  computeLateUndertimeDeductions,
+  computeScheduledHourlyBase,
+} = require('../server/payroll-attendance-deductions');
 
 const HOURLY_RATE = 120;
 const policy = {
@@ -70,6 +73,73 @@ const cases = [
 
 const results = cases.map(runCase);
 
+const ruzzelHourlyBase = computeScheduledHourlyBase({
+  attendanceRows: [480, 480, 477, 476, 480, 480].map((regular_minutes) => ({
+    attendance_status: 'Present',
+    regular_minutes,
+  })),
+  policy: {
+    standard_hours_per_day: 8,
+    break_deduction_hours: 0,
+  },
+});
+assert.strictEqual(ruzzelHourlyBase.payable_days, 6);
+assert.strictEqual(ruzzelHourlyBase.scheduled_hours, 48);
+assert.strictEqual(Number(ruzzelHourlyBase.approved_regular_hours.toFixed(2)), 47.88);
+
+const ruzzelLate = computeLateUndertimeDeductions({
+  attendanceRows: [
+    { time_in: '08:01', regular_minutes: 480 },
+    { time_in: '08:01', regular_minutes: 480 },
+    { time_in: '08:17', regular_minutes: 477 },
+    { time_in: '08:18', regular_minutes: 476 },
+    { time_in: '08:12', regular_minutes: 480 },
+    { time_in: '08:13', regular_minutes: 480 },
+  ],
+  policy: {
+    ...policy,
+    grace_period_minutes: 10,
+  },
+  wageType: 'Hourly',
+  rate: 86.88,
+});
+assert.strictEqual(ruzzelLate.deductible_late_minutes, 20);
+assert.strictEqual(ruzzelLate.late_deduction, 28.96);
+assert.strictEqual(Number((ruzzelHourlyBase.scheduled_hours * 86.88).toFixed(2)), 4170.24);
+const ruzzelNetMinutes = (ruzzelHourlyBase.scheduled_hours * 60) - ruzzelLate.deductible_late_minutes;
+assert.strictEqual(ruzzelNetMinutes, 2860);
+assert.strictEqual(Number((ruzzelNetMinutes / 60).toFixed(4)), 47.6667);
+assert.strictEqual(Number(((ruzzelHourlyBase.scheduled_hours * 86.88) - ruzzelLate.late_deduction).toFixed(2)), 4141.28);
+
+const fifteenMinuteGraceBase = computeScheduledHourlyBase({
+  attendanceRows: [
+    { attendance_status: 'Present', time_in: '08:12', regular_minutes: 468 },
+    { attendance_status: 'Present', time_in: '08:16', regular_minutes: 464 },
+  ],
+  policy: {
+    standard_hours_per_day: 8,
+    break_deduction_hours: 0,
+  },
+});
+const fifteenMinuteGraceLate = computeLateUndertimeDeductions({
+  attendanceRows: [
+    { time_in: '08:12', regular_minutes: 468 },
+    { time_in: '08:16', regular_minutes: 464 },
+  ],
+  policy: {
+    ...policy,
+    grace_period_minutes: 15,
+  },
+  wageType: 'Hourly',
+  rate: 86.88,
+});
+const fifteenMinuteGraceNetMinutes = (fifteenMinuteGraceBase.scheduled_hours * 60)
+  - fifteenMinuteGraceLate.deductible_late_minutes
+  - fifteenMinuteGraceLate.undertime_minutes;
+assert.strictEqual(fifteenMinuteGraceBase.scheduled_hours * 60, 960);
+assert.strictEqual(fifteenMinuteGraceLate.deductible_late_minutes, 1);
+assert.strictEqual(fifteenMinuteGraceNetMinutes, 959);
+
 const toggleOff = computeLateUndertimeDeductions({
   attendanceRows: [{ time_in: '08:30', late_minutes: 20, undertime_minutes: 30 }],
   policy: { ...policy, count_late_for_payroll: false, count_undertime_for_payroll: false },
@@ -133,3 +203,4 @@ console.log('Toggle validation: PASS');
 console.log('PAYROLL_READY exclusion validation: PASS');
 console.log('Monthly-to-daily-to-hour-to-minute deduction hierarchy: PASS');
 console.log('Fixed tardy/UT override ignored in favor of mandated minute-rate: PASS');
+console.log('Hourly adjusted base with embedded approved late deduction: PASS');

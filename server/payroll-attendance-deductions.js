@@ -32,6 +32,30 @@ function computeTimeDeduction({ deductionMethod, minutes, hourlyRate }) {
   return (employeeHourlyRate / 60) * minuteCount;
 }
 
+function computeScheduledHourlyBase({ attendanceRows, policy }) {
+  const rows = Array.isArray(attendanceRows) ? attendanceRows : [];
+  const standardHoursPerDay = Math.max(0, toNumber(
+    policy?.standard_hours_per_day || policy?.standard_work_hours,
+    8
+  ));
+  const breakDeductionHours = Math.max(0, toNumber(policy?.break_deduction_hours, 0));
+  const scheduledHoursPerDay = Math.max(0, standardHoursPerDay - breakDeductionHours);
+  const payableDays = rows.filter((row) => {
+    const status = String(row.attendance_status || row.status || '').trim().toLowerCase();
+    return !status.includes('absent') && toNumber(row.regular_minutes) > 0;
+  }).length;
+
+  return {
+    payable_days: payableDays,
+    scheduled_hours_per_day: scheduledHoursPerDay,
+    scheduled_hours: payableDays * scheduledHoursPerDay,
+    approved_regular_hours: rows.reduce(
+      (sum, row) => sum + Math.max(0, toNumber(row.regular_minutes)) / 60,
+      0
+    ),
+  };
+}
+
 function computeLateUndertimeDeductions({ attendanceRows, policy, wageType, rate }) {
   const rows = Array.isArray(attendanceRows) ? attendanceRows : [];
   const standardHours = toNumber(policy?.standard_hours_per_day || policy?.standard_work_hours, 8);
@@ -94,5 +118,6 @@ function computeLateUndertimeDeductions({ attendanceRows, policy, wageType, rate
 module.exports = {
   normalizeDeductionMethod,
   computeTimeDeduction,
+  computeScheduledHourlyBase,
   computeLateUndertimeDeductions,
 };
