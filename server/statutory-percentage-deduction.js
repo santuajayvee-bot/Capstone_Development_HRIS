@@ -22,10 +22,24 @@ function deductionContext(input = {}) {
   };
 }
 
-function monthHasFifthWeeklyCutoff(dateValue) {
-  const date = new Date(`${dateKey(dateValue)}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return false;
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() >= 29;
+function weeklyPayrollCutoffCount(input = {}) {
+  const context = deductionContext(input);
+  const cutoffKey = dateKey(
+    context.payroll_end_date
+    || context.end_date
+    || context.calculation_date
+    || context.payroll_start_date
+  );
+  const cutoffDate = new Date(`${cutoffKey}T00:00:00`);
+  if (Number.isNaN(cutoffDate.getTime())) return 4;
+
+  const year = cutoffDate.getFullYear();
+  const month = cutoffDate.getMonth();
+  const cutoffWeekday = cutoffDate.getDay();
+  const firstDayWeekday = new Date(year, month, 1).getDay();
+  const firstCutoffDay = 1 + ((cutoffWeekday - firstDayWeekday + 7) % 7);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return Math.floor((lastDay - firstCutoffDay) / 7) + 1;
 }
 
 function deductionMonthlyProjectionDivisor(setting = {}, input = {}) {
@@ -38,7 +52,14 @@ function deductionMonthlyProjectionDivisor(setting = {}, input = {}) {
   const schedule = String(context.payroll_frequency || setting.apply_schedule || setting.deduction_frequency || 'Weekly').trim();
   if (schedule === 'Monthly') return 1;
   if (schedule === 'Semi-Monthly' || schedule === 'First Payroll of Month' || schedule === 'Last Payroll of Month') return 2;
-  return monthHasFifthWeeklyCutoff(context.payroll_start_date) ? 5 : 4;
+  return weeklyPayrollCutoffCount(context);
+}
+
+function usesWeeklyStatutoryProration(input = {}) {
+  const context = deductionContext(input);
+  const frequency = String(context.payroll_frequency || '').trim().toLowerCase();
+  return frequency === 'weekly'
+    || /^\d{4}-\d{2}-w[1-5]$/i.test(String(input.payroll_period || '').trim());
 }
 
 function statutoryPercentageDeductionDetails(setting, grossPay, input = {}) {
@@ -94,4 +115,6 @@ module.exports = {
   deductionMonthlyProjectionDivisor,
   percentageDeductionAmount,
   statutoryPercentageDeductionDetails,
+  usesWeeklyStatutoryProration,
+  weeklyPayrollCutoffCount,
 };

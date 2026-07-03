@@ -14,6 +14,7 @@ const { computeLateUndertimeDeductions } = require('./payroll-attendance-deducti
 const {
   deductionMonthlyProjectionDivisor,
   percentageDeductionAmount: statutoryPercentageDeductionAmount,
+  usesWeeklyStatutoryProration,
 } = require('./statutory-percentage-deduction');
 const {
   ensurePayrollAttendanceConfigurationSchema,
@@ -1238,17 +1239,20 @@ async function computeConfiguredDeductions(pool, employeeId, grossPay, deduction
   for (const setting of selectCurrentDeductionSettings(settings)) {
     if (!deductionAppliesToEmployee(setting, employee)) continue;
     const statutoryKey = context.statutory_true_up === false ? '' : statutoryContributionKey(setting);
+    const weeklyStatutoryProration = statutoryKey && usesWeeklyStatutoryProration(context);
     const variableOutputApplies = statutoryKey
       ? variableOutputStatutoryDeductionApplies(employee, context)
       : null;
     const frequencyApplies = variableOutputApplies !== null
       ? variableOutputApplies
       : statutoryKey
-        ? statutoryTrueUpFrequencyApplies(setting, context)
+        ? weeklyStatutoryProration
+          ? deductionFrequencyApplies(setting, context)
+          : statutoryTrueUpFrequencyApplies(setting, context)
         : deductionFrequencyApplies(setting, context);
     if (!frequencyApplies) continue;
     let amount = 0;
-    if (statutoryKey && variableOutputApplies === true) {
+    if (statutoryKey && (variableOutputApplies === true || weeklyStatutoryProration)) {
       if (setting.computation_type === 'Percentage') {
         amount = percentageDeductionAmount(setting, grossPay, context);
       } else if (setting.computation_type === 'Table Lookup / Matrix Bracket') {
@@ -1338,7 +1342,16 @@ async function computeEmployeeDeductions(pool, employeeId, deductionContext, ava
 
 async function computePayrollDeductions(pool, employeeId, grossPay, deductionContext) {
   const configured = await computeConfiguredDeductions(pool, employeeId, grossPay, deductionContext);
-  const employee = await computeEmployeeDeductions(pool, employeeId, deductionContext, numeric(grossPay) - numeric(configured.total));
+  // Client rule: deductions come from Basic Pay. Non-taxable allowances are
+  // added after deductions and must not increase the amount available for
+  // statutory, loan, or other employee deductions.
+  const deductionAvailablePay = statutoryDeductionBaseAmount(grossPay, deductionContext);
+  const employee = await computeEmployeeDeductions(
+    pool,
+    employeeId,
+    deductionContext,
+    numeric(deductionAvailablePay) - numeric(configured.total)
+  );
   return {
     total: configured.total + employee.total,
     statutoryTotal: configured.total,
@@ -1442,10 +1455,27 @@ async function calculateSalaryDeductionSnapshot(pool, employeeId, grossPay, dedu
   };
 }
 
-async function computeConfiguredAllowances(pool, grossPay, calculationDate) {
-  // Allowance settings are a catalog/configuration list only. Do not apply
-  // these rows globally because allowance amounts can differ per employee.
-  return { total: 0, applied: [] };
+async function computeConfiguredAllowances(pool, employeeId, grossPay, calculationDate) {
+  // Global allowance settings are a catalog only. The employee master record
+  // carries the assigned non-taxable allowance for each payroll run.
+  if (!employeeId) return { total: 0, applied: [] };
+  const [rows] = await pool.execute(
+    'SELECT allowances FROM employees WHERE id = ? LIMIT 1',
+    [employeeId]
+  );
+  const amount = roundMoney(rows[0]?.allowances || 0);
+  if (!(amount > 0)) return { total: 0, applied: [] };
+  return {
+    total: amount,
+    applied: [{
+      name: 'Employee Allowance',
+      allowance_type: 'Employee Assigned',
+      amount,
+      is_taxable: 0,
+      calculation_date: calculationDate || null,
+      gross_pay_before_allowance: roundMoney(grossPay || 0)
+    }]
+  };
 }
 
 async function applyEmployeeDeductionBalances(pool, req, employeeId, salaryCalculationId, payrollPeriod, employeeDeductions) {
@@ -2991,7 +3021,7 @@ async function validateDailyHourlyPayroll(pool, options) {
   const attendanceWhere = [
     'ats.employee_id = ?',
     'ats.attendance_date BETWEEN ? AND ?',
-    "ats.verification_status = 'PAYROLL_READY'",
+    "ats.verification_status IN ('PAYROLL_READY', 'VALIDATED')",
     'COALESCE(ats.payroll_eligible, 0) = 1',
     'ats.payroll_run_id IS NULL'
   ];
@@ -3361,7 +3391,7 @@ async function ensurePieceRatePayrollSchema(pool) {
   await ensureColumn('payroll_runs', 'processed_by', 'INT NULL AFTER created_by');
   await ensureColumn('payroll_runs', 'processed_at', 'DATETIME NULL AFTER processed_by');
   await ensureColumn('payroll_runs', 'source_summary', 'TEXT NULL AFTER processed_at');
-  await ensureColumn('payroll_deduction_settings', 'proration_mode', "ENUM('Fixed Divisor','Calendar-Based Payroll Date Range') NOT NULL DEFAULT 'Fixed Divisor' AFTER apply_schedule");
+  await ensureColumn('payroll_deduction_settings', 'proration_mode', "ENUM('Fixed Divisor','Calendar-Based Payroll Date Range') NOT NULL DEFAULT 'Calendar-Based Payroll Date Range' AFTER apply_schedule");
   await ensureColumn('payroll_deduction_settings', 'fixed_divisor', 'DECIMAL(10,2) NULL AFTER proration_mode');
   await ensureBlockchainAuditSchema(pool);
   await ensureColumn('employee_wage_rates', 'monthly_salary', 'DECIMAL(12,2) NULL AFTER base_rate');
@@ -5222,6 +5252,7 @@ router.get('/employees/:id/wage-config', requireAuth, async (req, res) => {
       wage_type: wageTypeToReturn || null,
       current_rate: currentRate,
       wage_type_id: emp.wage_type_id_val,
+      effective_date: rates[0]?.effective_date || null,
       // Also include nested structure for reference
       employee: emp,
       rates: rates,
@@ -5240,6 +5271,9 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
     const pool = require('../config/db');
     const empId = req.params.id;
     const { wage_type_id, rates } = req.body;
+    const effectiveDate = req.body.effective_date
+      ? payrollDate(req.body.effective_date, 'Compensation effective date')
+      : null;
 
     console.log('\n=== POST /api/payroll/employees/:id/wage-config ===');
     console.log('Employee ID:', empId);
@@ -5291,7 +5325,7 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
       const [insertRes] = await pool.execute(`
         INSERT INTO employee_wage_rates 
         (employee_id, wage_type_id, base_rate, hourly_rate, overtime_rate, sewing_type_id, logistics_region_id, rate, effective_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURDATE()))
       `, [
         empId,
         wage_type_id,
@@ -5300,7 +5334,8 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
         rate.overtime_rate || null,
         rate.sewing_type_id || null,
         rate.logistics_region_id || null,
-        rate.rate
+        rate.rate,
+        effectiveDate
       ]);
       
       console.log('✅ Rate inserted. ID:', insertRes.insertId);
@@ -5313,6 +5348,15 @@ router.post('/employees/:id/wage-config', requireAuth, requireRole([...PAYROLL_P
     );
     
     console.log('✅ Verification - Active rates count:', verifyRates.length);
+
+    await logPayrollAudit(pool, req, 'employee_wage_configuration_updated', {
+      employee_id: Number(empId),
+      metadata: {
+        wage_type_id: Number(wage_type_id),
+        effective_date: effectiveDate,
+        rates_saved: verifyRates.length
+      }
+    });
 
     res.json({ success: true, message: 'Wage configuration updated', ratesSaved: verifyRates.length });
   } catch (err) {
@@ -7253,7 +7297,7 @@ router.get('/dashboard', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), asy
       `SELECT COUNT(DISTINCT employee_id) AS value
          FROM attendance_summary
         WHERE attendance_date BETWEEN ? AND ?
-          AND verification_status = 'PAYROLL_READY'
+          AND verification_status IN ('PAYROLL_READY', 'VALIDATED')
           AND COALESCE(payroll_eligible, 0) = 1`,
       [period.start, period.end]
     );
@@ -7655,7 +7699,7 @@ async function payrollGenerationSourceEmployeeSets(pool, period) {
       SELECT DISTINCT employee_id
         FROM attendance_summary
        WHERE attendance_date BETWEEN ? AND ?
-         AND verification_status = 'PAYROLL_READY'
+         AND verification_status IN ('PAYROLL_READY', 'VALIDATED')
          AND COALESCE(payroll_eligible, 0) = 1
          AND payroll_run_id IS NULL
     `, [period.start, period.end]);
@@ -7725,7 +7769,12 @@ async function filterEmployeesWithPayrollSources(pool, employees, period, body =
     if (['Daily', 'Hourly', 'Monthly'].includes(wageType)) return sourceSets.attendance.has(employeeId);
     if (wageType === 'Per-Piece') return sourceSets.piece.has(employeeId);
     if (isTripBasedWageType(emp.wage_type)) return sourceSets.trip.has(employeeId);
-    return false;
+    // Keep source-backed employees with missing/unsupported wage configuration
+    // in the preview so Payroll sees an actionable skipped reason instead of
+    // a misleading zero-employee result.
+    return sourceSets.attendance.has(employeeId)
+      || sourceSets.piece.has(employeeId)
+      || sourceSets.trip.has(employeeId);
   });
 }
 
@@ -7959,10 +8008,10 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
       continue;
     }
 
-    const allowanceKey = `${roundMoney(piecePayroll.total)}|${period.end}`;
+    const allowanceKey = `${emp.id}|${roundMoney(piecePayroll.total)}|${period.end}`;
     let allowances = allowanceCache.get(allowanceKey);
     if (!allowances) {
-      allowances = await computeConfiguredAllowances(pool, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, piecePayroll.total, period.end);
       allowanceCache.set(allowanceKey, allowances);
     }
 
@@ -7970,7 +8019,7 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
     const payrollDeductions = await computePreviewPayrollDeductions(pool, deductionCache, emp, totalEarning, {
       ...deductionContext,
       payroll_type: normalizedWageType,
-      statutory_base_pay: totalEarning
+      statutory_base_pay: piecePayroll.total
     }, {
       employeesWithActiveDeductions,
       hasSelectedEmployeeDeductionSettings: selectedEmployeeDeductionSettings
@@ -7994,7 +8043,7 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
       deductions: roundMoney(totalDeduction),
       statutory_deductions: roundMoney(payrollDeductions.total),
       attendance_deductions: 0,
-      net_pay: roundMoney(totalEarning - totalDeduction),
+      net_pay: roundMoney((piecePayroll.total - totalDeduction) + allowances.total),
       payroll_status: 'Preview',
       processed_by: '-',
       date_processed: null
@@ -8110,16 +8159,16 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       }
       const overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
       const baseGross = numeric(validation.gross_pay) + overtimePay;
-      allowances = await computeConfiguredAllowances(pool, baseGross, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, baseGross, period.end);
       totalEarning = baseGross + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : totalEarning
+        statutory_base_pay: baseGross
       });
       attendanceDeductionTotal = payableAttendanceDeductionAmount(normalizedWageType, validation);
       totalDeduction = payrollDeductions.total + attendanceDeductionTotal;
-      netPay = totalEarning - totalDeduction;
+      netPay = (baseGross - totalDeduction) + allowances.total;
       quantity = normalizedWageType === 'Hourly' ? validation.hours_worked : validation.days_worked;
       daysWorked = validation.days_worked;
       hoursWorked = validation.hours_worked;
@@ -8129,15 +8178,15 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
         skipEmployee(await describePieceRatePayrollSkip(pool, emp.id, period));
         continue;
       }
-      allowances = await computeConfiguredAllowances(pool, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, piecePayroll.total, period.end);
       totalEarning = piecePayroll.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: piecePayroll.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (piecePayroll.total - totalDeduction) + allowances.total;
       quantity = piecePayroll.quantity;
     } else if (isTripBasedWageType(emp.wage_type)) {
       await assertLogisticsTripSchema(pool);
@@ -8146,15 +8195,15 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
         skipEmployee('No approved delivery trips exist for this payroll period.');
         continue;
       }
-      allowances = await computeConfiguredAllowances(pool, approvedTrips.total, period.end);
+      allowances = await computeConfiguredAllowances(pool, emp.id, approvedTrips.total, period.end);
       totalEarning = approvedTrips.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(pool, emp.id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: approvedTrips.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (approvedTrips.total - totalDeduction) + allowances.total;
       quantity = approvedTrips.quantity || approvedTrips.trips.length;
     } else {
       skipEmployee(`Unsupported or unconfigured pay type: ${emp.wage_type || 'Not set'}.`);
@@ -8458,17 +8507,17 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
 
           overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
           const baseGross = numeric(validation.gross_pay) + overtimePay;
-          allowances = await computeConfiguredAllowances(connection, baseGross, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, baseGross, period.end);
           const grossWithAllowances = baseGross + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, grossWithAllowances, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : grossWithAllowances
+            statutory_base_pay: baseGross
           });
           totalEarning = grossWithAllowances;
           attendanceDeductionTotal = payableAttendanceDeductionAmount(normalizedWageType, validation);
           totalDeduction = payrollDeductions.total + attendanceDeductionTotal;
-          netPay = totalEarning - totalDeduction;
+          netPay = (baseGross - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'attendance';
           sourceRecordIds = sourceIdList(validation.attendance_rows || [], 'attendance:');
@@ -8493,15 +8542,15 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
             skipEmployee(await describePieceRatePayrollSkip(connection, emp.id, period));
             continue;
           }
-          allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, piecePayroll.total, period.end);
           totalEarning = piecePayroll.total + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: totalEarning
+            statutory_base_pay: piecePayroll.total
           });
           totalDeduction = payrollDeductions.total;
-          netPay = totalEarning - totalDeduction;
+          netPay = (piecePayroll.total - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'piece_rate_output';
           sourceRecordIds = [
@@ -8527,15 +8576,15 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
             skipEmployee('No approved delivery trips exist for this payroll period.');
             continue;
           }
-          allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
+          allowances = await computeConfiguredAllowances(connection, emp.id, approvedTrips.total, period.end);
           totalEarning = approvedTrips.total + allowances.total;
           payrollDeductions = await computePayrollDeductions(connection, emp.id, totalEarning, {
             ...deductionContext,
             payroll_type: normalizedWageType,
-            statutory_base_pay: totalEarning
+            statutory_base_pay: approvedTrips.total
           });
           totalDeduction = payrollDeductions.total;
-          netPay = totalEarning - totalDeduction;
+          netPay = (approvedTrips.total - totalDeduction) + allowances.total;
           employeeDeductions = payrollDeductions.employee;
           sourceType = 'logistics_trips';
           sourceRecordIds = sourceIdList(approvedTrips.trips, 'trip:');
@@ -9036,18 +9085,18 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       overtimeHours = numeric(snapshot.overtime_hours || record.overtime_hours);
       overtimePay = roundMoney(overtimeHours * hourlyRate);
       const grossBeforeAllowances = roundMoney(manualCorrection.sourceGross + overtimePay);
-      allowances = await computeConfiguredAllowances(connection, grossBeforeAllowances, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, grossBeforeAllowances, period.end);
       totalEarning = roundMoney(grossBeforeAllowances + allowances.total);
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? manualCorrection.sourceGross : totalEarning
+        statutory_base_pay: grossBeforeAllowances
       });
       const attendanceDeduction = ['Daily', 'Hourly'].includes(normalizedWageType)
         ? payableAttendanceDeductionAmount(normalizedWageType, snapshot)
         : 0;
       totalDeduction = roundMoney(payrollDeductions.total + attendanceDeduction);
-      netPay = roundMoney(totalEarning - totalDeduction);
+      netPay = roundMoney((grossBeforeAllowances - totalDeduction) + allowances.total);
       if (normalizedWageType === 'Hourly') {
         hoursWorked = manualCorrection.correctedTotal;
         quantity = hoursWorked;
@@ -9071,15 +9120,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       if (!validation.ok) throw new Error(validation.errors.join(' ') || 'Attendance is not payroll-ready.');
       overtimePay = numeric(validation.overtime_hours) * numeric(validation.hourly_rate);
       const baseGross = numeric(validation.gross_pay) + overtimePay;
-      allowances = await computeConfiguredAllowances(connection, baseGross, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, baseGross, period.end);
       totalEarning = baseGross + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: ['Daily', 'Hourly'].includes(normalizedWageType) ? validation.gross_pay : totalEarning
+        statutory_base_pay: baseGross
       });
       totalDeduction = payrollDeductions.total + payableAttendanceDeductionAmount(normalizedWageType, validation);
-      netPay = totalEarning - totalDeduction;
+      netPay = (baseGross - totalDeduction) + allowances.total;
       sourceType = 'attendance';
       sourceRecordIds = sourceIdList(validation.attendance_rows || [], 'attendance:');
       quantity = normalizedWageType === 'Hourly' ? validation.hours_worked : validation.days_worked;
@@ -9093,15 +9142,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
     } else if (normalizedWageType === 'Per-Piece') {
       const piecePayroll = await getApprovedPieceRatePayroll(connection, record.employee_id, period);
       if (!piecePayroll.records.length) throw new Error('No approved payroll-ready piece output exists for this period.');
-      allowances = await computeConfiguredAllowances(connection, piecePayroll.total, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, piecePayroll.total, period.end);
       totalEarning = piecePayroll.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: piecePayroll.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (piecePayroll.total - totalDeduction) + allowances.total;
       sourceType = 'piece_rate_output';
       sourceRecordIds = [
         ...sourceIdList(piecePayroll.outputs, 'output:'),
@@ -9114,15 +9163,15 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
     } else if (isTripBasedWageType(record.wage_type)) {
       const approvedTrips = await getApprovedDeliveryTripPayroll(connection, record.employee_id, period);
       if (!approvedTrips.trips.length) throw new Error('No approved payroll-ready trip logs exist for this period.');
-      allowances = await computeConfiguredAllowances(connection, approvedTrips.total, period.end);
+      allowances = await computeConfiguredAllowances(connection, record.employee_id, approvedTrips.total, period.end);
       totalEarning = approvedTrips.total + allowances.total;
       payrollDeductions = await computePayrollDeductions(connection, record.employee_id, totalEarning, {
         ...deductionContext,
         payroll_type: normalizedWageType,
-        statutory_base_pay: totalEarning
+        statutory_base_pay: approvedTrips.total
       });
       totalDeduction = payrollDeductions.total;
-      netPay = totalEarning - totalDeduction;
+      netPay = (approvedTrips.total - totalDeduction) + allowances.total;
       sourceType = 'logistics_trips';
       sourceRecordIds = sourceIdList(approvedTrips.trips, 'trip:');
       quantity = approvedTrips.quantity || approvedTrips.trips.length;
@@ -10187,8 +10236,8 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
       computation_type: computation_type || 'Manual Amount',
       rate_or_amount: rate_or_amount || 0,
       apply_schedule: apply_schedule || 'Every Payroll',
-      proration_mode: body.proration_mode || 'Fixed Divisor',
-      fixed_divisor: body.fixed_divisor || null,
+      proration_mode: body.proration_mode || 'Calendar-Based Payroll Date Range',
+      fixed_divisor: body.fixed_divisor === undefined || body.fixed_divisor === '' ? null : body.fixed_divisor,
       priority_order: body.priority_order || 5,
       applicability_scope: body.applicability_scope || 'All Employees',
       is_active: is_active === '0' || is_active === 0 ? 0 : 1,
@@ -10216,6 +10265,15 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     if (payload.applicability_scope && !DEDUCTION_APPLICABILITY_SCOPES.has(payload.applicability_scope)) return res.status(400).json({ error: 'Invalid applicability scope.' });
     if (payload.deduction_base_rate && !DEDUCTION_BASE_RATES.has(payload.deduction_base_rate)) return res.status(400).json({ error: 'Invalid deduction base rate.' });
     if (payload.proration_mode && !DEDUCTION_PRORATION_MODES.has(payload.proration_mode)) return res.status(400).json({ error: 'Invalid deduction proration mode.' });
+    if (payload.proration_mode === 'Calendar-Based Payroll Date Range') {
+      payload.fixed_divisor = null;
+    } else {
+      const manualDivisor = Number(payload.fixed_divisor);
+      if (!Number.isInteger(manualDivisor) || manualDivisor <= 0) {
+        return res.status(400).json({ error: 'Manual divisor must be a positive whole number.' });
+      }
+      payload.fixed_divisor = manualDivisor;
+    }
     const contributionNumericFields = [
       ['rate_or_amount', 'Rate or amount'],
       ['employee_share_rate', 'Employee share rate'],
@@ -10252,7 +10310,7 @@ router.post('/deduction-settings', requireAuth, requireRole(PAYROLL_PERMISSIONS.
     for (const key of allowedFields) {
       if (!columns.has(key) || payload[key] === undefined) continue;
       fields.push(key);
-      values.push(numericFields.has(key) ? numeric(payload[key]) : payload[key]);
+      values.push(numericFields.has(key) && payload[key] !== null ? numeric(payload[key]) : payload[key]);
     }
     if (columns.has('created_by')) {
       fields.push('created_by');
@@ -10581,7 +10639,7 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [records] = await connection.execute(`
-      SELECT sc.id, sc.employee_id, sc.payroll_run_id, sc.gross_pay, sc.calculation_date, sc.payroll_period,
+      SELECT sc.id, sc.employee_id, sc.payroll_run_id, sc.gross_pay, sc.total_allowances, sc.calculation_date, sc.payroll_period,
              sc.period_start, sc.period_end, sc.status,
              sc.validation_snapshot, sc.source_record_ids,
              wt.name AS wage_type
@@ -10679,9 +10737,7 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
           payroll_frequency: record.payroll_period && /-W[1-5]$/.test(String(record.payroll_period)) ? 'Weekly' : '',
           payroll_period: record.payroll_period || '',
           payroll_type: normalizePayrollWageType(existingSnapshot.wage_type || record.wage_type),
-          statutory_base_pay: ['Daily', 'Hourly'].includes(normalizePayrollWageType(existingSnapshot.wage_type || record.wage_type))
-            ? numeric(existingSnapshot.gross_pay || existingSnapshot.basic_pay || record.gross_pay)
-            : record.gross_pay,
+          statutory_base_pay: Math.max(0, numeric(record.gross_pay) - numeric(record.total_allowances)),
           salary_calculation_id: id
         },
         extraDeductionRows

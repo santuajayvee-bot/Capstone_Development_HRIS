@@ -3598,18 +3598,18 @@ function calendarBasedDivisorText(schedule = '') {
   if (['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(normalized)) {
     return 'Auto divisor: 2 for semi-monthly payroll.';
   }
-  return 'Auto divisor: 4 or 5 for weekly payroll, based on the payroll start month.';
+  return 'Auto divisor: 4 or 5 for weekly payroll, based on the number of cutoff dates in the payroll end month.';
 }
 
 function renderDeductionProration(row = {}) {
-  const mode = String(row.proration_mode || 'Fixed Divisor');
+  const mode = String(row.proration_mode || 'Calendar-Based Payroll Date Range');
   if (mode === 'Calendar-Based Payroll Date Range') {
     return `
       ${payrollEscape(mode)}
       <span class="payroll-deduction-detail">${payrollEscape(calendarBasedDivisorText(row.apply_schedule))}</span>
     `;
   }
-  return `${payrollEscape(mode)}${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}`;
+  return `Manual Divisor${row.fixed_divisor ? ` / ${payrollEscape(row.fixed_divisor)}` : ''}`;
 }
 
 function renderDeductionSettings(rows) {
@@ -3982,10 +3982,16 @@ async function savePayrollSetting(event, type) {
       data.computation_type = 'Percentage';
       data.rate_or_amount = data.employee_share_rate || data.rate_or_amount || 0;
     }
-    if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
-      data.fixed_divisor = data.apply_schedule === 'Monthly' ? 1
-        : ['Semi-Monthly', 'First Payroll of Month', 'Last Payroll of Month'].includes(data.apply_schedule) ? 2
-        : 4;
+    if (data.proration_mode === 'Calendar-Based Payroll Date Range') {
+      delete data.fixed_divisor;
+    } else if (data.proration_mode === 'Fixed Divisor' && !data.fixed_divisor) {
+      const message = 'Enter a manual divisor before saving.';
+      if (statusEl) {
+        statusEl.className = 'payroll-form-status error';
+        statusEl.textContent = message;
+      }
+      if (typeof showAlert === 'function') await showAlert(message, 'Manual Divisor Required', 'error');
+      return;
     }
     if (data.percentage_rate && !data.rate_or_amount) data.rate_or_amount = data.percentage_rate;
     if (data.employee_share_percentage && !data.employee_share_rate) data.employee_share_rate = data.employee_share_percentage;
@@ -4111,14 +4117,21 @@ function toggleDeductionFormSections() {
   const computationSelect = document.getElementById('deduction-computation-type');
   const rateInput = document.querySelector('#deduction-setting-form [name="rate_or_amount"]');
   const rateGroup = rateInput?.closest('.form-group');
-  const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Fixed Divisor';
+  const prorationMode = document.getElementById('deduction-proration-mode')?.value || 'Calendar-Based Payroll Date Range';
   const fixedDivisorGroup = document.getElementById('deduction-fixed-divisor-group');
+  const fixedDivisorInput = fixedDivisorGroup?.querySelector('[name="fixed_divisor"]');
   const calendarDivisorGroup = document.getElementById('deduction-calendar-divisor-group');
   const calendarDivisorHelp = document.getElementById('deduction-calendar-divisor-help');
   const applySchedule = document.getElementById('deduction-apply-schedule')?.value
     || document.querySelector('#deduction-setting-form [name="apply_schedule"]')?.value
     || '';
-  if (fixedDivisorGroup) fixedDivisorGroup.style.display = prorationMode === 'Fixed Divisor' ? '' : 'none';
+  const manualDivisor = prorationMode === 'Fixed Divisor';
+  if (fixedDivisorGroup) fixedDivisorGroup.style.display = manualDivisor ? '' : 'none';
+  if (fixedDivisorInput) {
+    fixedDivisorInput.disabled = !manualDivisor;
+    fixedDivisorInput.required = manualDivisor;
+    if (!manualDivisor) fixedDivisorInput.value = '';
+  }
   if (calendarDivisorGroup) calendarDivisorGroup.style.display = prorationMode === 'Calendar-Based Payroll Date Range' ? '' : 'none';
   if (calendarDivisorHelp) calendarDivisorHelp.textContent = calendarBasedDivisorText(applySchedule);
   const deductionName = String(getSelectedDeductionName()).trim();

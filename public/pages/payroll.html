@@ -568,11 +568,11 @@
       <div class="form-group deduction-statutory-field" style="display:none;"><label>Monthly Salary Ceiling</label><input name="maximum_salary_ceiling" type="number" min="0" step="0.01" /></div>
       <div class="form-group deduction-statutory-field" style="display:none;"><label>Maximum Employee Contribution</label><input name="maximum_contribution_cap" type="number" min="0" step="0.01" /></div>
       <div class="form-group"><label>Deduction Frequency</label><select name="apply_schedule" id="deduction-apply-schedule" onchange="toggleDeductionFormSections()"><option>Every Payroll</option><option>Weekly</option><option>Semi-Monthly</option><option>Monthly</option><option>First Payroll of Month</option><option>Last Payroll of Month</option><option>1st Week</option><option>2nd Week</option><option>3rd Week</option><option>4th Week</option><option>5th Week</option></select></div>
-      <div class="form-group"><label>Proration Mode</label><select name="proration_mode" id="deduction-proration-mode" onchange="toggleDeductionFormSections()"><option>Fixed Divisor</option><option>Calendar-Based Payroll Date Range</option></select></div>
-      <div class="form-group" id="deduction-fixed-divisor-group">
-        <label>Fixed Divisor</label>
+      <div class="form-group"><label>Proration Mode</label><select name="proration_mode" id="deduction-proration-mode" onchange="toggleDeductionFormSections()"><option value="Calendar-Based Payroll Date Range" selected>Calendar-Based Payroll Date Range</option><option value="Fixed Divisor">Manual Divisor</option></select></div>
+      <div class="form-group" id="deduction-fixed-divisor-group" style="display:none;">
+        <label>Manual Divisor</label>
         <input name="fixed_divisor" type="number" min="1" step="1" placeholder="Weekly 4 or 5, Semi-Monthly 2, Monthly 1" />
-        <span class="muted-small">Weekly: 4 applies on W1-W4; 5 applies on W1-W5. Calendar-Based selects 4 or 5 automatically.</span>
+        <span class="muted-small">Used only in Manual Divisor mode. The exact value entered here will be saved.</span>
       </div>
       <div class="form-group" id="deduction-calendar-divisor-group" style="display:none;">
         <label>Auto Divisor</label>

@@ -815,7 +815,7 @@ async function initializeWageConfig() {
 }
 
 const REGISTER_PAYROLL_ONLY_FIELDS = [
-  'wage_type_id', 'wage_type', 'base_rate', 'allowances',
+  'wage_type_id', 'wage_type', 'base_rate', 'wage_effective_date', 'allowances',
   'payroll_schedule', 'tax_status', 'bank_name', 'bank_account'
 ];
 
@@ -1823,6 +1823,7 @@ async function saveEmployee() {
     wage_type_id: getWageTypeId(document.getElementById('emp-wage-type')?.value),
     wage_type: document.getElementById('emp-wage-type')?.value || null,
     base_rate: document.getElementById('emp-salary')?.value || document.getElementById('emp-hourly-rate')?.value || document.getElementById('emp-prod-base-rate')?.value || null,
+    wage_effective_date: document.getElementById('emp-wage-effective-date')?.value || null,
     allowances: document.getElementById('emp-allowances')?.value || null,
     payroll_schedule: document.getElementById('emp-pay-freq')?.value || null,
     sss_number: document.getElementById('emp-sss')?.value || null,
@@ -2055,6 +2056,10 @@ async function loadExistingWageConfiguration(employeeCode) {
     }
     
     const config = await res.json();
+    const effectiveDateInput = document.getElementById('emp-wage-effective-date');
+    if (effectiveDateInput && config.effective_date) {
+      effectiveDateInput.value = String(config.effective_date).slice(0, 10);
+    }
     
     // Set the wage type dropdown
     const wageTypeDropdown = document.getElementById('emp-wage-type');
@@ -2078,7 +2083,7 @@ async function loadExistingWageConfiguration(employeeCode) {
         const overtimeInput = document.getElementById('emp-overtime-rate');
         if (config.rates[0]) {
           if (hourlyInput) {
-            hourlyInput.value = config.rates[0].hourly_rate || '';
+            hourlyInput.value = config.rates[0].hourly_rate || config.rates[0].rate || '';
           }
           if (overtimeInput) {
             overtimeInput.value = config.rates[0].overtime_rate || '';
@@ -2218,7 +2223,11 @@ async function saveWageConfiguration(employeeCode, wageTypeId) {
       const res = await apiFetch(`/api/payroll/employees/${employeeCode}/wage-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wage_type_id: wageTypeId, rates: rates })
+        body: JSON.stringify({
+          wage_type_id: wageTypeId,
+          effective_date: document.getElementById('emp-wage-effective-date')?.value || null,
+          rates: rates
+        })
       });
       
       console.log('📥 API Response Status:', res.status);
