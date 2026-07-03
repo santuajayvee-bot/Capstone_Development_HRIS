@@ -163,16 +163,24 @@ function auditNotification(row) {
   };
 }
 
+function safeDashboardText(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
 function employeeName(row) {
-  const first = decryptColumnValue(row?.first_name);
-  const last = decryptColumnValue(row?.last_name);
+  const first = safeDashboardText(row?.first_name);
+  const last = safeDashboardText(row?.last_name);
   return [first, last].filter(Boolean).join(' ') || row?.employee_code || '-';
 }
 
 function decryptProfile(profile) {
   if (!profile) return profile;
-  profile.first_name = decryptColumnValue(profile.first_name);
-  profile.last_name = decryptColumnValue(profile.last_name);
+  profile.first_name = safeDashboardText(profile.first_name);
+  profile.last_name = safeDashboardText(profile.last_name);
   return profile;
 }
 
