@@ -41,15 +41,6 @@ const UNEXPECTED_LOGIN_MESSAGE = 'Unable to process login request.';
 const MAX_FAILED_ATTEMPTS = positiveIntegerFromEnv('AUTH_MAX_FAILED_ATTEMPTS', 5, 20);
 const LOCK_MINUTES = positiveIntegerFromEnv('AUTH_LOCKOUT_MINUTES', 15, 1440);
 const REFRESH_COOKIE_NAME = 'refreshToken';
-const PRIVILEGED_MFA_ROLES = new Set([
-  'admin',
-  'system_admin',
-  'hr_admin',
-  'hr_manager',
-  'manager',
-  'payroll_officer',
-  'payroll_manager',
-]);
 
 function positiveIntegerFromEnv(name, fallback, maximum) {
   const value = Number.parseInt(process.env[name], 10);
@@ -93,14 +84,6 @@ function normalizeRoleName(roleName) {
   if (roleName === 'admin') return 'system_admin';
   if (roleName === 'manager') return 'hr_manager';
   return roleName || 'employee';
-}
-
-function roleRequiresMfa(roleName) {
-  return PRIVILEGED_MFA_ROLES.has(String(roleName || '').trim().toLowerCase());
-}
-
-function shouldRequireMfa(user) {
-  return isMfaEnabled() || roleRequiresMfa(user?.role_name);
 }
 
 function getDefaultRoleLabel(roleName) {
@@ -337,12 +320,9 @@ async function login(req, res) {
     // A correct password resets password-lockout state, but never creates an
     // access token until the MFA challenge has been successfully verified.
     await resetFailedLoginAttemptsForUser(user.id);
-    const mfaEmployeeId = await ensureEmployeeAuthIdentifier(user.employee_table_id || employeeId);
-    user.Employee_ID = mfaEmployeeId;
-
-    if (shouldRequireMfa(user)) {
+    if (isMfaEnabled()) {
       try {
-        const challenge = await createMfaChallenge({ employeeId: mfaEmployeeId, req });
+        const challenge = await createMfaChallenge({ employeeId, req });
         return res.status(202).json({
           success: true,
           mfaRequired: true,
@@ -360,9 +340,9 @@ async function login(req, res) {
     }
 
     await safeCreateAuditLog({
-      Employee_ID: mfaEmployeeId,
+      Employee_ID: employeeId,
       Action_Type: 'MFA_BYPASSED',
-      Description: 'MFA bypassed because MFA is disabled for a non-privileged role.',
+      Description: 'MFA bypassed because MFA_ENABLED is false.',
       IP_Address: ipAddress,
       User_Agent: userAgent,
     });
@@ -441,9 +421,4 @@ module.exports = {
   verifyMfa,
   resendMfa,
   lockoutStatus,
-  _mfaPolicyForTest: {
-    PRIVILEGED_MFA_ROLES,
-    roleRequiresMfa,
-    shouldRequireMfa,
-  },
 };

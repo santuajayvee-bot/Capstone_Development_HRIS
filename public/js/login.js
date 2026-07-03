@@ -5,7 +5,6 @@
 let lockoutCountdownTimer = null;
 let lockoutPollTimer = null;
 let activeLockoutState = null;
-let activeMfaChallenge = null;
 
 function loginError(message, warning = false) {
   const errEl = document.getElementById('login-err');

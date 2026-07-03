@@ -15,7 +15,6 @@ const {
 
 const MAX_MFA_ATTEMPTS = 5;
 const RESEND_COOLDOWN_SECONDS = 60;
-let mfaSchemaReady = false;
 
 class MfaServiceError extends Error {
   constructor(message, code = 'MFA_FAILED', statusCode = 400) {
@@ -51,7 +50,9 @@ function mfaConfig() {
 }
 
 function isMfaEnabled() {
-  return mfaConfig().enabled;
+  // Temporarily disabled for defense stability while SMS OTP delivery is being
+  // revalidated. Login must not fail just because the MFA provider is down.
+  return false;
 }
 
 function requestIp(req) {
@@ -106,75 +107,6 @@ function normalizeChallengeId(value) {
   return id;
 }
 
-async function hasMfaColumn(columnName) {
-  const [rows] = await pool.execute(
-    `SELECT 1
-       FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'MFA_CHALLENGE'
-        AND COLUMN_NAME = ?
-      LIMIT 1`,
-    [columnName]
-  );
-  return rows.length > 0;
-}
-
-async function ensureMfaColumn(columnName, definition) {
-  if (await hasMfaColumn(columnName)) return;
-  await pool.execute(`ALTER TABLE MFA_CHALLENGE ADD COLUMN ${columnName} ${definition}`);
-}
-
-async function ensureMfaIndex(indexName, sql) {
-  const [rows] = await pool.execute(
-    `SELECT 1
-       FROM INFORMATION_SCHEMA.STATISTICS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'MFA_CHALLENGE'
-        AND INDEX_NAME = ?
-      LIMIT 1`,
-    [indexName]
-  );
-  if (!rows.length) await pool.execute(sql);
-}
-
-async function ensureMfaChallengeSchema() {
-  if (mfaSchemaReady) return;
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS MFA_CHALLENGE (
-      Challenge_ID BIGINT PRIMARY KEY AUTO_INCREMENT,
-      Employee_ID BIGINT NOT NULL,
-      Provider VARCHAR(50) NOT NULL DEFAULT 'iprog',
-      Phone_Number VARCHAR(20) NULL,
-      Phone_Number_Encrypted TEXT NULL,
-      Phone_Number_Hash CHAR(64) NULL,
-      Challenge_Token_Hash CHAR(64) NOT NULL,
-      Status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-      Attempt_Count INT NOT NULL DEFAULT 0,
-      Resend_Count INT NOT NULL DEFAULT 0,
-      Last_Sent_At DATETIME NULL,
-      Expires_At DATETIME NOT NULL,
-      Verified_At DATETIME NULL,
-      Created_At DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      Updated_At DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
-  await ensureMfaColumn('Phone_Number', 'VARCHAR(20) NULL AFTER Provider');
-  await ensureMfaColumn('Phone_Number_Encrypted', 'TEXT NULL AFTER Phone_Number');
-  await ensureMfaColumn('Phone_Number_Hash', 'CHAR(64) NULL AFTER Phone_Number_Encrypted');
-  await ensureMfaColumn('Challenge_Token_Hash', 'CHAR(64) NOT NULL AFTER Phone_Number_Hash');
-  await ensureMfaColumn('Attempt_Count', 'INT NOT NULL DEFAULT 0 AFTER Status');
-  await ensureMfaColumn('Resend_Count', 'INT NOT NULL DEFAULT 0 AFTER Attempt_Count');
-  await ensureMfaColumn('Last_Sent_At', 'DATETIME NULL AFTER Resend_Count');
-  await ensureMfaColumn('Expires_At', 'DATETIME NOT NULL AFTER Last_Sent_At');
-  await ensureMfaColumn('Verified_At', 'DATETIME NULL AFTER Expires_At');
-  await ensureMfaColumn('Created_At', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER Verified_At');
-  await ensureMfaColumn('Updated_At', 'DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER Created_At');
-  await ensureMfaIndex('idx_mfa_challenge_employee_status', 'CREATE INDEX idx_mfa_challenge_employee_status ON MFA_CHALLENGE (Employee_ID, Status)');
-  await ensureMfaIndex('idx_mfa_challenge_expires', 'CREATE INDEX idx_mfa_challenge_expires ON MFA_CHALLENGE (Expires_At)');
-  await ensureMfaIndex('idx_mfa_challenge_phone_hash', 'CREATE INDEX idx_mfa_challenge_phone_hash ON MFA_CHALLENGE (Phone_Number_Hash)');
-  mfaSchemaReady = true;
-}
-
 function assertMfaConfiguration(config) {
   if (config.provider !== 'iprog') {
     throw new MfaServiceError('MFA provider is not configured.', 'MFA_PROVIDER_UNSUPPORTED', 503);
@@ -219,7 +151,6 @@ async function sendVerification(phoneNumber, config) {
 }
 
 async function findChallenge(challengeId) {
-  await ensureMfaChallengeSchema();
   const [rows] = await pool.execute(
     `SELECT Challenge_ID, Employee_ID, Provider, Phone_Number_Encrypted, Challenge_Token_Hash,
             Status, Attempt_Count, Resend_Count, Last_Sent_At, Expires_At
@@ -264,7 +195,6 @@ function assertPendingChallenge(challenge, mfaToken, req) {
 async function createMfaChallenge({ employeeId, req }) {
   const config = mfaConfig();
   assertMfaConfiguration(config);
-  await ensureMfaChallengeSchema();
   const phoneNumber = await getEmployeePhone(employeeId);
   if (!phoneNumber) {
     await auditMfa(employeeId, 'MFA_PHONE_UNAVAILABLE', 'MFA challenge was not created because no valid mobile number is registered.', req);

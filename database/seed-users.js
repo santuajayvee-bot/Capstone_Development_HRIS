@@ -28,7 +28,6 @@ const USERS = [
       first_name: 'System',
       last_name: 'Administrator',
       position: 'System Administrator',
-      contact_number: '09085528852',
     },
   },
   {
@@ -41,16 +40,15 @@ const USERS = [
       first_name: 'HR',
       last_name: 'Administrator',
       position: 'HR Admin',
-      contact_number: '09192017325',
     },
   },
   {
     username: 'payroll.officer', password: 'officer123', role: 'payroll_officer', email: 'payroll.officer@lgsv.local',
-    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer', contact_number: '09913845895' }
+    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer', contact_number: '09181234567' }
   },
   {
     username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local',
-    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager', contact_number: '09994979897' }
+    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager', contact_number: '09191234567' }
   },
   { username: 'serjo.justine', password: 'emp123', role: 'employee', email: 'serjo.justine@lgsv.local', employee_id: 37 },
   { username: 'chris.brown', password: 'emp123', role: 'employee', email: 'chris.brown@lgsv.local', employee_id: 11 },
