@@ -46,6 +46,10 @@ function roleCanViewFinalized(role) {
   return ['payroll_officer', 'payroll_manager', 'system_admin', 'admin'].includes(role);
 }
 
+function isSystemAdministrator(req) {
+  return ['system_admin', 'admin'].includes(req.user?.role);
+}
+
 async function writeSystemAuditLog(executor, req, action, module, employeeId = null, metadata = null) {
   await executor.execute(
     `INSERT INTO system_audit_log
@@ -232,6 +236,10 @@ async function verifyPayrollIntegrity(req, res) {
   let payrollHash = null;
 
   try {
+    if (!isSystemAdministrator(req)) {
+      return res.status(403).json({ error: 'System Administrator access is required for blockchain integrity verification.' });
+    }
+
     payroll = await fetchPayrollRecord(pool, payrollId);
     if (!payroll) {
       await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_NOT_FOUND [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', null, {

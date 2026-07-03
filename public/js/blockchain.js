@@ -9,6 +9,68 @@ let BC_PAGE = 1;
 let BC_DTR_PAGE = 1;
 const BC_PAGE_SIZE = 10;
 
+const BC_ROLE_LABELS = {
+  admin: 'System Administrator',
+  system_admin: 'System Administrator',
+  hr_admin: 'HR Admin',
+  hr_manager: 'HR Manager',
+  payroll_officer: 'Payroll Officer',
+  payroll_manager: 'Payroll Manager',
+};
+
+const BC_LEDGER_STATUS_COPY = {
+  PENDING_APPROVAL: {
+    label: 'Waiting for Approval',
+    help: 'Not final yet',
+    color: 'badge-blue',
+  },
+  PENDING: {
+    label: 'Waiting',
+    help: 'Audit is queued',
+    color: 'badge-yellow',
+  },
+  PENDING_ANCHOR: {
+    label: 'Waiting for Fabric',
+    help: 'Finalized locally, anchor queued',
+    color: 'badge-yellow',
+  },
+  RECORDED: {
+    label: 'Recorded on Fabric',
+    help: 'Transaction receipt exists',
+    color: 'badge-green',
+  },
+  VERIFIED: {
+    label: 'Verified',
+    help: 'Hash matched Fabric',
+    color: 'badge-green',
+  },
+  FAILED: {
+    label: 'Failed',
+    help: 'Needs retry or review',
+    color: 'badge-red',
+  },
+  CRITICAL: {
+    label: 'Mismatch Detected',
+    help: 'Possible tampering',
+    color: 'badge-red',
+  },
+  NOT_FINALIZED: {
+    label: 'Not Finalized',
+    help: 'Cannot verify yet',
+    color: 'badge-blue',
+  },
+  NOT_FOUND: {
+    label: 'Missing',
+    help: 'Record not found',
+    color: 'badge-red',
+  },
+  SUCCESS: {
+    label: 'Success',
+    help: 'Completed',
+    color: 'badge-green',
+  },
+};
+
 function bcEsc(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
@@ -44,14 +106,32 @@ function bcMoney(value) {
 function bcBadge(value) {
   const text = String(value || 'UNKNOWN');
   const normalized = text.toUpperCase();
-  const color = normalized.includes('RECORDED') || normalized.includes('VERIFIED') || normalized.includes('SUCCESS')
+  const mapped = BC_LEDGER_STATUS_COPY[normalized];
+  const label = mapped?.label || text;
+  const color = mapped?.color || (normalized.includes('RECORDED') || normalized.includes('VERIFIED') || normalized.includes('SUCCESS')
     ? 'badge-green'
     : normalized.includes('PENDING')
       ? 'badge-yellow'
       : normalized.includes('CRITICAL') || normalized.includes('FAILED') || normalized.includes('TAMPER')
         ? 'badge-red'
-        : 'badge-blue';
-  return `<span class="badge ${color}">${bcEsc(text)}</span>`;
+        : 'badge-blue');
+  return `<span class="badge ${color}" title="${bcEsc(text)}">${bcEsc(label)}</span>`;
+}
+
+function bcStatusCell(value) {
+  const text = String(value || 'PENDING');
+  const normalized = text.toUpperCase();
+  const mapped = BC_LEDGER_STATUS_COPY[normalized] || {
+    label: text.replace(/_/g, ' '),
+    help: 'See audit trail',
+    color: null,
+  };
+  return `
+    <div class="bc-status-stack" title="${bcEsc(text)}">
+      ${bcBadge(text)}
+      <span class="bc-status-help">${bcEsc(mapped.help)}</span>
+    </div>
+  `;
 }
 
 function bcSetText(id, value) {
@@ -74,6 +154,11 @@ function bcUserRole() {
     : '';
 }
 
+function bcRoleLabel() {
+  const role = bcUserRole();
+  return BC_ROLE_LABELS[role] || role.replace(/_/g, ' ') || 'Current user';
+}
+
 function bcCanVerify() {
   return ['system_admin', 'admin'].includes(bcUserRole());
 }
@@ -84,6 +169,29 @@ function bcCanViewPayrollRecords() {
 
 function bcCanRetryDtrAnchor() {
   return ['hr_admin', 'hr_manager', 'system_admin', 'admin'].includes(bcUserRole());
+}
+
+function bcAccessSummary() {
+  const role = bcUserRole();
+  if (['system_admin', 'admin'].includes(role)) {
+    return `${bcRoleLabel()}: can view audit evidence, verify recorded hashes, inspect ledger history, and retry technical anchors.`;
+  }
+  if (role === 'payroll_manager') {
+    return 'Payroll Manager: can view payroll integrity evidence after approval. Final integrity verification is reserved for System Admin.';
+  }
+  if (role === 'payroll_officer') {
+    return 'Payroll Officer: can view payroll integrity status for audit awareness. Approval and verification are separated.';
+  }
+  if (role === 'hr_admin' || role === 'hr_manager') {
+    return `${bcRoleLabel()}: can view attendance DTR integrity evidence. System Admin performs final verification.`;
+  }
+  return `${bcRoleLabel()}: blockchain integrity access is limited by backend RBAC.`;
+}
+
+function bcVerificationSummary() {
+  return bcCanVerify()
+    ? 'Verification controls are enabled for your System Admin role.'
+    : 'Verify actions are locked to System Admin to separate approval from integrity checking.';
 }
 
 function bcTotalPages() {
@@ -182,12 +290,14 @@ function renderBlockchainStats(payload) {
   const records = [...payrollRecords, ...dtrRecords];
   const recorded = records.filter(row => String(row.Blockchain_Status).toUpperCase() === 'RECORDED').length;
   const pending = records.filter(row => ['PENDING_APPROVAL', 'PENDING', 'PENDING_ANCHOR'].includes(String(row.Blockchain_Status).toUpperCase())).length;
-  const critical = records.filter(row => String(row.Latest_Audit_Status).toUpperCase() === 'CRITICAL').length;
+  const critical = records.filter(row => ['CRITICAL', 'FAILED'].includes(String(row.Latest_Audit_Status).toUpperCase())).length;
   const latest = records
     .map(row => row.Latest_Audit_At || row.Finalized_At || row.updated_at || row.created_at)
     .filter(Boolean)
     .sort((a, b) => new Date(b) - new Date(a))[0] || null;
 
+  bcSetText('bc-role-scope', bcAccessSummary());
+  bcSetText('bc-verify-owner', bcVerificationSummary());
   bcSetText('bc-stat-total', records.length);
   bcSetText('bc-stat-recorded', recorded);
   bcSetText('bc-stat-pending', pending);
@@ -235,7 +345,7 @@ function renderBlockchainRows(options = {}) {
     // A Fabric receipt is issued only after finalization. Keep the client rule
     // resilient to payroll-label changes; the API repeats the finalization and RBAC checks.
     const verifyButton = bcCanVerify() && String(status).toUpperCase() === 'RECORDED'
-      ? `<button class="btn btn-outline btn-sm" onclick="verifyPayrollHash(${payrollId})">Verify</button>`
+      ? `<button class="btn btn-outline btn-sm" onclick="verifyPayrollHash(${payrollId})">Verify integrity</button>`
       : '';
 
     return `<tr>
@@ -243,14 +353,14 @@ function renderBlockchainRows(options = {}) {
       <td>${bcEsc(record.Employee_ID)}</td>
       <td>${bcMoney(record.Gross_Pay)}</td>
       <td>${bcMoney(record.Net_Pay)}</td>
-      <td>${bcBadge(status)}</td>
-      <td>${bcBadge(auditStatus)}</td>
+      <td>${bcStatusCell(status)}</td>
+      <td>${bcStatusCell(auditStatus)}</td>
       <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
       <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${verifyButton}
-          <button class="btn btn-outline btn-sm" type="button" onclick="loadBlockchainAudit(${payrollId})">View audit</button>
+          <button class="btn btn-outline btn-sm" type="button" onclick="loadBlockchainAudit(${payrollId})">Audit trail</button>
         </div>
       </td>
     </tr>`;
@@ -284,10 +394,10 @@ function renderDtrBlockchainRows(options = {}) {
     const isRecorded = String(status).toUpperCase() === 'RECORDED';
     const isPendingAnchor = String(status).toUpperCase() === 'PENDING_ANCHOR';
     const verifyButton = bcCanVerify() && isRecorded
-      ? `<button class="btn btn-outline btn-sm" onclick="verifyDtrHash(${dtrId})">Verify</button>`
+      ? `<button class="btn btn-outline btn-sm" onclick="verifyDtrHash(${dtrId})">Verify integrity</button>`
       : '';
     const retryButton = bcCanRetryDtrAnchor() && isPendingAnchor
-      ? `<button class="btn btn-outline btn-sm" onclick="retryDtrAnchor(${dtrId})">Retry Anchor</button>`
+      ? `<button class="btn btn-outline btn-sm" onclick="retryDtrAnchor(${dtrId})">Retry Fabric</button>`
       : '';
 
     return `<tr>
@@ -296,15 +406,15 @@ function renderDtrBlockchainRows(options = {}) {
       <td>${bcEsc(record.Date_Range_Start || '-')}<br><span class="tx-hash">to ${bcEsc(record.Date_Range_End || '-')}</span></td>
       <td>${bcEsc(record.Total_Work_Hours ?? '0.00')} hrs<br><span class="tx-hash">OT ${bcEsc(record.Total_Overtime_Hours ?? '0.00')}</span></td>
       <td>${bcEsc(record.Total_Late_Minutes ?? 0)} min<br><span class="tx-hash">UT ${bcEsc(record.Total_Undertime_Minutes ?? 0)} min</span></td>
-      <td>${bcBadge(status)}</td>
-      <td>${bcBadge(auditStatus)}</td>
+      <td>${bcStatusCell(status)}</td>
+      <td>${bcStatusCell(auditStatus)}</td>
       <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
       <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           ${verifyButton}
           ${retryButton}
-          <button class="btn btn-outline btn-sm" type="button" onclick="loadDtrBlockchainAudit(${dtrId})">View audit</button>
+          <button class="btn btn-outline btn-sm" type="button" onclick="loadDtrBlockchainAudit(${dtrId})">Audit trail</button>
         </div>
       </td>
     </tr>`;
@@ -346,6 +456,10 @@ async function loadBlockchainRecords() {
 }
 
 async function verifyPayrollHash(payrollId) {
+  if (!bcCanVerify()) {
+    bcShowMessage('Integrity verification is restricted to System Admin. Your role can view the audit trail.', 'warning');
+    return;
+  }
   try {
     const { response, data } = await bcRequest(`/api/blockchain/payroll/verify/${payrollId}`);
     if (response.status === 202) {
@@ -368,6 +482,10 @@ async function verifyPayrollHash(payrollId) {
 }
 
 async function verifyDtrHash(dtrId) {
+  if (!bcCanVerify()) {
+    bcShowMessage('Integrity verification is restricted to System Admin. Your role can view the audit trail.', 'warning');
+    return;
+  }
   try {
     const { response, data } = await bcRequest(`/api/blockchain/dtr/verify/${dtrId}`);
     if (response.status === 202) {
@@ -540,6 +658,8 @@ function initBlockchainPage() {
   if (!page || !document.getElementById('tx-tbody')) return;
   if (BC_INITIALIZED) return;
   BC_INITIALIZED = true;
+  bcSetText('bc-role-scope', bcAccessSummary());
+  bcSetText('bc-verify-owner', bcVerificationSummary());
   document.getElementById('bc-refresh')?.addEventListener('click', loadBlockchainRecords);
   loadBlockchainRecords();
 }

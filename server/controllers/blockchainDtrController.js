@@ -56,6 +56,10 @@ function isFabricUnavailable(error) {
   return Boolean(error?.fabricUnavailable);
 }
 
+function isSystemAdministrator(req) {
+  return ['system_admin', 'admin'].includes(req.user?.role);
+}
+
 function dtrPendingAnchorMessage(error) {
   if (error?.code === 'FABRIC_DISABLED') return FABRIC_OFFLINE_MESSAGE;
   if (error?.code === 'FABRIC_CONFIG_MISSING' || error?.code === 'FABRIC_CREDENTIAL_FILE_MISSING' || error?.code === 'FABRIC_KEY_DIRECTORY_MISSING') {
@@ -542,6 +546,10 @@ async function verifyDTRIntegrity(req, res) {
   let dtrHash = null;
 
   try {
+    if (!isSystemAdministrator(req)) {
+      return res.status(403).json({ error: 'System Administrator access is required for blockchain integrity verification.' });
+    }
+
     dtr = await fetchDTRRecord(pool, positiveInteger(dtrId, 'dtrId'));
     if (!dtr) {
       await writeDTRBlockchainAuditLog(pool, req, Number(dtrId) || 0, 'VERIFY_INTEGRITY', 'NOT_FOUND', null, null, null).catch(() => {});

@@ -1,10 +1,38 @@
 <!-- ============================================================
      pages/blockchain.html - Permissioned Blockchain Audit
      ============================================================ -->
-<div class="section-title">Blockchain Audit</div>
-<div class="section-sub">Finalized payroll and attendance DTR hashes, Fabric receipts, local fallback queues, and integrity verification</div>
+<div class="section-title">Blockchain Integrity</div>
+<div class="section-sub">Tamper-evidence for finalized payroll and attendance DTR records. Full employee and payroll data remain off-chain.</div>
 
 <div id="bc-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
+
+<div class="bc-integrity-brief" aria-label="Blockchain integrity process">
+  <div class="bc-brief-item">
+    <div class="bc-brief-label">1. Finalized</div>
+    <div class="bc-brief-copy">Payroll Manager approves payroll or HR finalizes DTR.</div>
+  </div>
+  <div class="bc-brief-arrow">&rarr;</div>
+  <div class="bc-brief-item">
+    <div class="bc-brief-label">2. Recorded</div>
+    <div class="bc-brief-copy">Only hashes, references, and approval metadata are anchored to Fabric.</div>
+  </div>
+  <div class="bc-brief-arrow">&rarr;</div>
+  <div class="bc-brief-item">
+    <div class="bc-brief-label">3. Verified</div>
+    <div class="bc-brief-copy">System Admin compares MySQL data against the Fabric record.</div>
+  </div>
+</div>
+
+<div class="bc-access-panel">
+  <div>
+    <div class="bc-access-title">Current Access Scope</div>
+    <div id="bc-role-scope" class="bc-access-copy">Loading role access...</div>
+  </div>
+  <div>
+    <div class="bc-access-title">Integrity Verification</div>
+    <div id="bc-verify-owner" class="bc-access-copy">System Admin verifies recorded hashes.</div>
+  </div>
+</div>
 
 <div class="block-stats">
   <div class="stat-card">
@@ -18,21 +46,21 @@
     <div class="stat-sub">Fabric receipts</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Pending Review / Anchor</div>
+    <div class="stat-label">Waiting</div>
     <div class="stat-val" id="bc-stat-pending" style="color:var(--yellow)">-</div>
-    <div class="stat-sub">Local fallback queue</div>
+    <div class="stat-sub">Approval or Fabric anchor</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Critical Alerts</div>
+    <div class="stat-label">Needs Attention</div>
     <div class="stat-val" id="bc-stat-critical" style="color:var(--red)">-</div>
-    <div class="stat-sub">Tamper detections</div>
+    <div class="stat-sub">Mismatch or failed audit</div>
   </div>
 </div>
 
 <div class="card" style="margin-bottom:20px;">
   <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
     <div>
-      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Network Status</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Fabric Network</div>
       <div id="bc-network-status" class="section-sub">Loading blockchain status...</div>
       <div class="section-sub">Latest audit activity: <span id="bc-stat-latest">-</span></div>
     </div>
@@ -41,7 +69,8 @@
 </div>
 
 <div class="card" style="margin-bottom:20px;">
-  <div style="font-size:14px;font-weight:700;margin-bottom:16px;">Payroll Integrity Queue</div>
+  <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Payroll Integrity</div>
+  <div class="section-sub" style="margin-bottom:16px;">Payroll Manager can view recorded payroll evidence. System Admin performs integrity verification.</div>
   <div class="table-wrap blockchain-table-wrap">
     <table class="blockchain-table" data-no-pagination="1">
       <thead>
@@ -50,10 +79,10 @@
           <th>Employee Ref</th>
           <th>Gross Pay</th>
           <th>Net Pay</th>
-          <th>Blockchain Status</th>
+          <th>Ledger State</th>
           <th>Latest Audit</th>
           <th>Receipt / Hash</th>
-          <th>Queued / Finalized At</th>
+          <th>Finalized At</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -68,7 +97,7 @@
 <div class="card" style="margin-bottom:20px;">
   <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px;">
     <div>
-      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Attendance DTR Blockchain Audit</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Attendance DTR Integrity</div>
       <div class="section-sub">Finalized attendance DTR hashes only. Raw attendance logs, biometric data, and employee PII remain off-chain in MySQL.</div>
     </div>
     <div class="section-sub">Records: <span id="bc-dtr-count">-</span></div>
@@ -82,7 +111,7 @@
           <th>Date Range</th>
           <th>Hours / OT</th>
           <th>Late / UT</th>
-          <th>Blockchain Status</th>
+          <th>Ledger State</th>
           <th>Latest Audit</th>
           <th>Receipt / Hash</th>
           <th>Finalized At</th>

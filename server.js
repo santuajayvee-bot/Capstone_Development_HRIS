@@ -6381,7 +6381,7 @@ app.get('/api/payroll/payslips', requireAuth, requireRole(ROLES.any), async (req
   } catch (err) { res.status(500).json({ error: 'Failed to fetch payslips.' }); }
 });
 
-// Blockchain — admin only
+// Blockchain integrity summary. Detailed actions stay protected in route modules.
 app.get('/api/blockchain', requireAuth, requireRole([...ROLES.admin_any, ...ROLES.payroll_any]), async (req, res) => {
   try {
     const pool = require('./config/db');
