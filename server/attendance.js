@@ -39,6 +39,8 @@ const {
   saveAttendancePolicyValues,
 } = require('./attendance-policy-engine');
 const { missingDtrPunches } = require('./dtr-punch');
+const { absenceDateKeys, loadSyntheticAbsenceRows } = require('./attendance-absence');
+const { todayManilaDateKey } = require('./utils/dateValidation');
 
 const router = express.Router();
 
@@ -824,9 +826,17 @@ router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async
     const payrollReady = cleanText(req.query.payroll_ready, 1);
     const dateFrom = cleanText(req.query.date_from, 10);
     const dateTo = cleanText(req.query.date_to, 10);
+    const normalizedStatus = status.toLowerCase();
+    const absenceDates = normalizedStatus === 'absent'
+      ? absenceDateKeys({ date, dateFrom, dateTo, month, year }, todayManilaDateKey())
+      : [];
     const conditions = [];
     const values = [];
-    if (date) {
+    if (normalizedStatus === 'absent') {
+      if (!absenceDates.length) return res.json([]);
+      conditions.push(`al.date IN (${absenceDates.map(() => '?').join(',')})`);
+      values.push(...absenceDates);
+    } else if (date) {
       if (!isDate(date)) return res.status(400).json({ error: 'date must use YYYY-MM-DD format.' });
       conditions.push('al.date = ?');
       values.push(date);
@@ -854,7 +864,6 @@ router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async
       values.push(department);
     }
     if (status) {
-      const normalizedStatus = status.toLowerCase();
       if (normalizedStatus === 'late') {
         conditions.push('COALESCE(ats.late_minutes, al.late_minutes, 0) > 0');
       } else if (normalizedStatus === 'undertime') {
@@ -878,7 +887,7 @@ router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async
               al.am_time_in, al.am_time_out, al.pm_time_in, al.pm_time_out,
               al.overtime_hours, al.late_minutes, al.undertime_minutes, al.overtime_minutes,
               al.overtime_status, al.overtime_reviewed_at, al.overtime_review_reason,
-              al.absences, al.status, al.verification_status,
+              al.status, al.verification_status,
               al.source, al.integrity_hash, al.device_id,
               ats.regular_minutes, ats.overtime_minutes AS summary_overtime_minutes,
               ats.overtime_status AS summary_overtime_status,
@@ -897,9 +906,19 @@ router.get('/all', requireAuth, requireRole(ATTENDANCE_RECORD_VIEW_ROLES), async
         LIMIT 500`,
       values
     );
-    res.json(rows.map(row => attendanceRecordForRole(req, row)));
+    const syntheticAbsences = normalizedStatus === 'absent' && !validationStatus && payrollReady === ''
+      ? await loadSyntheticAbsenceRows(pool, { dates: absenceDates, search, department })
+      : [];
+    const records = [...rows, ...syntheticAbsences]
+      .sort((left, right) => String(right.date || '').localeCompare(String(left.date || ''))
+        || String(left.employee_code || '').localeCompare(String(right.employee_code || '')))
+      .slice(0, 500);
+    res.json(records.map(row => attendanceRecordForRole(req, row)));
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch attendance records.' });
+    console.error('[attendance/all]', err.message);
+    res.status(err.statusCode === 400 ? 400 : 500).json({
+      error: err.statusCode === 400 ? err.message : 'Failed to fetch attendance records.',
+    });
   }
 });
 
