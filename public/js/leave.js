@@ -277,7 +277,7 @@ async function loadLeaveRequests() {
           employees.forEach(emp => {
             const option = document.createElement('option');
             option.value = emp.id;
-            option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
+            option.textContent = leaveEmployeeLabel(emp);
             select.appendChild(option);
           });
           if ([...select.options].some(option => option.value === currentEmployeeId)) {
@@ -787,7 +787,7 @@ async function loadEmployeesForDropdown() {
         employees.forEach(emp => {
           const option = document.createElement('option');
           option.value = emp.id;
-          option.textContent = `${emp.first_name} ${emp.last_name} (${emp.employee_code})`;
+          option.textContent = leaveEmployeeLabel(emp);
           select.appendChild(option);
         });
         if ([...select.options].some(option => option.value === currentEmployeeId)) {
@@ -1136,13 +1136,30 @@ function leaveBadge(value, kind = '') {
   return `<span class="leave-badge ${(kind || value || '').toLowerCase()}">${value || '-'}</span>`;
 }
 
+function leaveLooksEncryptedText(value) {
+  const text = String(value || '').trim();
+  return /^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]+$/i.test(text);
+}
+
+function leaveSafeText(value) {
+  const text = String(value || '').trim();
+  return text && !leaveLooksEncryptedText(text) ? text : '';
+}
+
+function leaveReadableEmployeeName(emp = {}) {
+  const employeeName = leaveSafeText(emp.employee_name || emp.name);
+  if (employeeName) return employeeName;
+  const name = [
+    leaveSafeText(emp.first_name),
+    leaveSafeText(emp.middle_name),
+    leaveSafeText(emp.last_name),
+    leaveSafeText(emp.suffix)
+  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return name || `Employee #${emp.id || emp.employee_id || '-'}`;
+}
+
 function leaveEmployeeLabel(emp) {
-  const name = [emp.first_name, emp.middle_name, emp.last_name, emp.suffix]
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return `${emp.employee_code || emp.id} - ${name || emp.employee_name || 'Employee'}`;
+  return `${leaveSafeText(emp.employee_code) || emp.id || 'EMP'} - ${leaveReadableEmployeeName(emp)}`;
 }
 
 function leaveEmployeeMatchesFilter(emp, filterText) {
@@ -1155,6 +1172,7 @@ function leaveEmployeeMatchesFilter(emp, filterText) {
     emp.last_name,
     emp.suffix,
     emp.employee_name,
+    leaveReadableEmployeeName(emp),
     emp.department,
   ].filter(Boolean).join(' ').toLowerCase().includes(needle);
 }
