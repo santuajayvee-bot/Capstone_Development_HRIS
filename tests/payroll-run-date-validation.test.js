@@ -25,6 +25,6 @@ assert(
 );
 assert(!payrollJs.includes('reportValidity('), 'Payroll Run must not call native reportValidity().');
 assert(indexHtml.includes('pages/payroll.html?v=24'), 'Payroll page include cache version must be bumped.');
-assert(indexHtml.includes('js/payroll.js?v=65'), 'Payroll JS cache version must be bumped.');
+assert(indexHtml.includes('js/payroll.js?v=66'), 'Payroll JS cache version must be bumped.');
 
 console.log('Payroll Run date validation checks passed.');
