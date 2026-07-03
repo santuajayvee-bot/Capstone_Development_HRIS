@@ -3195,6 +3195,7 @@ button,
     min-width: var(--sidebar-expanded-width) !important;
     max-width: var(--sidebar-expanded-width) !important;
     overflow: visible !important;
+    z-index: 10060 !important;
     transition:
       width .22s ease,
       min-width .22s ease,
@@ -3202,11 +3203,28 @@ button,
       box-shadow .22s ease !important;
   }
 
+  .sidebar-collapse-toggle {
+    display: inline-flex !important;
+    position: absolute !important;
+    top: 30px !important;
+    right: -16px !important;
+    width: 32px !important;
+    height: 32px !important;
+    z-index: 10120 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+
   body.sidebar-collapsed .sidebar {
     width: var(--sidebar-collapsed-width) !important;
     min-width: var(--sidebar-collapsed-width) !important;
     max-width: var(--sidebar-collapsed-width) !important;
     box-shadow: none !important;
+  }
+
+  body.sidebar-collapsed .sidebar-collapse-toggle {
+    right: -16px !important;
   }
 
   .sidebar::after {
