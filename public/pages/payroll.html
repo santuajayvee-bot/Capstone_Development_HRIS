@@ -402,7 +402,7 @@
   <div class="page-header compact">
     <div>
       <div class="section-title small">Trip-Based Logistics Payroll</div>
-      <div class="section-sub">Configure truck types, locations, and trip rates for logistics payroll.</div>
+      <div class="section-sub">Encode verified delivery trips and prepare them for payroll. Rate configuration is manager-controlled.</div>
     </div>
     <div class="button-row">
       <button class="btn btn-outline" type="button" onclick="loadLogisticsPayrollModule()">Refresh</button>
@@ -410,7 +410,7 @@
   </div>
 
   <div class="payroll-form-page logistics-payroll-page">
-    <details class="payroll-collapsible" open>
+    <details class="payroll-collapsible" data-logistics-configure-only open>
       <summary>Logistics Rate Management</summary>
       <div class="logistics-config-grid">
         <form id="logistics-truck-type-form" class="payroll-field-row" onsubmit="saveLogisticsTruckType(event)">
@@ -456,6 +456,41 @@
       </div>
       <div class="table-wrap"><div id="logistics-rates-grid"></div></div>
     </details>
+
+    <details class="payroll-collapsible" open>
+      <summary>Record Delivery Trip</summary>
+      <form id="delivery-trip-form" class="payroll-field-row" onsubmit="saveDeliveryTrip(event, 'Draft')">
+        <input type="hidden" name="id" />
+        <label>Trip-Based Employee<select name="employee_id" id="delivery-trip-employee" required><option value="">Select employee</option></select></label>
+        <label>Truck Type<select name="truck_type_id" id="delivery-trip-truck-type" required><option value="">Select truck type</option></select></label>
+        <label>Location<select name="location_id" id="delivery-trip-location" required><option value="">Select location</option></select></label>
+        <label>Trip Date<input name="trip_date" id="delivery-trip-date" type="date" required /></label>
+        <label>Trip Type<select name="trip_type" id="delivery-trip-type" required><option>1st Trip</option><option>2nd Trip</option><option>Additional Trip</option></select></label>
+        <label>Role<select name="role" id="delivery-trip-role" required><option>Driver</option><option>Helper</option></select></label>
+        <label>Number of Trips<input name="output_quantity" type="number" min="1" max="100" step="1" value="1" required /></label>
+        <label>Plate Number<input name="plate_number" maxlength="30" placeholder="ABC 1234" /></label>
+        <label>Rate Preview<span class="salary-readonly" id="delivery-trip-rate-preview">Select the trip details.</span></label>
+        <label>Trip Pay<span class="salary-readonly" id="delivery-trip-pay-preview">PHP 0.00</span></label>
+        <div class="payroll-form-actions">
+          <button class="btn btn-outline" type="reset">Clear</button>
+          <button class="btn btn-outline" type="submit">Save Draft</button>
+          <button class="btn btn-primary" type="button" onclick="submitDeliveryTripForm()">Save &amp; Mark Payroll Ready</button>
+        </div>
+      </form>
+    </details>
+
+    <div class="table-wrap logistics-trip-section">
+      <div class="payroll-card-header-row"><div><h3>Delivery Trip Queue</h3><p>Verified trip logs encoded by Payroll Officer and prepared for payroll.</p></div></div>
+      <div id="delivery-trips-grid"></div>
+    </div>
+
+    <div class="table-wrap logistics-trip-section">
+      <div class="payroll-card-header-row">
+        <div><h3>Logistics Payroll Summary</h3><p>Payroll-ready and approved trip pay for the selected period.</p></div>
+        <div class="button-row"><input class="form-control" id="logistics-summary-start" type="date" /><input class="form-control" id="logistics-summary-end" type="date" /><button class="btn btn-outline" type="button" onclick="loadLogisticsPayrollSummary()">Apply</button></div>
+      </div>
+      <div id="logistics-payroll-summary-grid"></div>
+    </div>
   </div>
 </section>
 

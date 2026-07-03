@@ -5165,7 +5165,7 @@ router.get('/logistics/payroll-summary', requireAuth, requireRole(LOGISTICS_TRIP
              COUNT(*) AS approved_trip_count, COALESCE(SUM(dt.total_trip_pay), 0) AS total_logistics_pay
         FROM delivery_trips dt
         JOIN employees e ON e.id = dt.employee_id
-       WHERE dt.status IN ('Approved', 'Included in Payroll', 'Paid')
+       WHERE dt.status IN ('Payroll Ready', 'Approved', 'Included in Payroll', 'Paid')
          AND dt.trip_date BETWEEN ? AND ?
        GROUP BY dt.employee_id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.position
        ORDER BY e.last_name, e.first_name
