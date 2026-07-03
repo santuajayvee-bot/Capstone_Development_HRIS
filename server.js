@@ -1084,11 +1084,9 @@ function employeeHasRole(req, roles) {
 
 function employeeReferencePayload(employee, options = {}) {
   const includePayrollFields = Boolean(options.includePayrollFields);
-  const employeeName = employeeDisplayName(employee);
   return {
     id: employee.id,
     employee_code: employee.employee_code,
-    employee_name: employeeName || employee.employee_code || `Employee #${employee.id}`,
     first_name: employee.first_name,
     middle_name: employee.middle_name || null,
     last_name: employee.last_name,
