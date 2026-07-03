@@ -225,6 +225,24 @@ function rejectForbiddenFields(forbiddenFields, options = {}) {
   };
 }
 
+function rejectUnexpectedFields(allowedFields, options = {}) {
+  const allowed = new Set([...allowedFields].map(field => String(field).toLowerCase()));
+  return (req, res, next) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return next();
+    const unexpected = Object.keys(body).filter(key => !allowed.has(String(key).toLowerCase()));
+    if (!unexpected.length) return next();
+    return rejectWithAudit(req, res, 403, 'Request contains unauthorized fields.', {
+      action: options.action || 'blocked_parameter_tampering_attempt',
+      module: options.module || 'PARAMETER_TAMPERING',
+      targetTable: options.targetTable || null,
+      targetRecord: req.params?.id || null,
+      newValue: { fields: unexpected, path: req.originalUrl },
+      result: 'blocked',
+    });
+  };
+}
+
 function randomSafeFilename(originalName) {
   const extension = path.extname(String(originalName || '')).toLowerCase();
   return `${crypto.randomUUID()}${extension}`;
@@ -315,6 +333,7 @@ module.exports = {
   multerFileFilter,
   randomSafeFilename,
   rejectForbiddenFields,
+  rejectUnexpectedFields,
   rejectWithAudit,
   requireSameOriginForBrowserWrites,
   secureUploadedFile,

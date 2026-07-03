@@ -238,10 +238,16 @@
   async function saveLogisticsRate(event) {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form).entries());
+    const formData = new FormData(form);
+    const rateId = Number(formData.get('id') || 0);
+    const fields = [
+      'truck_type_id', 'location_id', 'trip_type', 'role', 'base_rate',
+      'additional_rate', 'multiplier', 'special_rule_description', 'status', 'effective_date'
+    ];
+    const data = Object.fromEntries(fields.map(field => [field, formData.get(field) ?? '']));
     try {
-      await request(data.id ? `/api/payroll/logistics/rates/${Number(data.id)}` : '/api/payroll/logistics/rates', {
-        method: data.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+      await request(rateId ? `/api/payroll/logistics/rates/${rateId}` : '/api/payroll/logistics/rates', {
+        method: rateId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
       form.reset();
       const rateDate = document.querySelector('#logistics-rate-form [name="effective_date"]');

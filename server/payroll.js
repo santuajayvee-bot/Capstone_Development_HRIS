@@ -44,6 +44,7 @@ const {
   COMPUTED_PAYROLL_FIELDS,
   auditSecurityEvent,
   rejectForbiddenFields,
+  rejectUnexpectedFields,
 } = require('./security-controls');
 
 const PAYROLL_PERMISSIONS = {
@@ -130,8 +131,21 @@ const PAYROLL_SETTINGS_GUARD = rejectForbiddenFields(PAYROLL_SETTINGS_TAMPER_FIE
   module: 'PAYROLL_SECURITY',
 });
 
-const LOGISTICS_RATE_SETTINGS_GUARD = rejectForbiddenFields(
-  new Set([...PAYROLL_SETTINGS_TAMPER_FIELDS].filter(field => field !== 'role')),
+const LOGISTICS_RATE_ALLOWED_FIELDS = new Set([
+  'truck_type_id',
+  'location_id',
+  'trip_type',
+  'role',
+  'base_rate',
+  'additional_rate',
+  'multiplier',
+  'special_rule_description',
+  'status',
+  'effective_date',
+]);
+
+const LOGISTICS_RATE_SETTINGS_GUARD = rejectUnexpectedFields(
+  LOGISTICS_RATE_ALLOWED_FIELDS,
   {
     action: 'blocked_payroll_settings_parameter_tampering_attempt',
     module: 'PAYROLL_SECURITY',
