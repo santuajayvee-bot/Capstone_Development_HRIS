@@ -2623,12 +2623,18 @@ async function resolvePayslipPayload(pool, record) {
 function payslipMoneyRows(payslip) {
   const isPiece = payslip.wage_type === 'Per-Piece';
   const isTrip = payslip.wage_type === 'Per-Trip';
+  const isHourly = payslip.wage_type === 'Hourly';
   const earnings = [];
 
   if (isPiece) {
     earnings.push({ label: 'Output Pay', amount: numeric(payslip.earnings?.basic_pay) });
   } else if (isTrip) {
     earnings.push({ label: 'Trip Pay', amount: numeric(payslip.earnings?.basic_pay) });
+  } else {
+    earnings.push({
+      label: isHourly && String(payslip.earnings?.attendance_pay_basis || '').trim() ? 'Adjusted Base Pay' : 'Basic Pay',
+      amount: numeric(payslip.earnings?.basic_pay)
+    });
   }
 
   if (numeric(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: numeric(payslip.earnings.rot_sot) });
@@ -2640,7 +2646,9 @@ function payslipMoneyRows(payslip) {
   const deductions = [];
   for (const item of Array.isArray(payslip.deductions) ? payslip.deductions : []) {
     const amount = numeric(item.amount);
-    if (amount <= 0 || item.key === 'tardy_ut_total') continue;
+    const rowKey = String(item.key || '').toLowerCase();
+    const alwaysShow = ['sss', 'hdmf', 'phic'].includes(rowKey);
+    if ((!alwaysShow && amount <= 0) || item.key === 'tardy_ut_total') continue;
     const label = String(item.label || 'Deduction')
       .replace(/^HDMF\s*\/\s*/i, '')
       .replace(/^PHIC\s*\/\s*/i, '');
@@ -2702,15 +2710,24 @@ function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
   const lateMinutes = numeric(earnings.late_minutes);
   const undertimeMinutes = numeric(earnings.undertime_minutes);
+  const lateDeduction = numeric(earnings.late_deduction);
+  const undertimeDeduction = numeric(earnings.undertime_deduction);
+  const adjustmentNote = String(earnings.attendance_pay_basis || '').trim()
+    ? 'Included in adjusted base'
+    : '';
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : '',
+      amount: lateDeduction > 0 ? peso(lateDeduction) : '',
+      note: lateDeduction > 0 ? adjustmentNote : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : '',
+      amount: undertimeDeduction > 0 ? peso(undertimeDeduction) : '',
+      note: undertimeDeduction > 0 ? adjustmentNote : ''
     }
   ];
 }
@@ -2799,26 +2816,31 @@ function drawPayslipPdf(doc, payslip) {
     const headerHeight = 20;
     const rowHeight = 22;
     const labelWidth = 78;
-    const valueWidth = (width - (labelWidth * 2)) / 2;
+    const minutesWidth = 118;
+    const amountWidth = 112;
+    const noteWidth = width - labelWidth - minutesWidth - amountWidth;
     doc.rect(left, y, width, headerHeight).fillAndStroke(headerFill, border);
     doc.font('Helvetica-Bold').fontSize(11).fillColor(ink)
       .text('Attendance Adjustments', left + 6, y + 4, { width: width - 12, align: 'center' });
     y += headerHeight;
 
-    const columns = [
-      { width: labelWidth, value: rows[0]?.label || 'Late', bold: true },
-      { width: valueWidth, value: rows[0]?.value || '' },
-      { width: labelWidth, value: rows[1]?.label || 'Undertime', bold: true },
-      { width: valueWidth, value: rows[1]?.value || '' },
-    ];
-    let x = left;
-    for (const column of columns) {
-      doc.rect(x, y, column.width, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
-      doc.font(column.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9.5).fillColor(ink)
-        .text(column.value, x + 6, y + 5, { width: column.width - 12, ellipsis: true });
-      x += column.width;
+    for (const row of rows) {
+      const columns = [
+        { width: labelWidth, value: row.label || '', bold: true },
+        { width: minutesWidth, value: row.value || '' },
+        { width: amountWidth, value: row.amount || '' },
+        { width: noteWidth, value: row.note || '' },
+      ];
+      let x = left;
+      for (const column of columns) {
+        doc.rect(x, y, column.width, rowHeight).strokeColor(border).lineWidth(0.8).stroke();
+        doc.font(column.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(ink)
+          .text(column.value, x + 6, y + 5, { width: column.width - 12, ellipsis: true });
+        x += column.width;
+      }
+      y += rowHeight;
     }
-    return y + rowHeight;
+    return y;
   };
 
   let y = 28;

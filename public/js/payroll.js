@@ -2074,15 +2074,24 @@ function payslipAttendanceRows(payslip) {
   const earnings = payslip.earnings || {};
   const lateMinutes = payslipNumber(earnings.late_minutes);
   const undertimeMinutes = payslipNumber(earnings.undertime_minutes);
+  const lateDeduction = payslipNumber(earnings.late_deduction);
+  const undertimeDeduction = payslipNumber(earnings.undertime_deduction);
+  const adjustmentNote = String(earnings.attendance_pay_basis || '').trim()
+    ? 'Included in adjusted base'
+    : '';
 
   return [
     {
       label: 'Late',
-      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : ''
+      value: lateMinutes > 0 ? payslipMinuteLabel(lateMinutes) : '',
+      amount: lateDeduction > 0 ? payslipMoney(lateDeduction) : '',
+      note: lateDeduction > 0 ? adjustmentNote : ''
     },
     {
       label: 'Undertime',
-      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : ''
+      value: undertimeMinutes > 0 ? payslipMinuteLabel(undertimeMinutes) : '',
+      amount: undertimeDeduction > 0 ? payslipMoney(undertimeDeduction) : '',
+      note: undertimeDeduction > 0 ? adjustmentNote : ''
     }
   ];
 }
@@ -2096,6 +2105,8 @@ function payslipAttendanceTable(payslip) {
         <div class="lgsv-payslip-attendance-row">
           <span>${payrollEscape(row.label)}</span>
           <strong>${payrollEscape(row.value)}</strong>
+          <strong>${payrollEscape(row.amount)}</strong>
+          <strong>${payrollEscape(row.note)}</strong>
         </div>
       `).join('')}
     </div>
@@ -2105,12 +2116,18 @@ function payslipAttendanceTable(payslip) {
 function payslipRows(payslip) {
   const isPiece = payslip.wage_type === 'Per-Piece';
   const isTrip = payslip.wage_type === 'Per-Trip';
+  const isHourly = payslip.wage_type === 'Hourly';
   const earnings = [];
 
   if (isPiece) {
     earnings.push({ label: 'Output Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
   } else if (isTrip) {
     earnings.push({ label: 'Trip Pay', amount: payslipNumber(payslip.earnings?.basic_pay) });
+  } else {
+    earnings.push({
+      label: isHourly && String(payslip.earnings?.attendance_pay_basis || '').trim() ? 'Adjusted Base Pay' : 'Basic Pay',
+      amount: payslipNumber(payslip.earnings?.basic_pay)
+    });
   }
 
   if (payslipNumber(payslip.earnings?.rot_sot) > 0) earnings.push({ label: 'Overtime / Premium', amount: payslipNumber(payslip.earnings.rot_sot) });
@@ -2122,7 +2139,9 @@ function payslipRows(payslip) {
   const deductions = [];
   (Array.isArray(payslip.deductions) ? payslip.deductions : []).forEach(item => {
     const amount = payslipNumber(item.amount);
-    if (amount <= 0 || item.key === 'tardy_ut_total') return;
+    const rowKey = String(item.key || '').toLowerCase();
+    const alwaysShow = ['sss', 'hdmf', 'phic'].includes(rowKey);
+    if ((!alwaysShow && amount <= 0) || item.key === 'tardy_ut_total') return;
     const label = String(item.label || 'Deduction')
       .replace(/^HDMF\s*\/\s*/i, '')
       .replace(/^PHIC\s*\/\s*/i, '');
@@ -2266,7 +2285,7 @@ function showPayslipPreview(payslip) {
         }
         .lgsv-payslip-attendance-row {
           display: grid;
-          grid-template-columns: 210px minmax(0, 1fr);
+          grid-template-columns: 130px minmax(0, 1fr) 150px minmax(0, 1fr);
           border-bottom: 1px solid #111111;
           min-height: 30px;
         }
@@ -2281,6 +2300,9 @@ function showPayslipPreview(payslip) {
         .lgsv-payslip-attendance-row span {
           border-right: 1px solid #111111;
           font-weight: 700;
+        }
+        .lgsv-payslip-attendance-row strong:not(:last-child) {
+          border-right: 1px solid #111111;
         }
         .lgsv-payslip-attendance-row strong {
           font-weight: 400;
@@ -2336,7 +2358,8 @@ function showPayslipPreview(payslip) {
           .lgsv-payslip-table th:last-child,
           .lgsv-payslip-table td:last-child { width: 118px; }
           .lgsv-payslip-attendance-row { grid-template-columns: 1fr; }
-          .lgsv-payslip-attendance-row span { border-right: 0; border-bottom: 1px solid #111111; }
+          .lgsv-payslip-attendance-row span,
+          .lgsv-payslip-attendance-row strong { border-right: 0; border-bottom: 1px solid #111111; }
           .lgsv-payslip-signatures { gap: 24px; margin-left: 0; margin-right: 0; }
         }
       </style>
