@@ -35,10 +35,18 @@ function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>]/g, '').slice(0, maxLength);
 }
 
+function safeBiometricText(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
 function biometricEmployeeName(row) {
-  const first = decryptColumnValue(row?.first_name) || '';
-  const middle = decryptColumnValue(row?.middle_name) || '';
-  const last = decryptColumnValue(row?.last_name) || '';
+  const first = safeBiometricText(row?.first_name);
+  const middle = safeBiometricText(row?.middle_name);
+  const last = safeBiometricText(row?.last_name);
   return [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
     || row?.employee_code
     || (row?.employee_id ? `Employee #${row.employee_id}` : 'Employee');

@@ -130,10 +130,18 @@ function requireAttendanceAuditAccess(req, res, next) {
   });
 }
 
+function safeAttendanceText(value) {
+  try {
+    return decryptColumnValue(value) || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
 function attendanceEmployeeName(row) {
-  const first = decryptColumnValue(row?.first_name) || '';
-  const middle = decryptColumnValue(row?.middle_name) || '';
-  const last = decryptColumnValue(row?.last_name) || '';
+  const first = safeAttendanceText(row?.first_name);
+  const middle = safeAttendanceText(row?.middle_name);
+  const last = safeAttendanceText(row?.last_name);
   const name = [first, middle, last].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   return name || row?.employee_code || (row?.employee_id ? `Employee #${row.employee_id}` : 'Employee');
 }
