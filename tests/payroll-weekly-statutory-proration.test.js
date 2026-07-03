@@ -97,5 +97,8 @@ assert.match(payrollUi, /delete data\.fixed_divisor;/, 'Calendar-based submissio
 assert.match(payrollUi, /Enter a manual divisor before saving\./, 'Manual mode must require a user-entered divisor.');
 assert.match(payrollApi, /body\.proration_mode \|\| 'Calendar-Based Payroll Date Range'/, 'The API must default omitted proration modes to calendar-based.');
 assert.match(payrollApi, /Manual divisor must be a positive whole number\./, 'The API must reject invalid manual divisors.');
+assert.match(payrollUi, /syncWeeklyPayrollEndDate\(\);\s*validateWeeklyPayrollDates\(\);/, 'Changing the weekly start date must synchronize the end date.');
+assert.match(payrollUi, /Weekly payroll range must not exceed 7 calendar days\./, 'The UI must reject oversized weekly ranges.');
+assert.match(payrollApi, /Weekly payroll period must not exceed 7 calendar days\./, 'The API must reject oversized weekly ranges.');
 
 console.log('Weekly statutory proration tests passed.');

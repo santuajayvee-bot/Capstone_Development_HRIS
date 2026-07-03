@@ -1591,6 +1591,12 @@ function payrollDate(value, label = 'Date') {
   return strictPayrollDate(value, label);
 }
 
+function payrollDateSpanDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
 function weeklyPayrollKey(startDate, endDate) {
   const start = payrollDate(startDate, 'Payroll start date');
   const end = payrollDate(endDate, 'Payroll end date');
@@ -1603,6 +1609,10 @@ function payrollPeriodFromRequest(body = {}) {
   const end = body.end_date ? payrollDate(body.end_date, 'Payroll end date') : requestedMonth.end;
   if (start > end) throw new Error('Period start must be before or equal to period end.');
   const hasExplicitWeek = Boolean(body.start_date || body.end_date || body.weekly);
+  const payrollFrequency = String(body.payroll_frequency || body.frequency || (hasExplicitWeek ? 'Weekly' : 'Monthly')).trim();
+  if (payrollFrequency === 'Weekly' && payrollDateSpanDays(start, end) > 7) {
+    throw new Error('Weekly payroll period must not exceed 7 calendar days.');
+  }
   const key = String(body.payroll_period || body.period_key || (hasExplicitWeek ? weeklyPayrollKey(start, end) : requestedMonth.month_year)).trim();
   if (!/^\d{4}-\d{2}(?:-W[1-5])?$/.test(key)) throw new Error('Payroll period must use YYYY-MM or YYYY-MM-W# format.');
   return {
@@ -1610,7 +1620,7 @@ function payrollPeriodFromRequest(body = {}) {
     base_month: start.slice(0, 7),
     start,
     end,
-    payroll_frequency: String(body.payroll_frequency || body.frequency || (hasExplicitWeek ? 'Weekly' : 'Monthly')).trim(),
+    payroll_frequency: payrollFrequency,
     period_label: `${start} to ${end}`,
     is_weekly: hasExplicitWeek || /-W[1-5]$/.test(key)
   };

@@ -553,6 +553,22 @@ function addDaysToIsoDate(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function payrollDateSpanDays(startValue, endValue) {
+  const startMatch = String(startValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const endMatch = String(endValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!startMatch || !endMatch) return 0;
+  const utcValue = match => Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Math.floor((utcValue(endMatch) - utcValue(startMatch)) / 86400000) + 1;
+}
+
+function syncWeeklyPayrollEndDate() {
+  const startInput = document.getElementById('weekly-payroll-start');
+  const endInput = document.getElementById('weekly-payroll-end');
+  const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
+  if (!startInput?.value || !endInput || frequency !== 'Weekly') return;
+  endInput.value = addDaysToIsoDate(startInput.value, 5) || startInput.value;
+}
+
 function payrollWeekKeyFromDates(startDate, endDate) {
   const match = String(startDate || endDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return `${String(startDate || endDate).slice(0, 7)}-W1`;
@@ -583,17 +599,25 @@ function validateWeeklyPayrollDates({ adjustEnd = false } = {}) {
   const endInput = document.getElementById('weekly-payroll-end');
   const submitButton = document.querySelector('#weekly-payroll-form button[type="submit"]');
   if (!startInput || !endInput) return true;
+  const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
   if (startInput.value) endInput.min = startInput.value;
   if (adjustEnd && startInput.value && (!endInput.value || endInput.value < startInput.value)) {
-    endInput.value = addDaysToIsoDate(startInput.value, 6) || startInput.value;
+    endInput.value = addDaysToIsoDate(startInput.value, frequency === 'Weekly' ? 5 : 6) || startInput.value;
   }
-  const valid = Boolean(startInput.value && endInput.value && startInput.value <= endInput.value);
+  const dateOrderValid = Boolean(startInput.value && endInput.value && startInput.value <= endInput.value);
+  const weeklyRangeValid = frequency !== 'Weekly'
+    || (dateOrderValid && payrollDateSpanDays(startInput.value, endInput.value) <= 7);
+  const valid = dateOrderValid && weeklyRangeValid;
   if (submitButton) submitButton.disabled = !valid;
-  if (!valid && startInput.value && endInput.value) {
+  if (!dateOrderValid && startInput.value && endInput.value) {
     setWeeklyPayrollStatus('Period start must be before or equal to period end.');
+  } else if (!weeklyRangeValid) {
+    setWeeklyPayrollStatus('Weekly payroll range must not exceed 7 calendar days.');
   } else {
     const status = document.getElementById('weekly-payroll-result');
-    if (status?.textContent === 'Period start must be before or equal to period end.') status.textContent = '';
+    if (['Period start must be before or equal to period end.', 'Weekly payroll range must not exceed 7 calendar days.'].includes(status?.textContent || '')) {
+      status.textContent = '';
+    }
   }
   return valid;
 }
@@ -4972,14 +4996,24 @@ function initializePayrollModule() {
   const weeklyDepartment = document.getElementById('weekly-payroll-department');
   const weeklyPayType = document.getElementById('weekly-payroll-pay-type');
   const weeklyEmployee = document.getElementById('weekly-payroll-employee');
+  const weeklyFrequency = document.getElementById('weekly-payroll-frequency');
   const weeklyStart = document.getElementById('weekly-payroll-start');
   const weeklyEnd = document.getElementById('weekly-payroll-end');
   if (weeklyStart && !weeklyStart.dataset.dateGuardBound) {
     weeklyStart.addEventListener('change', () => {
-      validateWeeklyPayrollDates({ adjustEnd: true });
+      syncWeeklyPayrollEndDate();
+      validateWeeklyPayrollDates();
       loadWeeklyPayrollRegistry();
     });
     weeklyStart.dataset.dateGuardBound = '1';
+  }
+  if (weeklyFrequency && !weeklyFrequency.dataset.dateGuardBound) {
+    weeklyFrequency.addEventListener('change', () => {
+      if (weeklyFrequency.value === 'Weekly') syncWeeklyPayrollEndDate();
+      validateWeeklyPayrollDates();
+      loadWeeklyPayrollRegistry();
+    });
+    weeklyFrequency.dataset.dateGuardBound = '1';
   }
   if (weeklyEnd && !weeklyEnd.dataset.dateGuardBound) {
     weeklyEnd.addEventListener('change', () => {
