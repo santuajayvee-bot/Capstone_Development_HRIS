@@ -28,6 +28,7 @@ const USERS = [
       first_name: 'System',
       last_name: 'Administrator',
       position: 'System Administrator',
+      contact_number: '09085528852',
     },
   },
   {
@@ -40,11 +41,12 @@ const USERS = [
       first_name: 'HR',
       last_name: 'Administrator',
       position: 'HR Admin',
+      contact_number: '09192017325',
     },
   },
   {
     username: 'payroll.officer', password: 'officer123', role: 'payroll_officer', email: 'payroll.officer@lgsv.local',
-    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer', contact_number: '09181234567' }
+    employee: { employee_code: 'PAYROLL-OFFICER', first_name: 'Payroll', last_name: 'Officer', position: 'Payroll Officer', contact_number: '09913845895' }
   },
   {
     username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local',
