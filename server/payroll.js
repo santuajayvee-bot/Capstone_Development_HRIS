@@ -95,7 +95,7 @@ const LOGISTICS_TRIP_PERMISSIONS = {
   view: PAYROLL_PERMISSIONS.view,
   encode: ROLES.payroll_any,
   approve: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
-  configure: [...ROLES.payroll_manager, ...ROLES.hr_final_approval],
+  configure: [...ROLES.payroll_any, ...ROLES.hr_final_approval],
 };
 
 const MAX_DAILY_PIECE_OUTPUT_QUANTITY = 10000;

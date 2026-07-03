@@ -17,9 +17,14 @@
     if (typeof normalizeClientRole === 'function') return normalizeClientRole(rawRole);
     return String(rawRole).trim().toLowerCase().replace(/[\s-]+/g, '_');
   };
-  const logisticsManagerRoles = new Set(['payroll_manager', 'hr_manager', 'hr_admin']);
-  const canConfigureLogistics = () => logisticsManagerRoles.has(currentRole());
-  const canApproveLogistics = () => logisticsManagerRoles.has(currentRole());
+  const logisticsConfigurationRoles = new Set(['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin']);
+  const logisticsApprovalRoles = new Set(['payroll_manager', 'hr_manager', 'hr_admin']);
+  const hasPermission = permission => Array.isArray(currentUser().permissions)
+    && currentUser().permissions.includes(permission);
+  const canConfigureLogistics = () => logisticsConfigurationRoles.has(currentRole())
+    || hasPermission('payroll.settings.manage');
+  const canApproveLogistics = () => logisticsApprovalRoles.has(currentRole())
+    || hasPermission('payroll.approve');
 
   function periodRange(month) {
     const safeMonth = /^\d{4}-\d{2}$/.test(month || '') ? month : currentMonth();

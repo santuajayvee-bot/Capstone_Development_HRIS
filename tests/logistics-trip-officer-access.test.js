@@ -8,13 +8,16 @@ const logisticsUi = fs.readFileSync(path.join(root, 'public', 'js', 'logistics-p
 const payrollPage = fs.readFileSync(path.join(root, 'public', 'pages', 'payroll.html'), 'utf8');
 
 assert.match(payrollApi, /encode:\s*ROLES\.payroll_any/, 'Payroll Officer must be authorized to encode delivery trips.');
+assert.match(payrollApi, /configure:\s*\[\.\.\.ROLES\.payroll_any, \.\.\.ROLES\.hr_final_approval\]/, 'Payroll Officer and Payroll Manager must be authorized to configure logistics rates.');
 assert.match(payrollApi, /router\.post\('\/logistics\/trips', requireAuth, requireRole\(LOGISTICS_TRIP_PERMISSIONS\.encode\)/);
 assert.match(payrollApi, /dt\.status IN \('Payroll Ready', 'Approved', 'Included in Payroll', 'Paid'\)/, 'Payroll-ready trip logs must appear in the logistics summary.');
 assert.match(payrollPage, /id="delivery-trip-form"/, 'The Logistics Trips tab must expose the delivery-trip encoding form.');
-assert.match(payrollPage, /data-logistics-configure-only/, 'Manager-only rate configuration must be distinguishable from trip encoding.');
+assert.match(payrollPage, /data-logistics-configure-only/, 'Role-controlled rate configuration must be distinguishable from trip encoding.');
 assert.doesNotMatch(logisticsUi, /removeDeliveryTripSections/, 'The frontend must not remove the Payroll Officer delivery-trip workflow.');
 assert.match(logisticsUi, /normalizeClientRole\(rawRole\)/, 'Logistics role checks must normalize AWS role labels before hiding configuration.');
-assert.match(logisticsUi, /new Set\(\['payroll_manager', 'hr_manager', 'hr_admin'\]\)/, 'Configuration and approval controls must match backend manager roles.');
+assert.match(logisticsUi, /new Set\(\['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin'\]\)/, 'Configuration controls must include Payroll Officer and Payroll Manager.');
+assert.match(logisticsUi, /hasPermission\('payroll\.settings\.manage'\)/, 'Configuration visibility must honor the authenticated permission list for existing AWS sessions.');
+assert.match(logisticsUi, /new Set\(\['payroll_manager', 'hr_manager', 'hr_admin'\]\)/, 'Approval controls must remain manager-only.');
 assert.match(logisticsUi, /saveDeliveryTrip, submitDeliveryTripForm/, 'Payroll Officer trip encoding functions must be available to the page.');
 
 console.log('Logistics trip Payroll Officer access tests: PASS');
