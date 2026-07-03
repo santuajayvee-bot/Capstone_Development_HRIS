@@ -9,10 +9,25 @@ const {
   getLinkedEmployeeProfile,
   getUserPermissions,
 } = require('./users');
+const {
+  auditDpaEvent,
+  getCurrentDpaVersion,
+  hasAcceptedCurrentDpa,
+} = require('./dpa-service');
 
 const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
   '/api/account/password',
   '/api/auth/me',
+  '/api/dpa/status',
+  '/api/dpa/accept',
+  '/api/dpa/decline',
+]);
+
+const DPA_ALLOWED_PATHS = new Set([
+  '/api/auth/me',
+  '/api/dpa/status',
+  '/api/dpa/accept',
+  '/api/dpa/decline',
 ]);
 
 function getJwtSecret() {
@@ -120,6 +135,10 @@ function normalizeAllowedRoles(allowedRoles) {
  */
 function isAllowedDuringForcedPasswordChange(req) {
   return PASSWORD_CHANGE_ALLOWED_PATHS.has(req.originalUrl.split('?')[0]);
+}
+
+function isAllowedDuringDpaGate(req) {
+  return DPA_ALLOWED_PATHS.has(req.originalUrl.split('?')[0]);
 }
 
 function isTokenOlderThanPasswordChange(tokenPayload, passwordChangedAt) {
@@ -293,6 +312,25 @@ async function requireAuth(req, res, next) {
     req.user.passwordChangedAt = accountState.password_changed_at || null;
 
     if (await rejectClientAuthorityTampering(req, res)) return;
+
+    const dpaAccepted = await hasAcceptedCurrentDpa(req.user.id);
+    req.user.dpaAccepted = dpaAccepted;
+    req.user.dpaRequired = !dpaAccepted;
+    req.user.dpaAgreementVersion = getCurrentDpaVersion();
+
+    if (!dpaAccepted && !isAllowedDuringDpaGate(req)) {
+      await auditDpaEvent(req, 'DPA_GATE_BLOCKED_API_ACCESS', 'blocked', {
+        method: req.method,
+        path: req.originalUrl,
+        agreement_version: req.user.dpaAgreementVersion,
+      }).catch(() => {});
+      return res.status(403).json({
+        error: 'Data Privacy Agreement must be accepted before continuing.',
+        code: 'DPA_REQUIRED',
+        dpaRequired: true,
+        agreement_version: req.user.dpaAgreementVersion,
+      });
+    }
 
     if (forcePasswordChange && !isAllowedDuringForcedPasswordChange(req)) {
       return res.status(403).json({

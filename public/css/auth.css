@@ -64,3 +64,183 @@
   cursor: pointer; font-family: 'DM Sans', sans-serif;
 }
 .denied-back:hover { background: #3a6aee; }
+
+/* Data Privacy Agreement gate */
+.dpa-gate-open {
+  overflow: hidden;
+}
+
+.dpa-gate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(6px);
+}
+
+.dpa-gate-overlay[hidden] {
+  display: none;
+}
+
+.dpa-modal {
+  width: min(760px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #ffffff);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+
+.dpa-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.dpa-kicker {
+  margin-bottom: 4px;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dpa-modal h2 {
+  margin: 0;
+  color: var(--text, #0f172a);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.dpa-version {
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  word-break: break-word;
+}
+
+.dpa-modal-body {
+  overflow: auto;
+  padding: 22px 28px;
+  color: var(--text, #0f172a);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.dpa-modal-body p {
+  margin: 0 0 14px;
+}
+
+.dpa-consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.9);
+  font-weight: 600;
+}
+
+.dpa-consent-row input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.dpa-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.dpa-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 18px 28px 24px;
+  border-top: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(248, 250, 252, 0.75);
+}
+
+.dpa-btn {
+  min-height: 42px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dpa-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dpa-btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.dpa-btn-secondary {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.18);
+  color: #334155;
+}
+
+@media (max-width: 640px) {
+  .dpa-gate-overlay {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .dpa-modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .dpa-modal-header,
+  .dpa-modal-body,
+  .dpa-modal-actions {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .dpa-modal-header {
+    flex-direction: column;
+  }
+
+  .dpa-version {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .dpa-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .dpa-btn {
+    width: 100%;
+  }
+}

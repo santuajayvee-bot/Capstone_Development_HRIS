@@ -84,6 +84,11 @@ function onbToast(message, type = 'success') {
   ONB_REFRESH_TIMER = setTimeout(() => { toast.style.display = 'none'; }, 3500);
 }
 
+function onbErrorMessage(error) {
+  const message = error?.message || 'Request failed.';
+  return error?.details ? `${message} ${error.details}` : message;
+}
+
 function onbOpenModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
@@ -226,7 +231,7 @@ async function onbRefresh() {
   try {
     await Promise.all([onbLoadDashboard(), onbLoadApplicants()]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
     const body = document.getElementById('onb-review-body');
     if (body) {
       const details = error.details
@@ -716,7 +721,7 @@ async function onbRevealApplicantSensitive() {
       ['Agency contact', data.agency_contact_person ? `${data.agency_contact_person} / ${data.agency_contact_number || 'number pending'}` : 'Not provided'],
     ]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -862,7 +867,7 @@ async function onbOpenApplicant(applicantId) {
     document.getElementById('onb-review-subtitle').textContent = `${applicant.applicant_code} · Position: ${applicant.applied_position} · ${wageSummary}`;
     onbRenderReview(applicant, documents, audit, integrity, account);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -878,7 +883,7 @@ async function onbUpdateProgress() {
     onbToast('Screening and training progress saved.');
     await Promise.all([onbRefresh(), onbOpenApplicant(ONB_ACTIVE_APPLICANT)]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -894,7 +899,7 @@ async function onbSaveDecision() {
     onbToast('HR decision recorded.');
     await Promise.all([onbRefresh(), onbOpenApplicant(ONB_ACTIVE_APPLICANT)]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -911,7 +916,7 @@ async function onbTransferApplicant() {
     onbToast(`${data.employee_code} created in the Employee Directory.`);
     await Promise.all([onbRefresh(), onbOpenApplicant(ONB_ACTIVE_APPLICANT)]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -963,7 +968,7 @@ async function onbCreateEmployeeAccount(event) {
       onbToast(data.message || 'Employee account created.');
     }
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -981,7 +986,7 @@ async function onbDeleteApplicant() {
     onbToast(data.message);
     await onbRefresh();
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -996,7 +1001,7 @@ async function onbUploadDocument() {
     onbToast('Document encrypted and prepared for the 201-file.');
     await Promise.all([onbRefresh(), onbOpenApplicant(ONB_ACTIVE_APPLICANT)]);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1013,7 +1018,7 @@ async function onbDownloadDocument(documentId) {
     URL.revokeObjectURL(url);
     await onbOpenApplicant(ONB_ACTIVE_APPLICANT);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1028,7 +1033,7 @@ async function onbVerifyDocument(documentId, verificationStatus) {
     onbToast(`Document marked ${verificationStatus}.`);
     await onbOpenApplicant(ONB_ACTIVE_APPLICANT);
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1050,7 +1055,7 @@ async function onbCreateApplicant(event) {
     onbToast('Applicant added to the pre-employment workflow.');
     await onbRefresh();
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1071,7 +1076,7 @@ async function onbSavePositionRoute(event) {
     onbToast(routeId ? 'Position routing rule updated.' : 'Position routing rule saved.');
     await onbLoadDashboard();
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1110,7 +1115,7 @@ async function onbDeletePositionRoute(positionRouteId) {
     onbToast('Position routing rule deleted.');
     await onbLoadDashboard();
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 
@@ -1148,7 +1153,7 @@ async function initOnboarding() {
     onbEnhanceDateInputs();
     await onbRefresh();
   } catch (error) {
-    onbToast(error.message, 'error');
+    onbToast(onbErrorMessage(error), 'error');
   }
 }
 

@@ -27,6 +27,13 @@ function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>\x00]/g, '').slice(0, maxLength);
 }
 
+function clientIp(req) {
+  return req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
+    || req?.ip
+    || req?.socket?.remoteAddress
+    || null;
+}
+
 function validateAllowedFields(body, allowedFields) {
   const unsupported = Object.keys(body || {}).filter(field => !allowedFields.has(field));
   if (unsupported.length) {
@@ -121,7 +128,7 @@ async function writeAudit(connection, req, action, targetEmployeeId, oldValue = 
       oldValue == null ? null : JSON.stringify(oldValue),
       newValue == null ? null : JSON.stringify(newValue),
       clientIp(req),
-      cleanText(req.headers['user-agent'], 500) || null,
+      cleanText(req?.headers?.['user-agent'], 500) || null,
     ]
   );
 }

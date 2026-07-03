@@ -32,6 +32,7 @@ const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptP
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
+const dpaRoutes                              = require('./server/dpa').router;
 const { clientErrorResponse }                = require('./server/error-response');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
@@ -674,6 +675,7 @@ app.use('/api/auth', authRoutes);
 
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);
+app.use('/api/dpa', dpaRoutes);
 app.use('/api/account', accountRoutes);
 
 function requirePhilippineAddressCache(res) {

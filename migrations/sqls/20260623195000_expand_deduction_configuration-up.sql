@@ -46,6 +46,44 @@ CREATE TABLE IF NOT EXISTS payroll_deduction_brackets (
   INDEX idx_deduction_bracket_active (is_active, effective_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS employee_deduction_accounts (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  employee_id BIGINT NOT NULL,
+  module_type ENUM('Cash Advance','Employee Loan') NOT NULL,
+  deduction_name VARCHAR(120) NOT NULL,
+  loan_type VARCHAR(80) NULL,
+  original_amount DECIMAL(12,2) NOT NULL,
+  remaining_balance DECIMAL(12,2) NOT NULL,
+  installment_amount DECIMAL(12,2) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NULL,
+  status ENUM('Active','Paused','Paid','Cancelled') NOT NULL DEFAULT 'Active',
+  remarks TEXT NULL,
+  created_by BIGINT NULL,
+  updated_by BIGINT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_employee_deduction_employee (employee_id),
+  INDEX idx_employee_deduction_status (status),
+  INDEX idx_employee_deduction_dates (start_date, end_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS employee_deduction_payments (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  deduction_account_id BIGINT NOT NULL,
+  employee_id BIGINT NOT NULL,
+  salary_calculation_id BIGINT NULL,
+  payroll_period VARCHAR(7) NULL,
+  applied_amount DECIMAL(12,2) NOT NULL,
+  balance_before DECIMAL(12,2) NOT NULL,
+  balance_after DECIMAL(12,2) NOT NULL,
+  applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  created_by BIGINT NULL,
+  INDEX idx_deduction_payment_account (deduction_account_id),
+  INDEX idx_deduction_payment_employee (employee_id),
+  INDEX idx_deduction_payment_salary (salary_calculation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 ALTER TABLE employee_deduction_accounts
   MODIFY COLUMN status ENUM('Active','Suspended','Fully Paid','Cancelled','Paused','Paid') NOT NULL DEFAULT 'Active';
 

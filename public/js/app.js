@@ -159,6 +159,15 @@ function handleAppRoute(options = {}) {
     return;
   }
 
+  if (typeof requiresDpaGate === 'function' && requiresDpaGate(user)) {
+    if (typeof showDpaAgreementGate === 'function') {
+      showDpaAgreementGate({
+        afterAccept: () => handleAppRoute({ replace: true }),
+      });
+    }
+    return;
+  }
+
   if (user?.mustChangePassword || user?.forcePasswordChange) {
     route = { path: '/settings', page: 'self-service', params: { forcePasswordChange: true } };
     setAppPath('/settings', true);

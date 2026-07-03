@@ -126,19 +126,7 @@ function startLockoutCountdown(username, data) {
   lockoutPollTimer = setInterval(refreshLockoutStatus, 5000);
 }
 
-function completeAuthenticatedLogin(data) {
-  stopLockoutCountdown();
-
-  saveAuth(data.accessToken || data.token, data.user);
-  buildSidebar(data.user);
-
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
-
-  if (typeof initAttendanceRealtime === 'function') {
-    initAttendanceRealtime();
-  }
-
+function continueAuthenticatedNavigation(data) {
   if (data.mustChangePassword || data.user?.mustChangePassword || data.user?.forcePasswordChange) {
     loginError('Please change your temporary password before continuing.', true);
     if (typeof showToast === 'function') {
@@ -164,6 +152,35 @@ function completeAuthenticatedLogin(data) {
   } else {
     navigate('dashboard', null);
   }
+}
+
+async function completeAuthenticatedLogin(data, options = {}) {
+  stopLockoutCountdown();
+
+  saveAuth(data.accessToken || data.token, data.user);
+
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+
+  if (!options.skipDpaGate && typeof requiresDpaGate === 'function' && requiresDpaGate(data.user)) {
+    if (typeof showDpaAgreementGate === 'function') {
+      showDpaAgreementGate({
+        afterAccept: () => {
+          const acceptedUser = typeof getUser === 'function' ? getUser() : data.user;
+          completeAuthenticatedLogin({ ...data, user: acceptedUser }, { skipDpaGate: true });
+        },
+      });
+      return;
+    }
+  }
+
+  buildSidebar(data.user);
+
+  if (typeof initAttendanceRealtime === 'function') {
+    initAttendanceRealtime();
+  }
+
+  continueAuthenticatedNavigation(data);
 }
 
 function setLoginStep(mfaRequired) {
@@ -239,7 +256,7 @@ async function verifyMfaCode() {
       if ([409, 410, 429].includes(response.status)) activeMfaChallenge = null;
       return;
     }
-    completeAuthenticatedLogin(data);
+    await completeAuthenticatedLogin(data);
   } catch (_) {
     loginError('Cannot reach the server. Please try again.');
   } finally {
@@ -322,7 +339,7 @@ async function doLogin() {
       return;
     }
 
-    completeAuthenticatedLogin(data);
+    await completeAuthenticatedLogin(data);
   } catch (err) {
     loginError('Cannot reach server. Is it running?');
   } finally {

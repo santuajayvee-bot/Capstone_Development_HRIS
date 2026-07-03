@@ -739,6 +739,7 @@ router.post('/positions', async (req, res) => {
     res.json({ message: 'Position routing rule saved.' });
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1030,6 +1031,7 @@ router.delete('/applicants/:applicantId', async (req, res) => {
     });
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1310,6 +1312,7 @@ router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_
     });
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1332,6 +1335,7 @@ router.post('/applicants/:applicantId/transfer', requireRole(HR_FINAL_APPROVAL_R
     res.status(201).json({ message: 'Approved applicant transferred to Employee Directory.', ...transferResult });
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Employee code or email already exists in the Employee Directory.' });
     res.status(400).json({ error: error.message });
   } finally {
@@ -1390,6 +1394,7 @@ router.post('/applicants/:applicantId/documents', (req, res, next) => {
   } catch (error) {
     await connection.rollback();
     if (filePath) await fs.promises.unlink(filePath).catch(() => {});
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1418,6 +1423,7 @@ router.get('/applicants/:applicantId/documents/:documentId/download', async (req
     res.send(buffer);
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1448,6 +1454,7 @@ router.patch('/applicants/:applicantId/documents/:documentId/verify', async (req
     res.json({ message: `Document marked ${status}.` });
   } catch (error) {
     await connection.rollback();
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   } finally {
     connection.release();
@@ -1494,6 +1501,7 @@ router.get('/applicants/:applicantId/integrity', async (req, res) => {
       pending_anchor_count: records.filter(row => row.anchor_status === 'PENDING').length,
     });
   } catch (error) {
+    if (isEncryptedDataAuthFailure(error)) return encryptedDataAuthErrorResponse(res);
     res.status(400).json({ error: error.message });
   }
 });

@@ -23,6 +23,10 @@ const {
   getLinkedEmployeeProfile,
 } = require('../server/users');
 const {
+  getCurrentDpaVersion,
+  hasAcceptedCurrentDpa,
+} = require('../server/dpa-service');
+const {
   MfaServiceError,
   createMfaChallenge,
   isMfaEnabled,
@@ -99,6 +103,7 @@ async function buildAuthenticatedUser(user) {
   const employeeId = user.employee_table_id || user.Employee_ID;
   const permissions = await getUserPermissions(user.id, role);
   const employeeProfile = await getLinkedEmployeeProfile(employeeId);
+  const dpaAccepted = await hasAcceptedCurrentDpa(user.id);
 
   return {
     id: user.id,
@@ -116,6 +121,9 @@ async function buildAuthenticatedUser(user) {
     passwordChangedAt: user.Password_Changed_At || null,
     permissions,
     employeeProfile,
+    dpaAccepted,
+    dpaRequired: !dpaAccepted,
+    dpaAgreementVersion: getCurrentDpaVersion(),
   };
 }
 
