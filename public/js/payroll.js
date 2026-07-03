@@ -2910,21 +2910,64 @@ function openPayrollClearanceReview(caseId) {
     loadOffboardingClearance();
     return;
   }
+  const checklistFields = [
+    ['last_payroll_period_checked', 'Last Payroll Period'],
+    ['attendance_checked', 'Attendance'],
+    ['leave_balance_checked', 'Leave Balance'],
+    ['deductions_checked', 'Deductions'],
+    ['benefits_or_13th_month_checked', 'Benefits / 13th Month'],
+  ];
+  const moneyField = (label, name, value) => `
+    <label class="payroll-clearance-field">
+      <span class="payroll-clearance-label">${label}</span>
+      <span class="payroll-clearance-money"><span>PHP</span><input name="${name}" type="number" min="0" step="0.01" value="${payrollEscape(value || '0.00')}" /></span>
+    </label>
+  `;
+  const checklist = checklistFields.map(([field, label]) => `
+    <label class="payroll-clearance-toggle-row">
+      <span>${label}</span>
+      <span class="payroll-clearance-toggle">
+        <input type="hidden" name="${field}" value="No" />
+        <input type="checkbox" name="${field}" value="Yes" ${row[field] === 'Yes' ? 'checked' : ''} aria-label="${label} checked" />
+        <span class="payroll-clearance-toggle-track" aria-hidden="true"></span>
+      </span>
+    </label>
+  `).join('');
   payrollModal('payroll-clearance-modal', 'Payroll Clearance Review', `
     ${offboardingReadonlyBlock(row)}
-    <form id="payroll-clearance-form" class="payroll-breakdown-grid" onsubmit="submitPayrollClearance(event, ${caseId})">
-      <label>final attendance cutoff<input name="final_attendance_cutoff" type="date" value="${payrollEscape(row.final_attendance_cutoff || '')}" /></label>
-      <label>unpaid salary<input name="unpaid_salary" type="number" min="0" step="0.01" value="${payrollEscape(row.unpaid_salary || '0.00')}" /></label>
-      <label>deductions<input name="final_deductions" type="number" min="0" step="0.01" value="${payrollEscape(row.final_deductions || '0.00')}" /></label>
-      <label>allowances<input name="final_allowances" type="number" min="0" step="0.01" value="${payrollEscape(row.final_allowances || '0.00')}" /></label>
-      <label>pending benefits<input name="pending_benefits" type="number" min="0" step="0.01" value="${payrollEscape(row.pending_benefits || '0.00')}" /></label>
-      ${['last_payroll_period_checked','attendance_checked','leave_balance_checked','deductions_checked','benefits_or_13th_month_checked'].map(field => `
-        <label>${field.replace(/_/g, ' ')}<select name="${field}"><option ${row[field] === 'No' ? 'selected' : ''}>No</option><option ${row[field] === 'Yes' ? 'selected' : ''}>Yes</option></select></label>
-      `).join('')}
-      <label>loans or cash advances checked<select name="loans_or_cash_advances_checked"><option ${row.loans_or_cash_advances_checked === 'No' ? 'selected' : ''}>No</option><option ${row.loans_or_cash_advances_checked === 'Yes' ? 'selected' : ''}>Yes</option><option ${row.loans_or_cash_advances_checked === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option></select></label>
-      <label>payroll clearance status<select name="payroll_clearance_status"><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select></label>
-      <label style="grid-column:1/-1;">payroll remarks<textarea name="payroll_remarks" rows="3">${payrollEscape(row.payroll_remarks || '')}</textarea></label>
-      <div class="payroll-breakdown-actions" style="grid-column:1/-1;"><button class="btn btn-outline" type="button" onclick="document.getElementById('payroll-clearance-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+    <form id="payroll-clearance-form" class="payroll-clearance-form" onsubmit="submitPayrollClearance(event, ${caseId})">
+      <section class="payroll-clearance-section">
+        <h3>Final Pay Inputs</h3>
+        <div class="payroll-clearance-grid">
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Final Attendance Cutoff</span>
+            <input name="final_attendance_cutoff" type="date" value="${payrollEscape(row.final_attendance_cutoff || '')}" />
+          </label>
+          ${moneyField('Unpaid Salary', 'unpaid_salary', row.unpaid_salary)}
+          ${moneyField('Deductions', 'final_deductions', row.final_deductions)}
+          ${moneyField('Allowances', 'final_allowances', row.final_allowances)}
+          ${moneyField('Pending Benefits', 'pending_benefits', row.pending_benefits)}
+        </div>
+      </section>
+      <section class="payroll-clearance-section">
+        <h3>Clearance Checklist</h3>
+        <div class="payroll-clearance-grid payroll-clearance-checklist">
+          ${checklist}
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Loans / Cash Advances</span>
+            <select name="loans_or_cash_advances_checked"><option ${row.loans_or_cash_advances_checked === 'No' ? 'selected' : ''}>No</option><option ${row.loans_or_cash_advances_checked === 'Yes' ? 'selected' : ''}>Yes</option><option ${row.loans_or_cash_advances_checked === 'Not Applicable' ? 'selected' : ''}>Not Applicable</option></select>
+          </label>
+          <label class="payroll-clearance-field">
+            <span class="payroll-clearance-label">Clearance Status</span>
+            <select name="payroll_clearance_status"><option>Pending</option><option>Checked</option><option>Cleared</option><option>With Issue</option></select>
+          </label>
+          <label class="payroll-clearance-field payroll-clearance-field-wide">
+            <span class="payroll-clearance-label">Payroll Remarks</span>
+            <textarea name="payroll_remarks" rows="3" placeholder="Add payroll clearance notes">${payrollEscape(row.payroll_remarks || '')}</textarea>
+          </label>
+        </div>
+      </section>
+      <div class="payroll-breakdown-actions payroll-clearance-actions"><button class="btn btn-outline" type="button" onclick="document.getElementById('payroll-clearance-modal')?.remove()">Cancel</button><button class="btn btn-primary" type="submit">Save Changes</button></div>
     </form>
   `);
   document.querySelector('#payroll-clearance-form [name="payroll_clearance_status"]').value = row.payroll_clearance_status || 'Pending';
