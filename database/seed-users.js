@@ -50,7 +50,7 @@ const USERS = [
   },
   {
     username: 'payroll.manager', password: 'manager123', role: 'payroll_manager', email: 'payroll.manager@lgsv.local',
-    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager', contact_number: '09191234567' }
+    employee: { employee_code: 'PAYROLL-MANAGER', first_name: 'Payroll', last_name: 'Manager', position: 'Payroll Manager', contact_number: '09994979897' }
   },
   { username: 'serjo.justine', password: 'emp123', role: 'employee', email: 'serjo.justine@lgsv.local', employee_id: 37 },
   { username: 'chris.brown', password: 'emp123', role: 'employee', email: 'chris.brown@lgsv.local', employee_id: 11 },

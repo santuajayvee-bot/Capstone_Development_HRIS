@@ -20,6 +20,7 @@ const MFA_PHONE_TARGETS = [
   { username: 'hr.admin', phoneNumber: '09192017325' },
   { username: 'sys.admin', phoneNumber: '09085528852' },
   { username: 'payroll.officer', phoneNumber: '09913845895' },
+  { username: 'payroll.manager', phoneNumber: '09994979897' },
 ];
 
 const applyChanges = process.argv.includes('--apply');

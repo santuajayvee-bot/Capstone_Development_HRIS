@@ -10,6 +10,7 @@ const expectedMappings = [
   ['hr.admin', '09192017325'],
   ['sys.admin', '09085528852'],
   ['payroll.officer', '09913845895'],
+  ['payroll.manager', '09994979897'],
 ];
 
 for (const [username, phoneNumber] of expectedMappings) {
