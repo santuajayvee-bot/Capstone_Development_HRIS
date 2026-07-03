@@ -56,7 +56,7 @@
       </div>
       <button class="btn btn-outline" type="button" onclick="loadWeeklyPayrollRegistry()">Refresh Register</button>
     </div>
-    <form id="weekly-payroll-form" class="payroll-run-grid" onsubmit="generateWeeklyPayroll(event)">
+    <form id="weekly-payroll-form" class="payroll-run-grid" onsubmit="generateWeeklyPayroll(event)" novalidate>
       <label class="payroll-run-field">Start Date<input id="weekly-payroll-start" name="start_date" type="date" required /></label>
       <label class="payroll-run-field">End Date<input id="weekly-payroll-end" name="end_date" type="date" required /></label>
       <label class="payroll-run-field">Payroll Frequency<select id="weekly-payroll-frequency" name="payroll_frequency"><option>Weekly</option><option>Semi-Monthly</option><option>Monthly</option></select></label>
