@@ -272,36 +272,10 @@ function renderSalaryPayrollValidation(validation) {
   `;
 }
 
-function renderSalaryOutputBasisNotice(wageType) {
-  const normalized = normalizeSalaryWageType(wageType);
-  if (normalized !== 'Per-Trip') {
-    renderSalaryPayrollValidation(null);
-    return false;
-  }
-  salaryPayrollValidation = null;
-  const box = salaryValidationBox();
-  if (!box) return false;
-  box.style.display = 'block';
-  box.style.borderColor = 'rgba(59,130,246,.35)';
-  box.style.background = 'rgba(59,130,246,.05)';
-  box.innerHTML = `
-    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
-      <div>
-        <div style="color:#2563eb;font-size:12px;">Per-trip output payroll</div>
-        <div style="color:var(--muted);margin-top:4px;">Attendance is for tracking only. Payroll uses encoded delivery trips and configured logistics rates.</div>
-      </div>
-      <div style="color:var(--muted);white-space:nowrap;">Output-based</div>
-    </div>
-  `;
-  return true;
-}
-
 async function loadSalaryPayrollValidation() {
   if (!currentSalaryEmployee || !salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
     salaryPayrollValidation = null;
-    if (!currentSalaryEmployee || !renderSalaryOutputBasisNotice(currentSalaryEmployee.wageType)) {
-      renderSalaryPayrollValidation(null);
-    }
+    renderSalaryPayrollValidation(null);
     return null;
   }
   const workDate = selectedSalaryWorkDate();
@@ -1328,7 +1302,7 @@ async function clickSalaryEmployee(id, code, first, last, dept, pos) {
     if (salaryUsesAttendanceValidation(normalizedWageType)) {
       await loadSalaryPayrollValidation();
     } else {
-      renderSalaryOutputBasisNotice(normalizedWageType);
+      renderSalaryPayrollValidation(null);
       calculateSalaryNow();
     }
     
@@ -1437,7 +1411,7 @@ function showWageStructureForm(wageType) {
     console.log('✅ Showing Per-Trip form...');
     perPieceSection.style.display = 'none';
     perTripSection.style.display = 'block';
-    renderSalaryOutputBasisNotice(wageType);
+    renderSalaryPayrollValidation(null);
     const hourlySection = document.getElementById('hourly-section');
     const dailySection = document.getElementById('daily-section');
     if (hourlySection) hourlySection.style.display = 'none';
@@ -1681,7 +1655,7 @@ function attachSalaryInputListeners() {
       if (currentSalaryEmployee && salaryUsesAttendanceValidation(currentSalaryEmployee.wageType)) {
         loadSalaryPayrollValidation();
       } else if (currentSalaryEmployee?.wageType === 'Per-Trip') {
-        renderSalaryOutputBasisNotice(currentSalaryEmployee.wageType);
+        renderSalaryPayrollValidation(null);
       }
       if (currentSalaryEmployee && ['Per-Piece', 'Per-Trip'].includes(currentSalaryEmployee.wageType)
         && periodInput.dataset.activeEncodingPeriod

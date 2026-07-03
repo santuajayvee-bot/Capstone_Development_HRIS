@@ -8,7 +8,6 @@ const source = `${fs.readFileSync(sourcePath, 'utf8')}
 globalThis.__salaryCalculationTestApi = {
   normalizeSalaryWageType,
   salaryUsesAttendanceValidation,
-  renderSalaryOutputBasisNotice,
   salaryApiError,
 };`;
 
@@ -37,18 +36,14 @@ vm.runInContext(source, context, { filename: sourcePath });
   assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Piece'), false);
   assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Trip'), false);
 
-  const noticeBox = { style: {}, innerHTML: '' };
+  const noticeBox = { style: {}, innerHTML: 'stale content' };
   context.document = {
     getElementById(id) {
       return id === 'salary-payroll-validation' ? noticeBox : null;
     },
   };
-  assert.strictEqual(api.renderSalaryOutputBasisNotice('Per-Trip'), true);
-  assert.strictEqual(noticeBox.style.display, 'block');
-  assert.match(noticeBox.innerHTML, /Per-trip output payroll/);
-  assert.match(noticeBox.innerHTML, /Attendance is for tracking only/);
-  assert.strictEqual(noticeBox.innerHTML.includes('payroll-ready attendance'), false);
-  assert.strictEqual(noticeBox.innerHTML.includes('Days Worked must be greater than zero'), false);
+  assert.strictEqual(api.salaryUsesAttendanceValidation('Per-Trip'), false);
+  assert.doesNotMatch(source, /Per-trip output payroll|Attendance is for tracking only|Output-based/);
 
   const error = await api.salaryApiError({
     text: async () => JSON.stringify({
