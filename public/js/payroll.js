@@ -591,7 +591,9 @@ function syncWeeklyPayrollEndDate() {
   const endInput = document.getElementById('weekly-payroll-end');
   const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
   if (!startInput?.value || !endInput || frequency !== 'Weekly') return;
-  endInput.value = addDaysToIsoDate(startInput.value, 5) || startInput.value;
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
+  const synchronizedEnd = addDaysToIsoDate(startInput.value, 5) || startInput.value;
+  endInput.value = synchronizedEnd > today ? today : synchronizedEnd;
 }
 
 function payrollWeekKeyFromDates(startDate, endDate) {
@@ -615,8 +617,10 @@ function setDefaultWeeklyPayrollDates() {
   start.setDate(now.getDate() - day + 1);
   const end = new Date(start);
   end.setDate(start.getDate() + 5);
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   startInput.value = dateInputValue(start);
-  endInput.value = dateInputValue(end);
+  const defaultEnd = dateInputValue(end);
+  endInput.value = defaultEnd > today ? today : defaultEnd;
 }
 
 function validateWeeklyPayrollDates({ adjustEnd = false } = {}) {
@@ -625,22 +629,38 @@ function validateWeeklyPayrollDates({ adjustEnd = false } = {}) {
   const submitButton = document.querySelector('#weekly-payroll-form button[type="submit"]');
   if (!startInput || !endInput) return true;
   const frequency = document.getElementById('weekly-payroll-frequency')?.value || 'Weekly';
+  const today = window.LGSVDatePicker?.todayValue?.() || dateInputValue(new Date());
   if (startInput.value) endInput.min = startInput.value;
+  startInput.max = today;
+  endInput.max = today;
   if (adjustEnd && startInput.value && (!endInput.value || endInput.value < startInput.value)) {
-    endInput.value = addDaysToIsoDate(startInput.value, frequency === 'Weekly' ? 5 : 6) || startInput.value;
+    const adjustedEnd = addDaysToIsoDate(startInput.value, frequency === 'Weekly' ? 5 : 6) || startInput.value;
+    endInput.value = adjustedEnd > today ? today : adjustedEnd;
   }
+  const startFuture = Boolean(startInput.value && startInput.value > today);
+  const endFuture = Boolean(endInput.value && endInput.value > today);
   const dateOrderValid = Boolean(startInput.value && endInput.value && startInput.value <= endInput.value);
   const weeklyRangeValid = frequency !== 'Weekly'
     || (dateOrderValid && payrollDateSpanDays(startInput.value, endInput.value) <= 7);
-  const valid = dateOrderValid && weeklyRangeValid;
+  const futureDateValid = !startFuture && !endFuture;
+  const valid = dateOrderValid && weeklyRangeValid && futureDateValid;
   if (submitButton) submitButton.disabled = !valid;
-  if (!dateOrderValid && startInput.value && endInput.value) {
+  if (startFuture) {
+    setWeeklyPayrollStatus('Payroll start date cannot be in the future.');
+  } else if (endFuture) {
+    setWeeklyPayrollStatus('Payroll end date cannot be in the future.');
+  } else if (!dateOrderValid && startInput.value && endInput.value) {
     setWeeklyPayrollStatus('Period start must be before or equal to period end.');
   } else if (!weeklyRangeValid) {
     setWeeklyPayrollStatus('Weekly payroll range must not exceed 7 calendar days.');
   } else {
     const status = document.getElementById('weekly-payroll-result');
-    if (['Period start must be before or equal to period end.', 'Weekly payroll range must not exceed 7 calendar days.'].includes(status?.textContent || '')) {
+    if ([
+      'Payroll start date cannot be in the future.',
+      'Payroll end date cannot be in the future.',
+      'Period start must be before or equal to period end.',
+      'Weekly payroll range must not exceed 7 calendar days.'
+    ].includes(status?.textContent || '')) {
       status.textContent = '';
     }
   }

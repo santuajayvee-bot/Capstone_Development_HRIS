@@ -99,6 +99,8 @@ assert.match(payrollApi, /body\.proration_mode \|\| 'Calendar-Based Payroll Date
 assert.match(payrollApi, /Manual divisor must be a positive whole number\./, 'The API must reject invalid manual divisors.');
 assert.match(payrollUi, /syncWeeklyPayrollEndDate\(\);\s*validateWeeklyPayrollDates\(\);/, 'Changing the weekly start date must synchronize the end date.');
 assert.match(payrollUi, /Weekly payroll range must not exceed 7 calendar days\./, 'The UI must reject oversized weekly ranges.');
+assert.match(payrollUi, /Payroll end date cannot be in the future\./, 'The UI must reject future payroll end dates before previewing.');
+assert.match(payrollApi, /payrollValidationError\(`\$\{label\} cannot be in the future\.`\)/, 'Payroll date validation must return safe 400 errors for future dates.');
 assert.match(payrollApi, /Weekly payroll period must not exceed 7 calendar days\./, 'The API must reject oversized weekly ranges.');
 
 console.log('Weekly statutory proration tests passed.');

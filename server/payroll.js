@@ -216,10 +216,17 @@ function todayManilaDateKey() {
   return new Date(Date.now() + (8 * 60 * 60 * 1000)).toISOString().slice(0, 10);
 }
 
+function payrollValidationError(message) {
+  const err = new Error(message);
+  err.status = 400;
+  err.statusCode = 400;
+  return err;
+}
+
 function strictPayrollDate(value, label = 'Date', { allowFuture = false } = {}) {
   const text = String(value || '').trim();
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) throw new Error(`${label} must use YYYY-MM-DD.`);
+  if (!match) throw payrollValidationError(`${label} must use YYYY-MM-DD.`);
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -227,8 +234,8 @@ function strictPayrollDate(value, label = 'Date', { allowFuture = false } = {}) 
   const validCalendarDate = parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
-  if (!validCalendarDate) throw new Error(`${label} is not a valid calendar date.`);
-  if (!allowFuture && text > todayManilaDateKey()) throw new Error(`${label} cannot be in the future.`);
+  if (!validCalendarDate) throw payrollValidationError(`${label} is not a valid calendar date.`);
+  if (!allowFuture && text > todayManilaDateKey()) throw payrollValidationError(`${label} cannot be in the future.`);
   return text;
 }
 
@@ -8342,7 +8349,7 @@ router.post('/generate/preview', requireAuth, requireRole(ROLES.payroll_any), PA
       payrollPeriod: payrollPeriodForPerformance,
       status: 'failed',
     });
-    const status = /required|must|period|invalid/i.test(err.message) ? 400 : 500;
+    const status = Number(err.status || err.statusCode) === 400 || /required|must|period|invalid|future|date/i.test(err.message) ? 400 : 500;
     res.status(status).json({ error: status === 400 ? err.message : 'Failed to preview payroll generation.' });
   }
 });
