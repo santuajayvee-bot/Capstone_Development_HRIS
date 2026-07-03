@@ -1,0 +1,185 @@
+BLOCKCHAIN MODULE DEFENSE SCRIPT - REVISED
+LGSV HR System
+
+Use this version for IT panelists. It is shorter, more technical, and less repetitive.
+
+
+OPENING
+
+I will explain the Blockchain Integrity module of the LGSV HR system.
+
+This module is not the payroll processor and it is not the main database. It is an integrity layer used to verify finalized payroll and finalized attendance DTR records.
+
+The main goal is to detect whether a finalized record in MySQL was modified after approval.
+
+
+SYSTEM DESIGN
+
+The system uses MySQL for operational data and Hyperledger Fabric for tamper-evidence.
+
+Full HR and payroll data stay off-chain in MySQL. Fabric stores only hashes, record references, approval metadata, and transaction records.
+
+This design is intentional because HR data is sensitive. We get integrity verification without exposing full PII or salary details on-chain.
+
+
+WHAT HAPPENS DURING FINALIZATION
+
+For payroll, the Payroll Manager finalizes the payroll record.
+
+After finalization, the backend selects the finalized payroll fields that should be protected, such as:
+
+- Payroll ID
+- Employee reference
+- Gross pay
+- Statutory deductions
+- Net pay
+- Non-taxable allowance
+- Approval status
+- Finalized timestamp
+- Approved by
+
+The backend then builds a stable payload from those fields and computes a SHA-256 hash.
+
+Conceptually:
+
+payload = finalized payroll fields
+hash = SHA-256(payload)
+
+That hash is submitted to Hyperledger Fabric through the Fabric Gateway. Fabric returns a transaction ID, and the system saves that transaction reference back to MySQL.
+
+The same idea applies to finalized DTR records. The backend hashes the finalized DTR summary fields, records the hash to Fabric, and stores the Fabric transaction reference.
+
+
+WHAT SYSTEM ADMIN DOES
+
+The System Admin does not manually compare database rows against blockchain rows.
+
+The System Admin triggers verification through the Blockchain Integrity module.
+
+When Verify Integrity is clicked, the backend does this:
+
+1. Load the current finalized record from MySQL.
+2. Rebuild the same canonical payload.
+3. Recompute the SHA-256 hash.
+4. Query Hyperledger Fabric for the stored record/hash.
+5. Compare the current MySQL hash against the Fabric hash.
+6. Save the verification result in the audit trail.
+
+If the hashes match, the result is Verified.
+
+If the hashes do not match, the result is Critical or Mismatch Detected.
+
+
+WHY THIS DETECTS TAMPERING
+
+A hash changes when the protected data changes.
+
+For example, if a finalized net pay is changed directly in MySQL, the recomputed hash will be different from the hash recorded in Fabric.
+
+That mismatch tells the system that the off-chain record no longer matches the original finalized version.
+
+
+ROLE BOUNDARY
+
+Payroll Manager handles business approval.
+
+System Admin handles technical integrity verification.
+
+That separation is important because the same role should not both approve payroll and verify the integrity proof.
+
+In short:
+
+Payroll Manager approves.
+System Admin verifies.
+The backend performs the hash comparison.
+
+
+UI STATUS TERMS
+
+Waiting for Approval:
+The payroll or DTR is not final yet, so it should not be anchored to Fabric.
+
+Waiting for Fabric:
+The record is finalized locally, but Fabric anchoring is still pending. This usually means Fabric is unavailable or the anchor needs retry.
+
+Recorded on Fabric:
+The hash was successfully written to Fabric and a transaction reference exists.
+
+Verified:
+The current MySQL record still matches the Fabric proof.
+
+Mismatch Detected:
+The current MySQL record no longer matches the Fabric proof.
+
+Failed:
+The anchoring or verification process had a technical failure.
+
+
+DEMO FLOW
+
+For the demo:
+
+1. Open the Blockchain Integrity module.
+2. Select a payroll or DTR record with Recorded on Fabric status.
+3. Click Verify Integrity as System Admin.
+4. Show that the result becomes Verified.
+5. Open the Audit Trail.
+6. Show the event type, actor role, timestamp, payload hash, transaction hash, and status.
+
+If we need to demonstrate tamper detection, we should only use a dummy payroll record.
+
+The demo would be:
+
+1. Verify the dummy recorded payroll first. It should pass.
+2. Simulate tampering by changing one finalized payroll value directly in MySQL.
+3. Click Verify Integrity again.
+4. The system should return Mismatch Detected or Critical.
+5. Restore the original value immediately.
+
+This proves that the UI does not need to allow editing finalized payroll. The detection is for unauthorized database-level changes.
+
+
+PANEL QUESTIONS AND ANSWERS
+
+Question:
+Why not store the full payroll record on blockchain?
+
+Answer:
+Because payroll and HR data contain sensitive PII. We store full data in MySQL and store only hashes and references on Fabric. This preserves privacy while still supporting integrity verification.
+
+
+Question:
+How does the system verify the data?
+
+Answer:
+The backend recomputes the SHA-256 hash from the current finalized MySQL record and compares it against the hash stored in Hyperledger Fabric. Matching hashes mean the record is intact. Different hashes indicate possible tampering.
+
+
+Question:
+Why is verification only for System Admin?
+
+Answer:
+Because Payroll Manager is already the payroll approver. System Admin handles technical verification to maintain separation of duties.
+
+
+Question:
+What happens if Fabric is down?
+
+Answer:
+The record can remain finalized in MySQL and be marked as Waiting for Fabric. The system keeps the local audit state and can anchor or retry once Fabric is available.
+
+
+Question:
+Can blockchain prevent tampering?
+
+Answer:
+It does not prevent someone with direct database access from attempting a change. It detects that the finalized record no longer matches the original blockchain proof. So the module provides tamper-evidence, not database access control.
+
+
+CLOSING
+
+To summarize, the Blockchain Integrity module protects finalized payroll and DTR records through hash-based verification.
+
+MySQL stores the actual operational data. Hyperledger Fabric stores the integrity proof.
+
+If finalized off-chain data changes later, the recomputed hash will not match the Fabric hash, and the system flags it as a critical integrity issue.

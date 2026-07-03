@@ -8,9 +8,6 @@
   <button class="sysadmin-tab active" data-tab="accounts" onclick="switchSysAdminTab('accounts', this)">
     Account Management
   </button>
-  <button class="sysadmin-tab" data-tab="account-requests" onclick="switchSysAdminTab('account-requests', this)">
-    Account Requests
-  </button>
   <button class="sysadmin-tab" data-tab="roles" onclick="switchSysAdminTab('roles', this)">
     Role and Access Control
   </button>
@@ -96,34 +93,6 @@
 <!-- ═══════════════════════════════════════════════════════════════
      TAB 2: ROLE & ACCESS CONTROL
      ═══════════════════════════════════════════════════════════════ -->
-<div class="sysadmin-panel" id="panel-account-requests">
-  <div class="sysadmin-action-bar">
-    <div>
-      <h3 style="margin:0;">Account Creation Requests</h3>
-    </div>
-    <button class="btn-sysadmin-outline" onclick="loadAccountCreationRequests()">Refresh</button>
-  </div>
-  <div class="sysadmin-table-wrapper">
-    <table class="sysadmin-table" id="account-request-table">
-      <thead>
-        <tr>
-          <th>Employee</th>
-          <th>Suggested Username</th>
-          <th>Default Role</th>
-          <th>Requested By</th>
-          <th>Requested At</th>
-          <th>Request Status</th>
-          <th>Account Status</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="account-request-tbody">
-        <tr><td colspan="8" class="table-empty">Loading account requests...</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
 <div class="sysadmin-panel" id="panel-roles">
   <div class="roles-grid" id="roles-grid">
     <!-- Populated by JS -->
@@ -409,37 +378,6 @@
     <div class="modal-footer">
       <button class="btn-sysadmin-outline" onclick="closeCredentialsModal()">Cancel</button>
       <button class="btn-sysadmin-primary" onclick="submitCredentialsUpdate()">Reset Password</button>
-    </div>
-  </div>
-</div>
-
-<div class="sysadmin-modal-overlay" id="account-request-modal" style="display:none;">
-  <div class="sysadmin-modal sysadmin-modal-sm">
-    <div class="modal-header">
-      <h3>Account Request Review</h3>
-      <button class="modal-close" onclick="closeAccountRequestModal()">&#10005;</button>
-    </div>
-    <div class="modal-body">
-      <div class="employee-preview" style="display:block;">
-        <div class="preview-row"><span>Employee:</span> <strong id="account-request-employee">-</strong></div>
-        <div class="preview-row"><span>Requested by:</span> <strong id="account-request-requested-by">-</strong></div>
-      </div>
-      <label class="sysadmin-label" style="margin-top:16px;">Username</label>
-      <input id="account-request-username" class="sysadmin-input" autocomplete="off" />
-      <label class="sysadmin-label" style="margin-top:16px;">Role Assignment</label>
-      <select id="account-request-role" class="sysadmin-input"></select>
-      <label class="sysadmin-label" style="margin-top:16px;">Temporary Password</label>
-      <input id="account-request-password" class="sysadmin-input" type="password" placeholder="Leave blank to generate" autocomplete="new-password" />
-      <label class="sysadmin-label" style="margin-top:16px;">Rejection Reason</label>
-      <textarea id="account-request-reason" class="sysadmin-input" rows="3"></textarea>
-      <div class="password-strength" id="account-request-generated" style="display:none;"></div>
-      <input type="hidden" id="account-request-id" />
-    </div>
-    <div class="modal-footer">
-      <button class="btn-sysadmin-danger" onclick="rejectAccountCreationRequest()">Reject</button>
-      <div style="flex:1"></div>
-      <button class="btn-sysadmin-outline" onclick="closeAccountRequestModal()">Cancel</button>
-      <button class="btn-sysadmin-primary" onclick="approveAccountCreationRequest()">Create Account</button>
     </div>
   </div>
 </div>

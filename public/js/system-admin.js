@@ -8,7 +8,6 @@ let sysAllUsers     = [];
 let sysAllRoles     = [];
 let sysAllEmployees = [];
 let sysBiometricDevices = [];
-let sysAccountRequests = [];
 let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
 let sysUsersDataSignature = '';
@@ -316,7 +315,6 @@ function switchSysAdminTab(tabId, el) {
     stopAccountRealtime();
   }
   if (tabId === 'roles')    loadRolesGrid();
-  if (tabId === 'account-requests') loadAccountCreationRequests();
   if (tabId === 'audit')    requestAnimationFrame(loadAuditLog);
   if (tabId === 'biometric-settings') loadBiometricSettings();
 }
@@ -339,7 +337,6 @@ function initSystemAdmin() {
   }
 
   if (activeTab === 'roles') loadRolesGrid();
-  if (activeTab === 'account-requests') loadAccountCreationRequests();
   if (activeTab === 'audit') loadAuditLog();
   if (activeTab === 'biometric-settings') loadBiometricSettings();
 }
@@ -1283,140 +1280,6 @@ function clearBiometricSettingsForm() {
   if (active) active.value = '1';
 }
 
-async function loadAccountCreationRequests() {
-  const tbody = document.getElementById('account-request-tbody');
-  if (!tbody) return;
-  try {
-    const response = await apiFetch('/api/account-requests');
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Unable to load account requests.');
-    sysAccountRequests = Array.isArray(data.requests) ? data.requests : [];
-    renderAccountCreationRequests(sysAccountRequests);
-  } catch (error) {
-    console.error('[SysAdmin] account request load error:', error);
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Unable to load account requests.</td></tr>';
-    showSysToast(error.message || 'Unable to load account requests.', 'error');
-  }
-}
-
-function renderAccountCreationRequests(requests) {
-  const tbody = document.getElementById('account-request-tbody');
-  if (!tbody) return;
-  if (!requests.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No account creation requests found.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = requests.map(request => {
-    const employeeLabel = request.employee_name
-      ? request.employee_code + ' - ' + request.employee_name
-      : request.employee_code || ('Employee ' + request.employee_id);
-    const requestedAt = sysFormatDateTime(request.created_at);
-    const action = request.status === 'PENDING'
-      ? '<button class="btn-sysadmin-sm" type="button" onclick="openAccountRequestModal(' + Number(request.request_id) + ')">Review</button>'
-      : '<small style="color:var(--muted)">Reviewed</small>';
-    return '<tr>' +
-      '<td><strong>' + sysEsc(employeeLabel) + '</strong></td>' +
-      '<td>' + sysEsc(request.suggested_username) + '</td>' +
-      '<td>' + sysEsc(sysRoleDisplay(request.default_role || { name: 'employee', label: 'Employee' }).label) + '</td>' +
-      '<td>' + sysEsc(request.requested_by_username || 'System') + '</td>' +
-      '<td><small>' + sysEsc(requestedAt) + '</small></td>' +
-      '<td><span class="badge-level badge-level-2">' + sysEsc(request.status) + '</span></td>' +
-      '<td><span class="badge-level badge-level-1">' + sysEsc(request.account_status) + '</span></td>' +
-      '<td>' + action + '</td>' +
-    '</tr>';
-  }).join('');
-}
-
-async function openAccountRequestModal(requestId) {
-  if (!sysAllRoles.length) await loadRolesList();
-  const request = sysAccountRequests.find(item => Number(item.request_id) === Number(requestId));
-  if (!request) {
-    showSysToast('Account request not found.', 'error');
-    return;
-  }
-  const employeeLabel = request.employee_name
-    ? request.employee_code + ' - ' + request.employee_name
-    : request.employee_code || ('Employee ' + request.employee_id);
-  document.getElementById('account-request-id').value = request.request_id;
-  document.getElementById('account-request-employee').textContent = employeeLabel;
-  document.getElementById('account-request-requested-by').textContent = request.requested_by_username || 'System';
-  document.getElementById('account-request-username').value = request.suggested_username || '';
-  document.getElementById('account-request-password').value = '';
-  document.getElementById('account-request-reason').value = '';
-  const generated = document.getElementById('account-request-generated');
-  generated.style.display = 'none';
-  generated.textContent = '';
-
-  const roleSelect = document.getElementById('account-request-role');
-  roleSelect.innerHTML = sysAssignableRoles().map(role => {
-    const selected = Number(role.id) === Number(request.default_role?.id) ? ' selected' : '';
-    return '<option value="' + Number(role.id) + '"' + selected + '>' +
-      sysEsc(role.label + ' (' + (role.access_level || 'Level 1') + ')') +
-      '</option>';
-  }).join('');
-  document.getElementById('account-request-modal').style.display = 'flex';
-}
-
-function closeAccountRequestModal() {
-  document.getElementById('account-request-modal').style.display = 'none';
-}
-
-async function approveAccountCreationRequest() {
-  const requestId = Number(document.getElementById('account-request-id').value);
-  const username = document.getElementById('account-request-username').value.trim();
-  const roleId = Number(document.getElementById('account-request-role').value);
-  const temporaryPassword = document.getElementById('account-request-password').value;
-  if (!requestId || !username || !roleId) {
-    showSysToast('Username and role assignment are required.', 'error');
-    return;
-  }
-  const body = { username, assigned_role_id: roleId };
-  if (temporaryPassword) body.temporary_password = temporaryPassword;
-
-  try {
-    const response = await apiFetch('/api/account-requests/' + requestId + '/approve', {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Unable to create employee account.');
-
-    const generated = document.getElementById('account-request-generated');
-    if (data.generatedTemporaryPassword) {
-      generated.textContent = 'Temporary password (show once): ' + data.generatedTemporaryPassword;
-      generated.style.display = 'block';
-    } else {
-      closeAccountRequestModal();
-    }
-    showSysToast(data.message || 'Employee account created.', 'success');
-    await Promise.all([loadAccountCreationRequests(), loadUsersTable()]);
-  } catch (error) {
-    showSysToast(error.message || 'Unable to create employee account.', 'error');
-  }
-}
-
-async function rejectAccountCreationRequest() {
-  const requestId = Number(document.getElementById('account-request-id').value);
-  const reason = document.getElementById('account-request-reason').value.trim();
-  if (reason.length < 8) {
-    showSysToast('Enter a rejection reason of at least 8 characters.', 'error');
-    return;
-  }
-  try {
-    const response = await apiFetch('/api/account-requests/' + requestId + '/reject', {
-      method: 'PATCH',
-      body: JSON.stringify({ reason }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Unable to reject account request.');
-    closeAccountRequestModal();
-    showSysToast(data.message || 'Account request rejected.', 'success');
-    await loadAccountCreationRequests();
-  } catch (error) {
-    showSysToast(error.message || 'Unable to reject account request.', 'error');
-  }
-}
-
 function editBiometricSettings(deviceId) {
   const device = sysBiometricDevices.find(item => Number(item.device_id) === Number(deviceId));
   if (!device) return;
@@ -1498,11 +1361,6 @@ window.togglePasswordVisibility = togglePasswordVisibility;
 window.toggleCredPasswordVisibility = toggleCredPasswordVisibility;
 window.filterUserTable       = filterUserTable;
 window.loadAuditLog          = loadAuditLog;
-window.loadAccountCreationRequests = loadAccountCreationRequests;
-window.openAccountRequestModal = openAccountRequestModal;
-window.closeAccountRequestModal = closeAccountRequestModal;
-window.approveAccountCreationRequest = approveAccountCreationRequest;
-window.rejectAccountCreationRequest = rejectAccountCreationRequest;
 window.toggleRoleUsers       = toggleRoleUsers;
 window.loadBiometricSettings = loadBiometricSettings;
 window.clearBiometricSettingsForm = clearBiometricSettingsForm;
