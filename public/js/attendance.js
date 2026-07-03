@@ -30,8 +30,9 @@ const ATT_AUDIT_LOG_PAGE_SIZE = 10;
 const BIOMETRIC_BRIDGE_URL = window.BIOMETRIC_BRIDGE_URL || 'http://127.0.0.1:8787';
 const LOCAL_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 const AWS_BIOMETRIC_DEVICE_REFERENCE = 'ZK9500-AWS-001';
-const BIOMETRIC_UI_RELAY_VERSION = 'AWS relay v40';
+const BIOMETRIC_UI_RELAY_VERSION = 'AWS relay v42';
 let LAST_BIOMETRIC_BRIDGE_ERROR = '';
+let ACTIVE_BIOMETRIC_COMMAND_TYPE = null;
 
 function manualAttendanceEl(id) {
   return document.querySelector(`#manual-modal #${id}`);
@@ -166,11 +167,39 @@ async function waitForBiometricBridgeCommand(commandId, { timeoutMs = 95000, int
   while (Date.now() < deadline) {
     const res = await apiFetch(`/api/biometric/bridge-commands/${commandId}`);
     const data = await res.json().catch(() => ({}));
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers.get('Retry-After') || 1);
+      await delay(Math.max(1, retryAfter) * 1000);
+      continue;
+    }
     if (!res.ok) throw new Error(data.error || 'Failed to read biometric station command.');
     if (['COMPLETED', 'FAILED', 'EXPIRED'].includes(data.command_status)) return data;
     await delay(intervalMs);
   }
   throw new Error('Biometric station did not respond before the request timed out.');
+}
+
+function activeFingerprintMapping(employeeId) {
+  return ATT_BIOMETRIC_MAPPINGS.find(item => String(item.employee_id) === String(employeeId) && item.is_active);
+}
+
+function setBiometricCommandBusy(commandType, busy = true) {
+  ACTIVE_BIOMETRIC_COMMAND_TYPE = busy ? commandType : null;
+  const labels = {
+    ENROLL: 'Enrolling...',
+    VERIFY: 'Verifying...',
+    DELETE: 'Removing...',
+  };
+  [
+    ['bio-enroll-button', 'ENROLL', 'Enroll Fingerprint'],
+    ['bio-verify-button', 'VERIFY', 'Verify Fingerprint'],
+    ['bio-remove-button', 'DELETE', 'Remove Fingerprint'],
+  ].forEach(([id, type, idleLabel]) => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    button.disabled = Boolean(ACTIVE_BIOMETRIC_COMMAND_TYPE);
+    button.textContent = ACTIVE_BIOMETRIC_COMMAND_TYPE === type ? labels[type] : idleLabel;
+  });
 }
 
 function formatDate(value) {
@@ -1762,11 +1791,54 @@ async function disableBiometricMapping(mappingId) {
   }
 }
 
-function removeSelectedFingerprint() {
+async function removeSelectedFingerprint() {
   const employeeId = document.getElementById('bio-map-employee')?.value;
-  const mapping = ATT_BIOMETRIC_MAPPINGS.find(item => String(item.employee_id) === String(employeeId) && item.is_active);
+  const deviceId = document.getElementById('bio-map-device')?.value;
+  const mapping = activeFingerprintMapping(employeeId);
   if (!mapping) return alert('No active fingerprint enrollment found for the selected employee.');
-  return disableBiometricMapping(mapping.mapping_id);
+  if (ACTIVE_BIOMETRIC_COMMAND_TYPE) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Remove this employee fingerprint from the scanner and HRIS mapping?', 'Remove Fingerprint', 'Remove', 'Cancel')
+    : confirm('Remove this employee fingerprint from the scanner and HRIS mapping?');
+  if (!confirmed) return;
+
+  try {
+    setBiometricCommandBusy('DELETE');
+    if (isRemoteBiometricPage()) {
+      if (!deviceId) throw new Error('No active biometric station is selected.');
+      setBiometricActionStatus('Sending removal request to the AWS biometric station.');
+      const command = await createBiometricBridgeCommand('DELETE', mapping.employee_id, deviceId);
+      const completed = await waitForBiometricBridgeCommand(command.command_id, { timeoutMs: 60000, intervalMs: 1500 });
+      if (completed.command_status !== 'COMPLETED') throw new Error(completed.error_message || completed.result?.error || 'Fingerprint removal failed.');
+    } else {
+      setBiometricActionStatus('Deleting local scanner template before disabling the HRIS mapping.');
+      const res = await fetchWithTimeout(`${BIOMETRIC_BRIDGE_URL}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_id: Number(mapping.employee_id),
+        }),
+      }, 10000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Local fingerprint template deletion failed.');
+    }
+
+    const res = await apiFetch(`/api/attendance/biometric/mappings/${mapping.mapping_id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Fingerprint mapping could not be disabled.');
+    await loadBiometricMappings();
+    await loadBiometricHealth();
+    updateFingerprintEnrollmentView();
+    setBiometricActionStatus(data.message || 'Fingerprint removed from scanner and HRIS mapping.', 'att-success');
+    if (typeof showAlert === 'function') await showAlert(data.message || 'Fingerprint removed.', 'Fingerprint Mapping', 'success');
+    else alert(data.message || 'Fingerprint removed.');
+  } catch (err) {
+    setBiometricActionStatus(`Removal failed: ${err.message}`, 'att-error');
+    if (typeof showAlert === 'function') await showAlert(err.message, 'Fingerprint Mapping', 'error');
+    else alert(err.message);
+  } finally {
+    setBiometricCommandBusy(null, false);
+  }
 }
 
 async function syncBiometricDevice(deviceId) {
@@ -2046,11 +2118,13 @@ async function enrollFingerprintFromBridge() {
   const deviceId = document.getElementById('bio-map-device')?.value;
   const employeeId = employeeSelect?.value;
   if (!deviceId || !employeeId) return alert('Select an employee first. Make sure the scanner is connected.');
+  if (ACTIVE_BIOMETRIC_COMMAND_TYPE) return;
 
   const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
   const codeMatch = selectedText.match(/\(([^)]+)\)/);
 
   try {
+    setBiometricCommandBusy('ENROLL');
     if (isRemoteBiometricPage()) {
       setBiometricStep(2);
       setBiometricActionStatus('Sending enrollment request to the AWS biometric station. Place the employee finger on the ZK9500 when prompted.');
@@ -2094,6 +2168,8 @@ async function enrollFingerprintFromBridge() {
     updateFingerprintEnrollmentView();
     setBiometricActionStatus(`Enrollment failed: ${err.message}`, 'att-error');
     alert(`Bridge enrollment failed: ${err.message}\n\nStart the LGSV ZK9500 bridge as Administrator, then try again.`);
+  } finally {
+    setBiometricCommandBusy(null, false);
   }
 }
 
@@ -2102,9 +2178,12 @@ async function verifyBiometricEnrollment() {
   const employeeId = employeeSelect?.value;
   const deviceId = document.getElementById('bio-map-device')?.value;
   if (!employeeId || !deviceId) return alert('Select an employee first. Make sure the scanner is connected.');
+  if (ACTIVE_BIOMETRIC_COMMAND_TYPE) return;
+  if (!activeFingerprintMapping(employeeId)) return alert('No active fingerprint enrollment found for the selected employee.');
 
   const selectedText = employeeSelect.options[employeeSelect.selectedIndex]?.textContent || '';
 
+  setBiometricCommandBusy('VERIFY');
   if (isRemoteBiometricPage()) {
     try {
       setBiometricActionStatus('Sending verification request to the AWS biometric station. Place the enrolled finger on the ZK9500 scanner.');
@@ -2121,6 +2200,8 @@ async function verifyBiometricEnrollment() {
     } catch (err) {
       setBiometricActionStatus(`Verification failed: ${err.message}`, 'att-error');
       alert(`Bridge verification failed: ${err.message}\n\nMake sure the AWS biometric bridge is running and the employee fingerprint is enrolled.`);
+    } finally {
+      setBiometricCommandBusy(null, false);
     }
     return;
   }
@@ -2146,6 +2227,8 @@ async function verifyBiometricEnrollment() {
   } catch (err) {
     setBiometricActionStatus(`Verification failed: ${err.message}`, 'att-error');
     alert(`Bridge verification failed: ${err.message}\n\nMake sure the bridge is running and the employee fingerprint is enrolled.`);
+  } finally {
+    setBiometricCommandBusy(null, false);
   }
 }
 

@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS biometric_bridge_command (
   command_id BIGINT AUTO_INCREMENT PRIMARY KEY,
   device_id INT NOT NULL,
   employee_id INT NULL,
-  command_type ENUM('VERIFY','ENROLL') NOT NULL,
+  command_type ENUM('VERIFY','ENROLL','DELETE') NOT NULL,
   command_status ENUM('PENDING','IN_PROGRESS','COMPLETED','FAILED','EXPIRED') NOT NULL DEFAULT 'PENDING',
   requested_by INT NULL,
   claimed_at DATETIME NULL,

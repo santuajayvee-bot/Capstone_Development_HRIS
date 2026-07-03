@@ -116,7 +116,7 @@ public class Program
             }
             listener.Start();
             Console.WriteLine("LGSV ZK9500 bridge running at " + string.Join(", ", listener.Prefixes.Cast<string>()));
-            Console.WriteLine("Endpoints: GET /health, POST /enroll, POST /verify, POST /scan");
+            Console.WriteLine("Endpoints: GET /health, POST /enroll, POST /verify, POST /delete, POST /scan");
 
             while (true)
             {
@@ -398,6 +398,11 @@ public class Program
                 Verify(context);
                 return;
             }
+            if (context.Request.HttpMethod == "POST" && path == "delete")
+            {
+                DeleteFingerprint(context);
+                return;
+            }
             if (context.Request.HttpMethod == "POST" && path == "scan")
             {
                 Scan(context);
@@ -534,6 +539,29 @@ public class Program
         });
     }
 
+    static Dictionary<string, object> DeleteTemplateForEmployee(int employeeId)
+    {
+        if (employeeId <= 0) throw new Exception("employee_id is required.");
+        var store = ReadStore();
+        var removed = store.templates.RemoveAll(t => t.employee_id == employeeId);
+        WriteStore(store);
+        LoadTemplatesIntoMatcher();
+
+        var payload = new Dictionary<string, object>();
+        payload["employee_id"] = employeeId;
+        payload["removed"] = removed;
+        payload["message"] = removed > 0 ? "Fingerprint template deleted." : "No local fingerprint template was found.";
+        Log("Deleted fingerprint template for employee " + employeeId + ". removed=" + removed);
+        return payload;
+    }
+
+    static void DeleteFingerprint(HttpListenerContext context)
+    {
+        var body = ReadRequest(context.Request);
+        var payload = DeleteTemplateForEmployee(body.employee_id);
+        Respond(context, 200, payload);
+    }
+
     static void Scan(HttpListenerContext context)
     {
         var body = ReadRequest(context.Request);
@@ -609,6 +637,11 @@ public class Program
             if (commandType == "ENROLL")
             {
                 CompleteBridgeCommand(command.command_id, true, EnrollForCommand(command), "");
+                return;
+            }
+            if (commandType == "DELETE")
+            {
+                CompleteBridgeCommand(command.command_id, true, DeleteForCommand(command), "");
                 return;
             }
             CompleteBridgeCommand(command.command_id, false, null, "Unsupported command type.");
@@ -688,6 +721,11 @@ public class Program
         payload["message"] = "Fingerprint enrolled.";
         Log("COMMAND " + command.command_id + " enrolled employee " + command.employee_id);
         return payload;
+    }
+
+    static Dictionary<string, object> DeleteForCommand(BridgeCommand command)
+    {
+        return DeleteTemplateForEmployee(command.employee_id);
     }
 
     static void CompleteBridgeCommand(int commandId, bool ok, Dictionary<string, object> result, string error)

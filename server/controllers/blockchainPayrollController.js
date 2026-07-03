@@ -105,6 +105,21 @@ async function fetchPayrollRecord(executor, payrollId) {
   return rows[0] || null;
 }
 
+async function fetchLatestRecordedPayrollAuditHash(executor, payrollId) {
+  const [rows] = await executor.execute(
+    `SELECT Payload_Hash, Transaction_Hash, Details, Status
+       FROM BLOCKCHAIN_AUDIT_LOG
+      WHERE Payroll_ID = ?
+        AND Event_Type IN ('FINALIZE_RECORD','VERIFY_INTEGRITY')
+        AND Status IN ('RECORDED','VERIFIED')
+        AND Payload_Hash IS NOT NULL
+      ORDER BY Created_At DESC, Audit_ID DESC
+      LIMIT 1`,
+    [payrollId]
+  );
+  return rows[0] || null;
+}
+
 function assertFinalizedPayroll(row) {
   if (!row) {
     const error = new Error('Payroll record not found.');
@@ -274,6 +289,49 @@ async function verifyPayrollIntegrity(req, res) {
       fabricResult = await verifyPayrollHashOnFabric(payrollId, payrollHash);
     } catch (error) {
       if (isFabricUnavailable(error)) {
+        const recordedAudit = await fetchLatestRecordedPayrollAuditHash(pool, payrollId);
+        if (recordedAudit?.Payload_Hash) {
+          const isLocalMatch = recordedAudit.Payload_Hash === payrollHash;
+          const auditStatus = isLocalMatch ? 'VERIFIED' : 'CRITICAL';
+          const localResult = {
+            mode: 'LOCAL_RECORDED_AUDIT_HASH',
+            blockchain_hash: recordedAudit.Payload_Hash,
+            transaction_hash: recordedAudit.Transaction_Hash,
+            fabric_error: error.message,
+          };
+          await writeSystemAuditLog(pool, req, isLocalMatch
+            ? `PAYROLL_LOCAL_INTEGRITY_VERIFIED [PAYROLL:${payrollId}]`
+            : `CRITICAL_PAYROLL_TAMPERING_DETECTED [PAYROLL:${payrollId}]`,
+            isLocalMatch ? 'BLOCKCHAIN_INTEGRITY' : 'BLOCKCHAIN_SECURITY',
+            payroll.Employee_ID,
+            {
+              payroll_id: payrollId,
+              computed_hash: payrollHash,
+              recorded_hash: recordedAudit.Payload_Hash,
+              result: auditStatus,
+              fabric_error: error.message,
+            });
+          await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', auditStatus, payroll.Transaction_Hash, payrollHash, localResult);
+
+          if (isLocalMatch) {
+            return res.json({
+              status: 'success',
+              message: 'Payroll record integrity verified against the recorded local blockchain audit hash.',
+              payroll_id: String(payrollId),
+              computed_hash: payrollHash,
+              blockchain_hash: recordedAudit.Payload_Hash,
+            });
+          }
+
+          return res.status(409).json({
+            status: 'critical',
+            message: 'Tampering detected: off-chain payroll record does not match blockchain ledger.',
+            payroll_id: String(payrollId),
+            computed_hash: payrollHash,
+            blockchain_hash: recordedAudit.Payload_Hash,
+          });
+        }
+
         await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_PENDING_ANCHOR [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', payroll.Employee_ID, {
           payroll_id: payrollId,
           computed_hash: payrollHash,
@@ -481,7 +539,13 @@ async function getFinalizedPayrollLedgerRecords(req, res) {
               latest.Event_Type AS Latest_Event_Type,
               latest.Status AS Latest_Audit_Status,
               latest.Payload_Hash AS Latest_Payload_Hash,
-              latest.Created_At AS Latest_Audit_At
+              latest.Created_At AS Latest_Audit_At,
+              (
+                SELECT COUNT(*)
+                  FROM BLOCKCHAIN_AUDIT_LOG critical
+                 WHERE critical.Payroll_ID = pr.Payroll_ID
+                   AND critical.Status = 'CRITICAL'
+              ) AS Critical_Audit_Count
          FROM PAYROLL_RECORD pr
          LEFT JOIN (
            SELECT bal.*

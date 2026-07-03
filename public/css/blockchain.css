@@ -112,6 +112,46 @@
   white-space: nowrap;
 }
 
+.blockchain-row-critical td {
+  background: rgba(224, 92, 122, .08);
+}
+
+.bc-critical-panel {
+  border-color: rgba(224, 92, 122, .5);
+  color: var(--text);
+  margin-bottom: 16px;
+  padding: 14px;
+}
+
+.bc-critical-panel-title {
+  color: var(--red);
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.bc-critical-panel-copy {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+.bc-critical-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bc-critical-item {
+  align-items: center;
+  border: 1px solid rgba(224, 92, 122, .28);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
 .bc-pagination {
   display: flex;
   align-items: center;

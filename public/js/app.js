@@ -473,6 +473,10 @@ function navigate(pageId, navEl, params = null) {
     initAttendance();
   }
 
+  if (pageId === 'blockchain' && typeof initBlockchainPage === 'function') {
+    initBlockchainPage();
+  }
+
   if (pageId === 'onboarding' && typeof initOnboarding === 'function') {
     initOnboarding();
   }

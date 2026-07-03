@@ -28,7 +28,7 @@ const HR_ROLES = ['hr_admin', 'hr_manager', 'admin', 'system_admin'];
 const BIOMETRIC_ADMIN_ROLES = HR_ROLES;
 const BRIDGE_DEVICE_REFERENCE = 'ZK9500-LOCAL-001';
 const BIOMETRIC_ATTENDANCE_STATUSES = "ENUM('PENDING_VALIDATION','VALIDATED','REJECTED','CORRECTED_BY_HR','NEEDS_REVIEW','PAYROLL_READY','INCOMPLETE') NOT NULL DEFAULT 'PENDING_VALIDATION'";
-const BRIDGE_COMMAND_TYPES = new Set(['VERIFY', 'ENROLL']);
+const BRIDGE_COMMAND_TYPES = new Set(['VERIFY', 'ENROLL', 'DELETE']);
 const BRIDGE_COMMAND_STATUSES = new Set(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'EXPIRED']);
 
 function cleanText(value, maxLength = 500) {
@@ -232,7 +232,7 @@ async function ensureBiometricAttendanceSchema() {
       command_id BIGINT AUTO_INCREMENT PRIMARY KEY,
       device_id INT NOT NULL,
       employee_id INT NULL,
-      command_type ENUM('VERIFY','ENROLL') NOT NULL,
+      command_type ENUM('VERIFY','ENROLL','DELETE') NOT NULL,
       command_status ENUM('PENDING','IN_PROGRESS','COMPLETED','FAILED','EXPIRED') NOT NULL DEFAULT 'PENDING',
       requested_by INT NULL,
       claimed_at DATETIME NULL,
@@ -357,6 +357,15 @@ async function ensureBiometricAttendanceSchema() {
     `);
   } catch (err) {
     console.warn('[biometric/schema] attendance_log enum check:', err.message);
+  }
+
+  try {
+    await pool.execute(`
+      ALTER TABLE biometric_bridge_command
+      MODIFY command_type ENUM('VERIFY','ENROLL','DELETE') NOT NULL
+    `);
+  } catch (err) {
+    console.warn('[biometric/schema] bridge command enum check:', err.message);
   }
 }
 
@@ -856,11 +865,12 @@ router.post('/attendance', requireAuth, requireRole(ROLES.any), async (req, res)
 });
 
 router.post('/bridge-commands', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES), async (req, res) => {
+  const conn = await pool.getConnection();
   try {
     await ensureBiometricAttendanceSchema();
     const commandType = cleanText(req.body.command_type, 20).toUpperCase();
     if (!BRIDGE_COMMAND_TYPES.has(commandType)) {
-      return res.status(400).json({ error: 'command_type must be VERIFY or ENROLL.' });
+      return res.status(400).json({ error: 'command_type must be VERIFY, ENROLL, or DELETE.' });
     }
 
     const employeeId = Number(req.body.employee_id);
@@ -880,26 +890,69 @@ router.post('/bridge-commands', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
       return res.status(400).json({ error: 'An active employee is required.' });
     }
 
-    const [devices] = await pool.execute(
+    await conn.beginTransaction();
+    const [devices] = await conn.execute(
       `SELECT device_id, device_reference, device_name
          FROM biometric_device
         WHERE is_active = 1
           ${requestedDeviceId ? 'AND device_id = ?' : ''}
         ORDER BY device_reference = ? DESC, device_name
-        LIMIT 1`,
+        LIMIT 1
+        FOR UPDATE`,
       requestedDeviceId ? [requestedDeviceId, BRIDGE_DEVICE_REFERENCE] : [BRIDGE_DEVICE_REFERENCE]
     );
     if (!devices.length) {
+      await conn.rollback();
       return res.status(400).json({ error: 'No active biometric station is registered.' });
     }
 
-    await pool.execute(
+    await conn.execute(
       `UPDATE biometric_bridge_command
           SET command_status = 'EXPIRED', error_message = 'Command expired before station pickup.'
         WHERE command_status IN ('PENDING','IN_PROGRESS') AND expires_at < NOW()`
     );
 
-    const [result] = await pool.execute(
+    const [activeCommands] = await conn.execute(
+      `SELECT command_id, employee_id, command_type, command_status
+         FROM biometric_bridge_command
+        WHERE device_id = ?
+          AND command_status IN ('PENDING','IN_PROGRESS')
+          AND expires_at >= NOW()
+        ORDER BY created_at
+        FOR UPDATE`,
+      [devices[0].device_id]
+    );
+    const reusable = activeCommands.find(command =>
+      Number(command.employee_id) === employeeId
+      && String(command.command_type).toUpperCase() === commandType
+    );
+    if (reusable) {
+      await conn.commit();
+      return res.status(200).json({
+        command_id: reusable.command_id,
+        command_status: reusable.command_status,
+        command_type: commandType,
+        device: devices[0],
+        reused: true,
+      });
+    }
+    if (activeCommands.length) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'The biometric station is busy with another enrollment, verification, or removal. Please wait for it to finish.' });
+    }
+
+    await conn.execute(
+      `UPDATE biometric_bridge_command
+          SET command_status = 'EXPIRED',
+              error_message = 'Duplicate queued command canceled; only one scanner command may run at a time.'
+        WHERE device_id = ?
+          AND employee_id = ?
+          AND command_type = ?
+          AND command_status = 'PENDING'`,
+      [devices[0].device_id, employeeId, commandType]
+    );
+
+    const [result] = await conn.execute(
       `INSERT INTO biometric_bridge_command
          (device_id, employee_id, command_type, command_status, requested_by, expires_at)
        VALUES (?, ?, ?, 'PENDING', ?, DATE_ADD(NOW(), INTERVAL 90 SECOND))`,
@@ -909,6 +962,7 @@ router.post('/bridge-commands', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
       device_id: devices[0].device_id,
       device_reference: devices[0].device_reference,
     });
+    await conn.commit();
     res.status(201).json({
       command_id: result.insertId,
       command_status: 'PENDING',
@@ -916,8 +970,11 @@ router.post('/bridge-commands', requireAuth, requireRole(BIOMETRIC_ADMIN_ROLES),
       device: devices[0],
     });
   } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
     console.error('[biometric/bridge-command-create]', err.message);
     res.status(500).json({ error: 'Failed to create biometric bridge command.' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -1057,6 +1114,14 @@ router.post('/station-command/:commandId/complete', async (req, res) => {
            is_active = 1,
            updated_by = VALUES(updated_by)`,
         [command.device_id, command.employee_id, userHash, encryptedId, command.requested_by, command.requested_by]
+      );
+    }
+    if (ok && command.command_type === 'DELETE') {
+      await conn.execute(
+        `UPDATE biometric_employee_mapping
+            SET is_active = 0, updated_by = ?
+          WHERE device_id = ? AND employee_id = ?`,
+        [command.requested_by || null, command.device_id, command.employee_id]
       );
     }
 

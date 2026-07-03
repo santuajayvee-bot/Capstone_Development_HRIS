@@ -284,13 +284,50 @@ async function bcRequest(url, options = {}) {
   return { response, data };
 }
 
+function renderCriticalPanel(records) {
+  const panel = document.getElementById('bc-critical-panel');
+  if (!panel) return 0;
+  const criticalRecords = records.filter(bcIsCriticalRecord);
+  if (!criticalRecords.length) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return 0;
+  }
+
+  panel.innerHTML = `
+    <div class="bc-critical-panel-title">CRITICAL ALERT</div>
+    <div class="bc-critical-panel-copy">Possible tampering or failed integrity verification was detected. Review the audit trail before approving or relying on this record.</div>
+    <div class="bc-critical-list">
+      ${criticalRecords.slice(0, 6).map(record => {
+        const recordId = record.Payroll_ID || record.DTR_ID || '-';
+        const recordType = record.Payroll_ID ? 'Payroll' : 'Attendance DTR';
+        return `
+          <div class="bc-critical-item">
+            <div>
+              <strong>${bcEsc(recordType)} ${bcEsc(recordId)}</strong><br>
+              <span class="tx-hash">${bcEsc(bcShortHash(record.Latest_Payload_Hash || record.Transaction_Hash || record.local_hash || ''))}</span>
+            </div>
+            ${bcBadge(record.Latest_Audit_Status)}
+          </div>`;
+      }).join('')}
+    </div>
+  `;
+  panel.style.display = 'block';
+  return criticalRecords.length;
+}
+
+function bcIsCriticalRecord(record) {
+  return ['CRITICAL', 'FAILED'].includes(String(record?.Latest_Audit_Status).toUpperCase())
+    || Number(record?.Critical_Audit_Count || 0) > 0;
+}
+
 function renderBlockchainStats(payload) {
   const payrollRecords = payload.records || [];
   const dtrRecords = payload.dtr_records || [];
   const records = [...payrollRecords, ...dtrRecords];
   const recorded = records.filter(row => String(row.Blockchain_Status).toUpperCase() === 'RECORDED').length;
   const pending = records.filter(row => ['PENDING_APPROVAL', 'PENDING', 'PENDING_ANCHOR'].includes(String(row.Blockchain_Status).toUpperCase())).length;
-  const critical = records.filter(row => ['CRITICAL', 'FAILED'].includes(String(row.Latest_Audit_Status).toUpperCase())).length;
+  const critical = renderCriticalPanel(records);
   const latest = records
     .map(row => row.Latest_Audit_At || row.Finalized_At || row.updated_at || row.created_at)
     .filter(Boolean)
@@ -312,7 +349,11 @@ function renderBlockchainStats(payload) {
       ? `Fabric Gateway credentials are configured: ${fabric.channelName} / ${fabric.chaincodeName}`
       : 'Fabric Gateway credentials are incomplete. Local audit records are available, but Fabric recording and verification are disabled.';
   bcSetText('bc-network-status', status);
-  if (!fabric.enabled || !fabric.ready) bcShowMessage(status, 'warning');
+  if (critical) {
+    bcShowMessage(`${critical} blockchain integrity alert${critical === 1 ? '' : 's'} need review.`, 'critical');
+  } else if (!fabric.enabled || !fabric.ready) {
+    bcShowMessage(status, 'warning');
+  }
 }
 
 function renderBlockchainRows(options = {}) {
@@ -341,6 +382,7 @@ function renderBlockchainRows(options = {}) {
     const payrollId = Number(record.Payroll_ID);
     const status = record.Blockchain_Status || 'PENDING';
     const auditStatus = record.Latest_Audit_Status || '-';
+    const isCritical = bcIsCriticalRecord(record);
     const integrityHash = record.Transaction_Hash || record.Latest_Payload_Hash || record.local_hash || '';
     // A Fabric receipt is issued only after finalization. Keep the client rule
     // resilient to payroll-label changes; the API repeats the finalization and RBAC checks.
@@ -348,13 +390,13 @@ function renderBlockchainRows(options = {}) {
       ? `<button class="btn btn-outline btn-sm" onclick="verifyPayrollHash(${payrollId})">Verify integrity</button>`
       : '';
 
-    return `<tr>
+    return `<tr class="${isCritical ? 'blockchain-row-critical' : ''}">
       <td class="tx-block">${bcEsc(record.Payroll_ID)}</td>
       <td>${bcEsc(record.Employee_ID)}</td>
       <td>${bcMoney(record.Gross_Pay)}</td>
       <td>${bcMoney(record.Net_Pay)}</td>
       <td>${bcStatusCell(status)}</td>
-      <td>${bcStatusCell(auditStatus)}</td>
+      <td>${bcStatusCell(isCritical && String(auditStatus).toUpperCase() !== 'CRITICAL' ? 'CRITICAL' : auditStatus)}</td>
       <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
       <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
       <td>
@@ -390,6 +432,7 @@ function renderDtrBlockchainRows(options = {}) {
     const dtrId = Number(record.DTR_ID);
     const status = record.Blockchain_Status || 'PENDING';
     const auditStatus = record.Latest_Audit_Status || '-';
+    const isCritical = bcIsCriticalRecord(record);
     const integrityHash = record.Transaction_Hash || record.Latest_Payload_Hash || record.DTR_Hash || record.local_hash || '';
     const isRecorded = String(status).toUpperCase() === 'RECORDED';
     const isPendingAnchor = String(status).toUpperCase() === 'PENDING_ANCHOR';
@@ -400,14 +443,14 @@ function renderDtrBlockchainRows(options = {}) {
       ? `<button class="btn btn-outline btn-sm" onclick="retryDtrAnchor(${dtrId})">Retry Fabric</button>`
       : '';
 
-    return `<tr>
+    return `<tr class="${isCritical ? 'blockchain-row-critical' : ''}">
       <td class="tx-block">${bcEsc(record.DTR_ID)}</td>
       <td>${bcEsc(record.Employee_Ref || record.Employee_Code || record.Employee_ID || '-')}</td>
       <td>${bcEsc(record.Date_Range_Start || '-')}<br><span class="tx-hash">to ${bcEsc(record.Date_Range_End || '-')}</span></td>
       <td>${bcEsc(record.Total_Work_Hours ?? '0.00')} hrs<br><span class="tx-hash">OT ${bcEsc(record.Total_Overtime_Hours ?? '0.00')}</span></td>
       <td>${bcEsc(record.Total_Late_Minutes ?? 0)} min<br><span class="tx-hash">UT ${bcEsc(record.Total_Undertime_Minutes ?? 0)} min</span></td>
       <td>${bcStatusCell(status)}</td>
-      <td>${bcStatusCell(auditStatus)}</td>
+      <td>${bcStatusCell(isCritical && String(auditStatus).toUpperCase() !== 'CRITICAL' ? 'CRITICAL' : auditStatus)}</td>
       <td class="tx-hash" title="${bcEsc(integrityHash)}">${bcEsc(bcShortHash(integrityHash))}</td>
       <td style="font-size:11px">${bcEsc(bcFormatDate(record.Finalized_At || record.Latest_Audit_At))}</td>
       <td>
@@ -656,7 +699,10 @@ async function loadDtrBlockchainAudit(dtrId) {
 function initBlockchainPage() {
   const page = document.getElementById('page-blockchain');
   if (!page || !document.getElementById('tx-tbody')) return;
-  if (BC_INITIALIZED) return;
+  if (BC_INITIALIZED) {
+    loadBlockchainRecords();
+    return;
+  }
   BC_INITIALIZED = true;
   bcSetText('bc-role-scope', bcAccessSummary());
   bcSetText('bc-verify-owner', bcVerificationSummary());
@@ -679,6 +725,7 @@ function watchBlockchainActivation() {
 
 document.addEventListener('DOMContentLoaded', watchBlockchainActivation);
 window.loadBlockchainRecords = loadBlockchainRecords;
+window.initBlockchainPage = initBlockchainPage;
 window.verifyPayrollHash = verifyPayrollHash;
 window.verifyDtrHash = verifyDtrHash;
 window.retryDtrAnchor = retryDtrAnchor;
