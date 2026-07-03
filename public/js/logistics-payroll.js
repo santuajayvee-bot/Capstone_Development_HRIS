@@ -1,6 +1,6 @@
 /* Trip-based logistics payroll UI. Financial values are calculated server-side. */
 (function logisticsPayrollModule() {
-  const state = { truckTypes: [], locations: [], rates: [], employees: [], trips: [], ratesPage: 1, ratesPageSize: 10 };
+  const state = { truckTypes: [], locations: [], rates: [], employees: [], ratesPage: 1, ratesPageSize: 10 };
 
   const money = value => `PHP ${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -18,19 +18,10 @@
     return String(rawRole).trim().toLowerCase().replace(/[\s-]+/g, '_');
   };
   const logisticsConfigurationRoles = new Set(['payroll_officer', 'payroll_manager', 'hr_manager', 'hr_admin']);
-  const logisticsApprovalRoles = new Set(['payroll_manager', 'hr_manager', 'hr_admin']);
   const hasPermission = permission => Array.isArray(currentUser().permissions)
     && currentUser().permissions.includes(permission);
   const canConfigureLogistics = () => logisticsConfigurationRoles.has(currentRole())
     || hasPermission('payroll.settings.manage');
-  const canApproveLogistics = () => logisticsApprovalRoles.has(currentRole())
-    || hasPermission('payroll.approve');
-
-  function periodRange(month) {
-    const safeMonth = /^\d{4}-\d{2}$/.test(month || '') ? month : currentMonth();
-    const [year, monthNumber] = safeMonth.split('-').map(Number);
-    return { start: `${safeMonth}-01`, end: new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10) };
-  }
 
   async function request(url, options) {
     const response = await apiFetch(url, options);
@@ -63,11 +54,6 @@
     if (rateDate && !rateDate.value) rateDate.value = today();
     const registryPeriod = document.getElementById('swr-fxr-period');
     if (registryPeriod && !registryPeriod.value) registryPeriod.value = document.getElementById('payroll-filter-month')?.value || currentMonth();
-    const range = periodRange(document.getElementById('payroll-filter-month')?.value || currentMonth());
-    const summaryStart = document.getElementById('logistics-summary-start');
-    const summaryEnd = document.getElementById('logistics-summary-end');
-    if (summaryStart && !summaryStart.value) summaryStart.value = range.start;
-    if (summaryEnd && !summaryEnd.value) summaryEnd.value = range.end;
   }
 
   function fillSelect(id, rows, valueKey, textBuilder, placeholder) {
@@ -98,29 +84,6 @@
     target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Truck Type</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.truckTypes.map(row => `
       <tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.description || '-')}</td><td>${Number(row.is_active) ? '<span class="status-badge active">Active</span>' : '<span class="status-badge inactive">Inactive</span>'}</td><td class="button-row">${actionButton('Edit', 'editTruckType', row.id)} ${Number(row.is_active) ? actionButton('Deactivate', 'deactivateTruckType', row.id) : ''}</td></tr>
     `).join('') || '<tr><td colspan="4">No truck types configured.</td></tr>'}</tbody></table>`;
-  }
-
-  function canManageTripRow(trip) {
-    if (currentRole() !== 'payroll_officer') return true;
-    return Number(trip.created_by) === Number(currentUser().id || currentUser().userId);
-  }
-
-  function tripActions(trip) {
-    if (trip.status === 'Draft' && canManageTripRow(trip)) {
-      return `${actionButton('Edit', 'editDeliveryTrip', trip.id)} ${actionButton('Mark Payroll Ready', 'submitDeliveryTrip', trip.id, 'primary')} ${actionButton('Delete', 'deleteDeliveryTrip', trip.id)}`;
-    }
-    if (['Submitted', 'For Validation'].includes(trip.status) && canApproveLogistics()) {
-      return `${actionButton('Approve', 'approveDeliveryTrip', trip.id, 'primary')} ${actionButton('Reject', 'rejectDeliveryTrip', trip.id)}`;
-    }
-    return '-';
-  }
-
-  function renderTrips() {
-    const target = document.getElementById('delivery-trips-grid');
-    if (!target) return;
-    target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Date</th><th>Employee</th><th>Truck</th><th>Location</th><th>Trip</th><th>Role</th><th>Qty</th><th>Plate</th><th>Trip Pay</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.trips.map(row => `
-      <tr><td>${escapeHtml(String(row.trip_date || '').slice(0, 10))}</td><td>${escapeHtml(row.employee_code || '')}<br>${escapeHtml(row.employee_name || '')}</td><td>${escapeHtml(row.truck_type)}</td><td>${escapeHtml(row.location_name)}</td><td>${escapeHtml(row.trip_type)}</td><td>${escapeHtml(row.role)}</td><td>${Number(row.output_quantity || 1)}</td><td>${escapeHtml(row.plate_number || '-')}</td><td>${money(row.total_trip_pay)}</td><td><span class="status-badge ${escapeHtml(String(row.status || '').toLowerCase().replace(/\s+/g, '-'))}">${escapeHtml(row.status)}</span></td><td class="button-row">${tripActions(row)}</td></tr>
-    `).join('') || '<tr><td colspan="11">No delivery trips found.</td></tr>'}</tbody></table>`;
   }
 
   function renderLocations() {
@@ -173,27 +136,23 @@
     applyLogisticsRoleAccess();
     setDefaultDates();
     try {
-      const [truckTypes, locations, rates, employees, trips] = await Promise.all([
+      const [truckTypes, locations, rates, employees] = await Promise.all([
         request('/api/payroll/logistics/truck-types?include_inactive=1'),
         request('/api/payroll/logistics/locations?include_inactive=1'),
         request('/api/payroll/logistics/rates?include_inactive=1'),
-        request('/api/payroll/logistics/employees'),
-        request('/api/payroll/logistics/trips')
+        request('/api/payroll/logistics/employees')
       ]);
       state.truckTypes = truckTypes;
       state.locations = locations;
       state.rates = rates;
       state.employees = employees;
-      state.trips = trips;
       populateSelectors();
       renderTruckTypes();
       renderLocations();
       renderRates();
-      renderTrips();
       await refreshTripPreview();
-      await loadLogisticsPayrollSummary();
     } catch (error) {
-      const target = document.getElementById('delivery-trips-grid') || document.getElementById('logistics-rates-grid');
+      const target = document.getElementById('logistics-rates-grid');
       if (target) target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
     }
   }
@@ -335,23 +294,6 @@
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  function editDeliveryTrip(id) {
-    const row = state.trips.find(item => Number(item.id) === Number(id));
-    const form = document.getElementById('delivery-trip-form');
-    if (!row || !form || !canManageTripRow(row)) return;
-    form.elements.id.value = row.id;
-    form.elements.employee_id.value = row.employee_id;
-    form.elements.truck_type_id.value = row.truck_type_id;
-    form.elements.location_id.value = row.location_id;
-    form.elements.trip_date.value = String(row.trip_date).slice(0, 10);
-    form.elements.trip_type.value = row.trip_type;
-    form.elements.role.value = row.role;
-    form.elements.output_quantity.value = row.output_quantity || 1;
-    form.elements.plate_number.value = row.plate_number || '';
-    refreshTripPreview();
-    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
   async function deactivateLogisticsTruckType(id) {
     if (!(await confirmAction('Deactivate this truck type? Existing trip history remains unchanged.', 'Deactivate Truck Type'))) return;
     try {
@@ -379,57 +321,6 @@
     } catch (error) { await showMessage(error.message, 'error'); }
   }
 
-  async function submitDeliveryTrip(id) {
-    try {
-      await request(`/api/payroll/logistics/trips/${Number(id)}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      await loadLogisticsPayrollModule();
-      await showMessage('Delivery trip marked Payroll Ready.');
-    } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  async function approveDeliveryTrip(id) {
-    if (!canApproveLogistics() || !(await confirmAction('Approve this delivery trip for payroll?', 'Approve Delivery Trip'))) return;
-    try {
-      await request(`/api/payroll/logistics/trips/${Number(id)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      await loadLogisticsPayrollModule();
-      await showMessage('Delivery trip approved.');
-    } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  async function rejectDeliveryTrip(id) {
-    if (!canApproveLogistics()) return;
-    const reason = window.prompt('Provide the rejection reason:');
-    if (!reason) return;
-    try {
-      await request(`/api/payroll/logistics/trips/${Number(id)}/reject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });
-      await loadLogisticsPayrollModule();
-      await showMessage('Delivery trip rejected.');
-    } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  async function deleteDeliveryTrip(id) {
-    if (!(await confirmAction('Delete this Draft delivery trip?', 'Delete Delivery Trip'))) return;
-    try {
-      await request(`/api/payroll/logistics/trips/${Number(id)}`, { method: 'DELETE' });
-      await loadLogisticsPayrollModule();
-      await showMessage('Draft delivery trip deleted.');
-    } catch (error) { await showMessage(error.message, 'error'); }
-  }
-
-  async function loadLogisticsPayrollSummary() {
-    const target = document.getElementById('logistics-payroll-summary-grid');
-    if (!target) return;
-    try {
-      const startDate = document.getElementById('logistics-summary-start')?.value;
-      const endDate = document.getElementById('logistics-summary-end')?.value;
-      const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
-      const result = await request(`/api/payroll/logistics/payroll-summary?${params}`);
-      target.innerHTML = `<table data-no-pagination="1"><thead><tr><th>Employee</th><th>Position</th><th>Payroll-Ready Trips</th><th>Total Logistics Pay</th></tr></thead><tbody>${(result.rows || []).map(row => `<tr><td>${escapeHtml(row.employee_code || '')} - ${escapeHtml(row.employee_name)}</td><td>${escapeHtml(row.position || '-')}</td><td>${Number(row.approved_trip_count)}</td><td>${money(row.total_logistics_pay)}</td></tr>`).join('') || '<tr><td colspan="4">No payroll-ready delivery trips in this period.</td></tr>'}</tbody><tfoot><tr><th colspan="3">Total Logistics Pay</th><th>${money(result.total_logistics_pay)}</th></tr></tfoot></table>`;
-    } catch (error) {
-      target.innerHTML = `<div class="payroll-form-status error">${escapeHtml(error.message)}</div>`;
-    }
-  }
-
   async function handleLogisticsActionClick(event) {
     const button = event.target.closest('[data-logistics-action]');
     if (!button || !document.getElementById('payroll-tab-logistics')?.contains(button)) return;
@@ -445,14 +336,9 @@
       if (action === 'editTruckType') return editLogisticsTruckType(id);
       if (action === 'editLocation') return editLogisticsLocation(id);
       if (action === 'editRate') return editLogisticsRate(id);
-      if (action === 'editDeliveryTrip') return editDeliveryTrip(id);
       if (action === 'deactivateTruckType') return await deactivateLogisticsTruckType(id);
       if (action === 'deactivateLocation') return await deactivateLogisticsLocation(id);
       if (action === 'deactivateRate') return await deactivateLogisticsRate(id);
-      if (action === 'submitDeliveryTrip') return await submitDeliveryTrip(id);
-      if (action === 'approveDeliveryTrip') return await approveDeliveryTrip(id);
-      if (action === 'rejectDeliveryTrip') return await rejectDeliveryTrip(id);
-      if (action === 'deleteDeliveryTrip') return await deleteDeliveryTrip(id);
     } finally {
       button.disabled = false;
     }
@@ -585,8 +471,7 @@
     loadLogisticsPayrollModule, saveLogisticsTruckType, saveLogisticsLocation, saveLogisticsRate,
     saveDeliveryTrip, submitDeliveryTripForm, refreshTripPreview,
     editLogisticsTruckType, editLogisticsLocation, editLogisticsRate, deactivateLogisticsTruckType,
-    editDeliveryTrip, deactivateLogisticsLocation, deactivateLogisticsRate, submitDeliveryTrip,
-    approveDeliveryTrip, rejectDeliveryTrip, deleteDeliveryTrip, loadLogisticsPayrollSummary,
+    deactivateLogisticsLocation, deactivateLogisticsRate,
     prepareSwrFxrRegistry, generateSwrFxrRegistry,
     changeLogisticsRatesPage, loadSwrFxrRegistry: generateSwrFxrRegistry, printSwrFxrRegistry
   });
