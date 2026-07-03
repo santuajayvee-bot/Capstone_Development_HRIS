@@ -10,6 +10,8 @@ assert.match(frontend, /function payrollExactHourLabel\(hours, minutes = null\)/
 assert.match(frontend, /net_credited_minutes[\s\S]*payrollExactHourLabel\(netCreditedHours, netCreditedMinutes\)/, 'Work Output must display exact net credited minutes.');
 assert.match(frontend, /Clocked Regular Hrs/, 'Hourly breakdown must label raw attendance time separately from payroll work output.');
 assert.match(frontend, /Included in work output; only beyond-grace late is deducted/, 'Hourly breakdown must explicitly state that grace is included in work output.');
+assert.match(frontend, /hasLateUtSummary[\s\S]*row\('Late \/ UT'/, 'Salary calculation summary must display employee Late / UT minutes.');
+assert.match(frontend, /included in adjusted base/, 'Hourly Late / UT summary must state that it is already included in adjusted base pay.');
 assert.match(frontend, /minimumFractionDigits:\s*4[\s\S]*maximumFractionDigits:\s*4/, 'Decimal hour display must keep 4 decimals to avoid centavo mismatches.');
 assert.match(frontend, /regular_minutes/, 'Attendance source rows must carry exact regular minutes.');
 assert.match(backend, /net_credited_minutes:\s*roundedNetCreditedMinutes/, 'Payroll snapshot must store exact net credited minutes.');

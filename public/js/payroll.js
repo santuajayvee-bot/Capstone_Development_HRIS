@@ -2608,6 +2608,19 @@ function showCalculationBreakdown(record) {
   if (deductionsApplied && !deductionRows.length && totalDeductions > 0) {
     deductionRows.push(['Configured Deductions', totalDeductions]);
   }
+  const lateDeductionAmount = number(snapshot.late_deduction);
+  const undertimeDeductionAmount = number(snapshot.undertime_deduction);
+  const attendanceDeductionAmount = lateDeductionAmount + undertimeDeductionAmount;
+  const hasLateUtSummary = deductionsApplied
+    && (deductibleLateMinutes > 0 || deductibleUndertimeMinutes > 0 || attendanceDeductionAmount > 0);
+  const lateUtSummaryValue = (() => {
+    const minutesLabel = `${deductibleLateMinutes.toLocaleString('en-US')} / ${deductibleUndertimeMinutes.toLocaleString('en-US')} min`;
+    if (hourlyLateEmbeddedInBase && attendanceDeductionAmount > 0) {
+      return `${minutesLabel} (${fmt(attendanceDeductionAmount)} included in adjusted base)`;
+    }
+    if (attendanceDeductionAmount > 0) return `${minutesLabel} (- ${fmt(attendanceDeductionAmount)})`;
+    return minutesLabel;
+  })();
 
   const row = (label, value, className = '') => `
     <tr class="${className}">
@@ -2686,6 +2699,7 @@ function showCalculationBreakdown(record) {
             ${row('Allowances', fmt(totalAllowances))}
             ${row(deductionsApplied ? 'Gross Pay' : 'Encoded Source Total', fmt(displayGrossPay), 'is-positive')}
             ${deductionsApplied ? `
+              ${hasLateUtSummary ? row('Late / UT', payrollEscape(lateUtSummaryValue), hourlyLateEmbeddedInBase ? '' : 'is-deduction') : ''}
               ${deductionRows.map(([label, amount]) => row(label, `- ${fmt(amount)}`, 'is-deduction')).join('')}
               ${row('Total Deductions', `- ${fmt(totalDeductions)}`, 'is-deduction')}
               ${row('Net Pay', fmt(displayNetPay), 'is-net')}
