@@ -10,6 +10,7 @@ const controller = read('controllers/authController.js');
 const routes = read('routes/authRoutes.js');
 const mfa = read('services/mfaService.js');
 const login = read('public/js/login.js');
+const authClient = read('public/js/auth.js');
 const server = read('server.js');
 const authQueries = read('db/authQueries.js');
 const adminRbac = read('server/admin-rbac.js');
@@ -36,6 +37,8 @@ assert(mfa.includes("crypto.createHmac('sha1'"), 'TOTP codes must be generated w
 assert(mfa.includes('MFA_TOTP_Secret_Encrypted'), 'TOTP secrets must be stored encrypted at rest.');
 assert(login.includes('mfa-qr-code'), 'The login client must support first-time TOTP QR enrollment.');
 assert(login.includes('captchaToken'), 'The login client must submit the reCAPTCHA token.');
+assert(login.includes('window.resetLoginFlow = resetLoginFlow'), 'The login client must expose a full login-flow reset helper.');
+assert(authClient.includes('window.resetLoginFlow()'), 'Logout must reset the login client back to the credential step.');
 assert(server.includes('https://www.google.com'), 'CSP must explicitly allow Google reCAPTCHA resources.');
 for (const authPath of ['/api/auth/login', '/api/auth/mfa/verify', '/api/auth/mfa/resend', '/api/auth/lockout-status']) {
   assert(server.includes(`'${authPath}'`), `Auth rate-limit path missing: ${authPath}`);

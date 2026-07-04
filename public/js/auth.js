@@ -509,7 +509,11 @@ async function logout() {
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-screen').style.display = 'flex';
   }
-  if (typeof window.resetLoginCaptcha === 'function') window.resetLoginCaptcha();
+  if (typeof window.resetLoginFlow === 'function') {
+    window.resetLoginFlow();
+  } else if (typeof window.resetLoginCaptcha === 'function') {
+    window.resetLoginCaptcha();
+  }
 }
 
 function closeMobileSidebar() {

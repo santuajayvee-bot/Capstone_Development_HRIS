@@ -283,10 +283,12 @@ function updateMfaDevelopmentCode(mockCode) {
   }
 }
 
-function cancelMfaLogin() {
+function resetLoginFlow() {
   activeMfaChallenge = null;
   const password = document.getElementById('password');
+  const mfaCode = document.getElementById('mfa-code');
   if (password) password.value = '';
+  if (mfaCode) mfaCode.value = '';
   const enrollment = document.getElementById('mfa-enrollment');
   const qrCode = document.getElementById('mfa-qr-code');
   const detail = document.getElementById('mfa-detail');
@@ -298,6 +300,10 @@ function cancelMfaLogin() {
   clearLoginError();
   resetLoginCaptcha();
   document.getElementById('username')?.focus();
+}
+
+function cancelMfaLogin() {
+  resetLoginFlow();
 }
 
 async function verifyMfaCode() {
@@ -450,6 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.doLogin = doLogin;
 window.cancelMfaLogin = cancelMfaLogin;
+window.resetLoginFlow = resetLoginFlow;
 window.resendMfaCode = resendMfaCode;
 window.verifyMfaCode = verifyMfaCode;
 window.resetLoginCaptcha = resetLoginCaptcha;
