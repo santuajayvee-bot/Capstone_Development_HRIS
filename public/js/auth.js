@@ -482,8 +482,25 @@ function canAccess(pageId) {
   return roleAllowsPage;
 }
 
-function logout() {
+async function logout() {
   if (typeof stopAttendanceAjaxRefresh === 'function') stopAttendanceAjaxRefresh();
+  const token = getToken();
+  if (token) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+    } catch (_) {
+      // Local logout must still finish if the server is unavailable.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   clearAuth();
   closeMobileSidebar();
   if (typeof showLoginRoute === 'function') {
@@ -492,6 +509,7 @@ function logout() {
     document.getElementById('app').style.display = 'none';
     document.getElementById('login-screen').style.display = 'flex';
   }
+  if (typeof window.resetLoginCaptcha === 'function') window.resetLoginCaptcha();
 }
 
 function closeMobileSidebar() {

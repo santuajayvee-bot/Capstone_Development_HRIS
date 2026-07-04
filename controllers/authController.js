@@ -17,6 +17,7 @@ const {
   createUserSession,
   createAuditLog,
   ensureEmployeeAuthIdentifier,
+  revokeSessionByJwtId,
 } = require('../db/authQueries');
 const {
   getUserPermissions,
@@ -29,10 +30,15 @@ const {
 const {
   MfaServiceError,
   createMfaChallenge,
-  isMfaEnabled,
+  isMfaRequiredForRole,
   resendMfaChallenge,
   verifyMfaChallenge,
 } = require('../services/mfaService');
+const {
+  RecaptchaServiceError,
+  publicRecaptchaConfig,
+  verifyRecaptchaToken,
+} = require('../services/recaptchaService');
 
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
@@ -62,6 +68,21 @@ function getUserAgent(req) {
   }
 
   return req.headers?.['user-agent'] || null;
+}
+
+function auditLoginIdentifier(identifier) {
+  if (!isNonEmptyString(identifier)) return 'unavailable';
+  const normalized = identifier.trim().toLowerCase();
+  const [localPart, domain] = normalized.split('@');
+  if (domain) {
+    const visibleLocal = localPart.length <= 2
+      ? `${localPart[0] || '*'}*`
+      : `${localPart.slice(0, 2)}***${localPart.slice(-1)}`;
+    return `${visibleLocal}@${domain}`;
+  }
+  return normalized.length <= 3
+    ? `${normalized[0] || '*'}***`
+    : `${normalized.slice(0, 2)}***${normalized.slice(-1)}`;
 }
 
 function isFutureDate(value) {
@@ -233,6 +254,7 @@ async function issueAuthenticatedSession(req, res, user) {
 async function login(req, res) {
   const loginIdentifier = req.body?.email || req.body?.username;
   const password = req.body?.password;
+  const captchaToken = req.body?.captchaToken || req.body?.['g-recaptcha-response'];
   const ipAddress = getRequestIp(req);
   const userAgent = getUserAgent(req);
 
@@ -243,13 +265,30 @@ async function login(req, res) {
   const normalizedLoginIdentifier = loginIdentifier.trim().toLowerCase();
 
   try {
+    const captcha = await verifyRecaptchaToken({ token: captchaToken, remoteIp: ipAddress });
+    if (!captcha.success) {
+      await safeCreateAuditLog({
+        Employee_ID: null,
+        Action_Type: 'LOGIN_CAPTCHA_FAILED',
+        Description: 'Login blocked because human verification failed.',
+        IP_Address: ipAddress,
+        User_Agent: userAgent,
+      });
+      return res.status(400).json({
+        success: false,
+        captchaRequired: true,
+        code: captcha.code,
+        message: 'Complete the human verification and try again.',
+      });
+    }
+
     const user = await findUserByEmail(normalizedLoginIdentifier);
 
     if (!user || isInactiveUser(user)) {
       await safeCreateAuditLog({
         Employee_ID: getAuthEmployeeId(user),
         Action_Type: 'LOGIN_FAILED',
-        Description: 'Login failed with invalid credentials.',
+        Description: `Login failed with invalid credentials for identifier ${auditLoginIdentifier(normalizedLoginIdentifier)}.`,
         IP_Address: ipAddress,
         User_Agent: userAgent,
       });
@@ -308,7 +347,7 @@ async function login(req, res) {
         await safeCreateAuditLog({
           Employee_ID: employeeId,
           Action_Type: 'LOGIN_FAILED',
-          Description: 'Login failed with invalid credentials.',
+          Description: `Login failed with invalid credentials for identifier ${auditLoginIdentifier(normalizedLoginIdentifier)}.`,
           IP_Address: ipAddress,
           User_Agent: userAgent,
         });
@@ -320,18 +359,26 @@ async function login(req, res) {
     // A correct password resets password-lockout state, but never creates an
     // access token until the MFA challenge has been successfully verified.
     await resetFailedLoginAttemptsForUser(user.id);
-    if (isMfaEnabled()) {
+    if (isMfaRequiredForRole(user.role_name)) {
       try {
-        const challenge = await createMfaChallenge({ employeeId, req });
+        const challenge = await createMfaChallenge({
+          employeeId,
+          accountName: user.username || user.Email || normalizedLoginIdentifier,
+          req,
+        });
         return res.status(202).json({
           success: true,
           mfaRequired: true,
           challengeId: challenge.challengeId,
           mfaToken: challenge.mfaToken,
-          maskedPhoneNumber: challenge.maskedPhoneNumber,
           codeLength: challenge.codeLength,
           expiresIn: challenge.expiresIn,
-          mockCode: challenge.mockCode || undefined,
+          enrollmentRequired: challenge.enrollmentRequired,
+          method: challenge.method,
+          qrCodeDataUrl: challenge.qrCodeDataUrl,
+          manualEntryKey: challenge.manualEntryKey,
+          issuer: challenge.issuer,
+          accountName: challenge.accountName,
         });
       } catch (error) {
         console.error('[authController] MFA challenge failed:', error.code || error.message);
@@ -341,19 +388,68 @@ async function login(req, res) {
 
     await safeCreateAuditLog({
       Employee_ID: employeeId,
-      Action_Type: 'MFA_BYPASSED',
-      Description: 'MFA bypassed because MFA_ENABLED is false.',
+      Action_Type: 'MFA_NOT_REQUIRED',
+      Description: 'MFA is not required for this non-privileged account.',
       IP_Address: ipAddress,
       User_Agent: userAgent,
     });
 
     return issueAuthenticatedSession(req, res, user);
   } catch (error) {
+    if (error instanceof RecaptchaServiceError) {
+      await safeCreateAuditLog({
+        Employee_ID: null,
+        Action_Type: 'LOGIN_CAPTCHA_UNAVAILABLE',
+        Description: 'Login blocked because human verification was unavailable.',
+        IP_Address: ipAddress,
+        User_Agent: userAgent,
+      });
+      return res.status(error.statusCode).json({
+        success: false,
+        captchaRequired: true,
+        code: error.code,
+        message: error.message,
+      });
+    }
     console.error('[authController] login failed:', error.message);
     return res.status(500).json({
       success: false,
       message: UNEXPECTED_LOGIN_MESSAGE,
     });
+  }
+}
+
+function captchaConfig(_req, res) {
+  try {
+    return res.json(publicRecaptchaConfig());
+  } catch (error) {
+    console.error('[authController] CAPTCHA config failed:', error.code || error.message);
+    return res.status(Number(error.statusCode || 503)).json({
+      success: false,
+      enabled: true,
+      message: 'Human verification is unavailable.',
+    });
+  }
+}
+
+async function logout(req, res) {
+  try {
+    const revoked = req.user?.jti
+      ? await revokeSessionByJwtId(req.user.jti, 'user_logout')
+      : 0;
+    const { maxAge: _maxAge, ...cookieOptions } = getRefreshCookieOptions();
+    res.clearCookie(REFRESH_COOKIE_NAME, cookieOptions);
+    await safeCreateAuditLog({
+      Employee_ID: req.user?.Employee_ID || req.user?.employeeId || null,
+      Action_Type: 'LOGOUT_SUCCESS',
+      Description: `User logout completed; ${Number(revoked || 0)} session revoked.`,
+      IP_Address: getRequestIp(req),
+      User_Agent: getUserAgent(req),
+    });
+    return res.json({ success: true, message: 'Logout successful.' });
+  } catch (error) {
+    console.error('[authController] logout failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to process logout.' });
   }
 }
 
@@ -399,7 +495,14 @@ async function lockoutStatus(req, res) {
   try {
     const user = await findUserByEmail(loginIdentifier.trim().toLowerCase());
     if (!user || isInactiveUser(user)) {
-      return res.status(404).json({ success: false, message: 'Account not found.' });
+      return res.json({
+        success: true,
+        locked: false,
+        attempts: 0,
+        remaining_attempts: MAX_FAILED_ATTEMPTS,
+        locked_until: null,
+        lock_seconds_remaining: 0,
+      });
     }
     const state = await getUserLoginLockState(user.id);
     return res.json({
@@ -418,6 +521,8 @@ async function lockoutStatus(req, res) {
 
 module.exports = {
   login,
+  captchaConfig,
+  logout,
   verifyMfa,
   resendMfa,
   lockoutStatus,

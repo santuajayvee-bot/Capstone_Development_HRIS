@@ -137,6 +137,22 @@
 
 .login-field input::placeholder { color: #98a2b3; }
 
+.login-captcha {
+  min-height: 78px;
+  margin: 2px 0 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.login-captcha[hidden] { display: none !important; }
+
+#login-recaptcha-widget {
+  width: 304px;
+  min-height: 78px;
+}
+
 #login-mfa-step[hidden] { display: none !important; }
 .login-mfa-title {
   margin-bottom: 6px;
@@ -151,11 +167,39 @@
   line-height: 1.45;
   margin-bottom: 4px;
 }
-.login-mfa-phone {
+.login-mfa-detail {
   min-height: 20px;
   margin-bottom: 18px;
   color: #667085;
   font-size: 13px;
+  text-align: center;
+}
+.login-mfa-qr {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+.login-mfa-qr[hidden] { display: none !important; }
+.login-mfa-qr img {
+  width: 192px;
+  height: 192px;
+  padding: 8px;
+  border: 1px solid rgba(139, 181, 198, 0.38);
+  border-radius: 8px;
+  background: #fff;
+}
+.login-mfa-setup-key {
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(139, 181, 198, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #475467;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
   text-align: center;
 }
 .login-mfa-dev-code {
@@ -392,5 +436,16 @@
 
   .login-mfa-actions {
     display: grid;
+  }
+}
+
+@media (max-width: 380px) {
+  .login-captcha {
+    min-height: 68px;
+  }
+
+  #login-recaptcha-widget {
+    transform: scale(0.86);
+    transform-origin: top center;
   }
 }

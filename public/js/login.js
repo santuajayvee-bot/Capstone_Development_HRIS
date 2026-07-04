@@ -5,6 +5,54 @@
 let lockoutCountdownTimer = null;
 let lockoutPollTimer = null;
 let activeLockoutState = null;
+let recaptchaWidgetId = null;
+let recaptchaRequired = false;
+let recaptchaLoadPromise = null;
+
+function resetLoginCaptcha() {
+  if (recaptchaWidgetId !== null && window.grecaptcha) {
+    window.grecaptcha.reset(recaptchaWidgetId);
+  }
+}
+
+function loadGoogleRecaptcha(siteKey) {
+  if (recaptchaLoadPromise) return recaptchaLoadPromise;
+  recaptchaLoadPromise = new Promise((resolve, reject) => {
+    window.onLgsvRecaptchaLoaded = () => {
+      const container = document.getElementById('login-recaptcha-widget');
+      if (!container || !window.grecaptcha) return reject(new Error('CAPTCHA widget unavailable.'));
+      recaptchaWidgetId = window.grecaptcha.render(container, { sitekey: siteKey });
+      resolve(recaptchaWidgetId);
+    };
+    const script = document.createElement('script');
+    script.src = 'https://www.google.com/recaptcha/api.js?onload=onLgsvRecaptchaLoaded&render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => reject(new Error('CAPTCHA provider unavailable.'));
+    document.head.appendChild(script);
+  });
+  return recaptchaLoadPromise;
+}
+
+async function initializeLoginCaptcha() {
+  const container = document.getElementById('login-captcha');
+  try {
+    const response = await fetch('/api/auth/captcha-config', { cache: 'no-store' });
+    const config = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(config.message || 'CAPTCHA configuration unavailable.');
+    recaptchaRequired = config.enabled === true;
+    if (!recaptchaRequired) {
+      if (container) container.hidden = true;
+      return;
+    }
+    if (container) container.hidden = false;
+    await loadGoogleRecaptcha(config.siteKey);
+  } catch (_) {
+    recaptchaRequired = true;
+    if (container) container.hidden = false;
+    loginError('Human verification is temporarily unavailable. Please refresh the page.');
+  }
+}
 
 function loginError(message, warning = false) {
   const errEl = document.getElementById('login-err');
@@ -196,8 +244,29 @@ function showMfaStep(data) {
     mfaToken: data.mfaToken,
     codeLength: Number(data.codeLength) || 6,
   };
-  document.getElementById('mfa-phone-number').textContent = data.maskedPhoneNumber || '';
-  updateMfaDevelopmentCode(data.mockCode);
+  const enrollment = document.getElementById('mfa-enrollment');
+  const qrCode = document.getElementById('mfa-qr-code');
+  const manualKey = document.getElementById('mfa-manual-key');
+  const detail = document.getElementById('mfa-detail');
+  const message = document.getElementById('mfa-message');
+  const resendButton = document.getElementById('mfa-resend-btn');
+
+  if (data.enrollmentRequired) {
+    if (message) message.textContent = 'Scan this QR code with Google Authenticator or Microsoft Authenticator, then enter the 6-digit code.';
+    if (qrCode) qrCode.src = data.qrCodeDataUrl || '';
+    if (manualKey) manualKey.textContent = data.manualEntryKey ? `Setup key: ${data.manualEntryKey}` : '';
+    if (enrollment) enrollment.hidden = false;
+    if (detail) detail.textContent = data.accountName ? `Account: ${data.accountName}` : '';
+  } else {
+    if (message) message.textContent = 'Enter the 6-digit code from your authenticator app.';
+    if (qrCode) qrCode.removeAttribute('src');
+    if (manualKey) manualKey.textContent = '';
+    if (enrollment) enrollment.hidden = true;
+    if (detail) detail.textContent = 'Codes refresh automatically every 30 seconds.';
+  }
+
+  if (resendButton) resendButton.hidden = true;
+  updateMfaDevelopmentCode(null);
   const codeInput = document.getElementById('mfa-code');
   codeInput.value = '';
   codeInput.maxLength = activeMfaChallenge.codeLength;
@@ -221,9 +290,18 @@ function cancelMfaLogin() {
   activeMfaChallenge = null;
   const password = document.getElementById('password');
   if (password) password.value = '';
+  const enrollment = document.getElementById('mfa-enrollment');
+  const qrCode = document.getElementById('mfa-qr-code');
+  const manualKey = document.getElementById('mfa-manual-key');
+  const detail = document.getElementById('mfa-detail');
+  if (enrollment) enrollment.hidden = true;
+  if (qrCode) qrCode.removeAttribute('src');
+  if (manualKey) manualKey.textContent = '';
+  if (detail) detail.textContent = '';
   updateMfaDevelopmentCode(null);
   setLoginStep(false);
   clearLoginError();
+  resetLoginCaptcha();
   document.getElementById('username')?.focus();
 }
 
@@ -238,7 +316,7 @@ async function verifyMfaCode() {
     return;
   }
   if (!new RegExp(`^\\d{${activeMfaChallenge.codeLength}}$`).test(code)) {
-    loginError('Enter the verification code sent to your registered mobile number.');
+    loginError('Enter the verification code from your authenticator app.');
     return;
   }
 
@@ -287,9 +365,8 @@ async function resendMfaCode() {
       loginError(data.message || data.error || 'Failed to resend MFA code.', response.status === 429);
       return;
     }
-    document.getElementById('mfa-phone-number').textContent = data.maskedPhoneNumber || document.getElementById('mfa-phone-number').textContent;
-    updateMfaDevelopmentCode(data.mockCode);
-    loginError('A new verification code has been sent.', true);
+    updateMfaDevelopmentCode(null);
+    loginError(data.message || 'Authenticator app codes refresh automatically every 30 seconds.', true);
   } catch (_) {
     loginError('Cannot reach the server. Please try again.');
   } finally {
@@ -311,6 +388,14 @@ async function doLogin() {
     return;
   }
 
+  const captchaToken = recaptchaRequired && recaptchaWidgetId !== null && window.grecaptcha
+    ? window.grecaptcha.getResponse(recaptchaWidgetId)
+    : '';
+  if (recaptchaRequired && !captchaToken) {
+    loginError('Complete the human verification before signing in.');
+    return;
+  }
+
   btnEl.textContent = 'Logging in...';
   btnEl.disabled = true;
 
@@ -318,19 +403,21 @@ async function doLogin() {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, captchaToken }),
     });
 
     const data = await res.json();
 
     if (!res.ok) {
       if (res.status === 423) {
+        resetLoginCaptcha();
         startLockoutCountdown(username, data);
         return;
       }
 
       const message = formatLoginFailureMessage(data, res.status);
       loginError(message, res.status === 423 || Number(data.remaining_attempts || 0) <= 2);
+      resetLoginCaptcha();
       return;
     }
 
@@ -341,6 +428,7 @@ async function doLogin() {
 
     await completeAuthenticatedLogin(data);
   } catch (err) {
+    resetLoginCaptcha();
     loginError('Cannot reach server. Is it running?');
   } finally {
     btnEl.textContent = 'Login';
@@ -362,9 +450,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('mfa-code')
     ?.addEventListener('keydown', e => { if (e.key === 'Enter') verifyMfaCode(); });
+  initializeLoginCaptcha();
 });
 
 window.doLogin = doLogin;
 window.cancelMfaLogin = cancelMfaLogin;
 window.resendMfaCode = resendMfaCode;
 window.verifyMfaCode = verifyMfaCode;
+window.resetLoginCaptcha = resetLoginCaptcha;

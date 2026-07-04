@@ -596,7 +596,12 @@ app.use('/api', requireSameOriginForBrowserWrites);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
-app.use('/api/auth/login', AUTH_RATE_LIMIT);
+app.use([
+  '/api/auth/login',
+  '/api/auth/mfa/verify',
+  '/api/auth/mfa/resend',
+  '/api/auth/lockout-status',
+], AUTH_RATE_LIMIT);
 app.use('/api', API_RATE_LIMIT);
 app.use('/api', generalWriteAuditMiddleware);
 app.use((req, res, next) => {
@@ -613,7 +618,7 @@ app.use((req, res, next) => {
   }
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.google.com https://www.gstatic.com; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; frame-src https://www.google.com https://recaptcha.google.com; connect-src 'self' https://www.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
   );
   next();
 });

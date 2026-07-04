@@ -1,0 +1,47 @@
+-- Pending TOTP challenges cannot be verified after restoring the prior provider.
+UPDATE MFA_CHALLENGE
+   SET Status = 'SUPERSEDED'
+ WHERE Status = 'PENDING';
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND INDEX_NAME = 'idx_employees_mfa_totp_hash') > 0,
+  'DROP INDEX idx_employees_mfa_totp_hash ON employees',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'MFA_TOTP_Enrolled_At') > 0,
+  'ALTER TABLE employees DROP COLUMN MFA_TOTP_Enrolled_At',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'MFA_TOTP_Secret_Hash') > 0,
+  'ALTER TABLE employees DROP COLUMN MFA_TOTP_Secret_Hash',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'MFA_TOTP_Secret_Encrypted') > 0,
+  'ALTER TABLE employees DROP COLUMN MFA_TOTP_Secret_Encrypted',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+ALTER TABLE MFA_CHALLENGE
+  MODIFY COLUMN Provider VARCHAR(50) NOT NULL DEFAULT 'iprog';

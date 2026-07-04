@@ -108,6 +108,8 @@ const SECRET_FIELDS = new Set([
   'code',
   'turnstile_token',
   'cf_turnstile_response',
+  'captcha_token',
+  'g_recaptcha_response',
 ]);
 
 const NAME_MESSAGE = 'Name fields must contain letters only and cannot contain numbers.';
