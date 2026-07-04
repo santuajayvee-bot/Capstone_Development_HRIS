@@ -316,7 +316,6 @@ async function createMfaChallenge({ employeeId, accountName, req }) {
       margin: 1,
       width: 192,
     });
-    response.manualEntryKey = secret.replace(/(.{4})/g, '$1 ').trim();
     response.issuer = config.issuer;
     response.accountName = accountName || 'lgsv-user';
   }

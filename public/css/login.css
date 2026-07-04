@@ -189,19 +189,6 @@
   border-radius: 8px;
   background: #fff;
 }
-.login-mfa-setup-key {
-  max-width: 100%;
-  padding: 8px 10px;
-  border: 1px solid rgba(139, 181, 198, 0.38);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  color: #475467;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  text-align: center;
-}
 .login-mfa-dev-code {
   margin: -8px 0 16px;
   padding: 9px 10px;

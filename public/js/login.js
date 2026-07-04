@@ -246,7 +246,6 @@ function showMfaStep(data) {
   };
   const enrollment = document.getElementById('mfa-enrollment');
   const qrCode = document.getElementById('mfa-qr-code');
-  const manualKey = document.getElementById('mfa-manual-key');
   const detail = document.getElementById('mfa-detail');
   const message = document.getElementById('mfa-message');
   const resendButton = document.getElementById('mfa-resend-btn');
@@ -254,13 +253,11 @@ function showMfaStep(data) {
   if (data.enrollmentRequired) {
     if (message) message.textContent = 'Scan this QR code with Google Authenticator or Microsoft Authenticator, then enter the 6-digit code.';
     if (qrCode) qrCode.src = data.qrCodeDataUrl || '';
-    if (manualKey) manualKey.textContent = data.manualEntryKey ? `Setup key: ${data.manualEntryKey}` : '';
     if (enrollment) enrollment.hidden = false;
     if (detail) detail.textContent = data.accountName ? `Account: ${data.accountName}` : '';
   } else {
     if (message) message.textContent = 'Enter the 6-digit code from your authenticator app.';
     if (qrCode) qrCode.removeAttribute('src');
-    if (manualKey) manualKey.textContent = '';
     if (enrollment) enrollment.hidden = true;
     if (detail) detail.textContent = 'Codes refresh automatically every 30 seconds.';
   }
@@ -292,11 +289,9 @@ function cancelMfaLogin() {
   if (password) password.value = '';
   const enrollment = document.getElementById('mfa-enrollment');
   const qrCode = document.getElementById('mfa-qr-code');
-  const manualKey = document.getElementById('mfa-manual-key');
   const detail = document.getElementById('mfa-detail');
   if (enrollment) enrollment.hidden = true;
   if (qrCode) qrCode.removeAttribute('src');
-  if (manualKey) manualKey.textContent = '';
   if (detail) detail.textContent = '';
   updateMfaDevelopmentCode(null);
   setLoginStep(false);
