@@ -696,7 +696,7 @@ async function loadAuditLog() {
 }
 
 function auditModuleLevel(moduleName) {
-  if (moduleName === 'RBAC_SECURITY' || moduleName === 'SYSTEM' || moduleName === 'BLOCKCHAIN') return 4;
+  if (['AUTH', 'AUTH_SECURITY', 'RBAC_SECURITY', 'SYSTEM', 'BLOCKCHAIN'].includes(moduleName)) return 4;
   if (moduleName === 'PAYROLL') return 3;
   if (['EMPLOYEE', 'ATTENDANCE', 'LEAVE', '201_FILE', 'ONBOARDING'].includes(moduleName)) return 2;
   return 1;
@@ -705,6 +705,8 @@ function auditModuleLevel(moduleName) {
 function auditModuleLabel(moduleName) {
   const labels = {
     ACCOUNT_LIFECYCLE: 'Account lifecycle',
+    AUTH: 'Authentication',
+    AUTH_SECURITY: 'Authentication security',
     ATTENDANCE: 'Attendance',
     BLOCKCHAIN: 'Blockchain',
     EMPLOYEE: 'Employee records',
@@ -810,9 +812,25 @@ function auditWriteMetadata(log) {
 }
 
 function auditActionText(log) {
+  const actionType = String(log?.action_type || '').trim().toUpperCase();
   const action = String(log?.action_performed || '').trim();
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete) return 'Employee record deletion requested';
+  const authLabels = {
+    LOGIN_SUCCESS: 'Successful login recorded',
+    LOGIN_FAILED: 'Failed login attempt recorded',
+    LOGIN_BLOCKED_LOCKED_ACCOUNT: 'Locked-account login attempt blocked',
+    LOGIN_CAPTCHA_FAILED: 'Login human verification failed',
+    LOGIN_CAPTCHA_UNAVAILABLE: 'Login human verification unavailable',
+    LOGOUT_SUCCESS: 'Successful logout recorded',
+    MFA_NOT_REQUIRED: 'Non-privileged login did not require MFA',
+    MFA_CHALLENGE_CREATED: 'MFA challenge created',
+    MFA_CHALLENGE_EXPIRED: 'MFA challenge expired',
+    MFA_VERIFICATION_FAILED: 'MFA verification failed',
+    MFA_TOO_MANY_ATTEMPTS: 'MFA challenge locked after failed attempts',
+    MFA_TOTP_ENROLLMENT_STARTED: 'TOTP MFA enrollment started',
+  };
+  if (authLabels[actionType]) return authLabels[actionType];
   if (!action) return '—';
   if (/failed_unauthorized_access_attempt/i.test(action)) return 'Unauthorized access attempt blocked';
   if (/failed_permission_check/i.test(action)) return 'Permission check failed';
@@ -837,6 +855,7 @@ function auditDetails(log) {
   const parts = [];
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete && write.statusCode) parts.push(`Status: ${write.statusCode}`);
+  if (log.action_type && !auditLooksBackendOnly(log.action_type)) parts.push(`Event: ${log.action_type}`);
   if (log.field_changed && !auditLooksBackendOnly(log.field_changed)) parts.push(`Field: ${log.field_changed}`);
   if (log.details && !auditLooksBackendOnly(log.details)) parts.push(log.details);
 

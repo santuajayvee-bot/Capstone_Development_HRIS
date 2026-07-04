@@ -75,6 +75,7 @@ function auditEventTypeCondition(eventType, fields = {}) {
   if (normalized === 'update') return `LOWER(${actionField}) REGEXP 'update|updated|change|changed|edit|edited|approve|approved|reject|rejected|correct|corrected|verify|verified|activate|activated|deactivate|deactivated|reset|reassign|reassigned'`;
   if (normalized === 'delete') return `LOWER(${actionField}) REGEXP 'delete|deleted|remove|removed|disable|disabled|cancel|cancelled|revoke|revoked'`;
   if (normalized === 'security') return `LOWER(CONCAT_WS(' ', ${moduleField}, ${actionField}, ${detailsField})) REGEXP 'security|denied|blocked|unauthorized|failed|tamper|lock|mfa|password|token|session'`;
+  if (normalized === 'auth') return `LOWER(CONCAT_WS(' ', ${moduleField}, ${actionField}, ${detailsField})) REGEXP 'auth|login|logout|mfa|captcha|session|credential|lockout'`;
   return null;
 }
 
@@ -95,16 +96,20 @@ async function buildGeneralAuditQueries({ includeLegacy = false } = {}) {
       await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL'),
       await columnExpr('system_audit_log', 'sal', 'Description', 'NULL'),
     ].join(', ')})`;
+    const actionType = await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL');
+    const employeeId = await columnExpr('system_audit_log', 'sal', 'employee_id', 'NULL');
+    const userId = await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL');
     queries.push(`
       SELECT
         CONCAT('system:', ${logId}) AS id,
         'system_audit_log' AS source_table,
         ${module} AS module,
         ${action} AS action_performed,
+        ${actionType} AS action_type,
         ${timestamp} AS timestamp,
-        ${await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL')} AS user_id,
-        u.username AS admin_username,
-        ${await columnExpr('system_audit_log', 'sal', 'employee_id', 'NULL')} AS employee_id,
+        ${userId} AS user_id,
+        COALESCE(u.username, actor_user.username) AS admin_username,
+        ${employeeId} AS employee_id,
         ${await columnExpr('system_audit_log', 'sal', 'target_employee_id', 'NULL')} AS target_employee_id,
         ${await columnExpr('system_audit_log', 'sal', 'old_value', 'NULL')} AS old_value,
         ${await columnExpr('system_audit_log', 'sal', 'new_value', 'NULL')} AS new_value,
@@ -114,7 +119,8 @@ async function buildGeneralAuditQueries({ includeLegacy = false } = {}) {
         NULL AS field_changed,
         NULL AS details
       FROM system_audit_log sal
-      LEFT JOIN users u ON u.id = ${await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL')}
+      LEFT JOIN users u ON u.id = ${userId}
+      LEFT JOIN users actor_user ON actor_user.employee_id = ${employeeId}
     `);
   }
 
@@ -292,9 +298,10 @@ async function queryCanonicalSystemAuditLog({
   const moduleExpr = await columnExpr('system_audit_log', 'sal', 'module', sqlLiteral('SYSTEM'));
   const userId = await columnExpr('system_audit_log', 'sal', 'user_id', 'NULL');
   const employeeId = await columnExpr('system_audit_log', 'sal', 'employee_id', await columnExpr('system_audit_log', 'sal', 'Employee_ID', 'NULL'));
+  const actionType = await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL');
   const actionExpr = `COALESCE(${[
     await columnExpr('system_audit_log', 'sal', 'action_performed', 'NULL'),
-    await columnExpr('system_audit_log', 'sal', 'Action_Type', 'NULL'),
+    actionType,
     await columnExpr('system_audit_log', 'sal', 'Description', 'NULL'),
   ].join(', ')})`;
   const oldValue = await columnExpr('system_audit_log', 'sal', 'old_value', 'NULL');
@@ -313,20 +320,26 @@ async function queryCanonicalSystemAuditLog({
       'system_audit_log' AS source_table,
       ${moduleExpr} AS module,
       ${actionExpr} AS action_performed,
+      ${actionType} AS action_type,
       ${timestamp} AS timestamp,
       ${userId} AS user_id,
-      u.username AS admin_username,
+      COALESCE(u.username, actor_user.username) AS admin_username,
       ${employeeId} AS employee_id,
       ${targetEmployeeId} AS target_employee_id,
       ${oldValue} AS old_value,
       ${newValue} AS new_value,
       ${ipAddress} AS ip_address,
       ${userAgent} AS user_agent,
-      NULL AS result,
+      CASE
+        WHEN UPPER(COALESCE(${actionType}, ${actionExpr}, '')) REGEXP 'SUCCESS|COMPLETED|APPROVED|VERIFIED|RECORDED|CREATED|UPDATED|ACTIVATED|LOGOUT' THEN 'Success'
+        WHEN UPPER(COALESCE(${actionType}, ${actionExpr}, '')) REGEXP 'FAILED|DENIED|BLOCKED|LOCKED|EXPIRED|INVALID|UNAUTHORIZED|TAMPER' THEN 'Failed'
+        ELSE NULL
+      END AS result,
       NULL AS field_changed,
       NULL AS details
     FROM system_audit_log sal
     LEFT JOIN users u ON u.id = ${userId}
+    LEFT JOIN users actor_user ON actor_user.employee_id = ${employeeId}
     WHERE ${timestamp} IS NOT NULL
   `;
 
