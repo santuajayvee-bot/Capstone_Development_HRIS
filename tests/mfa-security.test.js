@@ -2,7 +2,6 @@ const assert = require('assert');
 
 process.env.NODE_ENV = 'test';
 process.env.MFA_ENABLED = 'true';
-process.env.MFA_PROVIDER = 'totp';
 process.env.JWT_SECRET = 'test-only-jwt-secret-that-is-longer-than-thirty-two-characters';
 
 const {

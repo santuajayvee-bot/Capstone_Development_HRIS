@@ -92,11 +92,11 @@ function validateBiometricFlags() {
 
   if (value('NODE_ENV') !== 'production') warn('NODE_ENV is not production. Set NODE_ENV=production on AWS.');
 
-  if (value('MFA_MOCK_MODE') === 'true' || value('DISABLE_SMS_MFA_FOR_LOCAL_DEV') === 'true' || value('MFA_SHOW_MOCK_CODE') === 'true') {
-    fail('MFA mock/local bypass flags must be false in AWS.');
-  } else {
-    pass('MFA local bypass flags are disabled.');
-  }
+  if (value('MFA_ENABLED') !== 'true') fail('MFA_ENABLED must be true in AWS.');
+  else pass('TOTP MFA is enabled.');
+
+  if (!value('MFA_TOTP_ISSUER')) fail('MFA_TOTP_ISSUER must be configured for authenticator-app enrollment.');
+  else pass('TOTP MFA issuer is configured.');
 }
 
 function validateTlsTermination() {

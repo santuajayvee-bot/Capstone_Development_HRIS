@@ -25,7 +25,13 @@ assert(/revokeSessionByJwtId\(req\.user\.jti/.test(controller), 'Logout must rev
 for (const role of ['system_admin', 'payroll_manager', 'payroll_officer', 'hr_admin', 'hr_manager']) {
   assert(mfa.includes(`'${role}'`), `Privileged MFA role missing: ${role}`);
 }
-assert(mfa.includes("provider !== 'totp'"), 'TOTP must be the enforced MFA provider.');
+const retiredProviderPattern = new RegExp([
+  ['ip', 'rog'].join(''),
+  ['s', 'ms'].join(''),
+  ['MFA', '_PROVIDER'].join(''),
+].join('|'), 'i');
+assert(!retiredProviderPattern.test(mfa), 'MFA service must be TOTP-only and must not depend on retired provider switching.');
+assert(mfa.includes("VALUES (?, 'totp', ?, 'PENDING'"), 'MFA challenges must be created as TOTP challenges.');
 assert(mfa.includes("crypto.createHmac('sha1'"), 'TOTP codes must be generated with HMAC-SHA1 per RFC 6238.');
 assert(mfa.includes('MFA_TOTP_Secret_Encrypted'), 'TOTP secrets must be stored encrypted at rest.');
 assert(login.includes('mfa-qr-code'), 'The login client must support first-time TOTP QR enrollment.');

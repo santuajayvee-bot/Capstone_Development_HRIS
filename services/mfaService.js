@@ -35,13 +35,11 @@ function booleanEnv(name, fallback = false) {
 }
 
 function mfaConfig() {
-  const provider = String(process.env.MFA_PROVIDER || 'totp').trim().toLowerCase();
   const configuredValidity = Number(process.env.MFA_CHALLENGE_TTL_SECONDS || 300);
   const configuredWindow = Number(process.env.MFA_TOTP_WINDOW_STEPS || 1);
   return {
     enabled: booleanEnv('MFA_ENABLED', false),
     requireAllUsers: booleanEnv('MFA_REQUIRE_ALL_USERS', false),
-    provider,
     codeLength: 6,
     challengeTtl: Number.isFinite(configuredValidity) && configuredValidity >= 120 && configuredValidity <= 900
       ? configuredValidity
@@ -112,9 +110,6 @@ function normalizeChallengeId(value) {
 function assertMfaConfiguration(config) {
   if (!config.enabled) {
     throw new MfaServiceError('MFA is required but is not configured.', 'MFA_DISABLED', 503);
-  }
-  if (config.provider !== 'totp') {
-    throw new MfaServiceError('MFA provider is not configured.', 'MFA_PROVIDER_UNSUPPORTED', 503);
   }
 }
 
