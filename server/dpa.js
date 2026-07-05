@@ -55,8 +55,9 @@ async function acceptDpa(req, res) {
     return res.status(400).json({ error: 'Data Privacy Agreement consent is required.' });
   }
 
-  const connection = await pool.getConnection();
+  let connection;
   try {
+    connection = await pool.getConnection();
     await connection.beginTransaction();
     await connection.execute(
       `INSERT INTO DATA_PRIVACY_AGREEMENT_ACCEPTANCE
@@ -93,11 +94,11 @@ async function acceptDpa(req, res) {
       accepted: true,
     });
   } catch (error) {
-    await connection.rollback().catch(() => {});
+    if (connection) await connection.rollback().catch(() => {});
     console.error('[DPA] accept failed:', error.message);
     return res.status(500).json({ error: 'Data Privacy Agreement acceptance could not be saved.' });
   } finally {
-    connection.release();
+    if (connection) connection.release();
   }
 }
 

@@ -4,6 +4,12 @@
 <div class="section-title">Blockchain Integrity</div>
 <div class="section-sub">Tamper-evidence for finalized payroll and attendance DTR records. Full employee and payroll data remain off-chain.</div>
 
+<div class="bc-view-tabs" aria-label="Blockchain views">
+  <button class="bc-view-tab active" type="button" data-bc-view="integrity" onclick="switchBlockchainView('integrity')">Integrity Records</button>
+  <button class="bc-view-tab" id="bc-support-view-tab" type="button" data-bc-view="support" onclick="switchBlockchainView('support')">Support</button>
+</div>
+
+<div class="bc-view active" id="bc-view-integrity">
 <div id="bc-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
 <div id="bc-critical-panel" class="card bc-critical-panel" style="display:none;"></div>
 
@@ -145,5 +151,69 @@
         <tr><td colspan="6" class="att-empty">Select a payroll record audit trail.</td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+</div>
+
+<div class="bc-view" id="bc-view-support" hidden>
+  <div id="bc-support-message" class="card" style="display:none;margin-bottom:16px;padding:12px;"></div>
+
+  <div class="card" style="margin-bottom:20px;">
+    <div class="bc-support-heading">
+      <div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Blockchain Support</div>
+        <div class="section-sub">System Administrator technical view for Fabric readiness, pending anchors, and recent integrity alerts.</div>
+      </div>
+      <button class="btn btn-outline btn-sm" type="button" onclick="loadBlockchainSupportStatus()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="block-stats bc-support-stats">
+    <div class="stat-card">
+      <div class="stat-label">Fabric Ready</div>
+      <div class="stat-val" id="bc-support-fabric-ready">-</div>
+      <div class="stat-sub" id="bc-support-fabric-channel">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Payroll Records</div>
+      <div class="stat-val" id="bc-support-total-records">-</div>
+      <div class="stat-sub">Off-chain integrity rows</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Pending Anchor</div>
+      <div class="stat-val" id="bc-support-pending-anchor">-</div>
+      <div class="stat-sub">Needs Fabric recording</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Critical Audit</div>
+      <div class="stat-val" id="bc-support-critical-count">-</div>
+      <div class="stat-sub">Failed or mismatched verification</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+      <div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:6px;">Recent Technical Events</div>
+        <div class="section-sub">Limited recent history only. Use each record's Audit trail for full record-level review.</div>
+      </div>
+    </div>
+    <div class="table-wrap blockchain-table-wrap">
+      <table class="blockchain-table" data-no-pagination="1">
+        <thead>
+          <tr>
+            <th>Audit ID</th>
+            <th>Payroll</th>
+            <th>Event</th>
+            <th>Status</th>
+            <th>Transaction / Hash</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody id="bc-support-tbody">
+          <tr><td colspan="6" class="att-empty">No blockchain support events loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>

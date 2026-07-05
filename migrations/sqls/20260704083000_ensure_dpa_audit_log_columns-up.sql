@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS system_audit_log (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NULL,
+  employee_id INT NULL,
+  target_employee_id INT NULL,
+  action_performed TEXT NOT NULL,
+  module VARCHAR(80) NULL,
+  old_value TEXT NULL,
+  new_value TEXT NULL,
+  ip_address VARCHAR(80) NULL,
+  user_agent TEXT NULL,
+  timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  Action_Type VARCHAR(100) NOT NULL DEFAULT 'SYSTEM_EVENT',
+  Description TEXT NULL,
+  Created_At DATETIME NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE system_audit_log
+  ADD COLUMN IF NOT EXISTS user_id INT NULL,
+  ADD COLUMN IF NOT EXISTS employee_id INT NULL,
+  ADD COLUMN IF NOT EXISTS target_employee_id INT NULL,
+  ADD COLUMN IF NOT EXISTS action_performed TEXT NULL,
+  ADD COLUMN IF NOT EXISTS module VARCHAR(80) NULL,
+  ADD COLUMN IF NOT EXISTS old_value TEXT NULL,
+  ADD COLUMN IF NOT EXISTS new_value TEXT NULL,
+  ADD COLUMN IF NOT EXISTS ip_address VARCHAR(80) NULL,
+  ADD COLUMN IF NOT EXISTS user_agent TEXT NULL,
+  ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS Action_Type VARCHAR(100) NULL,
+  ADD COLUMN IF NOT EXISTS Description TEXT NULL,
+  ADD COLUMN IF NOT EXISTS Created_At DATETIME NULL DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE system_audit_log
+   SET action_performed = COALESCE(NULLIF(action_performed, ''), COALESCE(Action_Type, 'SYSTEM_EVENT'))
+ WHERE action_performed IS NULL OR action_performed = '';
+
+UPDATE system_audit_log
+   SET Action_Type = COALESCE(NULLIF(Action_Type, ''), 'SYSTEM_EVENT')
+ WHERE Action_Type IS NULL OR Action_Type = '';
+
+ALTER TABLE system_audit_log
+  MODIFY COLUMN IF EXISTS Action_Type VARCHAR(100) NOT NULL DEFAULT 'SYSTEM_EVENT';

@@ -7,6 +7,7 @@ let ATT_RECORDS = [];
 let ATT_EMPLOYEES = [];
 let ATT_DEPARTMENTS = [];
 let ATT_DEVICES = [];
+let ATT_DEVICE_SETTINGS = [];
 let ATT_BIOMETRIC_MAPPINGS = [];
 let BIOMETRIC_EXPECTED_SCAN = null;
 let ATT_SELECTED_DETAIL_ID = null;
@@ -444,6 +445,7 @@ async function initAttendance() {
   setVisible('att-tab-biometric', canManageBiometrics());
   setVisible('att-tab-policies', canManageAttendancePolicies());
   setVisible('att-tab-audit', canManageBiometrics());
+  setVisible('bio-device-settings-card', isSystemAdmin());
   setVisible('btn-manual-attendance', canManageAttendanceRecords());
   setVisible('att-select-all', canManageAttendanceRecords());
   setVisible('hr-payroll-policy-card', canManageAttendancePolicies());
@@ -481,6 +483,12 @@ async function initAttendance() {
     setText('att-records-copy', 'Review biometric scans, validate records, reject invalid entries, correct punches, and prepare payroll-ready attendance.');
     const recordsTab = document.querySelector('[data-att-tab="records"]');
     if (recordsTab) recordsTab.textContent = 'Attendance Records';
+  }
+
+  if (window.ROUTE_PARAMS?.attTab) {
+    const routeTab = window.ROUTE_PARAMS.attTab;
+    switchAttTab(routeTab, document.querySelector(`[data-att-tab="${routeTab}"]`));
+    return;
   }
 
   if (isSystemAdmin() && !isHr()) {
@@ -1475,6 +1483,7 @@ async function loadBiometricWorkspace() {
     return;
   }
   await Promise.all([loadEmployees(), loadBiometricHealth(), loadBiometricMappings(), loadBiometricEvents()]);
+  if (isSystemAdmin()) await loadBiometricDeviceSettings();
   updateFingerprintEnrollmentView();
   runBiometricDiagnostics();
 }
@@ -1654,25 +1663,105 @@ async function createLocalBiometricDevice() {
   }
 }
 
-async function saveBiometricDevice() {
-  const body = {
-    device_reference: document.getElementById('bio-device-reference').value,
-    device_name: document.getElementById('bio-device-name').value,
-    vendor: document.getElementById('bio-device-vendor').value,
-    api_base_url: document.getElementById('bio-device-url').value,
-    logs_endpoint: document.getElementById('bio-device-endpoint').value,
-    auth_type: document.getElementById('bio-device-auth').value,
-    auth_secret: document.getElementById('bio-device-secret').value,
-  };
+async function loadBiometricDeviceSettings() {
+  const tbody = document.getElementById('bio-devices-tbody');
+  if (!isSystemAdmin() || !tbody) return;
   try {
-    const res = await apiFetch('/api/attendance/biometric/devices', { method: 'POST', body: JSON.stringify(body) });
+    const res = await apiFetch('/api/attendance/biometric/devices');
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    alert(data.message);
-    ['bio-device-reference', 'bio-device-name', 'bio-device-vendor', 'bio-device-url', 'bio-device-secret'].forEach(id => {
-      document.getElementById(id).value = '';
-    });
-    loadBiometricHealth();
+    if (!res.ok) throw new Error(data.error || 'Failed to load biometric devices.');
+    ATT_DEVICE_SETTINGS = Array.isArray(data) ? data : [];
+    ATT_DEVICES = ATT_DEVICE_SETTINGS;
+    renderBiometricDeviceSettingsRows();
+    renderScannerStatus();
+    populateDeviceSelect();
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="att-empty">${esc(err.message || 'Failed to load biometric devices.')}</td></tr>`;
+  }
+}
+
+function renderBiometricDeviceSettingsRows() {
+  const tbody = document.getElementById('bio-devices-tbody');
+  if (!tbody) return;
+  if (!ATT_DEVICE_SETTINGS.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="att-empty">No biometric devices configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ATT_DEVICE_SETTINGS.map(device => `
+    <tr>
+      <td><strong>${esc(device.device_name || '-')}</strong><br><small class="att-muted">${esc(device.device_reference || '-')}</small></td>
+      <td>${esc(device.vendor || '-')}</td>
+      <td>${badge(device.is_active ? 'Active' : 'Inactive', device.is_active ? 'green' : 'neutral')}</td>
+      <td>${esc(formatDateTime(device.last_success_at))}</td>
+      <td>${esc(device.last_error_message || '-')}</td>
+      <td><button class="btn btn-outline btn-sm" type="button" onclick="editBiometricDevice(${Number(device.device_id)})">Edit</button></td>
+    </tr>
+  `).join('');
+}
+
+function clearBiometricDeviceForm() {
+  [
+    'bio-device-id',
+    'bio-device-reference',
+    'bio-device-name',
+    'bio-device-vendor',
+    'bio-device-url',
+    'bio-device-endpoint',
+    'bio-device-secret',
+  ].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  });
+  const auth = document.getElementById('bio-device-auth');
+  const active = document.getElementById('bio-device-active');
+  if (auth) auth.value = 'NONE';
+  if (active) active.value = '1';
+}
+
+function editBiometricDevice(deviceId) {
+  const device = ATT_DEVICE_SETTINGS.find(item => Number(item.device_id) === Number(deviceId));
+  if (!device) return;
+  document.getElementById('bio-device-id').value = device.device_id;
+  document.getElementById('bio-device-reference').value = device.device_reference || '';
+  document.getElementById('bio-device-name').value = device.device_name || '';
+  document.getElementById('bio-device-vendor').value = device.vendor || '';
+  document.getElementById('bio-device-url').value = device.api_base_url || '';
+  document.getElementById('bio-device-endpoint').value = device.logs_endpoint || '';
+  document.getElementById('bio-device-auth').value = device.auth_type || 'NONE';
+  document.getElementById('bio-device-active').value = Number(device.is_active) ? '1' : '0';
+  document.getElementById('bio-device-secret').value = '';
+  document.getElementById('bio-device-reference').focus();
+}
+
+async function saveBiometricDevice() {
+  if (!isSystemAdmin()) return alert('Only System Administrator can manage biometric device settings.');
+  const deviceId = document.getElementById('bio-device-id')?.value;
+  const body = {
+    device_reference: document.getElementById('bio-device-reference')?.value.trim(),
+    device_name: document.getElementById('bio-device-name')?.value.trim(),
+    vendor: document.getElementById('bio-device-vendor')?.value.trim(),
+    api_base_url: document.getElementById('bio-device-url')?.value.trim(),
+    logs_endpoint: document.getElementById('bio-device-endpoint')?.value.trim(),
+    auth_type: document.getElementById('bio-device-auth')?.value,
+    auth_secret: document.getElementById('bio-device-secret')?.value,
+    is_active: document.getElementById('bio-device-active')?.value === '1',
+  };
+  if (!body.device_reference || !body.device_name) {
+    return alert('Device reference and device name are required.');
+  }
+  if (!body.auth_secret) delete body.auth_secret;
+
+  try {
+    const res = await apiFetch(
+      deviceId ? `/api/attendance/biometric/devices/${deviceId}` : '/api/attendance/biometric/devices',
+      { method: deviceId ? 'PUT' : 'POST', body: JSON.stringify(body) }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save biometric device.');
+    alert(data.message || 'Biometric device saved.');
+    clearBiometricDeviceForm();
+    await loadBiometricDeviceSettings();
+    await runBiometricDiagnostics();
   } catch (err) {
     alert(err.message);
   }
@@ -2574,6 +2663,9 @@ window.createLocalBiometricDevice = createLocalBiometricDevice;
 window.updateFingerprintEnrollmentView = updateFingerprintEnrollmentView;
 window.removeSelectedFingerprint = removeSelectedFingerprint;
 window.loadBiometricAttendanceStatus = loadBiometricAttendanceStatus;
+window.loadBiometricDeviceSettings = loadBiometricDeviceSettings;
+window.clearBiometricDeviceForm = clearBiometricDeviceForm;
+window.editBiometricDevice = editBiometricDevice;
 window.saveBiometricDevice = saveBiometricDevice;
 window.saveBiometricMapping = saveBiometricMapping;
 window.enrollFingerprintFromBridge = enrollFingerprintFromBridge;

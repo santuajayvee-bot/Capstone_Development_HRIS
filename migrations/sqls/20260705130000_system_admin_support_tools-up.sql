@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS system_support_ticket (
+  ticket_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  ticket_number VARCHAR(40) NOT NULL UNIQUE,
+  title VARCHAR(160) NOT NULL,
+  category ENUM('ACCOUNT','AUTHENTICATION','MFA','PAYROLL_PROCESS','BLOCKCHAIN','BIOMETRIC','REPORTING','SECURITY','SYSTEM','OTHER') NOT NULL DEFAULT 'SYSTEM',
+  priority ENUM('LOW','MEDIUM','HIGH','CRITICAL') NOT NULL DEFAULT 'MEDIUM',
+  status ENUM('OPEN','IN_PROGRESS','WAITING_FOR_OWNER','RESOLVED','CLOSED') NOT NULL DEFAULT 'OPEN',
+  related_user_id BIGINT NULL,
+  related_employee_id BIGINT NULL,
+  description_encrypted TEXT NULL,
+  resolution_encrypted TEXT NULL,
+  created_by BIGINT NOT NULL,
+  assigned_to BIGINT NULL,
+  resolved_by BIGINT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  resolved_at DATETIME NULL,
+  INDEX idx_system_support_ticket_status (status, priority, created_at),
+  INDEX idx_system_support_ticket_category (category, created_at),
+  INDEX idx_system_support_ticket_related_user (related_user_id),
+  INDEX idx_system_support_ticket_created_by (created_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS system_backup_log (
+  backup_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  backup_reference VARCHAR(80) NOT NULL UNIQUE,
+  backup_type ENUM('DATABASE','FILES','FULL_SYSTEM') NOT NULL DEFAULT 'DATABASE',
+  storage_target ENUM('LOCAL','S3','RDS_SNAPSHOT','EXTERNAL') NOT NULL DEFAULT 'EXTERNAL',
+  status ENUM('REQUESTED','RUNNING','COMPLETED','FAILED','VERIFICATION_FAILED','VERIFIED') NOT NULL DEFAULT 'REQUESTED',
+  requested_by BIGINT NOT NULL,
+  verified_by BIGINT NULL,
+  manifest_hash CHAR(64) NULL,
+  backup_location_encrypted TEXT NULL,
+  notes_encrypted TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  verified_at DATETIME NULL,
+  INDEX idx_system_backup_log_status (status, created_at),
+  INDEX idx_system_backup_log_type (backup_type, storage_target),
+  INDEX idx_system_backup_log_requested_by (requested_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -4,7 +4,7 @@
      ============================================================ -->
 
 <!-- Tab Navigation -->
-<div class="sysadmin-tabs" id="sysadmin-tabs">
+<div class="sysadmin-tabs" id="sysadmin-tabs" hidden>
   <button class="sysadmin-tab active" data-tab="accounts" onclick="switchSysAdminTab('accounts', this)">
     Account Management
   </button>
@@ -14,8 +14,14 @@
   <button class="sysadmin-tab" data-tab="audit" onclick="switchSysAdminTab('audit', this)">
     Audit Trail
   </button>
-  <button class="sysadmin-tab" data-tab="biometric-settings" onclick="switchSysAdminTab('biometric-settings', this)">
-    Biometric Settings
+  <button class="sysadmin-tab" data-tab="health" onclick="switchSysAdminTab('health', this)">
+    System Health
+  </button>
+  <button class="sysadmin-tab" data-tab="support" onclick="switchSysAdminTab('support', this)">
+    Support Center
+  </button>
+  <button class="sysadmin-tab" data-tab="backups" onclick="switchSysAdminTab('backups', this)">
+    Backup and Restore
   </button>
 </div>
 
@@ -167,64 +173,218 @@
 <!-- ═══════════════════════════════════════════════════════════════
      TAB 4: BIOMETRIC SETTINGS
      ═══════════════════════════════════════════════════════════════ -->
-<div class="sysadmin-panel" id="panel-biometric-settings">
+<div class="sysadmin-panel" id="panel-health">
   <div class="sysadmin-action-bar">
     <div>
-      <h3 style="margin:0 0 4px;">Biometric Device Configuration</h3>
-      <small class="input-hint">For system administrators only. HR users see the simplified enrollment screen in Attendance.</small>
+      <h3 style="margin:0 0 4px;">System Health</h3>
+      <small id="health-last-updated" class="sysadmin-muted">Last checked: -</small>
     </div>
-    <button class="btn-sysadmin-outline" onclick="loadBiometricSettings()">Refresh</button>
+    <div class="support-row-actions">
+      <button class="btn-sysadmin-primary" onclick="runSystemHealthCheck()">Run Health Check</button>
+      <button class="btn-sysadmin-outline" onclick="loadSystemHealth()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="health-summary-grid">
+    <div class="support-metric-card health-summary-card health-online"><span>Online</span><strong id="health-count-online">0</strong><small>Healthy modules</small></div>
+    <div class="support-metric-card health-summary-card health-warning"><span>Warning</span><strong id="health-count-warning">0</strong><small>Needs admin review</small></div>
+    <div class="support-metric-card health-summary-card health-offline"><span>Offline</span><strong id="health-count-offline">0</strong><small>Unavailable checks</small></div>
+    <div class="support-metric-card health-summary-card health-maintenance"><span>Maintenance</span><strong id="health-count-maintenance">0</strong><small>Planned downtime</small></div>
+  </div>
+
+  <div class="sysadmin-action-bar">
+    <div class="action-left">
+      <input id="health-search" class="sysadmin-search" type="search" placeholder="Search modules" oninput="filterSystemHealthModules()" />
+      <select id="health-status-filter" class="sysadmin-select" onchange="filterSystemHealthModules()">
+        <option value="">All Status</option>
+        <option value="ONLINE">Online</option>
+        <option value="WARNING">Warning</option>
+        <option value="OFFLINE">Offline</option>
+        <option value="MAINTENANCE">Maintenance</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="health-module-grid" id="health-module-grid">
+    <div class="table-empty">Loading system health...</div>
+  </div>
+
+  <div class="support-two-column health-legacy-grid">
+    <div class="sysadmin-settings-card">
+      <h4 class="support-card-title">Runtime</h4>
+      <div class="support-kv-list" id="health-runtime-list"></div>
+    </div>
+    <div class="sysadmin-settings-card">
+      <h4 class="support-card-title">Latest Backup</h4>
+      <div class="support-kv-list" id="health-backup-list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="sysadmin-modal-overlay" id="health-detail-modal" style="display:none;">
+  <div class="sysadmin-modal health-detail-dialog">
+    <div class="modal-header">
+      <h3 id="health-detail-title">Module Health</h3>
+      <button class="modal-close" onclick="closeSystemHealthDetails()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="health-detail-hero">
+        <div>
+          <span id="health-detail-status" class="badge-clear">-</span>
+          <p id="health-detail-remarks">-</p>
+        </div>
+        <button class="btn-sysadmin-outline" id="health-detail-check-btn" onclick="">Check Module</button>
+      </div>
+      <div class="support-kv-list">
+        <div class="support-kv-row"><span>Last Checked</span><strong id="health-detail-last-checked">-</strong></div>
+        <div class="support-kv-row"><span>Last Success</span><strong id="health-detail-last-success">-</strong></div>
+        <div class="support-kv-row"><span>Last Failure</span><strong id="health-detail-last-failure">-</strong></div>
+        <div class="support-kv-row"><span>Response Time</span><strong id="health-detail-response">-</strong></div>
+        <div class="support-kv-row"><span>Endpoint / Check</span><strong id="health-detail-endpoint">-</strong></div>
+        <div class="support-kv-row"><span>Error</span><strong id="health-detail-error">-</strong></div>
+      </div>
+      <h4 class="support-card-title health-detail-section-title">Dependencies</h4>
+      <div id="health-detail-dependencies" class="health-dependency-list"></div>
+      <h4 class="support-card-title health-detail-section-title">Recent Logs</h4>
+      <div id="health-detail-logs" class="health-log-list"></div>
+      <h4 class="support-card-title health-detail-section-title">Recommended Action</h4>
+      <p id="health-detail-action" class="health-detail-action">-</p>
+    </div>
+  </div>
+</div>
+
+<div class="sysadmin-panel" id="panel-support">
+  <div class="sysadmin-action-bar">
+    <div>
+      <h3 style="margin:0 0 4px;">Support Center</h3>
+    </div>
+    <button class="btn-sysadmin-outline" onclick="loadSupportTickets()">Refresh</button>
   </div>
 
   <div class="sysadmin-settings-card">
     <div class="sysadmin-form-grid">
       <div>
-        <label class="sysadmin-label">Device Reference</label>
-        <input id="sys-bio-reference" class="sysadmin-input" placeholder="ZK9500-LOCAL-001" />
+        <label class="sysadmin-label">Title</label>
+        <input id="support-ticket-title" class="sysadmin-input" maxlength="160" />
       </div>
       <div>
-        <label class="sysadmin-label">Device Name</label>
-        <input id="sys-bio-name" class="sysadmin-input" placeholder="Main Gate Fingerprint Scanner" />
-      </div>
-      <div>
-        <label class="sysadmin-label">Vendor</label>
-        <input id="sys-bio-vendor" class="sysadmin-input" placeholder="ZKTeco" />
-      </div>
-      <div>
-        <label class="sysadmin-label">API Base URL</label>
-        <input id="sys-bio-url" class="sysadmin-input" placeholder="https://biometric.example/api/" />
-      </div>
-      <div>
-        <label class="sysadmin-label">Logs Endpoint</label>
-        <input id="sys-bio-endpoint" class="sysadmin-input" placeholder="/attendance/logs" />
-      </div>
-      <div>
-        <label class="sysadmin-label">Authentication Type</label>
-        <select id="sys-bio-auth" class="sysadmin-input">
-          <option value="NONE">None</option>
-          <option value="API_KEY">API Key</option>
-          <option value="BEARER">Bearer Token</option>
-          <option value="HMAC">HMAC</option>
-          <option value="OAUTH2">OAuth2</option>
-          <option value="MTLS">mTLS</option>
+        <label class="sysadmin-label">Related Account</label>
+        <select id="support-ticket-user" class="sysadmin-input">
+          <option value="">None</option>
         </select>
       </div>
       <div>
-        <label class="sysadmin-label">Secret Token</label>
-        <input id="sys-bio-secret" class="sysadmin-input" type="password" placeholder="Stored encrypted" />
+        <label class="sysadmin-label">Category</label>
+        <select id="support-ticket-category" class="sysadmin-input">
+          <option value="SYSTEM">System</option>
+          <option value="ACCOUNT">Account</option>
+          <option value="AUTHENTICATION">Authentication</option>
+          <option value="MFA">MFA</option>
+          <option value="PAYROLL_PROCESS">Payroll Process</option>
+          <option value="BLOCKCHAIN">Blockchain</option>
+          <option value="BIOMETRIC">Biometric</option>
+          <option value="REPORTING">Reporting</option>
+          <option value="SECURITY">Security</option>
+          <option value="OTHER">Other</option>
+        </select>
       </div>
       <div>
-        <label class="sysadmin-label">Status</label>
-        <select id="sys-bio-active" class="sysadmin-input">
-          <option value="1">Active</option>
-          <option value="0">Inactive</option>
+        <label class="sysadmin-label">Priority</label>
+        <select id="support-ticket-priority" class="sysadmin-input">
+          <option value="MEDIUM">Medium</option>
+          <option value="LOW">Low</option>
+          <option value="HIGH">High</option>
+          <option value="CRITICAL">Critical</option>
         </select>
       </div>
     </div>
-    <input type="hidden" id="sys-bio-device-id" />
+    <label class="sysadmin-label" style="margin-top:14px;">Description</label>
+    <textarea id="support-ticket-description" class="sysadmin-textarea" maxlength="2000"></textarea>
     <div class="modal-footer" style="padding:16px 0 0;">
-      <button class="btn-sysadmin-outline" onclick="clearBiometricSettingsForm()">Clear</button>
-      <button class="btn-sysadmin-primary" onclick="saveBiometricSettings()">Save Device</button>
+      <div style="flex:1"></div>
+      <button class="btn-sysadmin-primary" onclick="createSupportTicket()">Create Ticket</button>
+    </div>
+  </div>
+
+  <div class="sysadmin-action-bar" style="margin-top:20px;">
+    <div class="action-left">
+      <select id="support-status-filter" class="sysadmin-select" onchange="loadSupportTickets()">
+        <option value="">All Status</option>
+        <option value="OPEN">Open</option>
+        <option value="IN_PROGRESS">In Progress</option>
+        <option value="WAITING_FOR_OWNER">Waiting</option>
+        <option value="RESOLVED">Resolved</option>
+        <option value="CLOSED">Closed</option>
+      </select>
+      <select id="support-category-filter" class="sysadmin-select" onchange="loadSupportTickets()">
+        <option value="">All Categories</option>
+        <option value="ACCOUNT">Account</option>
+        <option value="AUTHENTICATION">Authentication</option>
+        <option value="MFA">MFA</option>
+        <option value="PAYROLL_PROCESS">Payroll Process</option>
+        <option value="BLOCKCHAIN">Blockchain</option>
+        <option value="BIOMETRIC">Biometric</option>
+        <option value="REPORTING">Reporting</option>
+        <option value="SECURITY">Security</option>
+        <option value="SYSTEM">System</option>
+        <option value="OTHER">Other</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="sysadmin-table-wrapper">
+    <table class="sysadmin-table">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Category</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Related</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="support-tickets-tbody">
+        <tr><td colspan="7" class="table-empty">No support tickets loaded.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="sysadmin-panel" id="panel-backups">
+  <div class="sysadmin-action-bar">
+    <div>
+      <h3 style="margin:0 0 4px;">Backup and Restore</h3>
+    </div>
+    <button class="btn-sysadmin-outline" onclick="loadBackupLogs()">Refresh</button>
+  </div>
+
+  <div class="sysadmin-settings-card">
+    <div class="sysadmin-form-grid">
+      <div>
+        <label class="sysadmin-label">Backup Type</label>
+        <select id="backup-type" class="sysadmin-input">
+          <option value="DATABASE">Database</option>
+          <option value="FILES">Files</option>
+          <option value="FULL_SYSTEM">Full System</option>
+        </select>
+      </div>
+      <div>
+        <label class="sysadmin-label">Storage Target</label>
+        <select id="backup-target" class="sysadmin-input">
+          <option value="EXTERNAL">External</option>
+          <option value="RDS_SNAPSHOT">RDS Snapshot</option>
+          <option value="S3">S3</option>
+          <option value="LOCAL">Local</option>
+        </select>
+      </div>
+    </div>
+    <label class="sysadmin-label" style="margin-top:14px;">Notes</label>
+    <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000"></textarea>
+    <div class="modal-footer" style="padding:16px 0 0;">
+      <div style="flex:1"></div>
+      <button class="btn-sysadmin-primary" onclick="requestBackup()">Request Backup</button>
     </div>
   </div>
 
@@ -232,16 +392,17 @@
     <table class="sysadmin-table">
       <thead>
         <tr>
-          <th>Device</th>
-          <th>Vendor</th>
+          <th>Reference</th>
+          <th>Type</th>
+          <th>Target</th>
           <th>Status</th>
-          <th>Last Successful Sync</th>
-          <th>Last Error</th>
+          <th>Manifest</th>
+          <th>Created</th>
           <th>Actions</th>
         </tr>
       </thead>
-      <tbody id="sys-bio-devices-tbody">
-        <tr><td colspan="6" class="table-empty">No biometric devices loaded.</td></tr>
+      <tbody id="backup-logs-tbody">
+        <tr><td colspan="7" class="table-empty">No backup records loaded.</td></tr>
       </tbody>
     </table>
   </div>

@@ -161,6 +161,64 @@
     </div>
   </div>
 
+  <div class="card bio-device-settings-card" id="bio-device-settings-card" style="margin-top:20px;display:none;">
+    <div class="att-card-heading">
+      <div>
+        <h3>Biometric Device Settings</h3>
+        <p>System Administrator configuration for scanner registration, endpoint, and authentication.</p>
+      </div>
+      <button class="btn btn-outline btn-sm" type="button" onclick="loadBiometricDeviceSettings()">Refresh</button>
+    </div>
+    <input type="hidden" id="bio-device-id" />
+    <div class="att-form-grid" style="margin-top:14px;">
+      <div><label>Device Reference</label><input id="bio-device-reference" placeholder="ZK9500-AWS-001" /></div>
+      <div><label>Device Name</label><input id="bio-device-name" placeholder="Main Gate Fingerprint Scanner" /></div>
+      <div><label>Vendor</label><input id="bio-device-vendor" placeholder="ZKTeco" /></div>
+      <div><label>API Base URL</label><input id="bio-device-url" placeholder="https://biometric.example/api/" /></div>
+      <div><label>Logs Endpoint</label><input id="bio-device-endpoint" placeholder="/attendance/logs" /></div>
+      <div>
+        <label>Authentication Type</label>
+        <select id="bio-device-auth">
+          <option value="NONE">None</option>
+          <option value="API_KEY">API Key</option>
+          <option value="BEARER">Bearer Token</option>
+          <option value="HMAC">HMAC</option>
+          <option value="OAUTH2">OAuth2</option>
+          <option value="MTLS">mTLS</option>
+        </select>
+      </div>
+      <div><label>Secret Token</label><input id="bio-device-secret" type="password" placeholder="Leave blank to keep existing secret" /></div>
+      <div>
+        <label>Status</label>
+        <select id="bio-device-active">
+          <option value="1">Active</option>
+          <option value="0">Inactive</option>
+        </select>
+      </div>
+    </div>
+    <div class="att-actions" style="justify-content:flex-end;margin-top:14px;">
+      <button class="btn btn-outline" type="button" onclick="clearBiometricDeviceForm()">Clear</button>
+      <button class="btn btn-primary" type="button" onclick="saveBiometricDevice()">Save Device</button>
+    </div>
+    <div class="table-wrap" style="margin-top:18px;">
+      <table id="bio-device-settings-table" data-no-pagination="1">
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>Vendor</th>
+            <th>Status</th>
+            <th>Last Successful Sync</th>
+            <th>Last Error</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="bio-devices-tbody">
+          <tr><td colspan="6" class="att-empty">No biometric devices loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="card" style="margin-top:20px;">
     <h3 class="att-title">Fingerprint Enrollment</h3>
     <p class="att-muted">Enroll, verify, or remove an employee fingerprint.</p>

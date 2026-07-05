@@ -7,6 +7,8 @@ let BC_DTR_RECORDS = [];
 let BC_INITIALIZED = false;
 let BC_PAGE = 1;
 let BC_DTR_PAGE = 1;
+let BC_CURRENT_VIEW = 'integrity';
+let BC_SUPPORT_LOADED = false;
 const BC_PAGE_SIZE = 10;
 
 const BC_ROLE_LABELS = {
@@ -53,6 +55,16 @@ const BC_LEDGER_STATUS_COPY = {
     label: 'Mismatch Detected',
     help: 'Possible tampering',
     color: 'badge-red',
+  },
+  FABRIC_UNAVAILABLE: {
+    label: 'Fabric Unavailable',
+    help: 'Verification not completed',
+    color: 'badge-yellow',
+  },
+  VERIFICATION_UNAVAILABLE: {
+    label: 'Fabric Unavailable',
+    help: 'Verification not completed',
+    color: 'badge-yellow',
   },
   NOT_FINALIZED: {
     label: 'Not Finalized',
@@ -148,6 +160,15 @@ function bcShowMessage(message, type = 'info') {
   element.style.color = type === 'critical' ? 'var(--red)' : type === 'warning' ? 'var(--yellow)' : 'var(--muted)';
 }
 
+function bcShowSupportMessage(message, type = 'info') {
+  const element = document.getElementById('bc-support-message');
+  if (!element) return;
+  element.textContent = message || '';
+  element.style.display = message ? 'block' : 'none';
+  element.style.borderColor = type === 'critical' ? 'rgba(224,92,122,.45)' : type === 'warning' ? 'rgba(245,166,35,.45)' : 'var(--border)';
+  element.style.color = type === 'critical' ? 'var(--red)' : type === 'warning' ? 'var(--yellow)' : 'var(--muted)';
+}
+
 function bcUserRole() {
   return typeof getUser === 'function'
     ? String(getUser()?.role || '').trim().toLowerCase()
@@ -192,6 +213,33 @@ function bcVerificationSummary() {
   return bcCanVerify()
     ? 'Verification controls are enabled for your System Admin role.'
     : 'Verify actions are locked to System Admin to separate approval from integrity checking.';
+}
+
+function switchBlockchainView(view = 'integrity', options = {}) {
+  const nextView = view === 'support' && bcCanVerify() ? 'support' : 'integrity';
+  if (view === 'support' && nextView !== 'support') {
+    bcShowMessage('Blockchain support is restricted to System Admin. Showing integrity records instead.', 'warning');
+  }
+
+  BC_CURRENT_VIEW = nextView;
+  document.querySelectorAll('#page-blockchain .bc-view').forEach(panel => {
+    const active = panel.id === `bc-view-${nextView}`;
+    panel.hidden = !active;
+    panel.classList.toggle('active', active);
+  });
+  document.querySelectorAll('#page-blockchain .bc-view-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.bcView === nextView);
+  });
+
+  if (!options.skipRouteUpdate && typeof syncRouteForPage === 'function') {
+    syncRouteForPage('blockchain', nextView === 'support' ? { blockchainView: 'support' } : null);
+  }
+
+  if (nextView === 'support') {
+    loadBlockchainSupportStatus();
+  } else {
+    loadBlockchainRecords();
+  }
 }
 
 function bcTotalPages() {
@@ -498,6 +546,51 @@ async function loadBlockchainRecords() {
   }
 }
 
+async function loadBlockchainSupportStatus() {
+  if (!bcCanVerify()) {
+    bcShowSupportMessage('Blockchain support is restricted to System Admin.', 'warning');
+    return;
+  }
+  try {
+    bcShowSupportMessage('');
+    const { data } = await bcRequest('/api/admin/blockchain-support/status');
+    BC_SUPPORT_LOADED = true;
+    const fabric = data.fabric || {};
+    const payroll = data.payroll_records || {};
+    const audit = data.audit || {};
+
+    bcSetText('bc-support-fabric-ready', fabric.ready ? 'Ready' : 'Not Ready');
+    bcSetText('bc-support-fabric-channel', fabric.channelName || '-');
+    bcSetText('bc-support-total-records', Number(payroll.total || 0));
+    bcSetText('bc-support-pending-anchor', Number(payroll.pending_anchor || 0));
+    bcSetText('bc-support-critical-count', Number(audit.critical || 0));
+    renderBlockchainSupportRows((audit.recent || []).slice(0, 8));
+  } catch (error) {
+    bcShowSupportMessage(error.message || 'Failed to load blockchain support status.', 'critical');
+    renderBlockchainSupportRows([]);
+  }
+}
+
+function renderBlockchainSupportRows(rows) {
+  const tbody = document.getElementById('bc-support-tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="att-empty">No recent blockchain support events.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(row => `
+    <tr>
+      <td>${Number(row.Audit_ID || 0)}</td>
+      <td>${Number(row.Payroll_ID || 0)}</td>
+      <td>${bcEsc(row.Event_Type || '-')}</td>
+      <td>${bcBadge(row.Status)}</td>
+      <td class="tx-hash" title="${bcEsc(row.Transaction_Hash || row.Payload_Hash || '')}">${bcEsc(bcShortHash(row.Transaction_Hash || row.Payload_Hash))}</td>
+      <td>${bcEsc(bcFormatDate(row.Created_At))}</td>
+    </tr>
+  `).join('');
+  if (typeof enhanceResponsiveTables === 'function') enhanceResponsiveTables(document.getElementById('bc-view-support') || document);
+}
+
 async function verifyPayrollHash(payrollId) {
   if (!bcCanVerify()) {
     bcShowMessage('Integrity verification is restricted to System Admin. Your role can view the audit trail.', 'warning');
@@ -517,6 +610,11 @@ async function verifyPayrollHash(payrollId) {
   } catch (error) {
     if (error.status === 409 && error.data?.status === 'critical') {
       bcShowMessage(error.data.message, 'critical');
+      await loadBlockchainAudit(payrollId);
+      return;
+    }
+    if (error.data?.status === 'verification_unavailable') {
+      bcShowMessage(error.data.message, 'warning');
       await loadBlockchainAudit(payrollId);
       return;
     }
@@ -699,15 +797,18 @@ async function loadDtrBlockchainAudit(dtrId) {
 function initBlockchainPage() {
   const page = document.getElementById('page-blockchain');
   if (!page || !document.getElementById('tx-tbody')) return;
+  const supportTab = document.getElementById('bc-support-view-tab');
+  if (supportTab) supportTab.style.display = bcCanVerify() ? '' : 'none';
+
   if (BC_INITIALIZED) {
-    loadBlockchainRecords();
+    switchBlockchainView(window.ROUTE_PARAMS?.blockchainView || BC_CURRENT_VIEW, { skipRouteUpdate: true });
     return;
   }
   BC_INITIALIZED = true;
   bcSetText('bc-role-scope', bcAccessSummary());
   bcSetText('bc-verify-owner', bcVerificationSummary());
   document.getElementById('bc-refresh')?.addEventListener('click', loadBlockchainRecords);
-  loadBlockchainRecords();
+  switchBlockchainView(window.ROUTE_PARAMS?.blockchainView || 'integrity', { skipRouteUpdate: true });
 }
 
 function watchBlockchainActivation() {
@@ -725,7 +826,9 @@ function watchBlockchainActivation() {
 
 document.addEventListener('DOMContentLoaded', watchBlockchainActivation);
 window.loadBlockchainRecords = loadBlockchainRecords;
+window.loadBlockchainSupportStatus = loadBlockchainSupportStatus;
 window.initBlockchainPage = initBlockchainPage;
+window.switchBlockchainView = switchBlockchainView;
 window.verifyPayrollHash = verifyPayrollHash;
 window.verifyDtrHash = verifyDtrHash;
 window.retryDtrAnchor = retryDtrAnchor;

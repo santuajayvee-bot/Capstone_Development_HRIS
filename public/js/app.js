@@ -24,6 +24,7 @@ const APP_ROUTE_MAP = {
   '/dashboard': { page: 'dashboard' },
   '/employees': { page: 'employees' },
   '/attendance': { page: 'attendance' },
+  '/attendance-sync': { page: 'attendance', params: { attTab: 'biometric' } },
   '/leave': { page: 'leave' },
   '/payroll': { page: 'payroll' },
   '/salary-calculation': { page: 'payroll', params: { payrollTab: 'salary' } },
@@ -35,7 +36,14 @@ const APP_ROUTE_MAP = {
   '/requests': { page: 'requests' },
   '/onboarding': { page: 'onboarding' },
   '/blockchain': { page: 'blockchain' },
+  '/blockchain-support': { page: 'blockchain', params: { blockchainView: 'support' } },
   '/system-admin': { page: 'system-admin' },
+  '/admin/accounts': { page: 'system-admin', params: { sysAdminTab: 'accounts' } },
+  '/admin/rbac': { page: 'system-admin', params: { sysAdminTab: 'roles' } },
+  '/admin/audit': { page: 'system-admin', params: { sysAdminTab: 'audit' } },
+  '/admin/health': { page: 'system-admin', params: { sysAdminTab: 'health' } },
+  '/admin/support': { page: 'system-admin', params: { sysAdminTab: 'support' } },
+  '/admin/backups': { page: 'system-admin', params: { sysAdminTab: 'backups' } },
   '/my-profile': { page: 'self-service' },
 };
 
@@ -89,8 +97,30 @@ function routeForPage(pageId, params = null) {
     if (routeParams.payrollTab === 'records' || routeParams.payrollTab === 'payslips') return '/payslips';
     return '/payroll';
   }
+  if (pageId === 'attendance' && routeParams.attTab === 'biometric') return '/attendance-sync';
+  if (pageId === 'blockchain' && routeParams.blockchainView === 'support') return '/blockchain-support';
+  if (pageId === 'system-admin') {
+    const adminRoutes = {
+      accounts: '/admin/accounts',
+      roles: '/admin/rbac',
+      audit: '/admin/audit',
+      health: '/admin/health',
+      support: '/admin/support',
+      backups: '/admin/backups',
+    };
+    if (adminRoutes[routeParams.sysAdminTab]) return adminRoutes[routeParams.sysAdminTab];
+  }
   const match = Object.entries(APP_ROUTE_MAP).find(([, route]) => route.page === pageId && !route.params);
   return match ? match[0] : `/${pageId}`;
+}
+
+function navKeyForRoute(pageId, params = null) {
+  const routeParams = params || {};
+  if (routeParams.employeeTab) return `${pageId}:${routeParams.employeeTab}`;
+  if (pageId === 'system-admin' && routeParams.sysAdminTab) return `${pageId}:${routeParams.sysAdminTab}`;
+  if (pageId === 'attendance' && routeParams.attTab) return `${pageId}:${routeParams.attTab}`;
+  if (pageId === 'blockchain' && routeParams.blockchainView) return `${pageId}:${routeParams.blockchainView}`;
+  return pageId;
 }
 
 function setAppPath(path, replace = false) {
@@ -128,6 +158,16 @@ function applyRoutePageState(pageId, params = null) {
   const routeParams = params || {};
   if (pageId === 'payroll' && routeParams.payrollTab && typeof switchPayrollTab === 'function') {
     switchPayrollTab(routeParams.payrollTab, { skipRouteUpdate: true });
+  }
+  if (pageId === 'attendance' && routeParams.attTab && typeof switchAttTab === 'function') {
+    const tabButton = document.querySelector(`[data-att-tab="${routeParams.attTab}"]`);
+    switchAttTab(routeParams.attTab, tabButton);
+  }
+  if (pageId === 'system-admin' && routeParams.sysAdminTab && typeof switchSysAdminTab === 'function') {
+    switchSysAdminTab(routeParams.sysAdminTab, null, { skipRouteUpdate: true });
+  }
+  if (pageId === 'blockchain' && routeParams.blockchainView && typeof switchBlockchainView === 'function') {
+    switchBlockchainView(routeParams.blockchainView, { skipRouteUpdate: true });
   }
 }
 
@@ -213,6 +253,7 @@ function formatPhilippineDateTime(value = new Date(), options = {}) {
 
 window.LGSV_TIME_ZONE = LGSV_TIME_ZONE;
 window.formatPhilippineDateTime = formatPhilippineDateTime;
+window.navKeyForRoute = navKeyForRoute;
 
 function formatTopbarDateTime(date = new Date()) {
   return date.toLocaleString('en-US', {
@@ -417,13 +458,23 @@ function navigate(pageId, navEl, params = null) {
       'self-service': 'My Profile',
       requests: 'My Requests',
     };
-    const titleKey = routeParams.employeeTab ? `${pageId}:${routeParams.employeeTab}` : pageId;
+    const moduleTitles = {
+      'system-admin:accounts': 'Account Management',
+      'system-admin:roles': 'Role and Access Control',
+      'system-admin:audit': 'Audit Trail',
+      'system-admin:health': 'System Health',
+      'system-admin:support': 'Support Center',
+      'system-admin:backups': 'Backup and Restore',
+      'attendance:biometric': 'Attendance Sync',
+      'blockchain:support': 'Blockchain Support',
+    };
+    const titleKey = navKeyForRoute(pageId, routeParams);
     titleEl.textContent = isEmployeeUser && employeeTitles[titleKey]
       ? employeeTitles[titleKey]
-      : PAGE_TITLES[pageId] || pageId;
+      : moduleTitles[titleKey] || PAGE_TITLES[pageId] || pageId;
   }
 
-  const navKey = routeParams.employeeTab ? `${pageId}:${routeParams.employeeTab}` : pageId;
+  const navKey = navKeyForRoute(pageId, routeParams);
 
   if (navEl) {
     document.querySelectorAll('.nav-item, .employee-bottom-nav-item').forEach(n => n.classList.remove('active'));
@@ -471,10 +522,12 @@ function navigate(pageId, navEl, params = null) {
   // Refresh role-aware attendance surfaces on every visit.
   if (pageId === 'attendance' && typeof initAttendance === 'function') {
     initAttendance();
+    requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
   }
 
   if (pageId === 'blockchain' && typeof initBlockchainPage === 'function') {
     initBlockchainPage();
+    requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
   }
 
   if (pageId === 'onboarding' && typeof initOnboarding === 'function') {
@@ -506,6 +559,7 @@ function navigate(pageId, navEl, params = null) {
   // When navigating to system-admin, initialize the module
   if (pageId === 'system-admin' && typeof initSystemAdmin === 'function') {
     initSystemAdmin();
+    requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
   }
 
   // When navigating to employee-dashboard, initialize the module

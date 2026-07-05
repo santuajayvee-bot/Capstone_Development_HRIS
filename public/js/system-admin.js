@@ -7,7 +7,11 @@
 let sysAllUsers     = [];
 let sysAllRoles     = [];
 let sysAllEmployees = [];
-let sysBiometricDevices = [];
+let sysSupportTickets = [];
+let sysBackupLogs = [];
+let sysHealthSnapshot = null;
+let sysHealthModules = [];
+let sysHealthSelectedModuleKey = null;
 let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
 let sysUsersDataSignature = '';
@@ -163,6 +167,9 @@ function sysActionIcon(icon) {
     key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="3"/><path d="M10.5 12.5L20 3"/><path d="M15 8l2 2"/><path d="M17 6l2 2"/></svg>',
     pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10"/><path d="M15 7v10"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7-11-7z"/></svg>',
+    unlock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.4-2"/></svg>',
+    revoke: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h12"/><path d="M11 8l4 4-4 4"/><path d="M21 5v14"/></svg>',
+    mfa: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/><path d="M10 7h4"/></svg>',
   };
   return icons[icon] || '';
 }
@@ -189,6 +196,9 @@ function sysAccountActionMenu(user) {
     '<div class="account-menu-popover" role="menu" aria-label="Actions for ' + sysEsc(user.username) + '">' +
       sysAccountMenuAction('role', 'Change role', 'shield', user.id) +
       sysAccountMenuAction('credentials', 'Reset password', 'key', user.id) +
+      sysAccountMenuAction('unlock', 'Unlock account', 'unlock', user.id) +
+      sysAccountMenuAction('revoke-sessions', 'Revoke sessions', 'revoke', user.id) +
+      sysAccountMenuAction('reset-mfa', 'Reset MFA', 'mfa', user.id) +
       statusAction +
     '</div>' +
   '</div>';
@@ -285,6 +295,12 @@ function bindAccountActionButtons() {
         await openRoleUpdateForUser(user);
       } else if (button.dataset.accountAction === 'credentials') {
         showCredentialsModal(Number(user.id), user.username);
+      } else if (button.dataset.accountAction === 'unlock') {
+        await unlockUserAccount(Number(user.id));
+      } else if (button.dataset.accountAction === 'revoke-sessions') {
+        await revokeUserSessions(Number(user.id));
+      } else if (button.dataset.accountAction === 'reset-mfa') {
+        await resetUserMfa(Number(user.id));
       } else if (button.dataset.accountAction === 'deactivate') {
         await toggleUserStatus(Number(user.id), false);
       } else if (button.dataset.accountAction === 'activate') {
@@ -300,23 +316,58 @@ function bindAccountActionButtons() {
 }
 
 // ── Tab Switching ────────────────────────────────────────────
-function switchSysAdminTab(tabId, el) {
+const SYS_ADMIN_TAB_TITLES = {
+  accounts: 'Account Management',
+  roles: 'Role and Access Control',
+  audit: 'Audit Trail',
+  health: 'System Health',
+  support: 'Support Center',
+  backups: 'Backup and Restore',
+};
+
+const SYS_HEALTH_FALLBACK_MODULES = [
+  ['authentication', 'Authentication / Login', '/api/auth/login'],
+  ['account_management', 'Account Management', '/api/admin/users'],
+  ['rbac', 'Role and Access Control', '/api/admin/roles'],
+  ['employee_201', 'Employee / 201-File Management', '/api/employees'],
+  ['attendance', 'Attendance', '/api/attendance/all'],
+  ['attendance_sync', 'Attendance Sync', '/api/biometric/status'],
+  ['leave', 'Leave Management', '/api/leaves'],
+  ['payroll', 'Payroll Computation', '/api/payroll'],
+  ['payslip', 'Payslip Generation', '/api/payslips'],
+  ['audit_trail', 'Audit Trail', '/api/admin/audit-log'],
+  ['blockchain', 'Blockchain Support', '/api/admin/blockchain-support/status'],
+  ['backup_restore', 'Backup and Restore', '/api/admin/backups'],
+  ['database', 'Database', 'MySQL SELECT 1'],
+];
+
+function switchSysAdminTab(tabId, el, options = {}) {
+  const targetTab = SYS_ADMIN_TAB_TITLES[tabId] ? tabId : 'accounts';
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.sysadmin-panel').forEach(p => p.classList.remove('active'));
-  const tabButton = el || document.querySelector(`.sysadmin-tab[data-tab="${tabId}"]`);
+  const tabButton = el || document.querySelector(`.sysadmin-tab[data-tab="${targetTab}"]`);
   if (tabButton) tabButton.classList.add('active');
-  const panel = document.getElementById('panel-' + tabId);
+  const panel = document.getElementById('panel-' + targetTab);
   if (panel) panel.classList.add('active');
 
-  if (tabId === 'accounts') {
+  const title = document.getElementById('page-title');
+  if (title && SYS_ADMIN_TAB_TITLES[targetTab]) title.textContent = SYS_ADMIN_TAB_TITLES[targetTab];
+
+  if (!options.skipRouteUpdate && typeof syncRouteForPage === 'function') {
+    syncRouteForPage('system-admin', { sysAdminTab: targetTab });
+  }
+
+  if (targetTab === 'accounts') {
     loadUsersTable();
     startAccountRealtime();
   } else {
     stopAccountRealtime();
   }
-  if (tabId === 'roles')    loadRolesGrid();
-  if (tabId === 'audit')    requestAnimationFrame(loadAuditLog);
-  if (tabId === 'biometric-settings') loadBiometricSettings();
+  if (targetTab === 'roles')    loadRolesGrid();
+  if (targetTab === 'audit')    requestAnimationFrame(loadAuditLog);
+  if (targetTab === 'health')   loadSystemHealth();
+  if (targetTab === 'support')  loadSupportTickets();
+  if (targetTab === 'backups')  loadBackupLogs();
 }
 
 // ── Initialize on navigation ────────────────────────────────
@@ -325,6 +376,7 @@ function initSystemAdmin() {
   loadRolesList();
 
   const activeTab =
+    window.ROUTE_PARAMS?.sysAdminTab ||
     document.querySelector('.sysadmin-tab.active')?.dataset?.tab ||
     document.querySelector('.sysadmin-panel.active')?.id?.replace(/^panel-/, '') ||
     'accounts';
@@ -338,7 +390,9 @@ function initSystemAdmin() {
 
   if (activeTab === 'roles') loadRolesGrid();
   if (activeTab === 'audit') loadAuditLog();
-  if (activeTab === 'biometric-settings') loadBiometricSettings();
+  if (activeTab === 'health') loadSystemHealth();
+  if (activeTab === 'support') loadSupportTickets();
+  if (activeTab === 'backups') loadBackupLogs();
 }
 
 function initSystemAdminIfActive() {
@@ -365,6 +419,7 @@ async function loadUsersTable() {
     const nextUsersSignature = sysUserDataSignature(nextUsers);
     const usersChanged = nextUsersSignature !== sysUsersDataSignature;
     sysAllUsers = nextUsers;
+    populateSupportUserSelect();
 
     // Also load employees for the unlinked count
     const empRes = await apiFetch('/api/employees');
@@ -1182,6 +1237,58 @@ async function toggleUserStatus(userId, activate) {
 // EDIT CREDENTIALS MODAL
 // ═══════════════════════════════════════════════════════════════
 
+async function unlockUserAccount(userId) {
+  if (!confirm('Clear this account lockout?')) return;
+  try {
+    const res = await apiFetch(`/api/admin/users/${userId}/unlock`, { method: 'PATCH' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Account unlock failed.');
+    showSysToast(data.message || 'Account lockout cleared.', 'success');
+    loadUsersTable();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function revokeUserSessions(userId) {
+  const reason = prompt('Reason for session revocation:', 'support_request');
+  if (reason === null) return;
+  try {
+    const res = await apiFetch(`/api/admin/users/${userId}/revoke-sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Session revocation failed.');
+    showSysToast(`${data.message || 'Sessions revoked.'} (${Number(data.revoked_sessions || 0)})`, 'success');
+    loadUsersTable();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function resetUserMfa(userId) {
+  const reason = prompt('Reason for MFA reset after identity verification:');
+  if (reason === null) return;
+  if (reason.trim().length < 8) {
+    showSysToast('Reason must be at least 8 characters.', 'error');
+    return;
+  }
+  if (!confirm('Confirm identity was verified before resetting MFA.')) return;
+  try {
+    const res = await apiFetch(`/api/admin/users/${userId}/reset-mfa`, {
+      method: 'PATCH',
+      body: JSON.stringify({ identity_verified: true, reason }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'MFA reset failed.');
+    showSysToast(data.message || 'MFA enrollment reset.', 'success');
+    loadUsersTable();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
 function showCredentialsModal(userId, username) {
   document.getElementById('cred-modal-user-id').value = userId;
   document.getElementById('cred-modal-username-display').textContent = username;
@@ -1256,97 +1363,523 @@ function toggleCredPasswordVisibility() {
 // BIOMETRIC DEVICE SETTINGS
 // ═══════════════════════════════════════════════════════════════
 
-async function loadBiometricSettings() {
-  const tbody = document.getElementById('sys-bio-devices-tbody');
+function sysSetText(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value ?? '-';
+}
+
+function sysShortHash(value) {
+  const text = String(value || '');
+  return text.length > 16 ? `${text.slice(0, 10)}...${text.slice(-6)}` : (text || '-');
+}
+
+function sysStatusBadge(status) {
+  const normalized = String(status || '').trim().toUpperCase();
+  const good = ['ACTIVE', 'COMPLETED', 'VERIFIED', 'RESOLVED', 'CLOSED', 'RECORDED'];
+  const bad = ['FAILED', 'CRITICAL', 'VERIFICATION_FAILED', 'INACTIVE'];
+  const warn = ['HIGH', 'OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'REQUESTED', 'RUNNING', 'PENDING', 'PENDING_ANCHOR'];
+  const cls = good.includes(normalized)
+    ? 'badge-active'
+    : bad.includes(normalized)
+      ? 'badge-inactive'
+      : warn.includes(normalized)
+        ? 'badge-locked'
+        : 'badge-clear';
+  return `<span class="${cls}">${sysEsc(normalized || '-')}</span>`;
+}
+
+function renderSupportKvList(id, entries) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  target.innerHTML = entries.map(([label, value]) => `
+    <div class="support-kv-row">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value ?? '-')}</strong>
+    </div>
+  `).join('');
+}
+
+function populateSupportUserSelect() {
+  const select = document.getElementById('support-ticket-user');
+  if (!select) return;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">None</option>' + sysAllUsers.map(user => {
+    const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.username;
+    return `<option value="${Number(user.id)}">${sysEsc(user.username)} - ${sysEsc(name)}</option>`;
+  }).join('');
+  if (currentValue) select.value = currentValue;
+}
+
+function buildSystemHealthFallbackModules(reason = '') {
+  const remarks = reason || 'The running backend returned the old health snapshot. Restart the Node server to load the module diagnostics.';
+  return SYS_HEALTH_FALLBACK_MODULES.map(([moduleKey, moduleName, endpoint]) => ({
+    module_key: moduleKey,
+    module_name: moduleName,
+    status: 'WARNING',
+    remarks,
+    response_time_ms: null,
+    endpoint_checked: endpoint,
+    dependency_status: {
+      backend_route: {
+        label: 'Health-check API route',
+        available: false,
+        status: 'Server restart required',
+      },
+    },
+    dependencies: [],
+    error_message: 'Health-check API route is not loaded in the running server process.',
+    last_checked_at: sysHealthSnapshot?.generated_at || null,
+    last_success_at: null,
+    last_failure_at: null,
+    recommended_action: 'Stop the current npm start process, start it again, then press Run Health Check.',
+    recent_logs: [],
+  }));
+}
+
+function summarizeHealthModules(modules) {
+  const summary = { total: modules.length, online: 0, warning: 0, offline: 0, maintenance: 0 };
+  modules.forEach(module => {
+    const key = String(module.status || 'WARNING').toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(summary, key)) summary[key] += 1;
+  });
+  return summary;
+}
+
+async function loadSystemHealth() {
   try {
-    const res = await apiFetch('/api/attendance/biometric/devices');
+    const res = await apiFetch('/api/admin/system-health');
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to load biometric devices.');
-    sysBiometricDevices = data;
-    if (!tbody) return;
-    tbody.innerHTML = data.length ? data.map(device => `
-      <tr>
-        <td>${sysEsc(device.device_name)}<br><small style="color:var(--muted)">${sysEsc(device.device_reference)}</small></td>
-        <td>${sysEsc(device.vendor || '—')}</td>
-        <td><span class="${device.is_active ? 'badge-active' : 'badge-inactive'}">${device.is_active ? 'Active' : 'Inactive'}</span></td>
-        <td>${sysEsc(sysFormatDateTime(device.last_success_at))}</td>
-        <td>${sysEsc(device.last_error_message || '—')}</td>
-        <td><button class="btn-sysadmin-sm" onclick="editBiometricSettings(${Number(device.device_id)})">Edit</button></td>
-      </tr>
-    `).join('') : '<tr><td colspan="6" class="table-empty">No biometric devices configured.</td></tr>';
+    if (!res.ok) throw new Error(data.error || 'Failed to load system health.');
+    sysHealthSnapshot = data;
+    sysHealthModules = Array.isArray(data.modules) && data.modules.length
+      ? data.modules
+      : buildSystemHealthFallbackModules();
+    if (!data.summary || !Array.isArray(data.modules) || !data.modules.length) {
+      sysHealthSnapshot.summary = summarizeHealthModules(sysHealthModules);
+    }
+    renderSystemHealthDashboard();
+
+    renderSupportKvList('health-runtime-list', [
+      ['Generated', sysFormatDateTime(data.generated_at)],
+      ['Node', data.runtime?.node_version || '-'],
+      ['Uptime', sysFormatDuration(Number(data.runtime?.uptime_seconds || 0))],
+      ['Memory', `${Number(data.runtime?.memory_mb || 0)} MB`],
+      ['Biometric Devices', `${Number(data.biometric?.active_devices || 0)} / ${Number(data.biometric?.total_devices || 0)}`],
+    ]);
+
+    const backup = data.backups?.last_backup;
+    renderSupportKvList('health-backup-list', backup ? [
+      ['Reference', backup.backup_reference],
+      ['Type', backup.backup_type],
+      ['Target', backup.storage_target],
+      ['Status', backup.status],
+      ['Created', sysFormatDateTime(backup.created_at)],
+    ] : [['Status', 'No backup record']]);
   } catch (err) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="table-empty">${sysEsc(err.message)}</td></tr>`;
-    showSysToast(err.message, 'error');
+    const grid = document.getElementById('health-module-grid');
+    if (grid) grid.innerHTML = `<div class="table-empty">${sysEsc(err.message || 'Failed to load system health.')}</div>`;
+    showSysToast(err.message || 'Failed to load system health.', 'error');
   }
 }
 
-function clearBiometricSettingsForm() {
-  [
-    'sys-bio-device-id',
-    'sys-bio-reference',
-    'sys-bio-name',
-    'sys-bio-vendor',
-    'sys-bio-url',
-    'sys-bio-endpoint',
-    'sys-bio-secret',
-  ].forEach(id => {
-    const element = document.getElementById(id);
-    if (element) element.value = '';
+function sysHealthStatusBadge(status) {
+  const normalized = String(status || 'WARNING').toUpperCase();
+  const cls = normalized === 'ONLINE'
+    ? 'badge-active'
+    : normalized === 'OFFLINE'
+      ? 'badge-inactive'
+      : normalized === 'MAINTENANCE'
+        ? 'badge-clear'
+        : 'badge-locked';
+  return `<span class="${cls}">${sysEsc(normalized)}</span>`;
+}
+
+function healthDependencyValue(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.join(', ');
+  const parts = [];
+  if (Object.prototype.hasOwnProperty.call(value, 'available')) parts.push(value.available ? 'Available' : 'Missing');
+  if (Object.prototype.hasOwnProperty.call(value, 'count')) parts.push(`Count: ${value.count}`);
+  if (Object.prototype.hasOwnProperty.call(value, 'total')) parts.push(`Total: ${value.total}`);
+  if (Object.prototype.hasOwnProperty.call(value, 'latency_ms')) parts.push(`${value.latency_ms} ms`);
+  if (value.table) parts.push(`Table: ${value.table}`);
+  if (value.status) parts.push(`Status: ${value.status}`);
+  if (value.reference) parts.push(`Ref: ${value.reference}`);
+  if (value.target) parts.push(`Target: ${value.target}`);
+  if (value.value) parts.push(sysFormatDateTime(value.value));
+  if (value.created_at) parts.push(`Created: ${sysFormatDateTime(value.created_at)}`);
+  if (value.completed_at) parts.push(`Completed: ${sysFormatDateTime(value.completed_at)}`);
+  if (value.verified_at) parts.push(`Verified: ${sysFormatDateTime(value.verified_at)}`);
+  return parts.length ? parts.join(' | ') : JSON.stringify(value);
+}
+
+function renderSystemHealthDashboard() {
+  const summary = sysHealthSnapshot?.summary || {};
+  sysSetText('health-count-online', Number(summary.online || 0));
+  sysSetText('health-count-warning', Number(summary.warning || 0));
+  sysSetText('health-count-offline', Number(summary.offline || 0));
+  sysSetText('health-count-maintenance', Number(summary.maintenance || 0));
+  sysSetText('health-last-updated', `Last checked: ${sysFormatDateTime(sysHealthSnapshot?.generated_at)}`);
+  renderSystemHealthModules();
+}
+
+function filterSystemHealthModules() {
+  renderSystemHealthModules();
+}
+
+function renderSystemHealthModules() {
+  const grid = document.getElementById('health-module-grid');
+  if (!grid) return;
+  const search = String(document.getElementById('health-search')?.value || '').trim().toLowerCase();
+  const statusFilter = String(document.getElementById('health-status-filter')?.value || '').trim().toUpperCase();
+  const modules = sysHealthModules.filter(module => {
+    const status = String(module.status || '').toUpperCase();
+    const haystack = [
+      module.module_name,
+      module.module_key,
+      module.remarks,
+      module.endpoint_checked,
+      module.recommended_action,
+    ].join(' ').toLowerCase();
+    return (!statusFilter || status === statusFilter) && (!search || haystack.includes(search));
   });
-  const auth = document.getElementById('sys-bio-auth');
-  const active = document.getElementById('sys-bio-active');
-  if (auth) auth.value = 'NONE';
-  if (active) active.value = '1';
-}
-
-function editBiometricSettings(deviceId) {
-  const device = sysBiometricDevices.find(item => Number(item.device_id) === Number(deviceId));
-  if (!device) return;
-  document.getElementById('sys-bio-device-id').value = device.device_id;
-  document.getElementById('sys-bio-reference').value = device.device_reference || '';
-  document.getElementById('sys-bio-name').value = device.device_name || '';
-  document.getElementById('sys-bio-vendor').value = device.vendor || '';
-  document.getElementById('sys-bio-url').value = device.api_base_url || '';
-  document.getElementById('sys-bio-endpoint').value = device.logs_endpoint || '';
-  document.getElementById('sys-bio-auth').value = device.auth_type || 'NONE';
-  document.getElementById('sys-bio-active').value = device.is_active ? '1' : '0';
-  document.getElementById('sys-bio-secret').value = '';
-}
-
-async function saveBiometricSettings() {
-  const deviceId = document.getElementById('sys-bio-device-id')?.value;
-  const body = {
-    device_reference: document.getElementById('sys-bio-reference')?.value.trim(),
-    device_name: document.getElementById('sys-bio-name')?.value.trim(),
-    vendor: document.getElementById('sys-bio-vendor')?.value.trim(),
-    api_base_url: document.getElementById('sys-bio-url')?.value.trim(),
-    logs_endpoint: document.getElementById('sys-bio-endpoint')?.value.trim(),
-    auth_type: document.getElementById('sys-bio-auth')?.value,
-    auth_secret: document.getElementById('sys-bio-secret')?.value,
-    is_active: document.getElementById('sys-bio-active')?.value === '1',
-  };
-  if (!body.device_reference || !body.device_name) {
-    showSysToast('Device reference and device name are required.', 'error');
+  if (!modules.length) {
+    grid.innerHTML = '<div class="table-empty">No modules match the selected filter.</div>';
     return;
   }
-  if (!body.auth_secret) delete body.auth_secret;
+  grid.innerHTML = modules.map(module => {
+    const keyArg = sysJsString(module.module_key);
+    const status = String(module.status || 'WARNING').toLowerCase();
+    return `
+      <article class="health-module-card health-module-${sysEsc(status)}">
+        <div class="health-module-card-head">
+          <div>
+            <h4>${sysEsc(module.module_name)}</h4>
+            <span>${sysEsc(module.endpoint_checked || '-')}</span>
+          </div>
+          ${sysHealthStatusBadge(module.status)}
+        </div>
+        <p>${sysEsc(module.remarks || 'No remarks available.')}</p>
+        <div class="health-card-meta">
+          <span>Last checked</span>
+          <strong>${sysEsc(sysFormatDateTime(module.last_checked_at))}</strong>
+          <span>Response</span>
+          <strong>${module.response_time_ms === null || module.response_time_ms === undefined ? '-' : `${Number(module.response_time_ms)} ms`}</strong>
+        </div>
+        <div class="support-row-actions">
+          <button class="btn-sysadmin-sm" onclick="openSystemHealthDetails(${keyArg})">View Details</button>
+          <button class="btn-sysadmin-sm" onclick="runSystemModuleHealthCheck(${keyArg})">Check Module</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
 
+function openSystemHealthDetails(moduleKey) {
+  const module = sysHealthModules.find(item => item.module_key === moduleKey);
+  if (!module) return;
+  sysHealthSelectedModuleKey = moduleKey;
+  sysSetText('health-detail-title', module.module_name || 'Module Health');
+  const statusTarget = document.getElementById('health-detail-status');
+  if (statusTarget) {
+    statusTarget.className = sysHealthStatusBadge(module.status).match(/class="([^"]+)"/)?.[1] || 'badge-clear';
+    statusTarget.textContent = String(module.status || '-').toUpperCase();
+  }
+  sysSetText('health-detail-remarks', module.remarks || '-');
+  sysSetText('health-detail-last-checked', sysFormatDateTime(module.last_checked_at));
+  sysSetText('health-detail-last-success', sysFormatDateTime(module.last_success_at));
+  sysSetText('health-detail-last-failure', sysFormatDateTime(module.last_failure_at));
+  sysSetText('health-detail-response', module.response_time_ms === null || module.response_time_ms === undefined ? '-' : `${Number(module.response_time_ms)} ms`);
+  sysSetText('health-detail-endpoint', module.endpoint_checked || '-');
+  sysSetText('health-detail-error', module.error_message || '-');
+  sysSetText('health-detail-action', module.recommended_action || '-');
+  const checkButton = document.getElementById('health-detail-check-btn');
+  if (checkButton) checkButton.setAttribute('onclick', `runSystemModuleHealthCheck(${sysJsString(moduleKey)})`);
+
+  const dependencies = module.dependency_status || {};
+  const depTarget = document.getElementById('health-detail-dependencies');
+  if (depTarget) {
+    const entries = Object.entries(dependencies);
+    depTarget.innerHTML = entries.length
+      ? entries.map(([key, value]) => `
+          <div class="health-dependency-row">
+            <span>${sysEsc(value?.label || key.replace(/_/g, ' '))}</span>
+            <strong>${sysEsc(healthDependencyValue(value))}</strong>
+          </div>
+        `).join('')
+      : '<div class="table-empty">No dependency details available.</div>';
+  }
+
+  const logsTarget = document.getElementById('health-detail-logs');
+  if (logsTarget) {
+    const logs = Array.isArray(module.recent_logs) ? module.recent_logs : [];
+    logsTarget.innerHTML = logs.length
+      ? logs.map(log => `
+          <div class="health-log-row">
+            <strong>${sysEsc(log.action || 'SYSTEM_HEALTH_CHECK')}</strong>
+            <span>${sysEsc(sysFormatDateTime(log.timestamp))}</span>
+            <small>${sysEsc(log.details || '-')}</small>
+          </div>
+        `).join('')
+      : '<div class="table-empty">No recent health-check audit entries.</div>';
+  }
+
+  const modal = document.getElementById('health-detail-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeSystemHealthDetails() {
+  const modal = document.getElementById('health-detail-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function systemHealthApiErrorMessage(error) {
+  const message = String(error?.message || error || '').trim();
+  if (/endpoint not found|not found/i.test(message)) {
+    return 'Health-check API is not loaded in the running server. Restart npm start, then run the check again.';
+  }
+  return message || 'Failed to run system health check.';
+}
+
+async function runSystemHealthCheck() {
   try {
-    const res = await apiFetch(
-      deviceId ? `/api/attendance/biometric/devices/${deviceId}` : '/api/attendance/biometric/devices',
-      { method: deviceId ? 'PUT' : 'POST', body: JSON.stringify(body) }
-    );
+    const res = await apiFetch('/api/admin/system-health/check', { method: 'POST' });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to save biometric device.');
-    showSysToast(data.message || 'Biometric device saved.', 'success');
-    clearBiometricSettingsForm();
-    loadBiometricSettings();
+    if (!res.ok) throw new Error(data.error || 'Failed to run system health check.');
+    sysHealthSnapshot = { ...sysHealthSnapshot, ...data, generated_at: data.checked_at || data.generated_at };
+    sysHealthModules = Array.isArray(data.modules) ? data.modules : sysHealthModules;
+    renderSystemHealthDashboard();
+    showSysToast(data.message || 'System health check completed.', 'success');
   } catch (err) {
-    showSysToast(err.message, 'error');
+    if (!sysHealthModules.length) {
+      sysHealthModules = buildSystemHealthFallbackModules(systemHealthApiErrorMessage(err));
+      sysHealthSnapshot = {
+        ...(sysHealthSnapshot || {}),
+        generated_at: sysHealthSnapshot?.generated_at || new Date().toISOString(),
+        summary: summarizeHealthModules(sysHealthModules),
+      };
+      renderSystemHealthDashboard();
+    }
+    showSysToast(systemHealthApiErrorMessage(err), 'error');
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
+async function runSystemModuleHealthCheck(moduleKey) {
+  try {
+    const res = await apiFetch(`/api/admin/system-health/check/${encodeURIComponent(moduleKey)}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to run module health check.');
+    if (data.module) {
+      const index = sysHealthModules.findIndex(module => module.module_key === data.module.module_key);
+      if (index >= 0) sysHealthModules[index] = data.module;
+      else sysHealthModules.push(data.module);
+    }
+    await loadSystemHealth();
+    if (sysHealthSelectedModuleKey === moduleKey) openSystemHealthDetails(moduleKey);
+    showSysToast(data.message || 'Module health check completed.', 'success');
+  } catch (err) {
+    showSysToast(systemHealthApiErrorMessage(err), 'error');
+  }
+}
+
+async function loadSupportTickets() {
+  try {
+    if (!sysAllUsers.length) await loadUsersTable();
+    populateSupportUserSelect();
+    const params = new URLSearchParams();
+    const status = document.getElementById('support-status-filter')?.value || '';
+    const category = document.getElementById('support-category-filter')?.value || '';
+    if (status) params.set('status', status);
+    if (category) params.set('category', category);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const res = await apiFetch(`/api/admin/support-tickets${query}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load support tickets.');
+    sysSupportTickets = Array.isArray(data) ? data : [];
+    renderSupportTickets();
+  } catch (err) {
+    const tbody = document.getElementById('support-tickets-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${sysEsc(err.message || 'Failed to load support tickets.')}</td></tr>`;
+  }
+}
+
+function renderSupportTickets() {
+  const tbody = document.getElementById('support-tickets-tbody');
+  if (!tbody) return;
+  if (!sysSupportTickets.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No support tickets found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysSupportTickets.map(ticket => {
+    const actions = [];
+    if (ticket.status === 'OPEN') actions.push(`<button class="btn-sysadmin-sm" onclick="updateSupportTicket(${Number(ticket.ticket_id)}, 'IN_PROGRESS')">Start</button>`);
+    if (!['RESOLVED', 'CLOSED'].includes(ticket.status)) actions.push(`<button class="btn-sysadmin-sm" onclick="updateSupportTicket(${Number(ticket.ticket_id)}, 'RESOLVED')">Resolve</button>`);
+    if (ticket.status === 'RESOLVED') actions.push(`<button class="btn-sysadmin-sm" onclick="updateSupportTicket(${Number(ticket.ticket_id)}, 'CLOSED')">Close</button>`);
+    return `
+      <tr>
+        <td><strong>${sysEsc(ticket.ticket_number)}</strong><br><small>${sysEsc(ticket.title)}</small></td>
+        <td>${sysEsc(ticket.category)}</td>
+        <td>${sysStatusBadge(ticket.priority)}</td>
+        <td>${sysStatusBadge(ticket.status)}</td>
+        <td>${ticket.related_user_id ? `User #${Number(ticket.related_user_id)}` : '-'}</td>
+        <td><small>${sysEsc(sysFormatDateTime(ticket.created_at))}</small></td>
+        <td><div class="support-row-actions">${actions.join('')}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function createSupportTicket() {
+  const title = document.getElementById('support-ticket-title')?.value.trim();
+  const description = document.getElementById('support-ticket-description')?.value.trim();
+  if (!title || !description) {
+    showSysToast('Ticket title and description are required.', 'error');
+    return;
+  }
+  const body = {
+    title,
+    description,
+    category: document.getElementById('support-ticket-category')?.value || 'SYSTEM',
+    priority: document.getElementById('support-ticket-priority')?.value || 'MEDIUM',
+  };
+  const userId = document.getElementById('support-ticket-user')?.value;
+  if (userId) body.related_user_id = Number(userId);
+  try {
+    const res = await apiFetch('/api/admin/support-tickets', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to create support ticket.');
+    showSysToast(data.message || 'Support ticket created.', 'success');
+    ['support-ticket-title', 'support-ticket-description'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    loadSupportTickets();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function updateSupportTicket(ticketId, status) {
+  const body = { status };
+  if (status === 'RESOLVED') {
+    const resolution = prompt('Resolution notes:');
+    if (resolution === null) return;
+    body.resolution_notes = resolution;
+  }
+  try {
+    const res = await apiFetch(`/api/admin/support-tickets/${ticketId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update ticket.');
+    showSysToast(data.message || 'Support ticket updated.', 'success');
+    loadSupportTickets();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function loadBackupLogs() {
+  try {
+    const res = await apiFetch('/api/admin/backups');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load backup records.');
+    sysBackupLogs = Array.isArray(data) ? data : [];
+    renderBackupLogs();
+  } catch (err) {
+    const tbody = document.getElementById('backup-logs-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${sysEsc(err.message || 'Failed to load backup records.')}</td></tr>`;
+  }
+}
+
+function renderBackupLogs() {
+  const tbody = document.getElementById('backup-logs-tbody');
+  if (!tbody) return;
+  if (!sysBackupLogs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No backup records found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysBackupLogs.map(record => {
+    const id = Number(record.backup_id);
+    const actions = [
+      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'RUNNING')">Run</button>`,
+      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'COMPLETED')">Complete</button>`,
+      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'VERIFIED')">Verify</button>`,
+      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'FAILED')">Fail</button>`,
+    ];
+    return `
+      <tr>
+        <td><strong>${sysEsc(record.backup_reference)}</strong></td>
+        <td>${sysEsc(record.backup_type)}</td>
+        <td>${sysEsc(record.storage_target)}</td>
+        <td>${sysStatusBadge(record.status)}</td>
+        <td><small>${sysEsc(sysShortHash(record.manifest_hash))}</small></td>
+        <td><small>${sysEsc(sysFormatDateTime(record.created_at))}</small></td>
+        <td><div class="support-row-actions">${actions.join('')}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function requestBackup() {
+  const body = {
+    backup_type: document.getElementById('backup-type')?.value || 'DATABASE',
+    storage_target: document.getElementById('backup-target')?.value || 'EXTERNAL',
+    notes: document.getElementById('backup-notes')?.value || '',
+  };
+  try {
+    const res = await apiFetch('/api/admin/backups/request', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to request backup.');
+    showSysToast(data.message || 'Backup request logged.', 'success');
+    const notes = document.getElementById('backup-notes');
+    if (notes) notes.value = '';
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function updateBackupStatus(backupId, status) {
+  const body = { status };
+  if (['COMPLETED', 'VERIFIED'].includes(status)) {
+    const manifestHash = prompt('SHA-256 manifest hash:', '');
+    if (manifestHash === null) return;
+    if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
+    const location = prompt('Backup location/reference:', '');
+    if (location === null) return;
+    if (location.trim()) body.backup_location = location.trim();
+  }
+  if (status === 'FAILED') {
+    const notes = prompt('Failure notes:', '');
+    if (notes === null) return;
+    body.notes = notes;
+  }
+  try {
+    const res = await apiFetch(`/api/admin/backups/${backupId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update backup.');
+    showSysToast(data.message || 'Backup record updated.', 'success');
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
 // TOAST NOTIFICATION
 // ═══════════════════════════════════════════════════════════════
 
@@ -1381,10 +1914,21 @@ window.toggleCredPasswordVisibility = toggleCredPasswordVisibility;
 window.filterUserTable       = filterUserTable;
 window.loadAuditLog          = loadAuditLog;
 window.toggleRoleUsers       = toggleRoleUsers;
-window.loadBiometricSettings = loadBiometricSettings;
-window.clearBiometricSettingsForm = clearBiometricSettingsForm;
-window.editBiometricSettings = editBiometricSettings;
-window.saveBiometricSettings = saveBiometricSettings;
+window.unlockUserAccount     = unlockUserAccount;
+window.revokeUserSessions    = revokeUserSessions;
+window.resetUserMfa          = resetUserMfa;
+window.loadSystemHealth      = loadSystemHealth;
+window.filterSystemHealthModules = filterSystemHealthModules;
+window.openSystemHealthDetails = openSystemHealthDetails;
+window.closeSystemHealthDetails = closeSystemHealthDetails;
+window.runSystemHealthCheck  = runSystemHealthCheck;
+window.runSystemModuleHealthCheck = runSystemModuleHealthCheck;
+window.loadSupportTickets    = loadSupportTickets;
+window.createSupportTicket   = createSupportTicket;
+window.updateSupportTicket   = updateSupportTicket;
+window.loadBackupLogs        = loadBackupLogs;
+window.requestBackup         = requestBackup;
+window.updateBackupStatus    = updateBackupStatus;
 
 document.addEventListener('partialsLoaded', initSystemAdminIfActive);
 document.addEventListener('DOMContentLoaded', () => setTimeout(initSystemAdminIfActive, 0));

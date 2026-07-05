@@ -32,10 +32,19 @@ const ROLE_PERMISSIONS = {
   ],
 };
 
+const SYSTEM_ADMIN_NAV_ITEMS = [
+  { page: 'system-admin', params: { sysAdminTab: 'accounts' }, icon: 'bi-people', label: 'Account Management' },
+  { page: 'system-admin', params: { sysAdminTab: 'roles' }, icon: 'bi-shield-check', label: 'Role and Access' },
+  { page: 'system-admin', params: { sysAdminTab: 'audit' }, icon: 'bi-file-earmark-bar-graph', label: 'Audit Trail' },
+  { page: 'system-admin', params: { sysAdminTab: 'health' }, icon: 'bi-speedometer2', label: 'System Health' },
+  { page: 'system-admin', params: { sysAdminTab: 'support' }, icon: 'bi-inbox', label: 'Support Center' },
+  { page: 'system-admin', params: { sysAdminTab: 'backups' }, icon: 'bi-journal-check', label: 'Backup and Restore' },
+];
+
 const NAV_CONFIG = {
   admin: [
     { page: 'dashboard', icon: 'bi-speedometer2', label: 'Dashboard' },
-    { page: 'system-admin', icon: 'bi-gear', label: 'System Admin' },
+    ...SYSTEM_ADMIN_NAV_ITEMS,
     { page: 'attendance', icon: 'bi-clock-history', label: 'Attendance' },
     { page: 'blockchain', icon: 'bi-shield-check', label: 'Blockchain' },
   ],
@@ -61,9 +70,9 @@ const NAV_CONFIG = {
   ],
   system_admin: [
     { page: 'dashboard', icon: 'bi-speedometer2', label: 'Dashboard' },
-    { page: 'system-admin', icon: 'bi-gear', label: 'System Admin' },
-    { page: 'attendance', icon: 'bi-clock-history', label: 'Attendance Sync' },
-    { page: 'blockchain', icon: 'bi-shield-check', label: 'Blockchain' },
+    ...SYSTEM_ADMIN_NAV_ITEMS,
+    { page: 'attendance', params: { attTab: 'biometric' }, icon: 'bi-clock-history', label: 'Attendance Sync' },
+    { page: 'blockchain', params: { blockchainView: 'support' }, icon: 'bi-shield-check', label: 'Blockchain Support' },
   ],
   payroll_officer: [
     { page: 'dashboard', icon: 'bi-speedometer2', label: 'Dashboard' },
@@ -377,23 +386,59 @@ async function apiFetch(url, options = {}) {
   return response;
 }
 
+function navParamsForItem(item = {}) {
+  if (item.params && typeof item.params === 'object') return item.params;
+  if (item.tab) return { employeeTab: item.tab };
+  return null;
+}
+
+function sidebarNavKey(pageId, params = null) {
+  if (typeof navKeyForRoute === 'function') return navKeyForRoute(pageId, params);
+  if (params?.employeeTab) return `${pageId}:${params.employeeTab}`;
+  if (pageId === 'system-admin' && params?.sysAdminTab) return `${pageId}:${params.sysAdminTab}`;
+  if (pageId === 'attendance' && params?.attTab) return `${pageId}:${params.attTab}`;
+  if (pageId === 'blockchain' && params?.blockchainView) return `${pageId}:${params.blockchainView}`;
+  return pageId;
+}
+
+function sidebarRouteForItem(item = {}) {
+  const params = navParamsForItem(item);
+  return typeof routeForPage === 'function' ? routeForPage(item.page, params) : '#';
+}
+
+function navigateFromSidebar(link) {
+  const page = link?.dataset?.page;
+  if (!page || typeof navigate !== 'function') return;
+  let params = null;
+  try {
+    params = JSON.parse(link.dataset.routeParams || '{}');
+  } catch (_error) {
+    params = null;
+  }
+  navigate(page, link, params && Object.keys(params).length ? params : null);
+}
+
 function buildSidebar(user) {
   user = normalizeClientUser(user);
   applyUserRoleToDocument(user);
   const navItems = document.getElementById('nav-items');
   if (!navItems) return;
   const config = NAV_CONFIG[user.role] || NAV_CONFIG.employee;
-  navItems.innerHTML = config.map((item, index) => `
-    <a href="${typeof routeForPage === 'function' ? routeForPage(item.page, item.tab ? { employeeTab: item.tab } : null) : '#'}"
+  navItems.innerHTML = config.map((item, index) => {
+    const params = navParamsForItem(item);
+    const navKey = sidebarNavKey(item.page, params);
+    return `
+    <a href="${sidebarRouteForItem(item)}"
          class="nav-item ${index === 0 ? 'active' : ''}"
          data-page="${item.page}"
-         data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
+         data-nav-key="${escapeHtml(navKey)}"
+         data-route-params="${escapeHtml(JSON.stringify(params || {}))}"
          title="${escapeHtml(item.label)}"
-         onclick="event.preventDefault(); navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
+         onclick="event.preventDefault(); navigateFromSidebar(this)">
       <span class="nav-icon">${sidebarIconMarkup(item)}</span>
       <span class="nav-label">${escapeHtml(item.label)}</span>
     </a>
-  `).join('');
+  `; }).join('');
 
   const name = document.getElementById('sidebar-user-name');
   if (name) name.textContent = user.username;
@@ -430,16 +475,19 @@ function buildEmployeeBottomNav(user) {
     { page: 'leave', icon: 'bi-calendar-check', label: 'Leave' },
   ].filter(item => canAccess(item.page));
 
-  bottomNav.innerHTML = items.map((item, index) => `
-    <a href="${typeof routeForPage === 'function' ? routeForPage(item.page, item.tab ? { employeeTab: item.tab } : null) : '#'}"
+  bottomNav.innerHTML = items.map((item, index) => {
+    const params = navParamsForItem(item);
+    return `
+    <a href="${sidebarRouteForItem(item)}"
             class="employee-bottom-nav-item ${index === 0 ? 'active' : ''}"
             data-page="${item.page}"
-            data-nav-key="${item.tab ? `${item.page}:${item.tab}` : item.page}"
-            onclick="event.preventDefault(); navigate('${item.page}', this, ${item.tab ? `{ employeeTab: '${item.tab}' }` : 'null'})">
+            data-nav-key="${escapeHtml(sidebarNavKey(item.page, params))}"
+            data-route-params="${escapeHtml(JSON.stringify(params || {}))}"
+            onclick="event.preventDefault(); navigateFromSidebar(this)">
       <span>${sidebarIconMarkup(item)}</span>
       <small>${escapeHtml(item.label)}</small>
     </a>
-  `).join('');
+  `; }).join('');
   bottomNav.style.display = '';
   document.body.classList.add('has-employee-bottom-nav');
 }

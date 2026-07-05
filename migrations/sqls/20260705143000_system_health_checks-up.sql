@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS system_health_checks (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  module_key VARCHAR(80) NOT NULL,
+  module_name VARCHAR(160) NOT NULL,
+  status ENUM('ONLINE','WARNING','OFFLINE','MAINTENANCE') NOT NULL DEFAULT 'WARNING',
+  remarks VARCHAR(500) NULL,
+  response_time_ms INT NULL,
+  endpoint_checked VARCHAR(255) NULL,
+  dependency_status TEXT NULL,
+  error_message VARCHAR(500) NULL,
+  last_checked_at DATETIME NULL,
+  last_success_at DATETIME NULL,
+  last_failure_at DATETIME NULL,
+  checked_by BIGINT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_system_health_checks_module_key (module_key),
+  INDEX idx_system_health_checks_status (status, updated_at),
+  INDEX idx_system_health_checks_last_checked (last_checked_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

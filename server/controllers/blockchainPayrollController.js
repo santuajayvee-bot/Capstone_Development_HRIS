@@ -16,6 +16,7 @@ const {
 } = require('../services/fabricService');
 
 const FABRIC_OFFLINE_MESSAGE = 'Blockchain network is not currently connected. Local audit records are available, but Fabric verification is disabled.';
+const FABRIC_VERIFY_UNAVAILABLE_MESSAGE = 'Fabric verification is temporarily unavailable. The payroll record remains recorded locally, but the ledger comparison could not be completed.';
 
 function clientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
@@ -40,6 +41,10 @@ function sendSafeError(res, error, fallbackMessage) {
 
 function normalizeStatus(status) {
   return String(status || '').trim().toUpperCase();
+}
+
+function normalizeHash(hash) {
+  return String(hash || '').trim().toLowerCase();
 }
 
 function roleCanViewFinalized(role) {
@@ -105,17 +110,24 @@ async function fetchPayrollRecord(executor, payrollId) {
   return rows[0] || null;
 }
 
-async function fetchLatestRecordedPayrollAuditHash(executor, payrollId) {
+async function fetchConfirmedPayrollHash(executor, payrollId, transactionHash = null) {
   const [rows] = await executor.execute(
-    `SELECT Payload_Hash, Transaction_Hash, Details, Status
+    `SELECT Audit_ID, Event_Type, Status, Transaction_Hash, Payload_Hash, Created_At
        FROM BLOCKCHAIN_AUDIT_LOG
       WHERE Payroll_ID = ?
-        AND Event_Type IN ('FINALIZE_RECORD','VERIFY_INTEGRITY')
-        AND Status IN ('RECORDED','VERIFIED')
         AND Payload_Hash IS NOT NULL
-      ORDER BY Created_At DESC, Audit_ID DESC
+        AND Status IN ('RECORDED', 'VERIFIED')
+        AND Event_Type IN ('FINALIZE_RECORD', 'VERIFY_INTEGRITY')
+      ORDER BY
+        CASE
+          WHEN Event_Type = 'FINALIZE_RECORD' AND Transaction_Hash = ? THEN 1
+          WHEN Event_Type = 'FINALIZE_RECORD' THEN 2
+          WHEN Event_Type = 'VERIFY_INTEGRITY' AND Transaction_Hash = ? THEN 3
+          ELSE 4
+        END,
+        Audit_ID DESC
       LIMIT 1`,
-    [payrollId]
+    [payrollId, transactionHash, transactionHash]
   );
   return rows[0] || null;
 }
@@ -284,19 +296,68 @@ async function verifyPayrollIntegrity(req, res) {
     }
 
     payrollHash = computePayrollHash(payroll);
+
+    if (normalizeStatus(payroll.Blockchain_Status) !== 'RECORDED' || !payroll.Transaction_Hash) {
+      await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_PENDING_ANCHOR [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', payroll.Employee_ID, {
+        payroll_id: payrollId,
+        computed_hash: payrollHash,
+        blockchain_status: payroll.Blockchain_Status,
+      });
+      await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', 'PENDING_ANCHOR', payroll.Transaction_Hash, payrollHash, {
+        message: 'Payroll has no recorded Fabric transaction yet.',
+        blockchain_status: payroll.Blockchain_Status,
+      });
+      return res.status(202).json({
+        status: 'pending_anchor',
+        message: 'Payroll has not been recorded on Fabric yet. Verification can run after anchoring is complete.',
+        payroll_id: String(payrollId),
+        computed_hash: payrollHash,
+        blockchain_status: payroll.Blockchain_Status,
+      });
+    }
+
+    const confirmedHash = await fetchConfirmedPayrollHash(pool, payrollId, payroll.Transaction_Hash);
+    if (confirmedHash?.Payload_Hash && normalizeHash(confirmedHash.Payload_Hash) !== normalizeHash(payrollHash)) {
+      await writeSystemAuditLog(pool, req, `CRITICAL_PAYROLL_TAMPERING_DETECTED [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_SECURITY', payroll.Employee_ID, {
+        payroll_id: payrollId,
+        computed_hash: payrollHash,
+        confirmed_hash: confirmedHash.Payload_Hash,
+        confirmed_hash_source: confirmedHash.Event_Type,
+        transaction_hash: payroll.Transaction_Hash,
+        result: 'CRITICAL',
+      });
+      await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', 'CRITICAL', payroll.Transaction_Hash, payrollHash, {
+        match: false,
+        blockchain_hash: confirmedHash.Payload_Hash,
+        supplied_hash: payrollHash,
+        source: 'LOCAL_CONFIRMED_HASH',
+        source_event: confirmedHash.Event_Type,
+        source_audit_id: confirmedHash.Audit_ID,
+        message: 'Current off-chain payroll hash differs from the previously recorded/verified hash.',
+      });
+      return res.status(409).json({
+        status: 'critical',
+        message: 'Tampering detected: current payroll data no longer matches the recorded blockchain evidence.',
+        payroll_id: String(payrollId),
+        computed_hash: payrollHash,
+        blockchain_hash: confirmedHash.Payload_Hash,
+      });
+    }
+
     let fabricResult;
     try {
       fabricResult = await verifyPayrollHashOnFabric(payrollId, payrollHash);
     } catch (error) {
       if (isFabricUnavailable(error)) {
-        const recordedAudit = await fetchLatestRecordedPayrollAuditHash(pool, payrollId);
-        if (recordedAudit?.Payload_Hash) {
-          const isLocalMatch = recordedAudit.Payload_Hash === payrollHash;
+        if (confirmedHash?.Payload_Hash) {
+          const isLocalMatch = normalizeHash(confirmedHash.Payload_Hash) === normalizeHash(payrollHash);
           const auditStatus = isLocalMatch ? 'VERIFIED' : 'CRITICAL';
           const localResult = {
-            mode: 'LOCAL_RECORDED_AUDIT_HASH',
-            blockchain_hash: recordedAudit.Payload_Hash,
-            transaction_hash: recordedAudit.Transaction_Hash,
+            mode: 'LOCAL_CONFIRMED_AUDIT_HASH',
+            blockchain_hash: confirmedHash.Payload_Hash,
+            transaction_hash: confirmedHash.Transaction_Hash,
+            source_event: confirmedHash.Event_Type,
+            source_audit_id: confirmedHash.Audit_ID,
             fabric_error: error.message,
           };
           await writeSystemAuditLog(pool, req, isLocalMatch
@@ -307,7 +368,8 @@ async function verifyPayrollIntegrity(req, res) {
             {
               payroll_id: payrollId,
               computed_hash: payrollHash,
-              recorded_hash: recordedAudit.Payload_Hash,
+              recorded_hash: confirmedHash.Payload_Hash,
+              recorded_hash_source: confirmedHash.Event_Type,
               result: auditStatus,
               fabric_error: error.message,
             });
@@ -319,7 +381,7 @@ async function verifyPayrollIntegrity(req, res) {
               message: 'Payroll record integrity verified against the recorded local blockchain audit hash.',
               payroll_id: String(payrollId),
               computed_hash: payrollHash,
-              blockchain_hash: recordedAudit.Payload_Hash,
+              blockchain_hash: confirmedHash.Payload_Hash,
             });
           }
 
@@ -328,23 +390,23 @@ async function verifyPayrollIntegrity(req, res) {
             message: 'Tampering detected: off-chain payroll record does not match blockchain ledger.',
             payroll_id: String(payrollId),
             computed_hash: payrollHash,
-            blockchain_hash: recordedAudit.Payload_Hash,
+            blockchain_hash: confirmedHash.Payload_Hash,
           });
         }
 
-        await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_PENDING_ANCHOR [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', payroll.Employee_ID, {
+        await writeSystemAuditLog(pool, req, `PAYROLL_INTEGRITY_SCAN_FABRIC_UNAVAILABLE [PAYROLL:${payrollId}]`, 'BLOCKCHAIN_INTEGRITY', payroll.Employee_ID, {
           payroll_id: payrollId,
           computed_hash: payrollHash,
           fabric_error: error.message,
         });
-        await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', 'PENDING_ANCHOR', payroll.Transaction_Hash, payrollHash, {
-          message: FABRIC_OFFLINE_MESSAGE,
+        await writeBlockchainAuditLog(pool, req, payrollId, 'VERIFY_INTEGRITY', 'FABRIC_UNAVAILABLE', payroll.Transaction_Hash, payrollHash, {
+          message: FABRIC_VERIFY_UNAVAILABLE_MESSAGE,
           fabric_error: error.message,
           fabric_code: error.code || null,
         });
-        return res.status(202).json({
-          status: 'pending_anchor',
-          message: FABRIC_OFFLINE_MESSAGE,
+        return res.status(503).json({
+          status: 'verification_unavailable',
+          message: FABRIC_VERIFY_UNAVAILABLE_MESSAGE,
           payroll_id: String(payrollId),
           computed_hash: payrollHash,
           blockchain_status: payroll.Blockchain_Status,
