@@ -164,6 +164,8 @@ assert(admin.includes("triggerType: 'SCHEDULED'"), 'Scheduled System Health chec
 assert(admin.includes('SYSTEM_HEALTH_REMEDIATION'), 'System Health modules must include remediation metadata.');
 assert(admin.includes('probable_cause'), 'System Health response must include probable cause.');
 assert(admin.includes('runbook_steps'), 'System Health response must include runbook steps.');
+assert(admin.includes('countRbacLevel4Roles'), 'RBAC health must count Level 4 roles through a dedicated detector.');
+assert(admin.includes('level4'), 'RBAC health must detect varchar access levels such as "Level 4".');
 assert(admin.includes('systemHealthHistoryRows'), 'System Health check responses must include current-run history rows.');
 assert(admin.includes('mergeSystemHealthHistoryRows'), 'System Health check responses must merge current-run and stored history.');
 assert(systemAdminScript.includes('health-detail-probable-cause'), 'System Health UI must render probable cause.');

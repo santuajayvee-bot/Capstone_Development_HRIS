@@ -1048,22 +1048,71 @@ async function checkAccountManagementHealth() {
   );
 }
 
+async function rbacLevel4RoleCondition(rolesTable, alias = '') {
+  if (!rolesTable) return '1 = 0';
+  const prefix = alias ? `${alias}.` : '';
+  const conditions = [];
+  if (await hasColumn(rolesTable, 'access_level')) {
+    conditions.push(`LOWER(REPLACE(REPLACE(TRIM(CAST(${prefix}access_level AS CHAR)), ' ', ''), '_', '')) IN ('4','level4','l4')`);
+  }
+  if (await hasColumn(rolesTable, 'name')) {
+    conditions.push(`LOWER(${prefix}name) IN ('system_admin','sys_admin','admin','administrator')`);
+  }
+  if (await hasColumn(rolesTable, 'label')) {
+    conditions.push(`LOWER(CAST(${prefix}label AS CHAR)) IN ('system admin','system administrator','administrator')`);
+    conditions.push(`LOWER(CAST(${prefix}label AS CHAR)) LIKE '%system%admin%'`);
+  }
+  return conditions.length ? conditions.join(' OR ') : '1 = 0';
+}
+
+async function countRbacLevel4Roles(rolesTable) {
+  if (!rolesTable) return 0;
+  const condition = await rbacLevel4RoleCondition(rolesTable);
+  return countIfTable(rolesTable, `WHERE ${condition}`);
+}
+
+async function countRbacLevel4Users(usersTable, rolesTable) {
+  if (!usersTable || !rolesTable || !isSafeIdentifier(usersTable) || !isSafeIdentifier(rolesTable)) return 0;
+  const hasRoleId = await hasColumn(usersTable, 'role_id');
+  const hasRolePk = await hasColumn(rolesTable, 'id');
+  if (!hasRoleId || !hasRolePk) return 0;
+  const activeClause = await hasColumn(usersTable, 'is_active') ? 'AND u.is_active = 1' : '';
+  const condition = await rbacLevel4RoleCondition(rolesTable, 'r');
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS count
+       FROM ${usersTable} u
+       JOIN ${rolesTable} r ON r.id = u.role_id
+      WHERE (${condition})
+        ${activeClause}`
+  );
+  return Number(rows[0]?.count || 0);
+}
+
 async function checkRbacHealth() {
   const usersTable = await firstExistingTable(['users']);
   const rolesTable = await firstExistingTable(['roles']);
   const permissionsTable = await firstExistingTable(['permissions']);
   const rolePermissionsTable = await firstExistingTable(['role_permissions']);
   const roles = await countIfTable(rolesTable);
-  const level4Roles = rolesTable && await hasColumn(rolesTable, 'access_level')
-    ? await countIfTable(rolesTable, 'WHERE access_level = 4')
-    : await countIfTable(rolesTable, "WHERE name IN ('system_admin','admin')");
+  const level4Roles = await countRbacLevel4Roles(rolesTable);
+  const level4Users = await countRbacLevel4Users(usersTable, rolesTable);
   const hasCore = Boolean(usersTable && rolesTable);
-  const status = hasCore && level4Roles > 0 ? 'ONLINE' : hasCore ? 'WARNING' : 'OFFLINE';
+  const hasPermissionMapping = Boolean(permissionsTable && rolePermissionsTable);
+  const status = !hasCore
+    ? 'OFFLINE'
+    : level4Roles === 0 || !hasPermissionMapping
+      ? 'WARNING'
+      : 'ONLINE';
+  const remarks = !hasCore
+    ? 'RBAC core tables are unavailable.'
+    : level4Roles === 0
+      ? 'RBAC core tables are reachable, but no Level 4 administrator role was found.'
+      : !hasPermissionMapping
+        ? 'RBAC roles are reachable, but permission catalog or role-permission mapping is incomplete.'
+        : 'RBAC roles, administrator role mapping, and permission tables are reachable.';
   return healthResult(
     status,
-    status === 'ONLINE'
-      ? 'RBAC roles and administrator role mapping are reachable.'
-      : 'RBAC core tables are incomplete or no Level 4 role was found.',
+    remarks,
     {
       dependencies: {
         users: await tableDependency(usersTable, 'User role assignments'),
@@ -1072,6 +1121,7 @@ async function checkRbacHealth() {
         role_permissions: await tableDependency(rolePermissionsTable, 'Role permissions'),
         role_count: { label: 'Roles', count: roles },
         level4_roles: { label: 'Level 4 roles', count: level4Roles },
+        active_level4_users: { label: 'Active Level 4 users', count: level4Users },
       },
     }
   );
