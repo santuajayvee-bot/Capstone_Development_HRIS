@@ -114,6 +114,7 @@
       <select id="audit-module-filter" class="sysadmin-select" onchange="loadAuditLog()">
         <option value="">All Modules</option>
         <option value="SYSTEM">System</option>
+        <option value="SYSTEM_HEALTH">System Health</option>
         <option value="AUTH">Authentication</option>
         <option value="RBAC">RBAC</option>
         <option value="RBAC_SECURITY">Security Events</option>
@@ -180,8 +181,16 @@
       <small id="health-last-updated" class="sysadmin-muted">Last checked: -</small>
     </div>
     <div class="support-row-actions">
-      <button class="btn-sysadmin-primary" onclick="runSystemHealthCheck()">Run Health Check</button>
-      <button class="btn-sysadmin-outline" onclick="loadSystemHealth()">Refresh</button>
+      <button type="button" class="btn-sysadmin-primary" id="health-run-check-btn" data-health-action="run-all">Run Health Check</button>
+      <button type="button" class="btn-sysadmin-outline" id="health-refresh-btn" data-health-action="refresh">Refresh</button>
+    </div>
+  </div>
+
+  <div class="health-run-status" id="health-run-status" hidden aria-live="polite">
+    <span class="health-run-spinner" aria-hidden="true"></span>
+    <div>
+      <strong id="health-run-title">Running health check...</strong>
+      <small id="health-run-detail">Please wait while the system checks module dependencies.</small>
     </div>
   </div>
 
@@ -209,6 +218,30 @@
     <div class="table-empty">Loading system health...</div>
   </div>
 
+  <div class="sysadmin-settings-card health-history-card">
+    <div class="sysadmin-action-bar health-history-header">
+      <h4 class="support-card-title">Recent Health Check History</h4>
+      <button class="btn-sysadmin-outline" onclick="loadSystemHealthHistory()">Refresh History</button>
+    </div>
+    <div class="sysadmin-table-wrapper health-history-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Checked</th>
+            <th>Module</th>
+            <th>Status</th>
+            <th>Trigger</th>
+            <th>Response</th>
+            <th>Remarks</th>
+          </tr>
+        </thead>
+        <tbody id="health-history-tbody">
+          <tr><td colspan="6" class="table-empty">No health check history loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="support-two-column health-legacy-grid">
     <div class="sysadmin-settings-card">
       <h4 class="support-card-title">Runtime</h4>
@@ -223,32 +256,66 @@
 
 <div class="sysadmin-modal-overlay" id="health-detail-modal" style="display:none;">
   <div class="sysadmin-modal health-detail-dialog">
-    <div class="modal-header">
-      <h3 id="health-detail-title">Module Health</h3>
-      <button class="modal-close" onclick="closeSystemHealthDetails()">&times;</button>
+    <div class="modal-header health-detail-header">
+      <div>
+        <span class="health-detail-eyebrow">System Health Module</span>
+        <h3 id="health-detail-title">Module Health</h3>
+      </div>
+      <button class="modal-close health-detail-close" onclick="closeSystemHealthDetails()" aria-label="Close">&times;</button>
     </div>
-    <div class="modal-body">
+    <div class="modal-body health-detail-body">
       <div class="health-detail-hero">
         <div>
           <span id="health-detail-status" class="badge-clear">-</span>
           <p id="health-detail-remarks">-</p>
         </div>
-        <button class="btn-sysadmin-outline" id="health-detail-check-btn" onclick="">Check Module</button>
+        <button type="button" class="btn-sysadmin-outline" id="health-detail-check-btn" data-health-action="check-module">Check Module</button>
       </div>
-      <div class="support-kv-list">
+      <div class="support-kv-list health-detail-metrics">
         <div class="support-kv-row"><span>Last Checked</span><strong id="health-detail-last-checked">-</strong></div>
         <div class="support-kv-row"><span>Last Success</span><strong id="health-detail-last-success">-</strong></div>
         <div class="support-kv-row"><span>Last Failure</span><strong id="health-detail-last-failure">-</strong></div>
         <div class="support-kv-row"><span>Response Time</span><strong id="health-detail-response">-</strong></div>
-        <div class="support-kv-row"><span>Endpoint / Check</span><strong id="health-detail-endpoint">-</strong></div>
-        <div class="support-kv-row"><span>Error</span><strong id="health-detail-error">-</strong></div>
+        <div class="support-kv-row health-detail-wide"><span>Endpoint / Check</span><strong id="health-detail-endpoint">-</strong></div>
+        <div class="support-kv-row health-detail-wide"><span>Error</span><strong id="health-detail-error">-</strong></div>
       </div>
-      <h4 class="support-card-title health-detail-section-title">Dependencies</h4>
-      <div id="health-detail-dependencies" class="health-dependency-list"></div>
-      <h4 class="support-card-title health-detail-section-title">Recent Logs</h4>
-      <div id="health-detail-logs" class="health-log-list"></div>
-      <h4 class="support-card-title health-detail-section-title">Recommended Action</h4>
-      <p id="health-detail-action" class="health-detail-action">-</p>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Dependencies</h4>
+        <div id="health-detail-dependencies" class="health-dependency-list"></div>
+      </div>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Diagnosis</h4>
+        <div class="health-remediation-grid">
+          <div class="health-remediation-item">
+            <span>Affected Area</span>
+            <p id="health-detail-affected-area">-</p>
+          </div>
+          <div class="health-remediation-item">
+            <span>Probable Cause</span>
+            <p id="health-detail-probable-cause">-</p>
+          </div>
+          <div class="health-remediation-item">
+            <span>Admin Action</span>
+            <p id="health-detail-admin-action">-</p>
+          </div>
+        </div>
+      </div>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Drilldown Actions</h4>
+        <div id="health-detail-drilldowns" class="health-drilldown-grid"></div>
+      </div>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Recommended Action</h4>
+        <p id="health-detail-action" class="health-detail-action">-</p>
+      </div>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Runbook Steps</h4>
+        <ol id="health-detail-runbook" class="health-runbook-list"></ol>
+      </div>
+      <div class="health-detail-section">
+        <h4 class="support-card-title health-detail-section-title">Recent Logs</h4>
+        <div id="health-detail-logs" class="health-log-list"></div>
+      </div>
     </div>
   </div>
 </div>

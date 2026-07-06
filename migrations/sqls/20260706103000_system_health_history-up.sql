@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS system_health_check_history (
+  history_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  run_id VARCHAR(64) NOT NULL,
+  module_key VARCHAR(80) NOT NULL,
+  module_name VARCHAR(160) NOT NULL,
+  status ENUM('ONLINE','WARNING','OFFLINE','MAINTENANCE') NOT NULL DEFAULT 'WARNING',
+  remarks VARCHAR(500) NULL,
+  response_time_ms INT NULL,
+  endpoint_checked VARCHAR(255) NULL,
+  dependency_status TEXT NULL,
+  error_message VARCHAR(500) NULL,
+  trigger_type ENUM('MANUAL','SCHEDULED') NOT NULL DEFAULT 'MANUAL',
+  checked_by BIGINT NULL,
+  checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_system_health_history_run (run_id, checked_at),
+  INDEX idx_system_health_history_module_time (module_key, checked_at),
+  INDEX idx_system_health_history_status_time (status, checked_at),
+  INDEX idx_system_health_history_checked_at (checked_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

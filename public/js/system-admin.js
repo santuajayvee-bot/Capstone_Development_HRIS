@@ -7,17 +7,23 @@
 let sysAllUsers     = [];
 let sysAllRoles     = [];
 let sysAllEmployees = [];
+let sysAccountStats = null;
 let sysSupportTickets = [];
 let sysBackupLogs = [];
 let sysHealthSnapshot = null;
 let sysHealthModules = [];
+let sysHealthHistory = [];
 let sysHealthSelectedModuleKey = null;
+let sysHealthCheckRunning = false;
+let sysHealthRunningModuleKey = null;
+let sysHealthButtonsBound = false;
 let sysCurrentStep  = 1;
 let sysAccountRealtimeTimer = null;
 let sysUsersDataSignature = '';
 let sysEmployeesDataSignature = '';
 let sysAuditRequestController = null;
 let sysAuditRequestId = 0;
+let sysUsersLoading = false;
 
 const SYS_ROLE_DISPLAY_OVERRIDES = {
   hr_admin: {
@@ -316,6 +322,35 @@ function bindAccountActionButtons() {
 }
 
 // ── Tab Switching ────────────────────────────────────────────
+function bindSystemHealthButtons() {
+  if (sysHealthButtonsBound) return;
+  sysHealthButtonsBound = true;
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-health-action]');
+    if (!button || button.disabled) return;
+    const action = button.dataset.healthAction;
+    const moduleKey = button.dataset.moduleKey;
+
+    if (action === 'run-all') {
+      event.preventDefault();
+      runSystemHealthCheck();
+    } else if (action === 'refresh') {
+      event.preventDefault();
+      loadSystemHealth();
+    } else if (action === 'details') {
+      event.preventDefault();
+      if (moduleKey) openSystemHealthDetails(moduleKey);
+    } else if (action === 'check-module') {
+      event.preventDefault();
+      if (moduleKey) runSystemModuleHealthCheck(moduleKey);
+    } else if (action === 'drilldown') {
+      event.preventDefault();
+      if (moduleKey) runSystemHealthDrilldownAction(moduleKey, button.dataset.actionId);
+    }
+  });
+}
+
 const SYS_ADMIN_TAB_TITLES = {
   accounts: 'Account Management',
   roles: 'Role and Access Control',
@@ -326,20 +361,108 @@ const SYS_ADMIN_TAB_TITLES = {
 };
 
 const SYS_HEALTH_FALLBACK_MODULES = [
+  ['dashboard', 'Dashboard', '/api/dashboard'],
   ['authentication', 'Authentication / Login', '/api/auth/login'],
+  ['dpa_privacy', 'Data Privacy Agreement', '/api/dpa/status'],
   ['account_management', 'Account Management', '/api/admin/users'],
   ['rbac', 'Role and Access Control', '/api/admin/roles'],
   ['employee_201', 'Employee / 201-File Management', '/api/employees'],
+  ['organization_setup', 'Organization Setup', '/api/employee-setup/lookups'],
+  ['onboarding', 'Onboarding / Recruitment', '/api/onboarding/dashboard'],
   ['attendance', 'Attendance', '/api/attendance/all'],
   ['attendance_sync', 'Attendance Sync', '/api/biometric/status'],
-  ['leave', 'Leave Management', '/api/leaves'],
-  ['payroll', 'Payroll Computation', '/api/payroll'],
-  ['payslip', 'Payslip Generation', '/api/payslips'],
+  ['leave', 'Leave Management', '/api/leave'],
+  ['operational_logs', 'Operational Logs', '/api/payroll/piece-rate-config / /api/payroll/logistics/trips'],
+  ['payroll_settings', 'Payroll Settings', '/api/payroll/deduction-settings'],
+  ['payroll', 'Payroll Computation', '/api/payroll/salary-calculations'],
+  ['payroll_approval', 'Payroll Approval', '/api/payroll/runs'],
+  ['payslip', 'Payslip Generation', '/api/payroll/payslips'],
+  ['reports', 'Reports', '/api/reports/library'],
+  ['self_service', 'Employee Self-Service', '/api/self-service/profile'],
   ['audit_trail', 'Audit Trail', '/api/admin/audit-log'],
   ['blockchain', 'Blockchain Support', '/api/admin/blockchain-support/status'],
+  ['support_center', 'Support Center', '/api/admin/support-tickets'],
   ['backup_restore', 'Backup and Restore', '/api/admin/backups'],
+  ['aws_readiness', 'AWS Deployment Readiness', 'Environment / EC2-RDS-S3 readiness'],
   ['database', 'Database', 'MySQL SELECT 1'],
 ];
+
+const SYS_HEALTH_AUDIT_MODULES = {
+  dashboard: 'SYSTEM',
+  authentication: 'AUTH',
+  dpa_privacy: 'SYSTEM',
+  account_management: 'ACCOUNT_LIFECYCLE',
+  rbac: 'RBAC',
+  employee_201: '201_FILE',
+  organization_setup: 'EMPLOYEE',
+  onboarding: 'ONBOARDING',
+  attendance: 'ATTENDANCE',
+  attendance_sync: 'ATTENDANCE',
+  leave: 'LEAVE',
+  operational_logs: 'PAYROLL',
+  payroll_settings: 'PAYROLL',
+  payroll: 'PAYROLL',
+  payroll_approval: 'PAYROLL',
+  payslip: 'PAYROLL',
+  reports: 'REPORTS',
+  self_service: 'SELF_SERVICE',
+  audit_trail: 'SYSTEM_HEALTH',
+  blockchain: 'BLOCKCHAIN',
+  support_center: 'SYSTEM_HEALTH',
+  backup_restore: 'SYSTEM',
+  aws_readiness: 'SYSTEM_HEALTH',
+  database: 'SYSTEM_HEALTH',
+};
+
+const SYS_HEALTH_SUPPORT_CATEGORIES = {
+  authentication: 'AUTHENTICATION',
+  dpa_privacy: 'SECURITY',
+  account_management: 'ACCOUNT',
+  rbac: 'SECURITY',
+  attendance_sync: 'BIOMETRIC',
+  payroll: 'PAYROLL_PROCESS',
+  payroll_settings: 'PAYROLL_PROCESS',
+  payroll_approval: 'PAYROLL_PROCESS',
+  operational_logs: 'PAYROLL_PROCESS',
+  payslip: 'PAYROLL_PROCESS',
+  reports: 'REPORTING',
+  blockchain: 'BLOCKCHAIN',
+  aws_readiness: 'SYSTEM',
+  database: 'SYSTEM',
+};
+
+const SYS_HEALTH_RELATED_NAV = {
+  dashboard: [{ id: 'open-dashboard', label: 'Open Dashboard', icon: 'bi-speedometer2', page: 'dashboard' }],
+  authentication: [{ id: 'open-accounts', label: 'Open Accounts', icon: 'bi-people', page: 'system-admin', params: { sysAdminTab: 'accounts' } }],
+  dpa_privacy: [{ id: 'open-dpa-audit', label: 'Open DPA Audit', icon: 'bi-shield-lock', type: 'audit', auditModule: 'SYSTEM', search: 'DPA' }],
+  account_management: [{ id: 'open-accounts', label: 'Open Accounts', icon: 'bi-people', page: 'system-admin', params: { sysAdminTab: 'accounts' } }],
+  rbac: [{ id: 'open-rbac', label: 'Open RBAC', icon: 'bi-shield-check', page: 'system-admin', params: { sysAdminTab: 'roles' } }],
+  employee_201: [{ id: 'open-employees', label: 'Open Employees', icon: 'bi-person-vcard', page: 'employees' }],
+  organization_setup: [{ id: 'open-org-setup', label: 'Open Org Setup', icon: 'bi-diagram-3', page: 'organization-setup' }],
+  onboarding: [{ id: 'open-onboarding', label: 'Open Onboarding', icon: 'bi-person-plus', page: 'onboarding' }],
+  attendance: [{ id: 'open-attendance', label: 'Open Attendance', icon: 'bi-clock-history', page: 'attendance' }],
+  attendance_sync: [{ id: 'open-attendance-sync', label: 'Open Attendance Sync', icon: 'bi-fingerprint', page: 'attendance', params: { attTab: 'biometric' } }],
+  leave: [{ id: 'open-leave', label: 'Open Leave', icon: 'bi-calendar-check', page: 'leave' }],
+  operational_logs: [
+    { id: 'open-payroll-encoding', label: 'Open Payroll Encoding', icon: 'bi-pencil-square', page: 'payroll', params: { payrollTab: 'salary' } },
+    { id: 'open-logistics-trips', label: 'Open Logistics Trips', icon: 'bi-truck', page: 'payroll', params: { payrollTab: 'logistics' } },
+  ],
+  payroll_settings: [
+    { id: 'open-deductions', label: 'Open Deductions', icon: 'bi-sliders', page: 'payroll', params: { payrollTab: 'deductions' } },
+    { id: 'open-piece-rate', label: 'Open Piece Rate', icon: 'bi-grid-3x3-gap', page: 'payroll', params: { payrollTab: 'piece-config' } },
+  ],
+  payroll: [{ id: 'open-payroll-run', label: 'Open Payroll Run', icon: 'bi-cash-stack', page: 'payroll', params: { payrollTab: 'run' } }],
+  payroll_approval: [{ id: 'open-payroll-run', label: 'Open Payroll Run', icon: 'bi-check2-square', page: 'payroll', params: { payrollTab: 'run' } }],
+  payslip: [{ id: 'open-payslips', label: 'Open Payslips', icon: 'bi-receipt', page: 'payroll', params: { payrollTab: 'records' } }],
+  reports: [{ id: 'open-reports', label: 'Open Reports', icon: 'bi-file-earmark-bar-graph', page: 'reports' }],
+  self_service: [{ id: 'open-self-service', label: 'Open Self-Service', icon: 'bi-person-circle', page: 'self-service' }],
+  audit_trail: [{ id: 'open-audit', label: 'Open Audit Trail', icon: 'bi-journal-text', page: 'system-admin', params: { sysAdminTab: 'audit' } }],
+  blockchain: [{ id: 'open-blockchain-support', label: 'Open Blockchain Support', icon: 'bi-shield-check', page: 'blockchain', params: { blockchainView: 'support' } }],
+  support_center: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-inbox', page: 'system-admin', params: { sysAdminTab: 'support' } }],
+  backup_restore: [{ id: 'open-backups', label: 'Open Backups', icon: 'bi-archive', page: 'system-admin', params: { sysAdminTab: 'backups' } }],
+  aws_readiness: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-inbox', page: 'system-admin', params: { sysAdminTab: 'support' } }],
+  database: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-database', page: 'system-admin', params: { sysAdminTab: 'support' } }],
+};
 
 function switchSysAdminTab(tabId, el, options = {}) {
   const targetTab = SYS_ADMIN_TAB_TITLES[tabId] ? tabId : 'accounts';
@@ -373,6 +496,7 @@ function switchSysAdminTab(tabId, el, options = {}) {
 // ── Initialize on navigation ────────────────────────────────
 function initSystemAdmin() {
   bindAccountActionButtons();
+  bindSystemHealthButtons();
   loadRolesList();
 
   const activeTab =
@@ -406,8 +530,10 @@ function initSystemAdminIfActive() {
 // ═══════════════════════════════════════════════════════════════
 
 async function loadUsersTable() {
+  if (sysUsersLoading) return;
+  sysUsersLoading = true;
   try {
-    const res = await apiFetch('/api/admin/users');
+    const res = await apiFetch('/api/admin/users?include_stats=1');
     if (!res || !res.ok) {
       console.error('Failed to load users');
       return;
@@ -415,31 +541,25 @@ async function loadUsersTable() {
     // Names are decrypted by the authorized server response. This is only a
     // display safeguard so an unexpected protected database value is never
     // rendered or retained in the screen's account-list state.
-    const nextUsers = (await res.json()).map(sysProtectEmployeeIdentity);
+    const payload = await res.json();
+    const rawUsers = Array.isArray(payload) ? payload : (Array.isArray(payload?.users) ? payload.users : []);
+    const nextUsers = rawUsers.map(sysProtectEmployeeIdentity);
     const nextUsersSignature = sysUserDataSignature(nextUsers);
     const usersChanged = nextUsersSignature !== sysUsersDataSignature;
     sysAllUsers = nextUsers;
+    sysAccountStats = payload?.stats || null;
     populateSupportUserSelect();
 
-    // Also load employees for the unlinked count
-    const empRes = await apiFetch('/api/employees');
-    let employeesChanged = false;
-    if (empRes && empRes.ok) {
-      const nextEmployees = await empRes.json();
-      const nextEmployeesSignature = sysEmployeeDataSignature(nextEmployees);
-      employeesChanged = nextEmployeesSignature !== sysEmployeesDataSignature;
-      sysAllEmployees = nextEmployees;
-      sysEmployeesDataSignature = nextEmployeesSignature;
-    }
-
     const needsInitialRender = document.getElementById('users-tbody')?.dataset.sysRendered !== 'true';
-    if (usersChanged || employeesChanged || needsInitialRender) updateStats();
+    if (usersChanged || needsInitialRender || sysAccountStats) updateStats();
     if (usersChanged || needsInitialRender) {
       sysUsersDataSignature = nextUsersSignature;
       filterUserTable();
     }
   } catch (err) {
     console.error('[SysAdmin] loadUsersTable error:', err);
+  } finally {
+    sysUsersLoading = false;
   }
 }
 
@@ -451,7 +571,7 @@ function startAccountRealtime() {
     if (panel?.classList.contains('active') && !modalOpen) {
       loadUsersTable();
     }
-  }, 5000);
+  }, 30000);
 }
 
 function stopAccountRealtime() {
@@ -462,12 +582,12 @@ function stopAccountRealtime() {
 }
 
 function updateStats() {
-  const total    = sysAllUsers.length;
-  const active   = sysAllUsers.filter(u => u.is_active).length;
-  const inactive = total - active;
-  const locked   = sysAllUsers.filter(isUserLocked).length;
+  const total    = Number(sysAccountStats?.total ?? sysAllUsers.length);
+  const active   = Number(sysAccountStats?.active ?? sysAllUsers.filter(u => u.is_active).length);
+  const inactive = Number(sysAccountStats?.inactive ?? (total - active));
+  const locked   = Number(sysAccountStats?.locked ?? sysAllUsers.filter(isUserLocked).length);
   const linkedIds = sysAllUsers.map(u => u.employee_id).filter(Boolean);
-  const unlinked  = sysAllEmployees.filter(e => !linkedIds.includes(e.id)).length;
+  const unlinked  = Number(sysAccountStats?.unlinked_employees ?? sysAllEmployees.filter(e => !linkedIds.includes(e.id)).length);
 
   document.getElementById('stat-total-users').textContent     = total;
   document.getElementById('stat-active-users').textContent    = active;
@@ -702,7 +822,7 @@ async function loadAuditLog() {
     const module = document.getElementById('audit-module-filter')?.value || '';
     const eventType = document.getElementById('audit-action-filter')?.value || '';
     const search = document.getElementById('audit-search')?.value?.trim() || '';
-    const params = new URLSearchParams({ limit: '100' });
+    const params = new URLSearchParams({ limit: '50' });
     if (module) params.set('module', module);
     if (eventType) params.set('event_type', eventType);
     if (search) params.set('search', search);
@@ -968,6 +1088,16 @@ function renderAuditLog(logs) {
 // REGISTRATION MODAL
 // ═══════════════════════════════════════════════════════════════
 
+async function ensureSysAdminEmployeesLoaded() {
+  if (sysAllEmployees.length) return;
+  const empRes = await apiFetch('/api/employees');
+  if (!empRes || !empRes.ok) throw new Error('Failed to load employee directory.');
+  const nextEmployees = await empRes.json();
+  const nextEmployeesSignature = sysEmployeeDataSignature(nextEmployees);
+  sysAllEmployees = nextEmployees;
+  sysEmployeesDataSignature = nextEmployeesSignature;
+}
+
 async function showRegisterModal() {
   sysCurrentStep = 1;
   updateStepUI();
@@ -983,6 +1113,14 @@ async function showRegisterModal() {
 
   // Populate employee dropdown (only unlinked employees)
   const empSelect = document.getElementById('reg-employee-id');
+  empSelect.innerHTML = '<option value="">Loading employees...</option>';
+  try {
+    await ensureSysAdminEmployeesLoaded();
+  } catch (error) {
+    empSelect.innerHTML = '<option value="">Unable to load employee directory</option>';
+    showSysToast(error.message || 'Failed to load employee directory.', 'error');
+    return;
+  }
   const linkedIds = sysAllUsers.map(u => u.employee_id).filter(Boolean);
   
   empSelect.innerHTML = '<option value="">— Choose an employee —</option>' +
@@ -1432,6 +1570,14 @@ function buildSystemHealthFallbackModules(reason = '') {
     last_success_at: null,
     last_failure_at: null,
     recommended_action: 'Stop the current npm start process, start it again, then press Run Health Check.',
+    affected_area: 'System Health diagnostics endpoint and module detail loading.',
+    probable_cause: 'The browser loaded updated static files, but the running Node process has not loaded the new backend routes.',
+    admin_action: 'Restart npm start, run migrations if needed, then refresh the browser.',
+    runbook_steps: [
+      'Stop the current npm start process.',
+      'Run npm run migrate.',
+      'Start npm start again and hard refresh the browser.',
+    ],
     recent_logs: [],
   }));
 }
@@ -1445,6 +1591,50 @@ function summarizeHealthModules(modules) {
   return summary;
 }
 
+function setSystemHealthRunning(isRunning, options = {}) {
+  sysHealthCheckRunning = Boolean(isRunning);
+  sysHealthRunningModuleKey = sysHealthCheckRunning ? (options.moduleKey || null) : null;
+  renderSystemHealthRunningState(options);
+}
+
+function renderSystemHealthRunningState(options = {}) {
+  const statusBox = document.getElementById('health-run-status');
+  const title = document.getElementById('health-run-title');
+  const detail = document.getElementById('health-run-detail');
+  const runButton = document.getElementById('health-run-check-btn');
+  const refreshButton = document.getElementById('health-refresh-btn');
+  const grid = document.getElementById('health-module-grid');
+  const runningModule = sysHealthRunningModuleKey
+    ? sysHealthModules.find(module => module.module_key === sysHealthRunningModuleKey)
+    : null;
+  const titleText = options.title || (runningModule
+    ? `Checking ${runningModule.module_name}...`
+    : 'Running full system health check...');
+  const detailText = options.detail || (runningModule
+    ? 'Please wait while this module dependency check completes.'
+    : 'Please wait while the system checks all module dependencies.');
+
+  if (statusBox) statusBox.hidden = !sysHealthCheckRunning;
+  if (title) title.textContent = titleText;
+  if (detail) detail.textContent = detailText;
+  if (runButton) {
+    runButton.disabled = sysHealthCheckRunning;
+    runButton.textContent = sysHealthCheckRunning ? 'Running...' : 'Run Health Check';
+  }
+  if (refreshButton) refreshButton.disabled = sysHealthCheckRunning;
+  if (grid) grid.setAttribute('aria-busy', sysHealthCheckRunning ? 'true' : 'false');
+
+  document.querySelectorAll('[data-health-action="check-module"]').forEach(button => {
+    button.disabled = sysHealthCheckRunning;
+    button.textContent = sysHealthCheckRunning && (!sysHealthRunningModuleKey || button.dataset.moduleKey === sysHealthRunningModuleKey)
+      ? 'Checking...'
+      : 'Check Module';
+  });
+  document.querySelectorAll('.health-module-card').forEach(card => {
+    card.classList.toggle('is-checking', sysHealthCheckRunning && card.dataset.moduleKey === sysHealthRunningModuleKey);
+  });
+}
+
 async function loadSystemHealth() {
   try {
     const res = await apiFetch('/api/admin/system-health');
@@ -1454,6 +1644,11 @@ async function loadSystemHealth() {
     sysHealthModules = Array.isArray(data.modules) && data.modules.length
       ? data.modules
       : buildSystemHealthFallbackModules();
+    if (Array.isArray(data.history) && data.history.length) {
+      sysHealthHistory = mergeSystemHealthHistory(data.history, sysHealthHistory);
+    } else if (!sysHealthHistory.length) {
+      sysHealthHistory = [];
+    }
     if (!data.summary || !Array.isArray(data.modules) || !data.modules.length) {
       sysHealthSnapshot.summary = summarizeHealthModules(sysHealthModules);
     }
@@ -1507,6 +1702,9 @@ function healthDependencyValue(value) {
   if (Object.prototype.hasOwnProperty.call(value, 'latency_ms')) parts.push(`${value.latency_ms} ms`);
   if (value.table) parts.push(`Table: ${value.table}`);
   if (value.status) parts.push(`Status: ${value.status}`);
+  if (value.source) parts.push(`Source: ${value.source}`);
+  if (value.mode) parts.push(`Mode: ${value.mode}`);
+  if (value.classification) parts.push(`Type: ${value.classification}`);
   if (value.reference) parts.push(`Ref: ${value.reference}`);
   if (value.target) parts.push(`Target: ${value.target}`);
   if (value.value) parts.push(sysFormatDateTime(value.value));
@@ -1524,6 +1722,52 @@ function renderSystemHealthDashboard() {
   sysSetText('health-count-maintenance', Number(summary.maintenance || 0));
   sysSetText('health-last-updated', `Last checked: ${sysFormatDateTime(sysHealthSnapshot?.generated_at)}`);
   renderSystemHealthModules();
+  renderSystemHealthHistory();
+}
+
+function systemHealthHistoryKey(row) {
+  return [
+    row?.run_id || '',
+    row?.module_key || '',
+    row?.checked_at || '',
+    row?.status || '',
+  ].join('|');
+}
+
+function mergeSystemHealthHistory(newRows = [], existingRows = []) {
+  const seen = new Set();
+  return [...newRows, ...existingRows].filter(row => {
+    if (!row) return false;
+    const key = systemHealthHistoryKey(row);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 30);
+}
+
+function healthHistoryRowsFromModules(modules = [], checkedAt = null) {
+  const rows = Array.isArray(modules) ? modules : [modules].filter(Boolean);
+  const runId = `client-${checkedAt || Date.now()}`;
+  return rows.filter(Boolean).map(module => ({
+    history_id: null,
+    run_id: runId,
+    module_key: module.module_key,
+    module_name: module.module_name,
+    status: module.status,
+    remarks: module.remarks,
+    response_time_ms: module.response_time_ms,
+    endpoint_checked: module.endpoint_checked,
+    error_message: module.error_message,
+    trigger_type: 'MANUAL',
+    checked_at: module.last_checked_at || checkedAt || new Date().toISOString(),
+  }));
+}
+
+function applySystemHealthHistory(incomingHistory, fallbackModules = [], checkedAt = null) {
+  const incomingRows = Array.isArray(incomingHistory) ? incomingHistory : [];
+  const currentRows = incomingRows.length ? incomingRows : healthHistoryRowsFromModules(fallbackModules, checkedAt);
+  if (!currentRows.length) return;
+  sysHealthHistory = mergeSystemHealthHistory(currentRows, sysHealthHistory);
 }
 
 function filterSystemHealthModules() {
@@ -1543,6 +1787,9 @@ function renderSystemHealthModules() {
       module.remarks,
       module.endpoint_checked,
       module.recommended_action,
+      module.affected_area,
+      module.probable_cause,
+      module.admin_action,
     ].join(' ').toLowerCase();
     return (!statusFilter || status === statusFilter) && (!search || haystack.includes(search));
   });
@@ -1551,10 +1798,12 @@ function renderSystemHealthModules() {
     return;
   }
   grid.innerHTML = modules.map(module => {
-    const keyArg = sysJsString(module.module_key);
+    const keyAttr = sysEsc(module.module_key);
     const status = String(module.status || 'WARNING').toLowerCase();
+    const checkingClass = sysHealthCheckRunning && sysHealthRunningModuleKey === module.module_key ? ' is-checking' : '';
+    const checkLabel = sysHealthCheckRunning && (!sysHealthRunningModuleKey || sysHealthRunningModuleKey === module.module_key) ? 'Checking...' : 'Check Module';
     return `
-      <article class="health-module-card health-module-${sysEsc(status)}">
+      <article class="health-module-card health-module-${sysEsc(status)}${checkingClass}" data-module-key="${keyAttr}">
         <div class="health-module-card-head">
           <div>
             <h4>${sysEsc(module.module_name)}</h4>
@@ -1570,12 +1819,221 @@ function renderSystemHealthModules() {
           <strong>${module.response_time_ms === null || module.response_time_ms === undefined ? '-' : `${Number(module.response_time_ms)} ms`}</strong>
         </div>
         <div class="support-row-actions">
-          <button class="btn-sysadmin-sm" onclick="openSystemHealthDetails(${keyArg})">View Details</button>
-          <button class="btn-sysadmin-sm" onclick="runSystemModuleHealthCheck(${keyArg})">Check Module</button>
+          <button type="button" class="btn-sysadmin-sm" data-health-action="details" data-module-key="${keyAttr}">View Details</button>
+          <button type="button" class="btn-sysadmin-sm" data-health-action="check-module" data-module-key="${keyAttr}" ${sysHealthCheckRunning ? 'disabled' : ''}>${checkLabel}</button>
         </div>
       </article>
     `;
   }).join('');
+  renderSystemHealthRunningState();
+}
+
+function renderSystemHealthHistory() {
+  const tbody = document.getElementById('health-history-tbody');
+  if (!tbody) return;
+  if (!sysHealthHistory.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No health check history yet. Run a health check to create the first entries.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysHealthHistory.slice(0, 30).map(row => `
+    <tr>
+      <td><small>${sysEsc(sysFormatDateTime(row.checked_at))}</small></td>
+      <td><strong>${sysEsc(row.module_name || row.module_key || '-')}</strong></td>
+      <td>${sysHealthStatusBadge(row.status)}</td>
+      <td><small>${sysEsc(row.trigger_type || 'MANUAL')}</small></td>
+      <td><small>${row.response_time_ms === null || row.response_time_ms === undefined ? '-' : `${Number(row.response_time_ms)} ms`}</small></td>
+      <td><small>${sysEsc(row.remarks || row.error_message || '-')}</small></td>
+    </tr>
+  `).join('');
+}
+
+function sysHealthCanNavigate(action) {
+  if (!action?.page) return true;
+  return typeof canAccess !== 'function' || canAccess(action.page);
+}
+
+function sysHealthModuleAuditSearch(module) {
+  const key = String(module?.module_key || '').trim();
+  if (['SYSTEM_HEALTH', 'SYSTEM'].includes(SYS_HEALTH_AUDIT_MODULES[key])) return key;
+  return '';
+}
+
+function systemHealthDrilldownActions(module) {
+  const moduleKey = String(module?.module_key || '');
+  const relatedActions = (SYS_HEALTH_RELATED_NAV[moduleKey] || []).map(action => ({
+    ...action,
+    type: action.type || 'navigate',
+    description: action.description || 'Open the related workspace.',
+  }));
+  const auditModule = SYS_HEALTH_AUDIT_MODULES[moduleKey] || 'SYSTEM_HEALTH';
+  const actions = [
+    ...relatedActions,
+    {
+      id: 'open-audit-filter',
+      type: 'audit',
+      icon: 'bi-journal-text',
+      label: 'Open Audit Trail',
+      description: 'Review related system activity and security events.',
+      auditModule,
+      search: sysHealthModuleAuditSearch(module),
+    },
+    {
+      id: 'prefill-support-ticket',
+      type: 'support-ticket',
+      icon: 'bi-inbox',
+      label: 'Prepare Support Ticket',
+      description: 'Prefill a support case from this health result.',
+    },
+  ];
+
+  return actions.map(action => {
+    const disabled = action.type === 'navigate' && !sysHealthCanNavigate(action);
+    return {
+      ...action,
+      disabled,
+      description: disabled
+        ? 'This destination is restricted by your current role.'
+        : action.description,
+    };
+  });
+}
+
+function renderSystemHealthDrilldownActions(module) {
+  const target = document.getElementById('health-detail-drilldowns');
+  if (!target) return;
+  const actions = systemHealthDrilldownActions(module);
+  target.innerHTML = actions.length
+    ? actions.map(action => `
+        <button
+          type="button"
+          class="health-drilldown-btn"
+          data-health-action="drilldown"
+          data-module-key="${sysEsc(module.module_key)}"
+          data-action-id="${sysEsc(action.id)}"
+          ${action.disabled ? 'disabled aria-disabled="true"' : ''}
+        >
+          <i class="bi ${sysEsc(action.icon || 'bi-arrow-right-circle')}" aria-hidden="true"></i>
+          <span>
+            <strong>${sysEsc(action.label)}</strong>
+            <small>${sysEsc(action.description || '')}</small>
+          </span>
+        </button>
+      `).join('')
+    : '<div class="table-empty">No drilldown actions configured.</div>';
+}
+
+function sysHealthNavigate(action) {
+  if (!action?.page || !sysHealthCanNavigate(action)) {
+    showSysToast('This destination is restricted by your current role.', 'error');
+    return;
+  }
+  closeSystemHealthDetails();
+  if (typeof navigate === 'function') {
+    navigate(action.page, null, action.params || null);
+    return;
+  }
+  if (action.page === 'system-admin' && action.params?.sysAdminTab) {
+    switchSysAdminTab(action.params.sysAdminTab, null);
+  }
+}
+
+function optionExists(select, value) {
+  return Boolean(select && [...select.options].some(option => option.value === value));
+}
+
+function openSystemHealthAuditDrilldown(module, action = {}) {
+  closeSystemHealthDetails();
+  if (typeof navigate === 'function') {
+    navigate('system-admin', null, { sysAdminTab: 'audit' });
+  } else {
+    switchSysAdminTab('audit', null);
+  }
+  requestAnimationFrame(() => {
+    const moduleFilter = document.getElementById('audit-module-filter');
+    const actionFilter = document.getElementById('audit-action-filter');
+    const searchInput = document.getElementById('audit-search');
+    const auditModule = action.auditModule || SYS_HEALTH_AUDIT_MODULES[module?.module_key] || '';
+    if (moduleFilter && optionExists(moduleFilter, auditModule)) moduleFilter.value = auditModule;
+    if (actionFilter) actionFilter.value = action.eventType || '';
+    if (searchInput) searchInput.value = action.search || '';
+    loadAuditLog();
+  });
+}
+
+function supportPriorityForHealth(module) {
+  const status = String(module?.status || '').toUpperCase();
+  if (status === 'OFFLINE') return 'HIGH';
+  if (status === 'WARNING') return 'MEDIUM';
+  return 'LOW';
+}
+
+function supportCategoryForHealth(module) {
+  return SYS_HEALTH_SUPPORT_CATEGORIES[module?.module_key] || 'SYSTEM';
+}
+
+function prefillSystemHealthSupportTicket(module) {
+  closeSystemHealthDetails();
+  if (typeof navigate === 'function') {
+    navigate('system-admin', null, { sysAdminTab: 'support' });
+  } else {
+    switchSysAdminTab('support', null);
+  }
+  requestAnimationFrame(() => {
+    const title = document.getElementById('support-ticket-title');
+    const category = document.getElementById('support-ticket-category');
+    const priority = document.getElementById('support-ticket-priority');
+    const description = document.getElementById('support-ticket-description');
+    const status = String(module?.status || 'UNKNOWN').toUpperCase();
+    if (title) title.value = `System Health: ${module?.module_name || module?.module_key || 'Module'} ${status}`;
+    if (category) category.value = supportCategoryForHealth(module);
+    if (priority) priority.value = supportPriorityForHealth(module);
+    if (description) {
+      description.value = [
+        `Module: ${module?.module_name || module?.module_key || '-'}`,
+        `Status: ${status}`,
+        `Endpoint / Check: ${module?.endpoint_checked || '-'}`,
+        `Remarks: ${module?.remarks || '-'}`,
+        module?.error_message ? `Error: ${module.error_message}` : '',
+        module?.recommended_action ? `Recommended action: ${module.recommended_action}` : '',
+      ].filter(Boolean).join('\n');
+      description.focus();
+    }
+    showSysToast('Support ticket details prepared. Review before creating the ticket.', 'success');
+  });
+}
+
+function runSystemHealthDrilldownAction(moduleKey, actionId) {
+  const module = sysHealthModules.find(item => item.module_key === moduleKey);
+  if (!module || !actionId) return;
+  const action = systemHealthDrilldownActions(module).find(item => item.id === actionId);
+  if (!action || action.disabled) {
+    showSysToast('This action is not available for your current role.', 'error');
+    return;
+  }
+  if (action.type === 'navigate') {
+    sysHealthNavigate(action);
+  } else if (action.type === 'audit') {
+    openSystemHealthAuditDrilldown(module, action);
+  } else if (action.type === 'support-ticket') {
+    prefillSystemHealthSupportTicket(module);
+  }
+}
+
+async function loadSystemHealthHistory() {
+  try {
+    const res = await apiFetch('/api/admin/system-health/history?limit=30');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load health history.');
+    if (Array.isArray(data.history) && data.history.length) {
+      sysHealthHistory = mergeSystemHealthHistory(data.history, sysHealthHistory);
+    } else if (!sysHealthHistory.length) {
+      sysHealthHistory = [];
+    }
+    renderSystemHealthHistory();
+  } catch (err) {
+    const tbody = document.getElementById('health-history-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="table-empty">${sysEsc(err.message || 'Failed to load health history.')}</td></tr>`;
+  }
 }
 
 function openSystemHealthDetails(moduleKey) {
@@ -1596,8 +2054,12 @@ function openSystemHealthDetails(moduleKey) {
   sysSetText('health-detail-endpoint', module.endpoint_checked || '-');
   sysSetText('health-detail-error', module.error_message || '-');
   sysSetText('health-detail-action', module.recommended_action || '-');
+  sysSetText('health-detail-affected-area', module.affected_area || '-');
+  sysSetText('health-detail-probable-cause', module.probable_cause || '-');
+  sysSetText('health-detail-admin-action', module.admin_action || '-');
   const checkButton = document.getElementById('health-detail-check-btn');
-  if (checkButton) checkButton.setAttribute('onclick', `runSystemModuleHealthCheck(${sysJsString(moduleKey)})`);
+  if (checkButton) checkButton.dataset.moduleKey = moduleKey;
+  renderSystemHealthDrilldownActions(module);
 
   const dependencies = module.dependency_status || {};
   const depTarget = document.getElementById('health-detail-dependencies');
@@ -1611,6 +2073,14 @@ function openSystemHealthDetails(moduleKey) {
           </div>
         `).join('')
       : '<div class="table-empty">No dependency details available.</div>';
+  }
+
+  const runbookTarget = document.getElementById('health-detail-runbook');
+  if (runbookTarget) {
+    const steps = Array.isArray(module.runbook_steps) ? module.runbook_steps : [];
+    runbookTarget.innerHTML = steps.length
+      ? steps.map(step => `<li>${sysEsc(step)}</li>`).join('')
+      : '<li>No runbook steps configured.</li>';
   }
 
   const logsTarget = document.getElementById('health-detail-logs');
@@ -1629,6 +2099,7 @@ function openSystemHealthDetails(moduleKey) {
 
   const modal = document.getElementById('health-detail-modal');
   if (modal) modal.style.display = 'flex';
+  renderSystemHealthRunningState();
 }
 
 function closeSystemHealthDetails() {
@@ -1645,12 +2116,18 @@ function systemHealthApiErrorMessage(error) {
 }
 
 async function runSystemHealthCheck() {
+  if (sysHealthCheckRunning) return;
+  setSystemHealthRunning(true, {
+    title: 'Running full system health check...',
+    detail: 'Checking authentication, accounts, RBAC, payroll, audit, database, AWS readiness, and related modules.',
+  });
   try {
     const res = await apiFetch('/api/admin/system-health/check', { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to run system health check.');
     sysHealthSnapshot = { ...sysHealthSnapshot, ...data, generated_at: data.checked_at || data.generated_at };
     sysHealthModules = Array.isArray(data.modules) ? data.modules : sysHealthModules;
+    applySystemHealthHistory(data.history, data.modules, data.checked_at || data.generated_at);
     renderSystemHealthDashboard();
     showSysToast(data.message || 'System health check completed.', 'success');
   } catch (err) {
@@ -1664,10 +2141,19 @@ async function runSystemHealthCheck() {
       renderSystemHealthDashboard();
     }
     showSysToast(systemHealthApiErrorMessage(err), 'error');
+  } finally {
+    setSystemHealthRunning(false);
   }
 }
 
 async function runSystemModuleHealthCheck(moduleKey) {
+  if (sysHealthCheckRunning) return;
+  const module = sysHealthModules.find(item => item.module_key === moduleKey);
+  setSystemHealthRunning(true, {
+    moduleKey,
+    title: `Checking ${module?.module_name || moduleKey}...`,
+    detail: 'Running this module check and refreshing its status, details, and history.',
+  });
   try {
     const res = await apiFetch(`/api/admin/system-health/check/${encodeURIComponent(moduleKey)}`, { method: 'POST' });
     const data = await res.json();
@@ -1677,11 +2163,14 @@ async function runSystemModuleHealthCheck(moduleKey) {
       if (index >= 0) sysHealthModules[index] = data.module;
       else sysHealthModules.push(data.module);
     }
+    applySystemHealthHistory(data.history, data.module ? [data.module] : [], data.checked_at);
     await loadSystemHealth();
     if (sysHealthSelectedModuleKey === moduleKey) openSystemHealthDetails(moduleKey);
     showSysToast(data.message || 'Module health check completed.', 'success');
   } catch (err) {
     showSysToast(systemHealthApiErrorMessage(err), 'error');
+  } finally {
+    setSystemHealthRunning(false);
   }
 }
 
@@ -1918,11 +2407,14 @@ window.unlockUserAccount     = unlockUserAccount;
 window.revokeUserSessions    = revokeUserSessions;
 window.resetUserMfa          = resetUserMfa;
 window.loadSystemHealth      = loadSystemHealth;
+window.loadSystemHealthHistory = loadSystemHealthHistory;
 window.filterSystemHealthModules = filterSystemHealthModules;
 window.openSystemHealthDetails = openSystemHealthDetails;
 window.closeSystemHealthDetails = closeSystemHealthDetails;
 window.runSystemHealthCheck  = runSystemHealthCheck;
 window.runSystemModuleHealthCheck = runSystemModuleHealthCheck;
+window.runSystemHealthDrilldownAction = runSystemHealthDrilldownAction;
+window.prefillSystemHealthSupportTicket = prefillSystemHealthSupportTicket;
 window.loadSupportTickets    = loadSupportTickets;
 window.createSupportTicket   = createSupportTicket;
 window.updateSupportTicket   = updateSupportTicket;

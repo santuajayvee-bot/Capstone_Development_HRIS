@@ -921,7 +921,62 @@ async function maxDateIfColumn(tableName, columnCandidates) {
 }
 
 function checkedTimestamp() {
-  return new Date().toISOString();
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function makeSystemHealthRunId() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : `health-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function envValue(candidates) {
+  for (const name of candidates) {
+    const value = String(process.env[name] || '').trim();
+    if (value) return { name, value };
+  }
+  return { name: null, value: '' };
+}
+
+function isTruthyEnv(candidates) {
+  const { value } = envValue(candidates);
+  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+}
+
+function secretHealthStatus(candidates, label, minLength = 32) {
+  const { name, value } = envValue(candidates);
+  if (!value) {
+    return {
+      label,
+      available: false,
+      status: 'Missing',
+      source: candidates.join(' or '),
+    };
+  }
+  return {
+    label,
+    available: true,
+    status: value.length >= minLength ? 'Configured' : `Configured but shorter than ${minLength} characters`,
+    source: name,
+  };
+}
+
+function classifyDatabaseHost(host) {
+  const normalized = String(host || '').trim().toLowerCase();
+  if (!normalized) return 'missing';
+  if (['localhost', '127.0.0.1', '::1'].includes(normalized) || normalized.endsWith('.local')) return 'local';
+  if (normalized.includes('.rds.amazonaws.com') || normalized.includes('rds.amazonaws.com')) return 'amazon-rds';
+  if (normalized.includes('amazonaws.com')) return 'aws-managed';
+  return 'custom';
+}
+
+function dependencySetting(label, available, status, extras = {}) {
+  return {
+    label,
+    available: Boolean(available),
+    status,
+    ...extras,
+  };
 }
 
 async function checkDatabaseHealth() {
@@ -1294,7 +1349,469 @@ async function checkBackupHealth() {
   );
 }
 
+async function checkAwsReadinessHealth() {
+  const nodeEnv = envValue(['NODE_ENV']).value || 'development';
+  const isProduction = nodeEnv.toLowerCase() === 'production';
+  const dbHost = envValue(['DB_HOST']);
+  const dbClass = classifyDatabaseHost(dbHost.value);
+  const dbSslEnabled = isTruthyEnv(['DB_SSL']);
+  const dbCredentialsReady = Boolean(
+    envValue(['DB_USER']).value &&
+    envValue(['DB_PASSWORD']).value &&
+    envValue(['DB_NAME']).value
+  );
+  const jwtSecret = secretHealthStatus(['JWT_ACCESS_SECRET', 'JWT_SECRET'], 'JWT signing secret');
+  const aesKey = secretHealthStatus(['AES_ENCRYPTION_KEY', 'AES_256_SECRET_KEY'], 'AES-256 data encryption key', 64);
+  const dedicatedEncryptionKeyReady = Boolean(envValue(['AES_ENCRYPTION_KEY', 'AES_256_SECRET_KEY']).value);
+  const encryptionRuntimeReady = dedicatedEncryptionKeyReady || Boolean(envValue(['JWT_SECRET', 'JWT_ACCESS_SECRET']).value);
+  const publicUrl = envValue(['PUBLIC_BASE_URL', 'APP_BASE_URL', 'BASE_URL']);
+  const publicHttps = publicUrl.value ? publicUrl.value.toLowerCase().startsWith('https://') : false;
+  const trustProxy = isTruthyEnv(['TRUST_PROXY', 'APP_TRUST_PROXY', 'EXPRESS_TRUST_PROXY']);
+  const secureCookies = isTruthyEnv(['COOKIE_SECURE', 'SECURE_COOKIES', 'SESSION_COOKIE_SECURE']);
+  const awsRegion = envValue(['AWS_REGION', 'AWS_DEFAULT_REGION']);
+  const s3Bucket = envValue(['AWS_S3_BUCKET', 'S3_BUCKET', 'BACKUP_S3_BUCKET', 'S3_BACKUP_BUCKET']);
+  const staticAwsCredentials = Boolean(envValue(['AWS_ACCESS_KEY_ID']).value && envValue(['AWS_SECRET_ACCESS_KEY']).value);
+  const iamHint = envValue(['AWS_ROLE_ARN', 'AWS_PROFILE', 'AWS_WEB_IDENTITY_TOKEN_FILE']);
+  const uploadRoot = envValue(['SECURE_UPLOAD_ROOT']);
+  const issues = [];
+  const warnings = [];
+
+  if (!isProduction) warnings.push('NODE_ENV is not production; AWS deployment readiness is partial.');
+  if (!dbHost.value) warnings.push('DB_HOST is not set; the app may fall back to localhost.');
+  if (isProduction && !dbHost.value) issues.push('DB_HOST must point to Amazon RDS MySQL in production.');
+  if (isProduction && dbClass === 'local') issues.push('Production DB_HOST points to a local database address.');
+  if (isProduction && dbClass !== 'amazon-rds' && dbClass !== 'aws-managed') warnings.push('DB_HOST does not look like an AWS-managed database endpoint.');
+  if (!dbCredentialsReady) {
+    const message = 'DB_USER, DB_PASSWORD, and DB_NAME must all be configured.';
+    if (isProduction) issues.push(message);
+    else warnings.push(message);
+  }
+  if (!dbSslEnabled) {
+    const message = 'DB_SSL is not enabled; RDS traffic should use TLS.';
+    if (isProduction) issues.push(message);
+    else warnings.push(message);
+  }
+  if (!jwtSecret.available) {
+    const message = 'JWT signing secret is missing.';
+    if (isProduction) issues.push(message);
+    else warnings.push(message);
+  }
+  if (!encryptionRuntimeReady) {
+    const message = 'Encryption key material is missing for sensitive employee and payroll data.';
+    if (isProduction) issues.push(message);
+    else warnings.push(message);
+  } else if (!dedicatedEncryptionKeyReady) {
+    warnings.push('Dedicated AES encryption key is not configured; runtime may fall back to JWT-derived encryption.');
+  }
+  if (!awsRegion.value) warnings.push('AWS_REGION or AWS_DEFAULT_REGION is not configured.');
+  if (!s3Bucket.value) warnings.push('S3 backup bucket is not configured.');
+  if (isProduction && publicUrl.value && !publicHttps) issues.push('Public base URL must use HTTPS in production.');
+  if (isProduction && !publicUrl.value) warnings.push('PUBLIC_BASE_URL or APP_BASE_URL is not configured.');
+  if (isProduction && !trustProxy) warnings.push('Trust proxy is not enabled for EC2, reverse proxy, or load balancer deployment.');
+  if (isProduction && !secureCookies) warnings.push('Secure cookie mode is not explicitly enabled.');
+  if (!uploadRoot.value) warnings.push('SECURE_UPLOAD_ROOT is not configured; uploads will use the local default path.');
+
+  const status = issues.length ? 'OFFLINE' : warnings.length ? 'WARNING' : 'ONLINE';
+  const remarks = status === 'ONLINE'
+    ? 'AWS deployment settings appear ready for EC2, RDS MySQL, S3 backup, and secure runtime.'
+    : issues.length
+      ? `${issues.length} critical AWS readiness issue(s) need admin action.`
+      : `${warnings.length} AWS readiness warning(s) need review before production deployment.`;
+
+  return healthResult(status, remarks, {
+    error_message: issues.length ? issues.join(' ') : null,
+    dependencies: {
+      runtime_environment: dependencySetting('NODE_ENV', true, nodeEnv, { mode: isProduction ? 'production' : 'local/dev' }),
+      http_port: dependencySetting('HTTP port', true, envValue(['PORT']).value ? 'Configured' : 'Default 3000'),
+      database_host: dependencySetting('DB_HOST', Boolean(dbHost.value), dbHost.value ? `${dbClass} endpoint` : 'Missing; localhost fallback', { classification: dbClass }),
+      database_credentials: dependencySetting('DB_USER / DB_PASSWORD / DB_NAME', dbCredentialsReady, dbCredentialsReady ? 'Configured' : 'Incomplete'),
+      database_tls: dependencySetting('DB_SSL', dbSslEnabled, dbSslEnabled ? 'Enabled' : 'Disabled'),
+      jwt_secret: jwtSecret,
+      encryption_key: aesKey,
+      encryption_runtime: dependencySetting('Encryption runtime', encryptionRuntimeReady, dedicatedEncryptionKeyReady ? 'Dedicated AES key configured' : encryptionRuntimeReady ? 'JWT-derived fallback available' : 'Missing'),
+      aws_region: dependencySetting('AWS region', Boolean(awsRegion.value), awsRegion.value ? 'Configured' : 'Missing', { source: awsRegion.name || 'AWS_REGION or AWS_DEFAULT_REGION' }),
+      s3_backup_bucket: dependencySetting('S3 backup bucket', Boolean(s3Bucket.value), s3Bucket.value ? 'Configured' : 'Missing', { source: s3Bucket.name || 'AWS_S3_BUCKET or S3_BUCKET' }),
+      aws_credential_mode: dependencySetting(
+        'AWS credential mode',
+        true,
+        staticAwsCredentials
+          ? 'Static env credentials configured'
+          : iamHint.value
+            ? 'IAM role/profile hint configured'
+            : 'Use EC2 instance profile/IAM role for AWS access',
+        { source: staticAwsCredentials ? 'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY' : iamHint.name || 'EC2 instance profile' }
+      ),
+      public_https_url: dependencySetting('Public HTTPS URL', publicHttps, publicHttps ? 'HTTPS configured' : publicUrl.value ? 'Not HTTPS' : 'Missing', { source: publicUrl.name || 'PUBLIC_BASE_URL or APP_BASE_URL' }),
+      trust_proxy: dependencySetting('Express trust proxy', trustProxy, trustProxy ? 'Enabled' : 'Not enabled'),
+      secure_cookies: dependencySetting('Secure cookies', secureCookies, secureCookies ? 'Enabled' : 'Not explicitly enabled'),
+      secure_upload_root: dependencySetting('Secure upload root', Boolean(uploadRoot.value), uploadRoot.value ? 'Configured' : 'Default local path'),
+    },
+  });
+}
+
+async function checkDashboardHealth() {
+  const employeesTable = await firstExistingTable(['employees']);
+  const usersTable = await firstExistingTable(['users']);
+  const auditTable = await firstExistingTable(['system_audit_log']);
+  const attendanceTable = await firstExistingTable(['attendance_log']);
+  const payrollTable = await firstExistingTable(['PAYROLL_RECORD', 'payroll_runs']);
+  const leaveTable = await firstExistingTable(['leave_requests']);
+  const employeeCount = await countIfTable(employeesTable);
+  const userCount = await countIfTable(usersTable);
+  const latestAudit = await maxDateIfColumn(auditTable, ['timestamp', 'Created_At', 'created_at']);
+  const latestAttendance = await maxDateIfColumn(attendanceTable, ['date', 'attendance_date', 'created_at', 'updated_at']);
+  const hasCore = Boolean(employeesTable && usersTable);
+  const status = hasCore ? 'ONLINE' : (employeesTable || usersTable ? 'WARNING' : 'OFFLINE');
+  return healthResult(
+    status,
+    status === 'ONLINE'
+      ? 'Dashboard data sources are reachable.'
+      : status === 'WARNING'
+        ? 'Dashboard has partial access to employee or account data.'
+        : 'Dashboard core employee and account tables are unavailable.',
+    {
+      dependencies: {
+        employees: await tableDependency(employeesTable, 'Employee directory'),
+        users: await tableDependency(usersTable, 'User accounts'),
+        audit_log: await tableDependency(auditTable, 'Recent system activity'),
+        attendance_log: await tableDependency(attendanceTable, 'Attendance summary source'),
+        payroll_source: await tableDependency(payrollTable, 'Payroll summary source'),
+        leave_requests: await tableDependency(leaveTable, 'Leave summary source'),
+        employee_count: { label: 'Employees', count: employeeCount },
+        user_count: { label: 'User accounts', count: userCount },
+        latest_audit_event: { label: 'Latest audit event', value: latestAudit },
+        latest_attendance_record: { label: 'Latest attendance record', value: latestAttendance },
+      },
+    }
+  );
+}
+
+async function checkOrganizationSetupHealth() {
+  const departmentsTable = await firstExistingTable(['departments']);
+  const positionsTable = await firstExistingTable(['positions']);
+  const wageTypesTable = await firstExistingTable(['wage_types']);
+  const holidaysTable = await firstExistingTable(['holiday_calendar']);
+  const departments = await countIfTable(departmentsTable);
+  const positions = await countIfTable(positionsTable);
+  const wageTypes = await countIfTable(wageTypesTable);
+  const holidays = await countIfTable(holidaysTable);
+  const hasCore = Boolean(departmentsTable && positionsTable);
+  const status = hasCore ? 'ONLINE' : 'WARNING';
+  return healthResult(
+    status,
+    hasCore
+      ? 'Organization setup lookups are reachable.'
+      : 'Department or position lookup tables are incomplete.',
+    {
+      dependencies: {
+        departments: await tableDependency(departmentsTable, 'Departments'),
+        positions: await tableDependency(positionsTable, 'Positions'),
+        wage_types: await tableDependency(wageTypesTable, 'Wage type setup'),
+        holiday_calendar: await tableDependency(holidaysTable, 'Holiday calendar'),
+        department_count: { label: 'Departments', count: departments },
+        position_count: { label: 'Positions', count: positions },
+        wage_type_count: { label: 'Wage types', count: wageTypes },
+        holiday_count: { label: 'Holidays', count: holidays },
+      },
+    }
+  );
+}
+
+async function checkOnboardingHealth() {
+  const applicantsTable = await firstExistingTable(['applicants']);
+  const activityTable = await firstExistingTable(['onboarding_activity_log']);
+  const documentsTable = await firstExistingTable(['onboarding_documents']);
+  const chainTable = await firstExistingTable(['onboarding_integrity_chain']);
+  const applicants = await countIfTable(applicantsTable);
+  const pendingApplicants = applicantsTable && await hasColumn(applicantsTable, 'status')
+    ? await countIfTable(applicantsTable, "WHERE LOWER(status) IN ('pending','for review','approved','for onboarding','onboarding')")
+    : 0;
+  const pendingAnchors = chainTable && await hasColumn(chainTable, 'anchor_status')
+    ? await countIfTable(chainTable, "WHERE anchor_status IN ('PENDING','FAILED')")
+    : 0;
+  const latestActivity = await maxDateIfColumn(activityTable, ['created_at', 'Created_At', 'timestamp']);
+  const status = !applicantsTable
+    ? 'WARNING'
+    : pendingAnchors > 0
+      ? 'WARNING'
+      : 'ONLINE';
+  return healthResult(
+    status,
+    !applicantsTable
+      ? 'Applicant/onboarding table is not installed yet.'
+      : pendingAnchors > 0
+        ? `${pendingAnchors} onboarding integrity anchor(s) need review.`
+        : 'Recruitment and onboarding dependencies are reachable.',
+    {
+      dependencies: {
+        applicants: await tableDependency(applicantsTable, 'Applicant records'),
+        onboarding_activity: await tableDependency(activityTable, 'Onboarding activity log'),
+        onboarding_documents: await tableDependency(documentsTable, 'Onboarding documents'),
+        integrity_chain: await tableDependency(chainTable, 'Onboarding integrity chain'),
+        applicant_count: { label: 'Applicants', count: applicants },
+        pending_applicants: { label: 'Pending applicants', count: pendingApplicants },
+        pending_integrity_anchors: { label: 'Pending/failed integrity anchors', count: pendingAnchors },
+        latest_activity: { label: 'Latest onboarding activity', value: latestActivity },
+      },
+    }
+  );
+}
+
+async function checkReportsHealth() {
+  const employeesTable = await firstExistingTable(['employees']);
+  const attendanceTable = await firstExistingTable(['attendance_log']);
+  const payrollTable = await firstExistingTable(['PAYROLL_RECORD']);
+  const payslipTable = await firstExistingTable(['payslips']);
+  const auditTable = await firstExistingTable(['system_audit_log']);
+  const employeeCount = await countIfTable(employeesTable);
+  const attendanceCount = await countIfTable(attendanceTable);
+  const payrollCount = await countIfTable(payrollTable);
+  const payslipCount = await countIfTable(payslipTable);
+  const hasReportSource = Boolean(employeesTable && (attendanceTable || payrollTable || payslipTable));
+  const status = hasReportSource ? 'ONLINE' : 'WARNING';
+  return healthResult(
+    status,
+    hasReportSource
+      ? 'Report source tables are reachable.'
+      : 'One or more report source tables are missing; reports may be limited.',
+    {
+      dependencies: {
+        employees: await tableDependency(employeesTable, 'Employee report source'),
+        attendance_log: await tableDependency(attendanceTable, 'Daily attendance report source'),
+        payroll_record: await tableDependency(payrollTable, 'Payroll register report source'),
+        payslips: await tableDependency(payslipTable, 'Employee payslip report source'),
+        audit_log: await tableDependency(auditTable, 'Report access audit source'),
+        employee_count: { label: 'Employees', count: employeeCount },
+        attendance_records: { label: 'Attendance records', count: attendanceCount },
+        payroll_records: { label: 'Payroll records', count: payrollCount },
+        payslip_records: { label: 'Payslips', count: payslipCount },
+      },
+    }
+  );
+}
+
+async function checkSelfServiceHealth() {
+  const employeesTable = await firstExistingTable(['employees']);
+  const usersTable = await firstExistingTable(['users']);
+  const requestTable = await firstExistingTable(['user_profile_change_requests']);
+  const auditTable = await firstExistingTable(['user_profile_audit_logs']);
+  const photoTable = await firstExistingTable(['employee_photos']);
+  const pendingRequests = requestTable && await hasColumn(requestTable, 'status')
+    ? await countIfTable(requestTable, "WHERE status IN ('Pending','PENDING','Submitted','SUBMITTED')")
+    : 0;
+  const latestRequest = await maxDateIfColumn(requestTable, ['created_at', 'submitted_at', 'updated_at']);
+  const hasCore = Boolean(employeesTable && usersTable);
+  const status = hasCore && requestTable && auditTable ? 'ONLINE' : hasCore ? 'WARNING' : 'OFFLINE';
+  return healthResult(
+    status,
+    status === 'ONLINE'
+      ? 'Employee self-service profile and request tables are reachable.'
+      : status === 'WARNING'
+        ? 'Self-service core records are reachable, but request or audit tables are incomplete.'
+        : 'Self-service employee/account dependencies are unavailable.',
+    {
+      dependencies: {
+        employees: await tableDependency(employeesTable, 'Employee profile source'),
+        users: await tableDependency(usersTable, 'Self-service login accounts'),
+        profile_change_requests: await tableDependency(requestTable, 'Profile change requests'),
+        profile_audit_logs: await tableDependency(auditTable, 'Self-service audit log'),
+        employee_photos: await tableDependency(photoTable, 'Profile photo storage'),
+        pending_requests: { label: 'Pending profile requests', count: pendingRequests },
+        latest_request: { label: 'Latest profile request', value: latestRequest },
+      },
+    }
+  );
+}
+
+async function checkDpaPrivacyHealth() {
+  const acceptanceTable = await firstExistingTable(['DATA_PRIVACY_AGREEMENT_ACCEPTANCE']);
+  const auditTable = await firstExistingTable(['system_audit_log']);
+  const usersTable = await firstExistingTable(['users']);
+  const acceptances = await countIfTable(acceptanceTable);
+  const latestAcceptance = await maxDateIfColumn(acceptanceTable, ['Accepted_At', 'accepted_at', 'created_at']);
+  const status = acceptanceTable && auditTable ? 'ONLINE' : acceptanceTable ? 'WARNING' : 'WARNING';
+  return healthResult(
+    status,
+    acceptanceTable && auditTable
+      ? 'Data Privacy Agreement acceptance and audit dependencies are reachable.'
+      : 'Data Privacy Agreement acceptance or audit table is missing.',
+    {
+      dependencies: {
+        dpa_acceptance: await tableDependency(acceptanceTable, 'DPA acceptance records'),
+        users: await tableDependency(usersTable, 'User acceptance owner'),
+        audit_log: await tableDependency(auditTable, 'DPA audit trail'),
+        acceptance_count: { label: 'Recorded acceptances', count: acceptances },
+        latest_acceptance: { label: 'Latest acceptance', value: latestAcceptance },
+        agreement_version: dependencySetting('Agreement version', true, envValue(['DPA_AGREEMENT_VERSION']).value || 'Default LGSV-HR-DPA-2026-07-03'),
+      },
+    }
+  );
+}
+
+async function checkSupportCenterHealth() {
+  const ticketTable = await firstExistingTable(['system_support_ticket']);
+  const usersTable = await firstExistingTable(['users']);
+  const auditTable = await firstExistingTable(['system_audit_log']);
+  const totalTickets = await countIfTable(ticketTable);
+  const openTickets = ticketTable && await hasColumn(ticketTable, 'status')
+    ? await countIfTable(ticketTable, "WHERE UPPER(status) IN ('OPEN','IN_PROGRESS','PENDING','ESCALATED')")
+    : 0;
+  const latestTicket = await maxDateIfColumn(ticketTable, ['updated_at', 'created_at']);
+  const status = !ticketTable ? 'WARNING' : openTickets > 0 ? 'WARNING' : 'ONLINE';
+  return healthResult(
+    status,
+    !ticketTable
+      ? 'Support ticket table is not installed yet.'
+      : openTickets > 0
+        ? `${openTickets} support ticket(s) are still open.`
+        : 'Support ticket and audit dependencies are reachable.',
+    {
+      dependencies: {
+        support_tickets: await tableDependency(ticketTable, 'Support tickets'),
+        users: await tableDependency(usersTable, 'Ticket assignees/requesters'),
+        audit_log: await tableDependency(auditTable, 'Support action audit'),
+        ticket_count: { label: 'Tickets', count: totalTickets },
+        open_tickets: { label: 'Open tickets', count: openTickets },
+        latest_ticket_update: { label: 'Latest ticket update', value: latestTicket },
+      },
+    }
+  );
+}
+
+async function checkOperationalLogsHealth() {
+  const pieceOutputsTable = await firstExistingTable(['piece_rate_outputs', 'payroll_production_outputs']);
+  const productionPairsTable = await firstExistingTable(['payroll_production_pairs']);
+  const pieceRatesTable = await firstExistingTable(['payroll_piece_rates', 'piece_rates']);
+  const deliveryTripsTable = await firstExistingTable(['delivery_trips']);
+  const logisticsRatesTable = await firstExistingTable(['logistics_rates', 'payroll_logistics_rates']);
+  const pieceOutputs = await countIfTable(pieceOutputsTable);
+  const productionPairs = await countIfTable(productionPairsTable);
+  const deliveryTrips = await countIfTable(deliveryTripsTable);
+  const pendingPieceOutputs = pieceOutputsTable && await hasColumn(pieceOutputsTable, 'status')
+    ? await countIfTable(pieceOutputsTable, "WHERE status IN ('Draft','For Validation','Submitted','Pending','Payroll Ready')")
+    : 0;
+  const pendingTrips = deliveryTripsTable && await hasColumn(deliveryTripsTable, 'status')
+    ? await countIfTable(deliveryTripsTable, "WHERE status IN ('Draft','For Validation','Submitted','Pending','Payroll Ready')")
+    : 0;
+  const hasOperationalTables = Boolean(pieceOutputsTable || productionPairsTable || deliveryTripsTable);
+  const hasRateTables = Boolean(pieceRatesTable || logisticsRatesTable);
+  const status = hasOperationalTables && hasRateTables ? 'ONLINE' : hasOperationalTables ? 'WARNING' : 'WARNING';
+  return healthResult(
+    status,
+    hasOperationalTables && hasRateTables
+      ? 'Production and logistics operational log dependencies are reachable.'
+      : hasOperationalTables
+        ? 'Operational logs are reachable, but rate configuration tables are incomplete.'
+        : 'Production and logistics operational log tables are not installed yet.',
+    {
+      dependencies: {
+        piece_rate_outputs: await tableDependency(pieceOutputsTable, 'Piece-rate output logs'),
+        production_pairs: await tableDependency(productionPairsTable, 'Production pair logs'),
+        piece_rates: await tableDependency(pieceRatesTable, 'Piece-rate configuration'),
+        delivery_trips: await tableDependency(deliveryTripsTable, 'Logistics trip logs'),
+        logistics_rates: await tableDependency(logisticsRatesTable, 'Logistics rate configuration'),
+        piece_output_count: { label: 'Piece-rate outputs', count: pieceOutputs },
+        production_pair_count: { label: 'Production pairs', count: productionPairs },
+        delivery_trip_count: { label: 'Delivery trips', count: deliveryTrips },
+        pending_piece_outputs: { label: 'Pending piece outputs', count: pendingPieceOutputs },
+        pending_delivery_trips: { label: 'Pending delivery trips', count: pendingTrips },
+      },
+    }
+  );
+}
+
+async function checkPayrollSettingsHealth() {
+  const policyTable = await firstExistingTable(['payroll_policy_settings']);
+  const deductionSettingsTable = await firstExistingTable(['payroll_deduction_settings']);
+  const deductionBracketsTable = await firstExistingTable(['payroll_deduction_brackets']);
+  const sssRowsTable = await firstExistingTable(['sss_table_rows']);
+  const sssVersionsTable = await firstExistingTable(['sss_table_versions']);
+  const allowanceSettingsTable = await firstExistingTable(['payroll_allowance_settings', 'allowance_settings']);
+  const attendanceConfigTable = await firstExistingTable(['payroll_attendance_configurations']);
+  const employeeDeductionsTable = await firstExistingTable(['employee_deduction_accounts']);
+  const activeDeductionSettings = deductionSettingsTable && await hasColumn(deductionSettingsTable, 'is_active')
+    ? await countIfTable(deductionSettingsTable, 'WHERE is_active = 1')
+    : await countIfTable(deductionSettingsTable);
+  const sssRows = await countIfTable(sssRowsTable);
+  const employeeDeductions = await countIfTable(employeeDeductionsTable);
+  const hasCoreSettings = Boolean(policyTable || deductionSettingsTable || sssRowsTable);
+  const status = hasCoreSettings ? 'ONLINE' : 'WARNING';
+  return healthResult(
+    status,
+    hasCoreSettings
+      ? 'Payroll settings and statutory deduction tables are reachable.'
+      : 'Payroll settings tables are not installed yet.',
+    {
+      dependencies: {
+        payroll_policy_settings: await tableDependency(policyTable, 'Payroll policy settings'),
+        payroll_deduction_settings: await tableDependency(deductionSettingsTable, 'Deduction settings'),
+        payroll_deduction_brackets: await tableDependency(deductionBracketsTable, 'Deduction brackets'),
+        sss_table_rows: await tableDependency(sssRowsTable, 'SSS table rows'),
+        sss_table_versions: await tableDependency(sssVersionsTable, 'SSS import versions'),
+        allowance_settings: await tableDependency(allowanceSettingsTable, 'Allowance settings'),
+        payroll_attendance_configurations: await tableDependency(attendanceConfigTable, 'Payroll attendance rules'),
+        employee_deductions: await tableDependency(employeeDeductionsTable, 'Employee deduction accounts'),
+        active_deduction_settings: { label: 'Active deduction settings', count: activeDeductionSettings },
+        sss_rows: { label: 'SSS rows', count: sssRows },
+        employee_deduction_accounts: { label: 'Employee deduction accounts', count: employeeDeductions },
+      },
+    }
+  );
+}
+
+async function checkPayrollApprovalHealth() {
+  const runsTable = await firstExistingTable(['payroll_runs']);
+  const payrollRecordTable = await firstExistingTable(['PAYROLL_RECORD']);
+  const auditTable = await firstExistingTable(['payroll_audit_trail', 'system_audit_log']);
+  const blockchainAuditTable = await firstExistingTable(['BLOCKCHAIN_AUDIT_LOG']);
+  const pendingRuns = runsTable && await hasColumn(runsTable, 'status')
+    ? await countIfTable(runsTable, "WHERE status IN ('Submitted','Pending','Pending Approval','For Approval','Ready for Approval')")
+    : 0;
+  const hasApprovalStatus = payrollRecordTable && await hasColumn(payrollRecordTable, 'Approval_Status');
+  const hasBlockchainStatus = payrollRecordTable && await hasColumn(payrollRecordTable, 'Blockchain_Status');
+  const finalizedRecords = hasApprovalStatus
+    ? await countIfTable(payrollRecordTable, "WHERE Approval_Status IN ('APPROVED','Approved','FINALIZED','Finalized')")
+    : await countIfTable(payrollRecordTable);
+  const pendingFinalizedAnchors = hasApprovalStatus && hasBlockchainStatus
+    ? await countIfTable(payrollRecordTable, "WHERE Approval_Status IN ('APPROVED','Approved','FINALIZED','Finalized') AND (Blockchain_Status IS NULL OR Blockchain_Status IN ('PENDING','FAILED'))")
+    : 0;
+  const status = !runsTable && !payrollRecordTable
+    ? 'WARNING'
+    : pendingRuns > 0 || pendingFinalizedAnchors > 0
+      ? 'WARNING'
+      : 'ONLINE';
+  return healthResult(
+    status,
+    !runsTable && !payrollRecordTable
+      ? 'Payroll approval tables are not installed yet.'
+      : pendingFinalizedAnchors > 0
+        ? `${pendingFinalizedAnchors} finalized payroll record(s) still need blockchain anchoring.`
+        : pendingRuns > 0
+          ? `${pendingRuns} payroll run(s) are waiting for approval review.`
+          : 'Payroll approval, finalization, and audit dependencies are reachable.',
+    {
+      dependencies: {
+        payroll_runs: await tableDependency(runsTable, 'Payroll run approvals'),
+        payroll_record: await tableDependency(payrollRecordTable, 'Final payroll records'),
+        payroll_audit: await tableDependency(auditTable, 'Payroll approval audit'),
+        blockchain_audit: await tableDependency(blockchainAuditTable, 'Finalization blockchain audit'),
+        pending_approvals: { label: 'Pending approvals', count: pendingRuns },
+        finalized_records: { label: 'Finalized payroll records', count: finalizedRecords },
+        pending_blockchain_anchors: { label: 'Pending blockchain anchors', count: pendingFinalizedAnchors },
+      },
+    }
+  );
+}
+
 const SYSTEM_HEALTH_MODULES = [
+  {
+    key: 'dashboard',
+    name: 'Dashboard',
+    endpoint: '/api/dashboard',
+    dependencies: ['employees', 'users', 'system_audit_log', 'attendance_log', 'PAYROLL_RECORD', 'leave_requests'],
+    recommended_action: 'Check employee, user, attendance, payroll, leave, and audit data sources when dashboard cards look stale.',
+    check: checkDashboardHealth,
+  },
   {
     key: 'authentication',
     name: 'Authentication / Login',
@@ -1302,6 +1819,14 @@ const SYSTEM_HEALTH_MODULES = [
     dependencies: ['users', 'USER_SESSION', 'system_audit_log'],
     recommended_action: 'Review failed login, MFA, and lockout audit events before resetting credentials.',
     check: checkAuthenticationHealth,
+  },
+  {
+    key: 'dpa_privacy',
+    name: 'Data Privacy Agreement',
+    endpoint: '/api/dpa/status',
+    dependencies: ['DATA_PRIVACY_AGREEMENT_ACCEPTANCE', 'system_audit_log', 'users'],
+    recommended_action: 'Verify DPA acceptance records and audit entries before allowing continued system access.',
+    check: checkDpaPrivacyHealth,
   },
   {
     key: 'account_management',
@@ -1328,6 +1853,22 @@ const SYSTEM_HEALTH_MODULES = [
     check: checkEmployeeHealth,
   },
   {
+    key: 'organization_setup',
+    name: 'Organization Setup',
+    endpoint: '/api/employee-setup/lookups',
+    dependencies: ['departments', 'positions', 'wage_types', 'holiday_calendar'],
+    recommended_action: 'Review department, position, wage type, and holiday setup before HR and payroll processing.',
+    check: checkOrganizationSetupHealth,
+  },
+  {
+    key: 'onboarding',
+    name: 'Onboarding / Recruitment',
+    endpoint: '/api/onboarding/dashboard',
+    dependencies: ['applicants', 'onboarding_activity_log', 'onboarding_documents', 'onboarding_integrity_chain'],
+    recommended_action: 'Review pending applicants, onboarding documents, and integrity anchors before transferring employees.',
+    check: checkOnboardingHealth,
+  },
+  {
     key: 'attendance',
     name: 'Attendance',
     endpoint: '/api/attendance/all',
@@ -1346,31 +1887,71 @@ const SYSTEM_HEALTH_MODULES = [
   {
     key: 'leave',
     name: 'Leave Management',
-    endpoint: '/api/leaves',
+    endpoint: '/api/leave',
     dependencies: ['leave_requests', 'leave_balances', 'leave_audit_trail'],
     recommended_action: 'Review pending leave requests and verify balance records before payroll cutoff.',
     check: checkLeaveHealth,
   },
   {
+    key: 'operational_logs',
+    name: 'Operational Logs',
+    endpoint: '/api/payroll/piece-rate-config / /api/payroll/logistics/trips',
+    dependencies: ['piece_rate_outputs', 'payroll_production_pairs', 'delivery_trips', 'payroll_piece_rates', 'logistics_rates'],
+    recommended_action: 'Review piece-rate output and logistics trip validation before payroll computation.',
+    check: checkOperationalLogsHealth,
+  },
+  {
+    key: 'payroll_settings',
+    name: 'Payroll Settings',
+    endpoint: '/api/payroll/deduction-settings',
+    dependencies: ['payroll_policy_settings', 'payroll_deduction_settings', 'sss_table_rows', 'payroll_attendance_configurations'],
+    recommended_action: 'Confirm statutory deduction, allowance, attendance, and wage-rate settings before payroll runs.',
+    check: checkPayrollSettingsHealth,
+  },
+  {
     key: 'payroll',
     name: 'Payroll Computation',
-    endpoint: '/api/payroll',
+    endpoint: '/api/payroll/salary-calculations',
     dependencies: ['PAYROLL_RECORD', 'payroll_runs', 'payroll_policy_settings'],
     recommended_action: 'Review draft payroll runs, policy settings, and payroll audit trail before final approval.',
     check: checkPayrollHealth,
   },
   {
+    key: 'payroll_approval',
+    name: 'Payroll Approval',
+    endpoint: '/api/payroll/runs',
+    dependencies: ['payroll_runs', 'PAYROLL_RECORD', 'payroll_audit_trail', 'BLOCKCHAIN_AUDIT_LOG'],
+    recommended_action: 'Route approval issues to Payroll Manager and keep finalized payroll locked with blockchain anchoring.',
+    check: checkPayrollApprovalHealth,
+  },
+  {
     key: 'payslip',
     name: 'Payslip Generation',
-    endpoint: '/api/payslips',
+    endpoint: '/api/payroll/payslips',
     dependencies: ['payslips', 'PAYROLL_RECORD'],
     recommended_action: 'Verify payslip encryption columns and only release finalized payslips.',
     check: checkPayslipHealth,
   },
   {
+    key: 'reports',
+    name: 'Reports',
+    endpoint: '/api/reports/library',
+    dependencies: ['employees', 'attendance_log', 'PAYROLL_RECORD', 'payslips', 'system_audit_log'],
+    recommended_action: 'Verify report source tables and keep financial exports limited to authorized payroll roles.',
+    check: checkReportsHealth,
+  },
+  {
+    key: 'self_service',
+    name: 'Employee Self-Service',
+    endpoint: '/api/self-service/profile',
+    dependencies: ['employees', 'users', 'user_profile_change_requests', 'user_profile_audit_logs', 'employee_photos'],
+    recommended_action: 'Review pending profile change requests and keep sensitive field reveals audit-logged.',
+    check: checkSelfServiceHealth,
+  },
+  {
     key: 'audit_trail',
     name: 'Audit Trail',
-    endpoint: '/api/admin/audit-logs',
+    endpoint: '/api/admin/audit-log',
     dependencies: ['system_audit_log'],
     recommended_action: 'Investigate unusual failed, denied, blocked, or tamper-related audit events.',
     check: checkAuditTrailHealth,
@@ -1384,12 +1965,28 @@ const SYSTEM_HEALTH_MODULES = [
     check: checkBlockchainHealth,
   },
   {
+    key: 'support_center',
+    name: 'Support Center',
+    endpoint: '/api/admin/support-tickets',
+    dependencies: ['system_support_ticket', 'users', 'system_audit_log'],
+    recommended_action: 'Review open support tickets and document troubleshooting actions without exposing secrets.',
+    check: checkSupportCenterHealth,
+  },
+  {
     key: 'backup_restore',
     name: 'Backup and Restore',
     endpoint: '/api/admin/backups',
     dependencies: ['system_backup_log', 'AWS S3 / RDS snapshot target'],
     recommended_action: 'Confirm the latest backup completed and verification hash is recorded.',
     check: checkBackupHealth,
+  },
+  {
+    key: 'aws_readiness',
+    name: 'AWS Deployment Readiness',
+    endpoint: 'Environment / EC2-RDS-S3 readiness',
+    dependencies: ['NODE_ENV', 'DB_HOST', 'DB_SSL', 'JWT_SECRET', 'AES_ENCRYPTION_KEY', 'AWS_REGION', 'S3 backup bucket'],
+    recommended_action: 'Review AWS production env vars, RDS TLS, HTTPS, secure cookies, and S3 backup settings before deployment.',
+    check: checkAwsReadinessHealth,
   },
   {
     key: 'database',
@@ -1402,6 +1999,250 @@ const SYSTEM_HEALTH_MODULES = [
 ];
 
 const SYSTEM_HEALTH_MODULE_MAP = new Map(SYSTEM_HEALTH_MODULES.map(module => [module.key, module]));
+
+const SYSTEM_HEALTH_REMEDIATION = {
+  dashboard: {
+    affected_area: 'Dashboard cards, cross-module summaries, and recent activity indicators.',
+    probable_cause: 'Missing employee/account tables, stale attendance or payroll sources, or unavailable audit log data.',
+    admin_action: 'Verify dashboard source tables before treating summary counts as accurate.',
+    runbook_steps: [
+      'Open Dashboard and identify which summary card is stale or blank.',
+      'Check the related module source table in System Health.',
+      'Review recent audit events if dashboard activity is not updating.',
+    ],
+  },
+  authentication: {
+    affected_area: 'Login, MFA verification, session creation, and account lockout handling.',
+    probable_cause: 'Missing user/session audit tables, repeated failed login attempts, stale sessions, or MFA setup issues.',
+    admin_action: 'Review failed login and MFA audit entries, unlock only verified accounts, and revoke stale sessions when needed.',
+    runbook_steps: [
+      'Open Account Management and check locked accounts.',
+      'Review Audit Trail for failed login, MFA, and session events.',
+      'Reset MFA or password only after identity verification.',
+    ],
+  },
+  dpa_privacy: {
+    affected_area: 'Data Privacy Agreement acceptance, forced acceptance flow, and DPA audit trail.',
+    probable_cause: 'Missing DPA acceptance migration, stale agreement version, or audit log schema drift.',
+    admin_action: 'Confirm users accept the current DPA version and that accept/decline actions are audit-logged.',
+    runbook_steps: [
+      'Check whether DATA_PRIVACY_AGREEMENT_ACCEPTANCE exists.',
+      'Confirm DPA_AGREEMENT_VERSION matches the current company agreement.',
+      'Review Audit Trail for DPA accepted or declined events.',
+    ],
+  },
+  account_management: {
+    affected_area: 'System Admin account registration, employee-account linking, unlock, session revoke, and MFA reset tools.',
+    probable_cause: 'Missing employee-role links, inactive accounts, duplicate account records, or unavailable employee directory data.',
+    admin_action: 'Verify account-to-employee mapping and correct only through audited System Admin actions.',
+    runbook_steps: [
+      'Search the affected username or employee code.',
+      'Confirm the assigned role and active status.',
+      'Use unlock, revoke sessions, or reset MFA only when the request is verified.',
+    ],
+  },
+  rbac: {
+    affected_area: 'Role hierarchy, permission checks, and protected admin/payroll/HR actions.',
+    probable_cause: 'Missing Level 4 role, incomplete permission mapping, or role records not matching backend RBAC rules.',
+    admin_action: 'Check role definitions before changing permissions, and confirm every role update is audit-logged.',
+    runbook_steps: [
+      'Open Role and Access Control.',
+      'Confirm System Administrator remains Level 4.',
+      'Review Audit Trail after any role or permission update.',
+    ],
+  },
+  employee_201: {
+    affected_area: 'Employee directory, 201-file access, lifecycle events, and protected employee records.',
+    probable_cause: 'Employee table unavailable, no employee records, missing lifecycle audit, or 201-file audit not installed.',
+    admin_action: 'Coordinate with HR Admin before changing employee records and verify 201-file access audit entries.',
+    runbook_steps: [
+      'Check Employee Management for the affected employee.',
+      'Confirm lifecycle state and employee status.',
+      'Review 201-file access audit before exposing sensitive data.',
+    ],
+  },
+  organization_setup: {
+    affected_area: 'Department, position, wage type, and holiday lookup data used by HR and payroll.',
+    probable_cause: 'Missing lookup migrations, empty setup tables, or incomplete organization reference data.',
+    admin_action: 'Coordinate setup changes with HR and payroll because these values affect employee records and computation rules.',
+    runbook_steps: [
+      'Open Organization Setup and verify departments and positions.',
+      'Confirm wage types match approved payroll policies.',
+      'Review holiday calendar entries before payroll cutoff.',
+    ],
+  },
+  onboarding: {
+    affected_area: 'Applicant records, onboarding documents, employee transfer flow, and onboarding integrity chain.',
+    probable_cause: 'Missing applicant/onboarding tables, pending onboarding records, or failed integrity anchors.',
+    admin_action: 'Resolve onboarding data issues before creating locked Regular Employee accounts from approved applicants.',
+    runbook_steps: [
+      'Open Onboarding and check pending applicants.',
+      'Verify required onboarding documents are present.',
+      'Review onboarding integrity anchor status before employee transfer.',
+    ],
+  },
+  attendance: {
+    affected_area: 'Attendance records, validation, correction flow, payroll-ready summaries, and manual adjustment audit.',
+    probable_cause: 'Pending validation records, missing attendance tables, incomplete biometric records, or correction queue buildup.',
+    admin_action: 'Ask HR Admin to validate attendance records and avoid direct payroll correction without audit trail.',
+    runbook_steps: [
+      'Open Attendance records and filter pending or needs review.',
+      'Validate or reject records through the attendance workflow.',
+      'Confirm any manual correction creates an audit entry.',
+    ],
+  },
+  attendance_sync: {
+    affected_area: 'Biometric devices, employee-device mappings, sync logs, and bridge commands.',
+    probable_cause: 'No active device, failed sync logs, unmapped biometric IDs, or bridge command queue issues.',
+    admin_action: 'Check Attendance Sync device status and mapping before asking payroll to rely on attendance data.',
+    runbook_steps: [
+      'Open Attendance Sync.',
+      'Confirm at least one biometric device is active.',
+      'Review sync errors and unmapped employee events.',
+    ],
+  },
+  leave: {
+    affected_area: 'Leave requests, balances, leave policy data, and leave audit trail.',
+    probable_cause: 'Missing leave tables, pending leave requests near cutoff, or leave balances not initialized.',
+    admin_action: 'Ask HR Admin to review pending leave and confirm balances before payroll cutoff.',
+    runbook_steps: [
+      'Open Leave Management and review pending requests.',
+      'Verify leave balances for affected employees.',
+      'Check leave audit trail for approvals or rejections.',
+    ],
+  },
+  operational_logs: {
+    affected_area: 'Production piece-rate output logs, production pair logs, logistics trip logs, and related rate setup.',
+    probable_cause: 'Missing operational log tables, pending validation records, or incomplete piece/logistics rate configuration.',
+    admin_action: 'Have Payroll Officer validate physical production and trip logs before payroll computation.',
+    runbook_steps: [
+      'Open Payroll operational logs and filter Draft, For Validation, or Payroll Ready records.',
+      'Check piece-rate and logistics rate setup for active rates.',
+      'Confirm encoded logs include who encoded and approved them.',
+    ],
+  },
+  payroll_settings: {
+    affected_area: 'Payroll policies, statutory deductions, allowances, attendance rules, and employee deduction accounts.',
+    probable_cause: 'Missing payroll settings tables, inactive deduction settings, or outdated SSS table rows.',
+    admin_action: 'Verify settings before payroll generation; do not add income tax unless the project scope is changed.',
+    runbook_steps: [
+      'Open Payroll settings and review active deduction rules.',
+      'Confirm SSS, PhilHealth, and Pag-IBIG settings are available.',
+      'Check employee-specific deductions before generating payroll.',
+    ],
+  },
+  payroll: {
+    affected_area: 'Draft payroll computation, payroll policies, payroll runs, and final payroll record preparation.',
+    probable_cause: 'Payroll tables unavailable, draft/submitted runs pending, policy settings missing, or payroll audit trail not reachable.',
+    admin_action: 'Do not alter finalized payroll directly; route issues through payroll review, correction, or dispute flow.',
+    runbook_steps: [
+      'Open Payroll and check draft or submitted runs.',
+      'Verify statutory deduction and payroll policy settings.',
+      'Escalate final approval issues to Payroll Manager.',
+    ],
+  },
+  payroll_approval: {
+    affected_area: 'Payroll Manager approval, final payroll locking, final payroll records, and blockchain anchoring readiness.',
+    probable_cause: 'Pending approval runs, finalized records not anchored, or missing payroll approval audit tables.',
+    admin_action: 'Route approval decisions to Payroll Manager and keep finalized payroll immutable except through correction flow.',
+    runbook_steps: [
+      'Open Payroll runs and filter submitted or for approval records.',
+      'Confirm Payroll Manager approval authority before finalization.',
+      'Verify finalized payroll records are ready for blockchain anchoring.',
+    ],
+  },
+  payslip: {
+    affected_area: 'Finalized payslip records, encrypted payslip payloads, and employee payslip access.',
+    probable_cause: 'Payslip table missing, encrypted storage columns missing, or payslips not generated from finalized payroll.',
+    admin_action: 'Confirm payslips are generated only from finalized payroll and sensitive values remain encrypted.',
+    runbook_steps: [
+      'Check whether payroll was finalized.',
+      'Verify payslip records exist for the payroll period.',
+      'Confirm encrypted payslip columns are present before release.',
+    ],
+  },
+  reports: {
+    affected_area: 'Attendance reports, payroll register, payslip reports, and official financial summary export controls.',
+    probable_cause: 'Missing report source tables, empty payroll/payslip records, or unavailable report access audit data.',
+    admin_action: 'Verify source tables and ensure official financial exports remain restricted to Payroll Manager.',
+    runbook_steps: [
+      'Open Reports and identify the affected report.',
+      'Check the related source module in System Health.',
+      'Confirm report export permissions match RBAC policy.',
+    ],
+  },
+  self_service: {
+    affected_area: 'Employee profile viewing, sensitive field reveal audit, password changes, and profile change requests.',
+    probable_cause: 'Missing self-service request tables, pending HR review requests, or unavailable employee/account links.',
+    admin_action: 'Review profile changes through HR approval flow and keep sensitive field reveal actions audit-logged.',
+    runbook_steps: [
+      'Open employee self-service request records.',
+      'Review pending profile changes with HR.',
+      'Check audit logs for sensitive field reveal or profile updates.',
+    ],
+  },
+  audit_trail: {
+    affected_area: 'System-wide audit logging for authentication, RBAC, payroll, HR, attendance, and support actions.',
+    probable_cause: 'Audit table unavailable, high failed/blocked activity, or missing audit columns from migration drift.',
+    admin_action: 'Investigate spikes in failed, denied, blocked, locked, or tamper-related events before clearing alerts.',
+    runbook_steps: [
+      'Open Audit Trail and filter Security or Authentication.',
+      'Check the actor, target, IP address, and timestamp.',
+      'Create or update a support ticket if repeated suspicious events appear.',
+    ],
+  },
+  blockchain: {
+    affected_area: 'Finalized payroll integrity anchoring, Fabric configuration, and blockchain audit verification.',
+    probable_cause: 'Fabric environment incomplete, pending payroll anchors, failed blockchain status, or critical verification records.',
+    admin_action: 'Verify only finalized payroll hashes are anchored and never store employee PII on-chain.',
+    runbook_steps: [
+      'Open Blockchain Support.',
+      'Review pending anchors and failed blockchain records.',
+      'Confirm Fabric environment variables and chaincode connectivity.',
+    ],
+  },
+  support_center: {
+    affected_area: 'Admin support tickets, troubleshooting history, assignment records, and support action audit.',
+    probable_cause: 'Support ticket table missing, unresolved tickets, or support action audit not reachable.',
+    admin_action: 'Document troubleshooting actions without putting passwords, AWS keys, tokens, or payroll secrets in ticket notes.',
+    runbook_steps: [
+      'Open Support Center and filter open tickets.',
+      'Review ticket priority, assignment, and latest update.',
+      'Escalate security or payroll-impacting tickets with audit references.',
+    ],
+  },
+  backup_restore: {
+    affected_area: 'Backup request records, verification hashes, storage target references, and restore readiness.',
+    probable_cause: 'No recent backup, latest backup failed, missing manifest hash, or storage target not recorded.',
+    admin_action: 'Request or verify a backup before any risky maintenance, migration, or restore operation.',
+    runbook_steps: [
+      'Open Backup and Restore.',
+      'Check latest backup status and verification hash.',
+      'Record backup location securely; do not expose secrets in notes.',
+    ],
+  },
+  aws_readiness: {
+    affected_area: 'AWS EC2 runtime, Amazon RDS MySQL connectivity, S3 backup configuration, HTTPS, cookies, and secrets management.',
+    probable_cause: 'Missing production environment variables, local database fallback, disabled RDS TLS, missing encryption key, or incomplete S3 backup settings.',
+    admin_action: 'Fix deployment environment settings before production cutover; never paste AWS keys or database passwords into tickets or screenshots.',
+    runbook_steps: [
+      'Confirm NODE_ENV=production, PORT, DB_HOST, DB_USER, DB_PASSWORD, and DB_NAME are configured from environment variables.',
+      'Enable DB_SSL=true for Amazon RDS MySQL and provide certificate env paths when required.',
+      'Configure JWT and AES encryption secrets through environment variables or AWS secret management.',
+      'Set HTTPS public URL, secure cookies, trust proxy, AWS region, S3 backup bucket, and secure upload root before deployment.',
+    ],
+  },
+  database: {
+    affected_area: 'MySQL or Amazon RDS MySQL connectivity, query latency, and schema availability.',
+    probable_cause: 'RDS latency, exhausted connection pool, missing migration, DB restart, or network/security group issue.',
+    admin_action: 'Check RDS connectivity and migration status before changing application code.',
+    runbook_steps: [
+      'Confirm database credentials and network access.',
+      'Run pending migrations if schema is missing.',
+      'Check slow queries and connection pool usage if latency is high.',
+    ],
+  },
+};
 
 function normalizeHealthStatus(value) {
   const status = String(value || '').toUpperCase();
@@ -1422,8 +2263,70 @@ function safeHealthError() {
   return 'Read-only diagnostic failed. Review server logs.';
 }
 
+function boundedIntegerEnv(name, defaultValue, minValue, maxValue) {
+  const parsed = Number.parseInt(String(process.env[name] || ''), 10);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(Math.max(parsed, minValue), maxValue);
+}
+
+function systemHealthModuleTimeoutMs() {
+  return boundedIntegerEnv('SYSTEM_HEALTH_MODULE_TIMEOUT_MS', 5000, 1000, 60000);
+}
+
+function systemHealthSlowWarningMs() {
+  return boundedIntegerEnv('SYSTEM_HEALTH_SLOW_WARNING_MS', 3000, 500, 60000);
+}
+
+function systemHealthCheckConcurrency(totalModules = SYSTEM_HEALTH_MODULES.length) {
+  const configured = boundedIntegerEnv('SYSTEM_HEALTH_CHECK_CONCURRENCY', 4, 1, 12);
+  return Math.min(configured, Math.max(Number(totalModules) || 1, 1));
+}
+
+class SystemHealthTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`System Health module check timed out after ${timeoutMs} ms.`);
+    this.name = 'SystemHealthTimeoutError';
+    this.code = 'SYSTEM_HEALTH_TIMEOUT';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function withSystemHealthTimeout(work, timeoutMs) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new SystemHealthTimeoutError(timeoutMs)), timeoutMs);
+  });
+  return Promise.race([
+    Promise.resolve().then(work),
+    timeout,
+  ]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
+function isSystemHealthTimeout(error) {
+  return error?.code === 'SYSTEM_HEALTH_TIMEOUT';
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const list = Array.isArray(items) ? items : [];
+  const results = new Array(list.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(Number(concurrency) || 1, 1), Math.max(list.length, 1));
+  async function runWorker() {
+    while (nextIndex < list.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(list[currentIndex], currentIndex);
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+  return results;
+}
+
 function healthModuleResponse(definition, rowOrResult = {}) {
   const status = normalizeHealthStatus(rowOrResult.status);
+  const remediation = SYSTEM_HEALTH_REMEDIATION[definition.key] || {};
   return {
     module_key: definition.key,
     module_name: definition.name,
@@ -1438,37 +2341,65 @@ function healthModuleResponse(definition, rowOrResult = {}) {
     last_success_at: rowOrResult.last_success_at || null,
     last_failure_at: rowOrResult.last_failure_at || null,
     recommended_action: definition.recommended_action,
+    affected_area: remediation.affected_area || null,
+    probable_cause: remediation.probable_cause || null,
+    admin_action: remediation.admin_action || null,
+    runbook_steps: remediation.runbook_steps || [],
     recent_logs: Array.isArray(rowOrResult.recent_logs) ? rowOrResult.recent_logs : [],
   };
 }
 
-async function runSystemHealthModule(definition) {
+async function runSystemHealthModule(definition, { timeoutMs = systemHealthModuleTimeoutMs() } = {}) {
   const started = Date.now();
   const timestamp = checkedTimestamp();
   try {
-    const check = await definition.check();
-    const status = normalizeHealthStatus(check.status);
+    const check = await withSystemHealthTimeout(() => definition.check(), timeoutMs);
+    const responseTimeMs = Date.now() - started;
+    const slowWarningMs = systemHealthSlowWarningMs();
+    const baseStatus = normalizeHealthStatus(check.status);
+    const slowDiagnostic = baseStatus === 'ONLINE' && responseTimeMs > slowWarningMs;
+    const status = slowDiagnostic ? 'WARNING' : baseStatus;
+    const dependencies = { ...(check.dependencies || {}) };
+    if (slowDiagnostic) {
+      dependencies.diagnostic_performance = dependencySetting(
+        'Health check response time',
+        false,
+        `Slow response: ${responseTimeMs} ms`,
+        { slow_warning_ms: slowWarningMs }
+      );
+    }
     return healthModuleResponse(definition, {
       status,
-      remarks: check.remarks,
-      response_time_ms: Date.now() - started,
+      remarks: slowDiagnostic
+        ? `Slow diagnostic response (${responseTimeMs} ms). ${check.remarks}`
+        : check.remarks,
+      response_time_ms: responseTimeMs,
       endpoint_checked: definition.endpoint,
-      dependencies: check.dependencies || {},
+      dependencies,
       error_message: check.error_message || null,
       checked_at: timestamp,
       last_success_at: status === 'OFFLINE' ? null : timestamp,
       last_failure_at: status === 'OFFLINE' ? timestamp : null,
     });
   } catch (error) {
+    const timedOut = isSystemHealthTimeout(error);
+    const safeMessage = timedOut
+      ? `Health check timed out after ${timeoutMs} ms.`
+      : safeHealthError();
     console.error(`[RBAC] system health ${definition.key} check failed:`, error.message);
     return healthModuleResponse(definition, {
-      status: 'OFFLINE',
-      remarks: safeHealthError(),
+      status: timedOut ? 'WARNING' : 'OFFLINE',
+      remarks: timedOut
+        ? `This module did not respond within the configured ${timeoutMs} ms diagnostic timeout.`
+        : safeHealthError(),
       response_time_ms: Date.now() - started,
       endpoint_checked: definition.endpoint,
-      dependencies: {},
-      error_message: safeHealthError(),
+      dependencies: timedOut ? {
+        diagnostic_timeout: dependencySetting('Health check timeout', false, `Exceeded ${timeoutMs} ms`, { timeout_ms: timeoutMs }),
+      } : {},
+      error_message: safeMessage,
       checked_at: timestamp,
+      last_success_at: null,
       last_failure_at: timestamp,
     });
   }
@@ -1478,8 +2409,12 @@ async function persistSystemHealthModule(moduleResult, checkedByUserId = null) {
   if (!(await hasTable('system_health_checks'))) return;
   const status = normalizeHealthStatus(moduleResult.status);
   const checkedAt = moduleResult.last_checked_at || checkedTimestamp();
-  const successAt = status === 'OFFLINE' ? null : checkedAt;
-  const failureAt = status === 'OFFLINE' ? checkedAt : null;
+  const successAt = Object.prototype.hasOwnProperty.call(moduleResult, 'last_success_at')
+    ? moduleResult.last_success_at
+    : status === 'OFFLINE' ? null : checkedAt;
+  const failureAt = Object.prototype.hasOwnProperty.call(moduleResult, 'last_failure_at')
+    ? moduleResult.last_failure_at
+    : status === 'OFFLINE' ? checkedAt : null;
   await pool.execute(
     `INSERT INTO system_health_checks
        (module_key, module_name, status, remarks, response_time_ms, endpoint_checked,
@@ -1511,6 +2446,75 @@ async function persistSystemHealthModule(moduleResult, checkedByUserId = null) {
       successAt,
       failureAt,
       checkedByUserId || null,
+    ]
+  );
+}
+
+function systemHealthHistoryRows(moduleResults, {
+  runId,
+  triggerType = 'MANUAL',
+  checkedByUserId = null,
+} = {}) {
+  const safeTrigger = String(triggerType || '').toUpperCase() === 'SCHEDULED' ? 'SCHEDULED' : 'MANUAL';
+  return (Array.isArray(moduleResults) ? moduleResults : [moduleResults]).filter(Boolean).map(moduleResult => ({
+    history_id: null,
+    run_id: runId || makeSystemHealthRunId(),
+    module_key: moduleResult.module_key,
+    module_name: moduleResult.module_name,
+    status: normalizeHealthStatus(moduleResult.status),
+    remarks: cleanText(moduleResult.remarks, 500),
+    response_time_ms: moduleResult.response_time_ms,
+    endpoint_checked: moduleResult.endpoint_checked,
+    error_message: moduleResult.error_message ? cleanText(moduleResult.error_message, 500) : null,
+    trigger_type: safeTrigger,
+    checked_by: checkedByUserId || null,
+    checked_at: moduleResult.last_checked_at || checkedTimestamp(),
+  }));
+}
+
+function mergeSystemHealthHistoryRows(currentRows = [], storedRows = [], limit = 30) {
+  const seen = new Set();
+  return [...currentRows, ...storedRows].filter(row => {
+    if (!row) return false;
+    const key = [
+      row.run_id || '',
+      row.module_key || '',
+      row.checked_at || '',
+      row.status || '',
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, limit);
+}
+
+async function persistSystemHealthHistory(moduleResult, {
+  runId,
+  triggerType = 'MANUAL',
+  checkedByUserId = null,
+} = {}) {
+  if (!(await hasTable('system_health_check_history'))) return;
+  const status = normalizeHealthStatus(moduleResult.status);
+  const checkedAt = moduleResult.last_checked_at || checkedTimestamp();
+  const safeTrigger = String(triggerType || '').toUpperCase() === 'SCHEDULED' ? 'SCHEDULED' : 'MANUAL';
+  await pool.execute(
+    `INSERT INTO system_health_check_history
+       (run_id, module_key, module_name, status, remarks, response_time_ms,
+        endpoint_checked, dependency_status, error_message, trigger_type, checked_by, checked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      runId || makeSystemHealthRunId(),
+      moduleResult.module_key,
+      moduleResult.module_name,
+      status,
+      cleanText(moduleResult.remarks, 500),
+      moduleResult.response_time_ms,
+      moduleResult.endpoint_checked,
+      JSON.stringify(moduleResult.dependency_status || {}),
+      moduleResult.error_message ? cleanText(moduleResult.error_message, 500) : null,
+      safeTrigger,
+      checkedByUserId || null,
+      checkedAt,
     ]
   );
 }
@@ -1583,24 +2587,33 @@ function summarizeSystemHealth(modules) {
   return summary;
 }
 
-async function buildSystemHealthModules({ persist = false, checkedByUserId = null, moduleKey = null } = {}) {
+async function buildSystemHealthModules({
+  persist = false,
+  checkedByUserId = null,
+  moduleKey = null,
+  historyRunId = null,
+  triggerType = 'MANUAL',
+} = {}) {
   const stored = await loadStoredSystemHealthModules();
   const definitions = moduleKey ? [SYSTEM_HEALTH_MODULE_MAP.get(moduleKey)].filter(Boolean) : SYSTEM_HEALTH_MODULES;
-  const modules = [];
+  const runId = historyRunId || makeSystemHealthRunId();
+  const timeoutMs = systemHealthModuleTimeoutMs();
+  const concurrency = moduleKey ? 1 : systemHealthCheckConcurrency(definitions.length);
 
-  for (const definition of definitions) {
-    const result = await runSystemHealthModule(definition);
+  return runWithConcurrency(definitions, concurrency, async definition => {
+    const result = await runSystemHealthModule(definition, { timeoutMs });
     const storedRow = stored.get(definition.key);
     if (storedRow) {
       result.last_success_at = result.last_success_at || storedRow.last_success_at || null;
       result.last_failure_at = result.last_failure_at || storedRow.last_failure_at || null;
     }
-    if (persist) await persistSystemHealthModule(result, checkedByUserId);
+    if (persist) {
+      await persistSystemHealthModule(result, checkedByUserId);
+      await persistSystemHealthHistory(result, { runId, triggerType, checkedByUserId });
+    }
     result.recent_logs = await recentSystemHealthLogs(definition.key);
-    modules.push(result);
-  }
-
-  return modules;
+    return result;
+  });
 }
 
 async function getSystemHealthSnapshot(options = {}) {
@@ -1615,6 +2628,28 @@ async function getSystemHealthSnapshot(options = {}) {
     summary,
     modules,
   };
+}
+
+async function getSystemHealthHistory({ limit = 40, moduleKey = '' } = {}) {
+  if (!(await hasTable('system_health_check_history'))) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 40, 1), 200);
+  const params = [];
+  let whereClause = '';
+  if (moduleKey) {
+    whereClause = 'WHERE module_key = ?';
+    params.push(moduleKey);
+  }
+  const [rows] = await pool.execute(
+    `SELECT history_id, run_id, module_key, module_name, status, remarks,
+            response_time_ms, endpoint_checked, error_message, trigger_type,
+            checked_by, checked_at
+       FROM system_health_check_history
+      ${whereClause}
+      ORDER BY checked_at DESC, history_id DESC
+      LIMIT ${safeLimit}`,
+    params
+  );
+  return rows;
 }
 
 async function logSystemHealthCheck(req, moduleResults, requestedModule = 'all') {
@@ -1672,6 +2707,7 @@ router.put('/users/:userId/reset-password', accountController.resetUserPassword)
 router.get('/system-health', async (req, res) => {
   try {
     const snapshot = await getSystemHealthSnapshot();
+    snapshot.history = await getSystemHealthHistory({ limit: 30 });
     return res.json(snapshot);
   } catch (err) {
     console.error('[RBAC] system-health error:', err.message);
@@ -1679,12 +2715,39 @@ router.get('/system-health', async (req, res) => {
   }
 });
 
+router.get('/system-health/history', async (req, res) => {
+  try {
+    const moduleKey = cleanText(req.query.module_key || '', 80).toLowerCase();
+    if (moduleKey && !SYSTEM_HEALTH_MODULE_MAP.has(moduleKey)) {
+      return res.status(400).json({ error: 'Unknown system health module.' });
+    }
+    const history = await getSystemHealthHistory({
+      limit: req.query.limit,
+      moduleKey,
+    });
+    return res.json({ history });
+  } catch (err) {
+    console.error('[RBAC] system-health history error:', err.message);
+    return res.status(500).json({ error: 'Failed to load system health history.' });
+  }
+});
+
 router.post('/system-health/check', async (req, res) => {
   try {
+    const historyRunId = makeSystemHealthRunId();
+    const checkedByUserId = req.user?.id || null;
     const snapshot = await getSystemHealthSnapshot({
       persist: true,
-      checkedByUserId: req.user?.id || null,
+      checkedByUserId,
+      historyRunId,
+      triggerType: 'MANUAL',
     });
+    const currentRunHistory = systemHealthHistoryRows(snapshot.modules, {
+      runId: historyRunId,
+      triggerType: 'MANUAL',
+      checkedByUserId,
+    });
+    const storedHistory = await getSystemHealthHistory({ limit: 30 });
     await logSystemHealthCheck(req, snapshot.modules, 'all').catch(error => {
       console.error('[RBAC] system-health audit log error:', error.message);
     });
@@ -1693,6 +2756,7 @@ router.post('/system-health/check', async (req, res) => {
       checked_at: snapshot.generated_at,
       summary: snapshot.summary,
       modules: snapshot.modules,
+      history: mergeSystemHealthHistoryRows(currentRunHistory, storedHistory, 30),
     });
   } catch (err) {
     console.error('[RBAC] system-health check error:', err.message);
@@ -1706,12 +2770,22 @@ router.post('/system-health/check/:moduleKey', async (req, res) => {
     if (!SYSTEM_HEALTH_MODULE_MAP.has(moduleKey)) {
       return res.status(404).json({ error: 'Unknown system health module.' });
     }
+    const historyRunId = makeSystemHealthRunId();
+    const checkedByUserId = req.user?.id || null;
     const snapshot = await getSystemHealthSnapshot({
       persist: true,
-      checkedByUserId: req.user?.id || null,
+      checkedByUserId,
       moduleKey,
+      historyRunId,
+      triggerType: 'MANUAL',
     });
     const moduleResult = snapshot.modules[0];
+    const currentRunHistory = systemHealthHistoryRows(moduleResult, {
+      runId: historyRunId,
+      triggerType: 'MANUAL',
+      checkedByUserId,
+    });
+    const storedHistory = await getSystemHealthHistory({ limit: 30 });
     await logSystemHealthCheck(req, moduleResult, moduleKey).catch(error => {
       console.error('[RBAC] system-health module audit log error:', error.message);
     });
@@ -1720,6 +2794,7 @@ router.post('/system-health/check/:moduleKey', async (req, res) => {
       checked_at: snapshot.generated_at,
       module: moduleResult,
       summary: snapshot.summary,
+      history: mergeSystemHealthHistoryRows(currentRunHistory, storedHistory, 30),
     });
   } catch (err) {
     console.error('[RBAC] system-health module check error:', err.message);
@@ -2606,6 +3681,7 @@ router.get('/roles', async (req, res) => {
    ================================================================ */
 router.get('/users', async (req, res) => {
   try {
+    const includeStats = req.query.include_stats === '1';
     const hasFailedAttempts = await hasColumn('users', 'failed_login_attempts');
     const hasAccountLockedUntil = await hasColumn('users', 'account_locked_until');
     const hasLoginAttempts = await hasColumn('users', 'login_attempts');
@@ -2638,7 +3714,28 @@ router.get('/users', async (req, res) => {
        LEFT JOIN employees e ON e.id = u.employee_id
        ORDER BY u.id`
     );
-    return res.json(rows.map(decryptEmployeeUserFields));
+    const users = rows.map(decryptEmployeeUserFields);
+    if (!includeStats) return res.json(users);
+
+    const [unlinkedRows] = await pool.execute(
+      `SELECT COUNT(*) AS count
+         FROM employees e
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM users account_user
+           WHERE account_user.employee_id = e.id
+        )`
+    );
+    return res.json({
+      users,
+      stats: {
+        total: users.length,
+        active: users.filter(user => Number(user.is_active || 0) === 1).length,
+        inactive: users.filter(user => Number(user.is_active || 0) !== 1).length,
+        locked: users.filter(user => Number(user.is_locked || 0) === 1).length,
+        unlinked_employees: Number(unlinkedRows[0]?.count || 0),
+      },
+    });
   } catch (err) {
     console.error('❌ [RBAC] list users error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch users.' });
@@ -2710,7 +3807,7 @@ router.patch('/users/:userId/activate', async (req, res) => {
    ================================================================ */
 router.get('/audit-log', async (req, res) => {
   try {
-    const limit  = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+    const limit  = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const module = String(req.query.module || '').trim();
     const search = String(req.query.search || '').trim().toLowerCase();
@@ -2718,14 +3815,6 @@ router.get('/audit-log', async (req, res) => {
     const includeLegacy = req.query.include_legacy === '1';
     if (!includeLegacy) {
       const rows = await queryCanonicalSystemAuditLog({ limit, offset, module, search, eventType });
-      if (rows.length === 0) {
-        const fallbackRows = await queryGeneralAuditSources({ limit, offset, module, search, eventType, includeLegacy: true });
-        return res.json(fallbackRows.map(row => ({
-          ...row,
-          old_value: redactAuditValue(row.old_value),
-          new_value: redactAuditValue(row.new_value),
-        })));
-      }
       return res.json(rows.map(row => ({
         ...row,
         old_value: redactAuditValue(row.old_value),
@@ -2745,5 +3834,49 @@ router.get('/audit-log', async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch audit log.' });
   }
 });
+
+let systemHealthSchedulerTimer = null;
+let systemHealthSchedulerRunning = false;
+
+function systemHealthAutoCheckEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env.SYSTEM_HEALTH_AUTO_CHECK_ENABLED || '').trim().toLowerCase());
+}
+
+function systemHealthIntervalMs() {
+  const minutes = Number.parseInt(process.env.SYSTEM_HEALTH_INTERVAL_MINUTES || '10', 10);
+  const safeMinutes = Number.isFinite(minutes) ? Math.min(Math.max(minutes, 1), 1440) : 10;
+  return safeMinutes * 60 * 1000;
+}
+
+async function runScheduledSystemHealthCheck() {
+  if (systemHealthSchedulerRunning) return;
+  systemHealthSchedulerRunning = true;
+  try {
+    const snapshot = await getSystemHealthSnapshot({
+      persist: true,
+      checkedByUserId: null,
+      historyRunId: makeSystemHealthRunId(),
+      triggerType: 'SCHEDULED',
+    });
+    const summary = snapshot.summary || summarizeSystemHealth(snapshot.modules || []);
+    console.log(
+      `[RBAC] scheduled system health check: ${summary.online || 0} online, ${summary.warning || 0} warning, ${summary.offline || 0} offline`
+    );
+  } catch (error) {
+    console.error('[RBAC] scheduled system health check failed:', error.message);
+  } finally {
+    systemHealthSchedulerRunning = false;
+  }
+}
+
+function startSystemHealthScheduler() {
+  if (!systemHealthAutoCheckEnabled() || systemHealthSchedulerTimer) return;
+  const intervalMs = systemHealthIntervalMs();
+  systemHealthSchedulerTimer = setInterval(runScheduledSystemHealthCheck, intervalMs);
+  if (typeof systemHealthSchedulerTimer.unref === 'function') systemHealthSchedulerTimer.unref();
+  console.log(`[RBAC] System Health auto-check enabled every ${Math.round(intervalMs / 60000)} minute(s).`);
+}
+
+startSystemHealthScheduler();
 
 module.exports = router;
