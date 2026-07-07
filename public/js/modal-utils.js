@@ -15,6 +15,8 @@ const nativeConfirm = window.confirm.bind(window);
 
 let modalPromiseResolve = null;
 let bootstrapModal = null;
+let modalMode = 'alert';
+let promptInputElement = null;
 
 function elevateUniversalModalLayer() {
   if (modalElement) modalElement.style.zIndex = '40010';
@@ -97,7 +99,34 @@ function prepareModal(message, title, type) {
   modalMessage.textContent = finalMessage;
 }
 
+function preparePromptModal(message, title, defaultValue = '') {
+  setModalType('info');
+  modalTitle.textContent = title;
+  modalMessage.innerHTML = '';
+  const label = document.createElement('label');
+  label.className = 'form-label';
+  label.textContent = message;
+  const input = document.createElement('input');
+  input.type = 'password';
+  input.className = 'form-control';
+  input.value = defaultValue || '';
+  input.autocomplete = 'current-password';
+  modalMessage.appendChild(label);
+  modalMessage.appendChild(input);
+  promptInputElement = input;
+  modalConfirmBtn.textContent = 'Continue';
+  modalConfirmBtn.className = 'btn btn-primary';
+  modalCancelBtn.textContent = 'Cancel';
+  modalCancelBtn.style.display = 'inline-flex';
+  modalMode = 'prompt';
+}
+
 modalConfirmBtn?.addEventListener('click', () => {
+  if (modalMode === 'prompt') {
+    resolveModal(promptInputElement?.value ?? '');
+    closeModal();
+    return;
+  }
   resolveModal(true);
   closeModal();
 });
@@ -113,7 +142,13 @@ modalCloseBtn?.addEventListener('click', () => {
 });
 
 modalElement?.addEventListener('hidden.bs.modal', () => {
-  resolveModal(false);
+  if (modalMode === 'prompt') {
+    resolveModal(false);
+  } else {
+    resolveModal(false);
+  }
+  modalMode = 'alert';
+  promptInputElement = null;
 });
 
 modalElement?.addEventListener('shown.bs.modal', elevateUniversalModalLayer);
@@ -148,13 +183,27 @@ async function showConfirm(message, title = 'Confirm', confirmText = 'Yes', canc
     modalConfirmBtn.className = 'btn btn-danger';
     modalCancelBtn.textContent = cancelText;
     modalCancelBtn.style.display = 'inline-flex';
+    modalMode = 'confirm';
 
+    openModal();
+  });
+}
+
+async function showPrompt(message, title = 'Input Required', defaultValue = '') {
+  if (!modalElement || !modalTitle || !modalMessage || !modalConfirmBtn || !modalCancelBtn || !modalIcon) {
+    return nativeConfirm(String(message || ''));
+  }
+
+  return new Promise((resolve) => {
+    modalPromiseResolve = resolve;
+    preparePromptModal(String(message || ''), title, defaultValue);
     openModal();
   });
 }
 
 window.showAlert = showAlert;
 window.showConfirm = showConfirm;
+window.showPrompt = showPrompt;
 window.closeModal = closeModal;
 window.alert = (message) => {
   showAlert(String(message || ''), 'Notice', 'info');

@@ -37,6 +37,7 @@
     <button type="button" class="self-mobile-list-row" data-self-mobile-tab="address"><span>AI</span><span><strong>Address Information</strong><small>Current and permanent address</small></span><em>›</em></button>
     <button type="button" class="self-mobile-list-row" data-self-mobile-tab="emergency"><span>EC</span><span><strong>Emergency Contact</strong><small>Emergency contact details</small></span><em>›</em></button>
     <button type="button" class="self-mobile-list-row" data-self-mobile-tab="security"><span>AS</span><span><strong>Account Security</strong><small>Password, 2FA settings</small></span><em>›</em></button>
+    <button type="button" class="self-mobile-list-row" data-self-mobile-tab="devices"><span>TD</span><span><strong>Devices</strong><small>Trusted browsers and computers</small></span><em>›</em></button>
     <button type="button" class="self-mobile-list-row" data-self-mobile-tab="requests"><span>CR</span><span><strong>Change Requests</strong><small>Pending change requests</small></span><em>›</em></button>
     <button type="button" class="self-mobile-list-row" data-self-mobile-tab="activity"><span>AL</span><span><strong>Activity Log</strong><small>Recent account activity</small></span><em>›</em></button>
   </div>
@@ -48,6 +49,7 @@
     <button type="button" class="tab-btn" data-self-tab="emergency">Emergency Contact</button>
     <button type="button" class="tab-btn" data-self-tab="picture">Profile Picture</button>
     <button type="button" class="tab-btn" data-self-tab="security">Account Security</button>
+    <button type="button" class="tab-btn" data-self-tab="devices">Devices</button>
     <button type="button" class="tab-btn" data-self-tab="requests">Change Requests</button>
     <button type="button" class="tab-btn" data-self-tab="activity">Activity Log</button>
     <button type="button" class="tab-btn self-service-hr-only" data-self-tab="hr-requests">Employee Change Requests</button>
@@ -197,6 +199,22 @@
       <button type="button" class="btn btn-primary" id="self-password-save">Change Password</button>
     </div>
   </form>
+
+  <div class="erp-panel self-tab-panel" id="self-tab-devices">
+    <div class="self-devices-header">
+      <div>
+        <div class="erp-section-title">Trusted devices</div>
+        <p class="form-note">Manage devices registered to your account. Registered devices are recognized during login and can be revoked at any time.</p>
+      </div>
+      <button type="button" class="btn btn-primary" id="self-register-device-btn">Register Current Device</button>
+    </div>
+    <div class="self-device-subtabs" role="tablist" aria-label="Device management sections">
+      <button type="button" class="self-device-subtab active" data-self-device-view="trusted">Trusted Devices</button>
+      <button type="button" class="self-device-subtab" data-self-device-view="history">Device History</button>
+    </div>
+    <div id="self-devices-list" class="self-devices-list"></div>
+    <div id="self-devices-history" class="self-devices-list" hidden></div>
+  </div>
 
   <div class="erp-panel self-tab-panel" id="self-tab-requests">
     <div class="erp-section-title">Submit restricted-field change request</div>

@@ -33,6 +33,7 @@ const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
 const dpaRoutes                              = require('./server/dpa').router;
+const trustedDeviceRoutes                   = require('./server/trusted-devices');
 const { clientErrorResponse }                = require('./server/error-response');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
@@ -62,6 +63,22 @@ const {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  return next();
+});
 const API_RATE_LIMIT = createRateLimiter({
   windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000),
   max: Number(process.env.API_RATE_LIMIT_MAX || 300),
@@ -681,6 +698,7 @@ app.use('/api/auth', authRoutes);
 // ── PROTECTED ────────────────────────────────────────────────
 app.get('/api/auth/me', requireAuth, me);
 app.use('/api/dpa', dpaRoutes);
+app.use('/api/trusted-devices', trustedDeviceRoutes);
 app.use('/api/account', accountRoutes);
 
 function requirePhilippineAddressCache(res) {

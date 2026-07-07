@@ -340,6 +340,16 @@ function markPasswordChangeRequired() {
   }
 }
 
+function resolveApiUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('/api/')) return url;
+  const host = window.location.hostname;
+  const port = window.location.port;
+  if ((host === 'localhost' || host === '127.0.0.1') && port === '8080') {
+    return `http://localhost:3000${url}`;
+  }
+  return url;
+}
+
 async function apiFetch(url, options = {}) {
   const token = getToken();
   const isFormData = options.body instanceof FormData;
@@ -348,7 +358,8 @@ async function apiFetch(url, options = {}) {
     ...(options.headers || {}),
   };
   if (!isFormData && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch(url, { ...options, headers });
+  const resolvedUrl = resolveApiUrl(url);
+  const response = await fetch(resolvedUrl, { ...options, headers });
   if (response.status === 401) {
     console.warn('401 Unauthorized:', url);
     clearAuth();

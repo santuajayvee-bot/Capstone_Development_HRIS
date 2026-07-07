@@ -30,6 +30,7 @@ const {
 const {
   MfaServiceError,
   createMfaChallenge,
+  isMfaEnabled,
   isMfaRequiredForRole,
   resendMfaChallenge,
   verifyMfaChallenge,
@@ -39,6 +40,10 @@ const {
   publicRecaptchaConfig,
   verifyRecaptchaToken,
 } = require('../services/recaptchaService');
+const {
+  getTrustedDeviceStatus,
+  updateLastUsed: updateTrustedDeviceLastUsed,
+} = require('../services/trustedDeviceService');
 
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
@@ -47,6 +52,7 @@ const UNEXPECTED_LOGIN_MESSAGE = 'Unable to process login request.';
 const MAX_FAILED_ATTEMPTS = positiveIntegerFromEnv('AUTH_MAX_FAILED_ATTEMPTS', 5, 20);
 const LOCK_MINUTES = positiveIntegerFromEnv('AUTH_LOCKOUT_MINUTES', 15, 1440);
 const REFRESH_COOKIE_NAME = 'refreshToken';
+const pendingDeviceLoginContexts = new Map();
 
 function positiveIntegerFromEnv(name, fallback, maximum) {
   const value = Number.parseInt(process.env[name], 10);
@@ -206,7 +212,24 @@ function mfaErrorResponse(res, error) {
   });
 }
 
-async function issueAuthenticatedSession(req, res, user) {
+function rememberPendingDeviceLogin(challengeId, context = {}) {
+  if (!challengeId) return;
+  const key = String(challengeId);
+  pendingDeviceLoginContexts.set(key, {
+    ...context,
+    expiresAt: Date.now() + (10 * 60 * 1000),
+  });
+}
+
+function takePendingDeviceLogin(challengeId) {
+  const key = String(challengeId || '');
+  const context = pendingDeviceLoginContexts.get(key);
+  pendingDeviceLoginContexts.delete(key);
+  if (!context || context.expiresAt < Date.now()) return null;
+  return context;
+}
+
+async function issueAuthenticatedSession(req, res, user, extras = {}) {
   const employeeTableId = user.employee_table_id || user.Employee_ID;
   const employeeId = await ensureEmployeeAuthIdentifier(employeeTableId);
   user.Employee_ID = employeeId;
@@ -248,6 +271,7 @@ async function issueAuthenticatedSession(req, res, user) {
     token: accessToken,
     user: authenticatedUser,
     mustChangePassword: Boolean(Number(user.force_password_change)),
+    ...extras,
   });
 }
 
@@ -359,16 +383,29 @@ async function login(req, res) {
     // A correct password resets password-lockout state, but never creates an
     // access token until the MFA challenge has been successfully verified.
     await resetFailedLoginAttemptsForUser(user.id);
-    if (isMfaRequiredForRole(user.role_name)) {
+    const deviceFingerprint = req.body?.deviceFingerprint || req.body?.fingerprint || {};
+    const deviceStatus = await getTrustedDeviceStatus(user.id, deviceFingerprint, req);
+    const deviceVerificationRequired = isMfaEnabled();
+    const mfaRequired = isMfaRequiredForRole(user.role_name) || deviceVerificationRequired;
+    if (mfaRequired) {
       try {
         const challenge = await createMfaChallenge({
           employeeId,
           accountName: user.username || user.Email || normalizedLoginIdentifier,
           req,
         });
+        rememberPendingDeviceLogin(challenge.challengeId, {
+          userId: user.id,
+          deviceHash: deviceStatus.deviceHash,
+          trustedDevice: deviceStatus.trusted,
+          promptRegisterTrustedDevice: !deviceStatus.trusted,
+        });
         return res.status(202).json({
           success: true,
           mfaRequired: true,
+          deviceVerificationRequired,
+          trustedDevice: deviceStatus.trusted,
+          promptRegisterTrustedDevice: false,
           challengeId: challenge.challengeId,
           mfaToken: challenge.mfaToken,
           codeLength: challenge.codeLength,
@@ -386,15 +423,22 @@ async function login(req, res) {
       }
     }
 
+    if (deviceStatus.trusted) {
+      await updateTrustedDeviceLastUsed(user.id, deviceStatus.deviceHash, req);
+    }
+
     await safeCreateAuditLog({
       Employee_ID: employeeId,
       Action_Type: 'MFA_NOT_REQUIRED',
-      Description: 'MFA is not required for this non-privileged account.',
+      Description: 'MFA/device verification is not required for this login.',
       IP_Address: ipAddress,
       User_Agent: userAgent,
     });
 
-    return issueAuthenticatedSession(req, res, user);
+    return issueAuthenticatedSession(req, res, user, {
+      trustedDevice: deviceStatus.trusted,
+      promptRegisterTrustedDevice: !deviceStatus.trusted,
+    });
   } catch (error) {
     if (error instanceof RecaptchaServiceError) {
       await safeCreateAuditLog({
@@ -465,7 +509,14 @@ async function verifyMfa(req, res) {
     if (!authenticatedUser || isInactiveUser(authenticatedUser)) {
       return res.status(401).json({ success: false, message: 'MFA challenge is no longer valid.' });
     }
-    return issueAuthenticatedSession(req, res, authenticatedUser);
+    const deviceContext = takePendingDeviceLogin(req.body?.challengeId);
+    if (deviceContext?.deviceHash && deviceContext.userId === authenticatedUser.id) {
+      await updateTrustedDeviceLastUsed(authenticatedUser.id, deviceContext.deviceHash, req);
+    }
+    return issueAuthenticatedSession(req, res, authenticatedUser, {
+      trustedDevice: Boolean(deviceContext?.trustedDevice),
+      promptRegisterTrustedDevice: Boolean(deviceContext?.promptRegisterTrustedDevice),
+    });
   } catch (error) {
     console.error('[authController] MFA verification failed:', error.code || error.message);
     return mfaErrorResponse(res, error);

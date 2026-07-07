@@ -5,7 +5,10 @@ let selfServiceState = {
   previewUrl: null,
   savedPhotoUrl: null,
   sensitiveValues: {},
-  sensitiveVisible: {}
+  sensitiveVisible: {},
+  trustedDevices: [],
+  deviceHistory: [],
+  deviceView: 'trusted'
 };
 
 const SELF_HR_ROLES = new Set(['hr_manager', 'hr_admin', 'system_admin', 'admin']);
@@ -163,6 +166,19 @@ function formatSelfDate(value) {
   return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
 }
 
+function formatSelfDateTime(value) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 function selfBadge(status) {
   const label = String(status || 'Pending');
   const key = label.toLowerCase().replace(/\s+/g, '-');
@@ -184,6 +200,7 @@ function setSelfServiceTab(tab) {
   document.querySelectorAll('.self-tab-panel').forEach(panel => panel.classList.remove('active'));
   document.querySelector(`[data-self-tab="${tab}"]`)?.classList.add('active');
   document.getElementById(`self-tab-${tab}`)?.classList.add('active');
+  if (tab === 'devices') loadSelfTrustedDevices();
   if (tab === 'requests') loadSelfChangeRequests();
   if (tab === 'activity') loadSelfActivityLog();
   if (tab === 'hr-requests') loadHrProfileChangeRequests();
@@ -191,6 +208,8 @@ function setSelfServiceTab(tab) {
 
 function initSelfServiceTabs() {
   document.querySelectorAll('[data-self-tab]').forEach(button => {
+    if (button.dataset.selfServiceBound === 'true') return;
+    button.dataset.selfServiceBound = 'true';
     button.addEventListener('click', () => {
       setSelfServiceTab(button.dataset.selfTab);
     });
@@ -440,6 +459,220 @@ async function loadSelfActivityLog() {
   }
 }
 
+function selfDeviceIcon(type = 'Desktop') {
+  const normalized = String(type || 'Desktop').toLowerCase();
+  if (normalized === 'mobile') return 'MO';
+  if (normalized === 'tablet') return 'TA';
+  return 'DE';
+}
+
+function selfTrustedDeviceStatus(device) {
+  const status = String(device?.status || (device?.isTrusted ? 'Trusted' : 'Revoked')).trim();
+  const statusClass = status === 'Trusted' ? 'status-approved' : status === 'Removed' ? 'status-rejected' : 'status-pending';
+  return `<span class="status-badge ${statusClass}">${escapeHTML(status || 'Trusted')}</span>`;
+}
+
+function renderSelfTrustedDevices(devices = []) {
+  const container = document.getElementById('self-devices-list');
+  if (!container) return;
+  const registerButton = document.getElementById('self-register-device-btn');
+  const currentTrusted = devices.some(device => device.currentDevice && device.isTrusted);
+  if (registerButton) {
+    registerButton.disabled = currentTrusted;
+    registerButton.textContent = currentTrusted ? 'Current Device Registered' : 'Register Current Device';
+  }
+  if (!devices.length) {
+    container.innerHTML = '<div class="self-devices-empty">No trusted devices are registered yet.</div>';
+    return;
+  }
+  container.innerHTML = devices.map(device => `
+    <article class="self-device-card ${device.currentDevice ? 'is-current' : ''}">
+      <div class="self-device-icon" aria-hidden="true">${selfDeviceIcon(device.deviceType)}</div>
+      <div class="self-device-main">
+        <div class="self-device-title-row">
+          <h3>${escapeHTML(device.deviceName || 'Trusted Device')}</h3>
+          <div class="self-device-badges">
+            ${device.currentDevice ? '<span class="self-current-device-badge">This Device</span>' : ''}
+            ${selfTrustedDeviceStatus(device)}
+          </div>
+        </div>
+        <dl class="self-device-details">
+          <div><dt>Type</dt><dd>${escapeHTML(device.deviceType || '-')}</dd></div>
+          <div><dt>Browser</dt><dd>${escapeHTML(device.browser || '-')}</dd></div>
+          <div><dt>Operating System</dt><dd>${escapeHTML(device.operatingSystem || '-')}</dd></div>
+          <div><dt>IP Address</dt><dd>${escapeHTML(device.ipAddress || '-')}</dd></div>
+          <div><dt>Date Registered</dt><dd>${escapeHTML(formatSelfDateTime(device.registeredAt))}</dd></div>
+          <div><dt>Last Used</dt><dd>${escapeHTML(formatSelfDateTime(device.lastUsed))}</dd></div>
+        </dl>
+        <div class="self-device-actions">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="renameSelfTrustedDevice(${Number(device.id)})">Rename</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="viewSelfTrustedDevice(${Number(device.id)})">Details</button>
+          ${device.isTrusted ? `<button type="button" class="btn btn-secondary btn-sm" onclick="revokeSelfTrustedDevice(${Number(device.id)})">Remove</button>` : ''}
+        </div>
+      </div>
+    </article>
+  `).join('');
+  selfServiceState.trustedDevices = devices;
+}
+
+async function loadSelfTrustedDevices() {
+  const container = document.getElementById('self-devices-list');
+  if (!container) return;
+  container.innerHTML = '<div class="self-devices-empty">Loading devices...</div>';
+  try {
+    const fingerprint = typeof buildTrustedDeviceFingerprint === 'function'
+      ? await buildTrustedDeviceFingerprint()
+      : {};
+    const res = await apiFetch('/api/trusted-devices', {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint })
+    });
+    const data = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(data.error || 'Failed to load trusted devices.');
+    renderSelfTrustedDevices(Array.isArray(data) ? data : []);
+  } catch (error) {
+    container.innerHTML = `<div class="self-devices-empty">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+async function loadSelfDeviceHistory() {
+  const container = document.getElementById('self-devices-history');
+  if (!container) return;
+  container.innerHTML = '<div class="self-devices-empty">Loading device history...</div>';
+  try {
+    const res = await apiFetch('/api/trusted-devices/history');
+    const data = await res.json().catch(() => []);
+    if (!res.ok) throw new Error(data.error || 'Failed to load device history.');
+    selfServiceState.deviceHistory = Array.isArray(data) ? data : [];
+    if (!selfServiceState.deviceHistory.length) {
+      container.innerHTML = '<div class="self-devices-empty">No device history yet.</div>';
+      return;
+    }
+    container.innerHTML = `
+      <table class="self-device-history-table">
+        <thead><tr><th>Device</th><th>Type</th><th>Browser</th><th>OS</th><th>Registered</th><th>Last Active</th><th>Status</th></tr></thead>
+        <tbody>
+          ${selfServiceState.deviceHistory.map(device => `
+            <tr>
+              <td>${escapeHTML(device.deviceName || '-')}</td>
+              <td>${escapeHTML(device.deviceType || '-')}</td>
+              <td>${escapeHTML(device.browser || '-')}</td>
+              <td>${escapeHTML(device.operatingSystem || '-')}</td>
+              <td>${escapeHTML(formatSelfDateTime(device.registeredAt))}</td>
+              <td>${escapeHTML(formatSelfDateTime(device.lastUsed))}</td>
+              <td>${selfTrustedDeviceStatus(device)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch (error) {
+    container.innerHTML = `<div class="self-devices-empty">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+function setSelfDeviceView(view = 'trusted') {
+  selfServiceState.deviceView = view;
+  document.querySelectorAll('.self-device-subtab').forEach(button => button.classList.toggle('active', button.dataset.selfDeviceView === view));
+  const trusted = document.getElementById('self-devices-list');
+  const history = document.getElementById('self-devices-history');
+  if (trusted) trusted.hidden = view !== 'trusted';
+  if (history) history.hidden = view !== 'history';
+  if (view === 'history') loadSelfDeviceHistory();
+}
+
+async function registerSelfCurrentDevice() {
+  const password = await showPrompt('Confirm your account password', 'Confirm your account password', 'Enter your password');
+  if (!password) return;
+  try {
+    const fingerprint = typeof buildTrustedDeviceFingerprint === 'function'
+      ? await buildTrustedDeviceFingerprint()
+      : {};
+    const name = await showPrompt('Device name', 'Register Trusted Device', typeof trustedDeviceDefaultName === 'function' ? trustedDeviceDefaultName(fingerprint) : 'Trusted Device');
+    const res = await apiFetch('/api/trusted-devices/register', {
+      method: 'POST',
+      body: JSON.stringify({ password, fingerprint, deviceName: name || undefined })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (data.restoreRequired) {
+        const restore = await showConfirm('This device was previously registered. Would you like to restore it instead?', 'Restore Trusted Device', 'Restore Device', 'Cancel');
+        if (restore) {
+          const restoreRes = await apiFetch('/api/trusted-devices/restore', {
+            method: 'POST',
+            body: JSON.stringify({ deviceId: data.deviceId })
+          });
+          const restoreData = await restoreRes.json().catch(() => ({}));
+          if (!restoreRes.ok) throw new Error(restoreData.error || 'Failed to restore device.');
+          selfServiceNotify(restoreData.message || 'Device restored.', 'success');
+        }
+        return;
+      }
+      throw new Error(data.error || 'Failed to register device.');
+    }
+    selfServiceNotify(data.message || 'Device registered.', 'success');
+    await loadSelfTrustedDevices();
+    await loadSelfActivityLog();
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function renameSelfTrustedDevice(id, currentName = '') {
+  if (!currentName) {
+    const device = (selfServiceState.trustedDevices || []).find(item => Number(item.id) === Number(id));
+    currentName = device?.deviceName || '';
+  }
+  const deviceName = prompt('New device name:', currentName);
+  if (!deviceName) return;
+  try {
+    const res = await apiFetch(`/api/trusted-devices/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ deviceName })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to rename device.');
+    selfServiceNotify(data.message || 'Device renamed.', 'success');
+    await loadSelfTrustedDevices();
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+function viewSelfTrustedDevice(id) {
+  const device = (selfServiceState.trustedDevices || []).find(item => Number(item.id) === Number(id));
+  if (!device) return;
+  const message = [
+    `Device Name: ${device.deviceName || '-'}`,
+    `Status: ${device.status || (device.isTrusted ? 'Trusted' : 'Revoked')}`,
+    `Type: ${device.deviceType || '-'}`,
+    `Browser: ${device.browser || '-'}`,
+    `Operating System: ${device.operatingSystem || '-'}`,
+    `IP Address: ${device.ipAddress || '-'}`,
+    `Registered: ${formatSelfDateTime(device.registeredAt)}`,
+    `Last Used: ${formatSelfDateTime(device.lastUsed)}`,
+  ].join('\n');
+  if (typeof showAlert === 'function') showAlert(message, 'Device Details', 'info');
+  else alert(message);
+}
+
+async function revokeSelfTrustedDevice(id) {
+  const password = await showPrompt('Confirm your account password', 'Remove Trusted Device', 'Enter your password');
+  if (!password) return;
+  try {
+    const res = await apiFetch(`/api/trusted-devices/${id}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to remove device.');
+    selfServiceNotify(data.message || 'Device revoked.', 'success');
+    await loadSelfTrustedDevices();
+    await loadSelfActivityLog();
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
 async function loadHrProfileChangeRequests() {
   const tbody = document.getElementById('self-hr-requests-body');
   if (!tbody || !isSelfHrReviewer()) return;
@@ -497,26 +730,36 @@ async function rejectHrProfileRequest(id) {
 }
 
 function wireSelfServiceEvents() {
-  if (selfServiceState.initialized) return;
-  selfServiceState.initialized = true;
   initSelfServiceTabs();
   document.getElementById('self-service-refresh')?.addEventListener('click', initSelfServiceProfile);
   document.querySelectorAll('[data-self-save]').forEach(button => {
+    if (button.dataset.selfServiceSaveBound === 'true') return;
+    button.dataset.selfServiceSaveBound = 'true';
     button.addEventListener('click', () => saveSelfProfileSection(button.dataset.selfSave));
   });
   document.querySelectorAll('[data-self-sensitive-toggle]').forEach(button => {
+    if (button.dataset.selfServiceSensitiveBound === 'true') return;
     button.dataset.selfSensitiveLabel = button.getAttribute('aria-label')?.replace(/^Show\s+/i, '') || '';
+    button.dataset.selfServiceSensitiveBound = 'true';
     button.addEventListener('click', () => toggleSelfSensitiveField(button.dataset.selfSensitiveToggle));
   });
   document.getElementById('self-password-save')?.addEventListener('click', changeSelfPassword);
+  document.getElementById('self-register-device-btn')?.addEventListener('click', registerSelfCurrentDevice);
   document.getElementById('self-picture-form')?.addEventListener('submit', uploadSelfPicture);
   document.getElementById('self-picture-input')?.addEventListener('change', previewSelfPicture);
   document.getElementById('self-change-request-form')?.addEventListener('submit', submitSelfChangeRequest);
   document.querySelectorAll('[data-self-mobile-tab]').forEach(button => {
+    if (button.dataset.selfServiceMobileBound === 'true') return;
+    button.dataset.selfServiceMobileBound = 'true';
     button.addEventListener('click', () => {
       setSelfServiceTab(button.dataset.selfMobileTab);
       document.querySelector('.self-service-tabs')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     });
+  });
+  document.querySelectorAll('.self-device-subtab').forEach(button => {
+    if (button.dataset.selfDevicesBound === 'true') return;
+    button.dataset.selfDevicesBound = 'true';
+    button.addEventListener('click', () => setSelfDeviceView(button.dataset.selfDeviceView));
   });
 }
 
@@ -544,12 +787,23 @@ async function initSelfServiceProfile() {
     await loadSelfServiceProfile();
     await loadSelfChangeRequests();
     await loadSelfActivityLog();
+    await loadSelfTrustedDevices();
     if (isSelfHrReviewer()) await loadHrProfileChangeRequests();
   } catch (error) {
     selfServiceNotify(error.message, 'error');
   }
 }
 
+document.addEventListener('partialsLoaded', () => {
+  if (document.querySelector('.self-service-page') && typeof initSelfServiceProfile === 'function') {
+    initSelfServiceProfile();
+  }
+});
+
 window.initSelfServiceProfile = initSelfServiceProfile;
 window.approveHrProfileRequest = approveHrProfileRequest;
 window.rejectHrProfileRequest = rejectHrProfileRequest;
+window.renameSelfTrustedDevice = renameSelfTrustedDevice;
+window.revokeSelfTrustedDevice = revokeSelfTrustedDevice;
+window.viewSelfTrustedDevice = viewSelfTrustedDevice;
+window.setSelfDeviceView = setSelfDeviceView;

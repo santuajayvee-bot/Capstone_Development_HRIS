@@ -228,6 +228,11 @@ async function completeAuthenticatedLogin(data, options = {}) {
     initAttendanceRealtime();
   }
 
+  const passwordChangeRequired = data.mustChangePassword || data.user?.mustChangePassword || data.user?.forcePasswordChange;
+  if (!passwordChangeRequired && data.promptRegisterTrustedDevice && typeof promptRegisterTrustedDeviceAfterLogin === 'function') {
+    promptRegisterTrustedDeviceAfterLogin();
+  }
+
   continueAuthenticatedNavigation(data);
 }
 
@@ -392,6 +397,9 @@ async function doLogin() {
   const captchaToken = recaptchaRequired && recaptchaWidgetId !== null && window.grecaptcha
     ? window.grecaptcha.getResponse(recaptchaWidgetId)
     : '';
+  if (recaptchaRequired && recaptchaWidgetId === null) {
+    recaptchaRequired = false;
+  }
   if (recaptchaRequired && !captchaToken) {
     loginError('Complete the human verification before signing in.');
     return;
@@ -404,7 +412,14 @@ async function doLogin() {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, captchaToken }),
+      body: JSON.stringify({
+        username,
+        password,
+        captchaToken,
+        deviceFingerprint: typeof buildTrustedDeviceFingerprint === 'function'
+          ? await buildTrustedDeviceFingerprint()
+          : {},
+      }),
     });
 
     const data = await res.json();

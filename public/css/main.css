@@ -4845,6 +4845,165 @@ tr:hover td,
   border: 1px solid var(--border);
 }
 
+.self-devices-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.self-device-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.self-device-subtab {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 12px;
+}
+
+.self-device-subtab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.self-devices-list {
+  display: grid;
+  gap: 12px;
+}
+
+.self-devices-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 18px;
+  text-align: center;
+}
+
+.self-device-card {
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 44px 1fr;
+  padding: 16px;
+}
+
+.self-device-card.is-current {
+  border-color: #2f6fed;
+}
+
+.self-device-icon {
+  align-items: center;
+  background: var(--erp-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.self-device-title-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.self-device-title-row h3 {
+  font-size: 16px;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.self-device-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.self-current-device-badge {
+  background: #e8f0ff;
+  border: 1px solid #b8cdfc;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.self-device-details {
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.self-device-details div {
+  min-width: 0;
+}
+
+.self-device-details dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.self-device-details dd {
+  color: var(--text);
+  font-size: 13px;
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.self-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.self-device-history-table,
+.self-device-session-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.self-device-history-table th,
+.self-device-history-table td,
+.self-device-session-table th,
+.self-device-session-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.self-device-history-table th,
+.self-device-session-table th {
+  background: var(--table-head, var(--card2));
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
 .self-service-page table {
   width: 100%;
   border-collapse: collapse;
@@ -4867,6 +5026,20 @@ tr:hover td,
 
 @media (max-width: 900px) {
   .self-service-page .erp-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .self-devices-header,
+  .self-device-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .self-device-card {
+    grid-template-columns: 1fr;
+  }
+
+  .self-device-details {
     grid-template-columns: 1fr;
   }
 
