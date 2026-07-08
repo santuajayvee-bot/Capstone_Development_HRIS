@@ -422,56 +422,182 @@
 <div class="sysadmin-panel" id="panel-backups">
   <div class="sysadmin-action-bar">
     <div>
-      <h3 style="margin:0 0 4px;">Backup and Restore</h3>
+      <h3 style="margin:0 0 4px;">Backup and Recovery</h3>
     </div>
     <button class="btn-sysadmin-outline" onclick="loadBackupLogs()">Refresh</button>
   </div>
 
-  <div class="sysadmin-settings-card">
-    <div class="sysadmin-form-grid">
-      <div>
-        <label class="sysadmin-label">Backup Type</label>
-        <select id="backup-type" class="sysadmin-input">
-          <option value="DATABASE">Database</option>
-          <option value="FILES">Files</option>
-          <option value="FULL_SYSTEM">Full System</option>
-        </select>
-      </div>
-      <div>
-        <label class="sysadmin-label">Storage Target</label>
-        <select id="backup-target" class="sysadmin-input">
-          <option value="EXTERNAL">External</option>
-          <option value="RDS_SNAPSHOT">RDS Snapshot</option>
-          <option value="S3">S3</option>
-          <option value="LOCAL">Local</option>
-        </select>
-      </div>
-    </div>
-    <label class="sysadmin-label" style="margin-top:14px;">Notes</label>
-    <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000"></textarea>
-    <div class="modal-footer" style="padding:16px 0 0;">
-      <div style="flex:1"></div>
-      <button class="btn-sysadmin-primary" onclick="requestBackup()">Request Backup</button>
-    </div>
+  <div class="backup-recovery-tabs" role="tablist" aria-label="Backup and Recovery sections">
+    <button type="button" class="backup-recovery-tab active" data-backup-tab="overview" onclick="switchBackupRecoveryTab('overview')">Overview</button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="sets" onclick="switchBackupRecoveryTab('sets')">Backup Sets</button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="recovery" onclick="switchBackupRecoveryTab('recovery')">Module Recovery</button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')">Restore Jobs</button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')">Rollback Requests</button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')">Backup Settings</button>
   </div>
 
-  <div class="sysadmin-table-wrapper" style="margin-top:20px;">
-    <table class="sysadmin-table">
-      <thead>
-        <tr>
-          <th>Reference</th>
-          <th>Type</th>
-          <th>Target</th>
-          <th>Status</th>
-          <th>Manifest</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="backup-logs-tbody">
-        <tr><td colspan="7" class="table-empty">No backup records loaded.</td></tr>
-      </tbody>
-    </table>
+  <section class="backup-recovery-section active" data-backup-panel="overview">
+    <div class="backup-summary-grid" id="backup-summary-grid"></div>
+
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Data</th>
+            <th>Files</th>
+            <th>Config</th>
+            <th>Recovery Point</th>
+            <th>Versions</th>
+            <th>Last Backup</th>
+            <th>Health</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="backup-coverage-tbody">
+          <tr><td colspan="9" class="table-empty">No backup coverage loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="sets">
+    <div class="sysadmin-settings-card backup-request-panel">
+      <div class="sysadmin-form-grid">
+        <div>
+          <label class="sysadmin-label">Backup Name</label>
+          <input id="backup-name" class="sysadmin-input" maxlength="160" placeholder="Optional reference name" />
+        </div>
+        <div>
+          <label class="sysadmin-label">Backup Type</label>
+          <select id="backup-type" class="sysadmin-input">
+            <option value="DATABASE">Database</option>
+            <option value="FILES">Files</option>
+            <option value="CONFIGURATION">Configuration</option>
+            <option value="MODULE_STATE">Module State</option>
+            <option value="DEPLOYMENT_VERSION">Deployment Version</option>
+            <option value="FULL_BACKUP">Full Backup</option>
+          </select>
+        </div>
+        <div>
+          <label class="sysadmin-label">Storage Provider</label>
+          <select id="backup-target" class="sysadmin-input">
+            <option value="MANUAL">Manual</option>
+            <option value="LOCAL">Local</option>
+            <option value="RDS_SNAPSHOT">RDS Snapshot</option>
+            <option value="S3">S3</option>
+          </select>
+        </div>
+      </div>
+      <label class="sysadmin-label" style="margin-top:14px;">Covered Modules</label>
+      <select id="backup-modules" class="sysadmin-input backup-module-select" multiple></select>
+      <label class="sysadmin-label" style="margin-top:14px;">Notes</label>
+      <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000"></textarea>
+      <div class="modal-footer" style="padding:16px 0 0;">
+        <div style="flex:1"></div>
+        <button class="btn-sysadmin-primary" onclick="requestBackup()">Request Backup</button>
+      </div>
+    </div>
+
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Reference</th>
+            <th>Type</th>
+            <th>Provider</th>
+            <th>Status</th>
+            <th>Checksum</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="backup-logs-tbody">
+          <tr><td colspan="7" class="table-empty">No backup records loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="recovery">
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Current</th>
+            <th>Stable</th>
+            <th>Health</th>
+            <th>Artifact</th>
+            <th>Rollback</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="module-recovery-tbody">
+          <tr><td colspan="8" class="table-empty">No module recovery points loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="restore">
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Backup</th>
+            <th>Type</th>
+            <th>Module</th>
+            <th>Status</th>
+            <th>Requested By</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="restore-jobs-tbody">
+          <tr><td colspan="7" class="table-empty">No restore jobs loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="rollback">
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Current</th>
+            <th>Target</th>
+            <th>Status</th>
+            <th>Requested By</th>
+            <th>Approved By</th>
+            <th>Result</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rollback-requests-tbody">
+          <tr><td colspan="8" class="table-empty">No rollback requests loaded.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="settings">
+    <div class="backup-settings-grid" id="backup-settings-grid"></div>
+  </section>
+</div>
+
+<div class="sysadmin-modal-overlay" id="backup-detail-modal" style="display:none;">
+  <div class="sysadmin-modal backup-detail-dialog">
+    <div class="modal-header">
+      <h3 id="backup-detail-title">Backup Details</h3>
+      <button class="modal-close" onclick="closeBackupDetails()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="backup-detail-body" class="support-kv-list"></div>
+    </div>
   </div>
 </div>
 

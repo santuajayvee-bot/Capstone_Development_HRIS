@@ -10,6 +10,12 @@ let sysAllEmployees = [];
 let sysAccountStats = null;
 let sysSupportTickets = [];
 let sysBackupLogs = [];
+let sysBackupDashboard = null;
+let sysBackupCoverage = [];
+let sysModuleRecoveryPoints = [];
+let sysRestoreJobs = [];
+let sysRollbackRequests = [];
+let sysBackupActiveTab = 'overview';
 let sysHealthSnapshot = null;
 let sysHealthModules = [];
 let sysHealthHistory = [];
@@ -1513,9 +1519,9 @@ function sysShortHash(value) {
 
 function sysStatusBadge(status) {
   const normalized = String(status || '').trim().toUpperCase();
-  const good = ['ACTIVE', 'COMPLETED', 'VERIFIED', 'RESOLVED', 'CLOSED', 'RECORDED'];
-  const bad = ['FAILED', 'CRITICAL', 'VERIFICATION_FAILED', 'INACTIVE'];
-  const warn = ['HIGH', 'OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'REQUESTED', 'RUNNING', 'PENDING', 'PENDING_ANCHOR'];
+  const good = ['ACTIVE', 'COMPLETED', 'VERIFIED', 'RESOLVED', 'CLOSED', 'RECORDED', 'COVERED', 'YES', 'AVAILABLE', 'ONLINE', 'HEALTHY', 'RESTORED'];
+  const bad = ['FAILED', 'CRITICAL', 'VERIFICATION_FAILED', 'INACTIVE', 'NOT COVERED', 'NO', 'OFFLINE'];
+  const warn = ['HIGH', 'OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'REQUESTED', 'RUNNING', 'PENDING', 'PENDING_ANCHOR', 'WARNING', 'MAINTENANCE'];
   const cls = good.includes(normalized)
     ? 'badge-active'
     : bad.includes(normalized)
@@ -2276,15 +2282,157 @@ async function updateSupportTicket(ticketId, status) {
 
 async function loadBackupLogs() {
   try {
-    const res = await apiFetch('/api/admin/backups');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to load backup records.');
-    sysBackupLogs = Array.isArray(data) ? data : [];
-    renderBackupLogs();
+    const [overviewRes, backupsRes, recoveryRes, restoreRes, rollbackRes] = await Promise.all([
+      apiFetch('/api/admin/backups/overview'),
+      apiFetch('/api/admin/backups'),
+      apiFetch('/api/admin/backups/recovery-points'),
+      apiFetch('/api/admin/backups/restore-jobs'),
+      apiFetch('/api/admin/backups/rollback-requests'),
+    ]);
+    const [overview, backups, recovery, restore, rollback] = await Promise.all([
+      overviewRes.json(),
+      backupsRes.json(),
+      recoveryRes.json(),
+      restoreRes.json(),
+      rollbackRes.json(),
+    ]);
+    if (!overviewRes.ok) throw new Error(overview.error || 'Failed to load backup dashboard.');
+    if (!backupsRes.ok) throw new Error(backups.error || 'Failed to load backup records.');
+    if (!recoveryRes.ok) throw new Error(recovery.error || 'Failed to load module recovery points.');
+    if (!restoreRes.ok) throw new Error(restore.error || 'Failed to load restore jobs.');
+    if (!rollbackRes.ok) throw new Error(rollback.error || 'Failed to load rollback requests.');
+
+    sysBackupDashboard = overview || {};
+    sysBackupCoverage = Array.isArray(overview?.coverage) ? overview.coverage : [];
+    sysBackupLogs = Array.isArray(backups) ? backups : [];
+    sysModuleRecoveryPoints = Array.isArray(recovery) ? recovery : [];
+    sysRestoreJobs = Array.isArray(restore) ? restore : [];
+    sysRollbackRequests = Array.isArray(rollback) ? rollback : [];
+    renderBackupRecoveryWorkspace();
   } catch (err) {
-    const tbody = document.getElementById('backup-logs-tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${sysEsc(err.message || 'Failed to load backup records.')}</td></tr>`;
+    const colspans = {
+      'backup-coverage-tbody': 9,
+      'backup-logs-tbody': 7,
+      'module-recovery-tbody': 8,
+      'restore-jobs-tbody': 7,
+      'rollback-requests-tbody': 8,
+    };
+    Object.keys(colspans).forEach(id => {
+      const tbody = document.getElementById(id);
+      if (tbody) tbody.innerHTML = `<tr><td colspan="${colspans[id]}" class="table-empty">${sysEsc(err.message || 'Failed to load backup recovery data.')}</td></tr>`;
+    });
+    showSysToast(err.message || 'Failed to load backup recovery data.', 'error');
   }
+}
+
+function switchBackupRecoveryTab(tab) {
+  sysBackupActiveTab = tab || 'overview';
+  document.querySelectorAll('[data-backup-tab]').forEach(button => {
+    button.classList.toggle('active', button.dataset.backupTab === sysBackupActiveTab);
+  });
+  document.querySelectorAll('[data-backup-panel]').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.backupPanel === sysBackupActiveTab);
+  });
+}
+
+function backupTypeLabel(value) {
+  return String(value || '-').replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function backupModuleName(moduleKey) {
+  const match = sysBackupCoverage.find(item => item.module_key === moduleKey)
+    || sysModuleRecoveryPoints.find(item => item.module_key === moduleKey);
+  return match?.module_name || backupTypeLabel(moduleKey);
+}
+
+function backupSelectModules() {
+  const select = document.getElementById('backup-modules');
+  if (!select) return [];
+  const selected = Array.from(select.selectedOptions || []).map(option => option.value).filter(Boolean);
+  return selected.length ? selected : sysBackupCoverage.map(module => module.module_key);
+}
+
+function renderBackupModuleOptions() {
+  const select = document.getElementById('backup-modules');
+  if (!select || !sysBackupCoverage.length) return;
+  const selected = new Set(Array.from(select.selectedOptions || []).map(option => option.value));
+  select.innerHTML = sysBackupCoverage.map(module => {
+    const shouldSelect = selected.size ? selected.has(module.module_key) : true;
+    return `<option value="${sysEsc(module.module_key)}" ${shouldSelect ? 'selected' : ''}>${sysEsc(module.module_name)}</option>`;
+  }).join('');
+}
+
+function backupSummaryValue(record, fallback = '-') {
+  if (!record) return fallback;
+  if (typeof record === 'string') return record;
+  return record.backup_reference || record.module_name || record.status || fallback;
+}
+
+function backupSummaryMeta(record) {
+  if (!record || typeof record === 'string') return '';
+  const parts = [
+    record.status,
+    record.storage_provider,
+    record.created_at ? sysFormatDateTime(record.created_at) : record.created_at,
+  ].filter(Boolean);
+  return parts.join(' | ');
+}
+
+function renderBackupSummaryCards() {
+  const target = document.getElementById('backup-summary-grid');
+  if (!target) return;
+  const cards = sysBackupDashboard?.cards || {};
+  const items = [
+    ['Latest Database Backup', backupSummaryValue(cards.latest_database_backup), backupSummaryMeta(cards.latest_database_backup)],
+    ['Latest File Backup', backupSummaryValue(cards.latest_file_backup), backupSummaryMeta(cards.latest_file_backup)],
+    ['Latest Configuration Backup', backupSummaryValue(cards.latest_configuration_backup), backupSummaryMeta(cards.latest_configuration_backup)],
+    ['Latest Module Recovery Point', backupSummaryValue(cards.latest_module_recovery_point), backupSummaryMeta(cards.latest_module_recovery_point)],
+    ['Latest Deployment Version', backupSummaryValue(cards.latest_deployment_version), backupSummaryMeta(cards.latest_deployment_version)],
+    ['Backup Status', cards.backup_status || sysBackupDashboard?.status || 'Warning', 'Recovery readiness'],
+    ['Total Backup Sets', Number(cards.total_backup_sets || 0), 'Recorded backup sets'],
+    ['Failed Backup Jobs', Number(cards.failed_backup_jobs || 0), 'Needs admin review'],
+    ['Last Restore Attempt', backupSummaryValue(cards.last_restore_attempt, 'No restore job'), backupSummaryMeta(cards.last_restore_attempt)],
+  ];
+  target.innerHTML = items.map(([label, value, meta]) => `
+    <article class="backup-summary-card">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value)}</strong>
+      <small>${sysEsc(meta || '-')}</small>
+    </article>
+  `).join('');
+}
+
+function renderBackupCoverage() {
+  const tbody = document.getElementById('backup-coverage-tbody');
+  if (!tbody) return;
+  if (!sysBackupCoverage.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No module coverage loaded.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysBackupCoverage.map(module => {
+    const restoreDisabled = module.backup_set_id ? '' : 'disabled';
+    const rollbackDisabled = module.rollback_available ? '' : 'disabled';
+    return `
+      <tr>
+        <td><strong>${sysEsc(module.module_name)}</strong><br><small>${sysEsc(module.module_key)}</small></td>
+        <td>${sysStatusBadge(module.data_backup_coverage)}</td>
+        <td>${sysStatusBadge(module.file_backup_coverage)}</td>
+        <td>${sysStatusBadge(module.config_backup_coverage)}</td>
+        <td>${module.recovery_point_available ? sysStatusBadge('YES') : sysStatusBadge('NO')}</td>
+        <td><small>Current: ${sysEsc(module.current_version || '-')}<br>Stable: ${sysEsc(module.stable_version || '-')}</small></td>
+        <td><small>${sysEsc(sysFormatDateTime(module.last_backup_timestamp))}</small></td>
+        <td>${sysStatusBadge(module.last_health_status)}</td>
+        <td>
+          <div class="support-row-actions">
+            <button class="btn-sysadmin-sm" onclick="switchBackupRecoveryTab('sets')">View Backups</button>
+            <button class="btn-sysadmin-sm" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, 'DATABASE')" ${restoreDisabled}>Restore Data</button>
+            <button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Rollback Version</button>
+            <button class="btn-sysadmin-sm" onclick="createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})">Create Incident</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function renderBackupLogs() {
@@ -2295,20 +2443,22 @@ function renderBackupLogs() {
     return;
   }
   tbody.innerHTML = sysBackupLogs.map(record => {
-    const id = Number(record.backup_id);
+    const id = Number(record.backup_set_id || record.backup_id || record.id);
     const actions = [
+      `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'RUNNING')">Run</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'COMPLETED')">Complete</button>`,
-      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'VERIFIED')">Verify</button>`,
+      `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Verify</button>`,
+      `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(record.backup_type || 'DATABASE')})" ${['COMPLETED', 'VERIFIED', 'RESTORED'].includes(String(record.status || '').toUpperCase()) ? '' : 'disabled'}>Restore</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'FAILED')">Fail</button>`,
     ];
     return `
       <tr>
         <td><strong>${sysEsc(record.backup_reference)}</strong></td>
-        <td>${sysEsc(record.backup_type)}</td>
-        <td>${sysEsc(record.storage_target)}</td>
+        <td>${sysEsc(backupTypeLabel(record.backup_type))}</td>
+        <td>${sysEsc(record.storage_provider || record.storage_target || '-')}</td>
         <td>${sysStatusBadge(record.status)}</td>
-        <td><small>${sysEsc(sysShortHash(record.manifest_hash))}</small></td>
+        <td><small>${sysEsc(sysShortHash(record.checksum || record.manifest_hash))}</small></td>
         <td><small>${sysEsc(sysFormatDateTime(record.created_at))}</small></td>
         <td><div class="support-row-actions">${actions.join('')}</div></td>
       </tr>
@@ -2316,10 +2466,121 @@ function renderBackupLogs() {
   }).join('');
 }
 
+function renderModuleRecoveryPoints() {
+  const tbody = document.getElementById('module-recovery-tbody');
+  if (!tbody) return;
+  if (!sysModuleRecoveryPoints.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No module recovery points found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysModuleRecoveryPoints.map(point => `
+    <tr>
+      <td><strong>${sysEsc(point.module_name)}</strong><br><small>${sysEsc(point.backup_reference || point.module_key)}</small></td>
+      <td>${sysEsc(point.current_version || '-')}</td>
+      <td>${sysEsc(point.stable_version || '-')}</td>
+      <td>${sysStatusBadge(point.health_status_at_backup)}</td>
+      <td><small>${sysEsc(point.artifact_location || '-')}</small></td>
+      <td>${point.rollback_available ? sysStatusBadge('AVAILABLE') : sysStatusBadge('NOT AVAILABLE')}</td>
+      <td><small>${sysEsc(sysFormatDateTime(point.created_at))}</small></td>
+      <td>
+        <div class="support-row-actions">
+          <button class="btn-sysadmin-sm" onclick="openBackupDetails('recovery', ${Number(point.id)})">View Recovery Point</button>
+          <button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(point.module_key)})" ${point.rollback_available ? '' : 'disabled'}>Request Rollback</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderRestoreJobs() {
+  const tbody = document.getElementById('restore-jobs-tbody');
+  if (!tbody) return;
+  if (!sysRestoreJobs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No restore jobs found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysRestoreJobs.map(job => `
+    <tr>
+      <td><strong>#${Number(job.restore_job_id || job.id)}</strong><br><small>${sysEsc(sysFormatDateTime(job.created_at))}</small></td>
+      <td>${sysEsc(job.backup_reference || job.backup_set_id || '-')}</td>
+      <td>${sysEsc(backupTypeLabel(job.restore_type))}</td>
+      <td>${sysEsc(job.affected_module ? backupModuleName(job.affected_module) : '-')}</td>
+      <td>${sysStatusBadge(job.status)}</td>
+      <td>${sysEsc(job.requested_by_username || job.requested_by || '-')}</td>
+      <td><small>${sysEsc(job.result_message || '-')}</small></td>
+    </tr>
+  `).join('');
+}
+
+function renderRollbackRequests() {
+  const tbody = document.getElementById('rollback-requests-tbody');
+  if (!tbody) return;
+  if (!sysRollbackRequests.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No rollback requests found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysRollbackRequests.map(request => {
+    const id = Number(request.rollback_request_id || request.id);
+    const status = String(request.status || '').toUpperCase();
+    const actions = [];
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'APPROVED')">Approve</button>`);
+    if (status === 'APPROVED') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'IN_PROGRESS')">Start</button>`);
+    if (['PENDING', 'APPROVED'].includes(status)) actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'CANCELLED')">Cancel</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'COMPLETED')">Complete</button>`);
+    return `
+      <tr>
+        <td><strong>${sysEsc(backupModuleName(request.affected_module))}</strong></td>
+        <td>${sysEsc(request.current_version || '-')}</td>
+        <td>${sysEsc(request.target_version || '-')}</td>
+        <td>${sysStatusBadge(request.status)}</td>
+        <td>${sysEsc(request.requested_by_username || request.requested_by || '-')}</td>
+        <td>${sysEsc(request.approved_by_username || request.approved_by || '-')}</td>
+        <td><small>${sysEsc(request.result_message || request.reason || '-')}</small></td>
+        <td><div class="support-row-actions">${actions.join('')}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderBackupSettings() {
+  const target = document.getElementById('backup-settings-grid');
+  if (!target) return;
+  const settings = sysBackupDashboard?.settings || {};
+  const items = [
+    ['Database Backups', settings.database_provider || 'Local MySQL dump record'],
+    ['File Backups', settings.file_provider || 'Local file backup metadata'],
+    ['Configuration Backups', settings.config_provider || 'Non-secret configuration only'],
+    ['Deployment Rollback', settings.deployment_provider || 'Manual deployment artifact reference'],
+    ['AWS Region', settings.aws_region_configured ? 'Configured' : 'Missing'],
+    ['S3 Bucket', settings.s3_bucket_configured ? 'Configured' : 'Missing'],
+    ['RDS Snapshot', settings.rds_snapshot_configured ? 'Configured' : 'Missing'],
+  ];
+  target.innerHTML = items.map(([label, value]) => `
+    <article class="backup-setting-card">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value)}</strong>
+    </article>
+  `).join('');
+}
+
+function renderBackupRecoveryWorkspace() {
+  renderBackupModuleOptions();
+  renderBackupSummaryCards();
+  renderBackupCoverage();
+  renderBackupLogs();
+  renderModuleRecoveryPoints();
+  renderRestoreJobs();
+  renderRollbackRequests();
+  renderBackupSettings();
+  switchBackupRecoveryTab(sysBackupActiveTab);
+}
+
 async function requestBackup() {
   const body = {
+    backup_name: document.getElementById('backup-name')?.value || '',
     backup_type: document.getElementById('backup-type')?.value || 'DATABASE',
-    storage_target: document.getElementById('backup-target')?.value || 'EXTERNAL',
+    storage_provider: document.getElementById('backup-target')?.value || 'MANUAL',
+    included_modules: backupSelectModules(),
     notes: document.getElementById('backup-notes')?.value || '',
   };
   try {
@@ -2331,7 +2592,9 @@ async function requestBackup() {
     if (!res.ok) throw new Error(data.error || 'Failed to request backup.');
     showSysToast(data.message || 'Backup request logged.', 'success');
     const notes = document.getElementById('backup-notes');
+    const name = document.getElementById('backup-name');
     if (notes) notes.value = '';
+    if (name) name.value = '';
     loadBackupLogs();
     loadSystemHealth();
   } catch (err) {
@@ -2339,15 +2602,30 @@ async function requestBackup() {
   }
 }
 
-async function updateBackupStatus(backupId, status) {
-  const body = { status };
+async function verifyBackup(backupId) {
+  const manifestHash = prompt('SHA-256 manifest/checksum hash:', '');
+  if (manifestHash === null) return;
+  const location = prompt('Backup location/reference:', '');
+  if (location === null) return;
+  await updateBackupStatus(backupId, 'VERIFIED', {
+    manifest_hash: manifestHash.trim(),
+    storage_location: location.trim(),
+  });
+}
+
+async function updateBackupStatus(backupId, status, extra = {}) {
+  const body = { status, ...extra };
   if (['COMPLETED', 'VERIFIED'].includes(status)) {
-    const manifestHash = prompt('SHA-256 manifest hash:', '');
-    if (manifestHash === null) return;
-    if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
-    const location = prompt('Backup location/reference:', '');
-    if (location === null) return;
-    if (location.trim()) body.backup_location = location.trim();
+    if (!body.manifest_hash && !body.checksum) {
+      const manifestHash = prompt('SHA-256 manifest/checksum hash:', '');
+      if (manifestHash === null) return;
+      if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
+    }
+    if (!body.storage_location && !body.backup_location) {
+      const location = prompt('Backup location/reference:', '');
+      if (location === null) return;
+      if (location.trim()) body.storage_location = location.trim();
+    }
   }
   if (status === 'FAILED') {
     const notes = prompt('Failure notes:', '');
@@ -2367,6 +2645,128 @@ async function updateBackupStatus(backupId, status) {
   } catch (err) {
     showSysToast(err.message || 'Network error.', 'error');
   }
+}
+
+async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABASE') {
+  const normalizedBackupId = Number(backupId || 0);
+  if (!normalizedBackupId) {
+    showSysToast('Select a completed backup before requesting restore.', 'error');
+    return;
+  }
+  const warning = 'This action may affect current system data. Please ensure that a valid backup is selected.\n\nType RESTORE to queue the restore job:';
+  const phrase = prompt(warning, '');
+  if (phrase === null) return;
+  const reason = prompt('Restore reason:', moduleKey ? `Restore ${backupModuleName(moduleKey)} from selected backup.` : '');
+  if (reason === null) return;
+  const maintenance = confirm('Place the affected module under maintenance before restore?');
+  try {
+    const res = await apiFetch(`/api/admin/backups/${normalizedBackupId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({
+        restore_type: restoreType === 'FULL_BACKUP' ? 'FULL_BACKUP' : (restoreType || 'DATABASE'),
+        affected_module: moduleKey || '',
+        reason,
+        confirmation_phrase: phrase,
+        place_under_maintenance: maintenance,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to queue restore request.');
+    showSysToast(data.message || 'Restore request queued.', 'success');
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function requestModuleRollback(moduleKey) {
+  const module = sysBackupCoverage.find(item => item.module_key === moduleKey);
+  const point = sysModuleRecoveryPoints.find(item => item.module_key === moduleKey);
+  const reason = prompt('Rollback reason:', `Rollback request for ${backupModuleName(moduleKey)}.`);
+  if (reason === null) return;
+  try {
+    const res = await apiFetch('/api/admin/backups/rollback-requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        affected_module: moduleKey,
+        current_version: point?.current_version || module?.current_version || '',
+        target_version: point?.stable_version || module?.stable_version || '',
+        artifact_location: point?.artifact_location || '',
+        reason,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to request rollback.');
+    showSysToast(data.message || 'Rollback request logged.', 'success');
+    loadBackupLogs();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function updateRollbackRequestStatus(requestId, status) {
+  const resultMessage = prompt(`${backupTypeLabel(status)} notes:`, '');
+  if (resultMessage === null) return;
+  try {
+    const res = await apiFetch(`/api/admin/backups/rollback-requests/${Number(requestId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, result_message: resultMessage }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update rollback request.');
+    showSysToast(data.message || 'Rollback request updated.', 'success');
+    loadBackupLogs();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function createBackupIncident(moduleKey, moduleName) {
+  try {
+    const res = await apiFetch('/api/admin/support-tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: `Recovery review: ${moduleName}`,
+        category: 'SYSTEM',
+        priority: 'HIGH',
+        description: `Backup and Recovery review requested for ${moduleName} (${moduleKey}). Check latest backup, recovery point, health status, and rollback readiness.`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to create incident.');
+    showSysToast(data.message || 'Incident created.', 'success');
+    loadSupportTickets();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+function openBackupDetails(kind, id) {
+  const modal = document.getElementById('backup-detail-modal');
+  const title = document.getElementById('backup-detail-title');
+  const body = document.getElementById('backup-detail-body');
+  if (!modal || !title || !body) return;
+  const source = kind === 'recovery'
+    ? sysModuleRecoveryPoints.find(item => Number(item.id) === Number(id))
+    : sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === Number(id));
+  if (!source) return;
+  title.textContent = kind === 'recovery' ? 'Module Recovery Point' : 'Backup Set Details';
+  const entries = Object.entries(source)
+    .filter(([key]) => !['notes_encrypted', 'remarks_encrypted'].includes(key))
+    .map(([key, value]) => [backupTypeLabel(key), Array.isArray(value) ? value.join(', ') : value]);
+  body.innerHTML = entries.map(([label, value]) => `
+    <div class="support-kv-row">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value ?? '-')}</strong>
+    </div>
+  `).join('');
+  modal.style.display = 'flex';
+}
+
+function closeBackupDetails() {
+  const modal = document.getElementById('backup-detail-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 // TOAST NOTIFICATION
@@ -2419,8 +2819,16 @@ window.loadSupportTickets    = loadSupportTickets;
 window.createSupportTicket   = createSupportTicket;
 window.updateSupportTicket   = updateSupportTicket;
 window.loadBackupLogs        = loadBackupLogs;
+window.switchBackupRecoveryTab = switchBackupRecoveryTab;
 window.requestBackup         = requestBackup;
 window.updateBackupStatus    = updateBackupStatus;
+window.verifyBackup          = verifyBackup;
+window.requestRestoreJob     = requestRestoreJob;
+window.requestModuleRollback = requestModuleRollback;
+window.updateRollbackRequestStatus = updateRollbackRequestStatus;
+window.createBackupIncident  = createBackupIncident;
+window.openBackupDetails     = openBackupDetails;
+window.closeBackupDetails    = closeBackupDetails;
 
 document.addEventListener('partialsLoaded', initSystemAdminIfActive);
 document.addEventListener('DOMContentLoaded', () => setTimeout(initSystemAdminIfActive, 0));

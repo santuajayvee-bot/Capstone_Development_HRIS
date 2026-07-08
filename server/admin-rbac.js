@@ -14,6 +14,7 @@ const crypto   = require('crypto');
 const express  = require('express');
 const router   = express.Router();
 const pool     = require('../config/db');
+const appPackage = require('../package.json');
 const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const { decryptColumnValue, encryptColumnValue, nullableText } = require('./data-protection');
@@ -556,9 +557,34 @@ const SUPPORT_CATEGORIES = new Set([
 
 const SUPPORT_PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 const SUPPORT_STATUSES = new Set(['OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'RESOLVED', 'CLOSED']);
-const BACKUP_TYPES = new Set(['DATABASE', 'FILES', 'FULL_SYSTEM']);
-const BACKUP_TARGETS = new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT', 'EXTERNAL']);
+const BACKUP_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP', 'FULL_SYSTEM']);
+const BACKUP_SET_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP']);
+const BACKUP_TARGETS = new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT', 'MANUAL', 'EXTERNAL']);
+const BACKUP_SET_TARGETS = new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT', 'MANUAL']);
 const BACKUP_STATUSES = new Set(['REQUESTED', 'RUNNING', 'COMPLETED', 'FAILED', 'VERIFICATION_FAILED', 'VERIFIED']);
+const BACKUP_SET_STATUSES = new Set(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'VERIFIED', 'RESTORED']);
+const RESTORE_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'FULL_BACKUP']);
+const RESTORE_STATUSES = new Set(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']);
+const ROLLBACK_STATUSES = new Set(['PENDING', 'APPROVED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']);
+
+const BACKUP_RECOVERY_MODULES = [
+  { key: 'authentication', name: 'Authentication / Login', data: true, files: false, config: true, rollback: true },
+  { key: 'account_management', name: 'Account Management', data: true, files: false, config: true, rollback: true },
+  { key: 'rbac', name: 'Role and Access / RBAC', data: true, files: false, config: true, rollback: true },
+  { key: 'employee_201', name: 'Employee Management / 201 File', data: true, files: true, config: true, rollback: true },
+  { key: 'attendance', name: 'Attendance Management', data: true, files: false, config: true, rollback: true },
+  { key: 'attendance_sync', name: 'Attendance Sync', data: true, files: false, config: true, rollback: true },
+  { key: 'leave', name: 'Leave Management', data: true, files: false, config: true, rollback: true },
+  { key: 'payroll', name: 'Payroll Management', data: true, files: false, config: true, rollback: true },
+  { key: 'payslip', name: 'Payslip Generation', data: true, files: true, config: true, rollback: true },
+  { key: 'audit_trail', name: 'Audit Trail', data: true, files: false, config: true, rollback: false },
+  { key: 'blockchain', name: 'Blockchain Support', data: true, files: false, config: true, rollback: true },
+  { key: 'system_health', name: 'System Health', healthKey: 'backup_restore', data: true, files: false, config: true, rollback: true },
+  { key: 'support_center', name: 'Support Center / Incident Management', data: true, files: false, config: true, rollback: true },
+  { key: 'backup_restore', name: 'Backup and Restore', data: true, files: false, config: true, rollback: true },
+  { key: 'file_storage', name: 'File Upload / Document Storage', healthKey: 'employee_201', data: true, files: true, config: true, rollback: true },
+  { key: 'notification_service', name: 'Notification Service', healthKey: 'aws_readiness', data: false, files: false, config: true, rollback: true },
+];
 
 function normalizePositiveInteger(value, fieldName = 'id') {
   const parsed = Number.parseInt(value, 10);
@@ -597,6 +623,187 @@ function makeReference(prefix) {
   const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
   return `${prefix}-${timestamp}-${suffix}`;
+}
+
+function normalizeBackupSetType(value, fallback = 'DATABASE') {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'FULL_SYSTEM') return 'FULL_BACKUP';
+  return BACKUP_SET_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeBackupStorageProvider(value, fallback = 'MANUAL') {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'EXTERNAL') return 'MANUAL';
+  return BACKUP_SET_TARGETS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeBackupSetStatus(value, fallback = 'PENDING') {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'REQUESTED') return 'PENDING';
+  if (normalized === 'VERIFICATION_FAILED') return 'FAILED';
+  return BACKUP_SET_STATUSES.has(normalized) ? normalized : fallback;
+}
+
+function backupSetTypeToLegacy(value) {
+  const normalized = normalizeBackupSetType(value, 'DATABASE');
+  if (normalized === 'DATABASE' || normalized === 'FILES') return normalized;
+  return 'FULL_SYSTEM';
+}
+
+function backupProviderToLegacy(value) {
+  const normalized = normalizeBackupStorageProvider(value, 'MANUAL');
+  return normalized === 'MANUAL' ? 'EXTERNAL' : normalized;
+}
+
+function backupStatusToLegacy(value) {
+  const normalized = normalizeBackupSetStatus(value, 'PENDING');
+  if (normalized === 'PENDING') return 'REQUESTED';
+  if (normalized === 'RESTORED') return 'VERIFIED';
+  return normalized;
+}
+
+function parseModuleList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(item => cleanText(item, 80)).filter(Boolean);
+  const text = String(value || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed.map(item => cleanText(item, 80)).filter(Boolean);
+  } catch (_) {}
+  return text.split(',').map(item => cleanText(item, 80)).filter(Boolean);
+}
+
+function cleanModuleSelection(value) {
+  const allowed = new Set(BACKUP_RECOVERY_MODULES.map(module => module.key));
+  const selected = parseModuleList(value).filter(key => allowed.has(key));
+  return selected.length ? Array.from(new Set(selected)) : BACKUP_RECOVERY_MODULES.map(module => module.key);
+}
+
+function appVersion() {
+  return cleanText(process.env.APP_VERSION || appPackage.version || '1.0.0', 80);
+}
+
+function deploymentCommit() {
+  return cleanText(
+    process.env.APP_COMMIT_SHA ||
+    process.env.GIT_COMMIT ||
+    process.env.COMMIT_SHA ||
+    'local-dev',
+    80
+  );
+}
+
+function deploymentArtifactReference() {
+  return cleanText(
+    process.env.DEPLOYMENT_ARTIFACT_URI ||
+    process.env.AWS_DEPLOYMENT_ARTIFACT ||
+    process.env.S3_DEPLOYMENT_ARTIFACT ||
+    'manual-deployment-record',
+    1000
+  );
+}
+
+function moduleCurrentVersion(moduleKey) {
+  const envKey = `MODULE_${String(moduleKey || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_VERSION`;
+  return cleanText(process.env[envKey] || appVersion(), 80);
+}
+
+function moduleStableVersion(moduleKey) {
+  const envKey = `MODULE_${String(moduleKey || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_STABLE_VERSION`;
+  return cleanText(process.env[envKey] || moduleCurrentVersion(moduleKey), 80);
+}
+
+function backupSetResponse(row) {
+  const storageLocation = revealProtectedText(row.storage_location_encrypted);
+  const remarks = revealProtectedText(row.remarks_encrypted);
+  return {
+    id: row.id,
+    backup_set_id: row.id,
+    backup_id: row.id,
+    backup_reference: row.backup_reference,
+    backup_name: row.backup_name,
+    backup_type: row.backup_type,
+    storage_provider: row.storage_provider,
+    storage_target: row.storage_provider,
+    storage_location: storageLocation,
+    backup_location: storageLocation,
+    status: row.status,
+    included_modules: parseModuleList(row.included_modules),
+    checksum: row.checksum,
+    manifest_hash: row.checksum,
+    file_size: row.file_size,
+    created_by: row.created_by,
+    created_by_username: row.created_by_username || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    verified_at: row.verified_at,
+    restored_at: row.restored_at,
+    remarks,
+    notes: remarks,
+  };
+}
+
+function moduleRecoveryPointResponse(row) {
+  return {
+    id: row.id,
+    module_key: row.module_key,
+    module_name: row.module_name,
+    current_version: row.current_version,
+    stable_version: row.stable_version,
+    deployment_commit: row.deployment_commit,
+    artifact_location: revealProtectedText(row.artifact_location_encrypted),
+    storage_provider: row.storage_provider,
+    health_status_at_backup: row.health_status_at_backup,
+    backup_set_id: row.backup_set_id,
+    backup_reference: row.backup_reference || null,
+    rollback_available: Boolean(row.rollback_available),
+    created_by: row.created_by,
+    created_by_username: row.created_by_username || null,
+    created_at: row.created_at,
+    remarks: revealProtectedText(row.remarks_encrypted),
+  };
+}
+
+function restoreJobResponse(row) {
+  return {
+    id: row.id,
+    restore_job_id: row.id,
+    backup_set_id: row.backup_set_id,
+    backup_reference: row.backup_reference || null,
+    restore_type: row.restore_type,
+    affected_module: row.affected_module,
+    status: row.status,
+    requested_by: row.requested_by,
+    requested_by_username: row.requested_by_username || null,
+    approved_by: row.approved_by,
+    approved_by_username: row.approved_by_username || null,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    reason: revealProtectedText(row.reason_encrypted),
+    result_message: revealProtectedText(row.result_message_encrypted),
+    created_at: row.created_at,
+  };
+}
+
+function rollbackRequestResponse(row) {
+  return {
+    id: row.id,
+    rollback_request_id: row.id,
+    affected_module: row.affected_module,
+    current_version: row.current_version,
+    target_version: row.target_version,
+    artifact_location: revealProtectedText(row.artifact_location_encrypted),
+    reason: revealProtectedText(row.reason_encrypted),
+    status: row.status,
+    requested_by: row.requested_by,
+    requested_by_username: row.requested_by_username || null,
+    approved_by: row.approved_by,
+    approved_by_username: row.approved_by_username || null,
+    created_at: row.created_at,
+    completed_at: row.completed_at,
+    result_message: revealProtectedText(row.result_message_encrypted),
+  };
 }
 
 function isSafeIdentifier(identifier) {
@@ -686,6 +893,210 @@ function backupResponse(row) {
     updated_at: row.updated_at,
     completed_at: row.completed_at,
     verified_at: row.verified_at,
+  };
+}
+
+async function listBackupSets(limit = 100) {
+  if (await hasTable('backup_sets')) {
+    const [rows] = await pool.execute(
+      `SELECT bs.*, creator.username AS created_by_username
+         FROM backup_sets bs
+         LEFT JOIN users creator ON creator.id = bs.created_by
+        ORDER BY bs.created_at DESC
+        LIMIT ?`,
+      [Math.max(1, Math.min(Number(limit) || 100, 200))]
+    );
+    return rows.map(backupSetResponse);
+  }
+
+  if (await hasTable('system_backup_log')) {
+    const [rows] = await pool.execute(
+      `SELECT bl.*, requester.username AS requested_by_username
+         FROM system_backup_log bl
+         LEFT JOIN users requester ON requester.id = bl.requested_by
+        ORDER BY bl.created_at DESC
+        LIMIT ?`,
+      [Math.max(1, Math.min(Number(limit) || 100, 200))]
+    );
+    return rows.map(row => {
+      const legacy = backupResponse(row);
+      return {
+        ...legacy,
+        id: legacy.backup_id,
+        backup_set_id: legacy.backup_id,
+        backup_name: legacy.backup_reference,
+        backup_type: normalizeBackupSetType(legacy.backup_type),
+        storage_provider: normalizeBackupStorageProvider(legacy.storage_target),
+        status: normalizeBackupSetStatus(legacy.status),
+        included_modules: BACKUP_RECOVERY_MODULES.map(module => module.key),
+        checksum: legacy.manifest_hash,
+        storage_location: legacy.backup_location,
+        remarks: legacy.notes,
+      };
+    });
+  }
+
+  return [];
+}
+
+async function listModuleRecoveryPoints(limit = 100) {
+  if (!(await hasTable('module_recovery_points'))) return [];
+  const [rows] = await pool.execute(
+    `SELECT mrp.*, bs.backup_reference, creator.username AS created_by_username
+       FROM module_recovery_points mrp
+       LEFT JOIN backup_sets bs ON bs.id = mrp.backup_set_id
+       LEFT JOIN users creator ON creator.id = mrp.created_by
+      ORDER BY mrp.created_at DESC
+      LIMIT ?`,
+    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+  );
+  return rows.map(moduleRecoveryPointResponse);
+}
+
+async function listRestoreJobs(limit = 100) {
+  if (!(await hasTable('restore_jobs'))) return [];
+  const [rows] = await pool.execute(
+    `SELECT rj.*, bs.backup_reference,
+            requester.username AS requested_by_username,
+            approver.username AS approved_by_username
+       FROM restore_jobs rj
+       LEFT JOIN backup_sets bs ON bs.id = rj.backup_set_id
+       LEFT JOIN users requester ON requester.id = rj.requested_by
+       LEFT JOIN users approver ON approver.id = rj.approved_by
+      ORDER BY rj.created_at DESC
+      LIMIT ?`,
+    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+  );
+  return rows.map(restoreJobResponse);
+}
+
+async function listRollbackRequests(limit = 100) {
+  if (!(await hasTable('module_rollback_requests'))) return [];
+  const [rows] = await pool.execute(
+    `SELECT mrr.*,
+            requester.username AS requested_by_username,
+            approver.username AS approved_by_username
+       FROM module_rollback_requests mrr
+       LEFT JOIN users requester ON requester.id = mrr.requested_by
+       LEFT JOIN users approver ON approver.id = mrr.approved_by
+      ORDER BY mrr.created_at DESC
+      LIMIT ?`,
+    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+  );
+  return rows.map(rollbackRequestResponse);
+}
+
+async function backupHealthStatusMap() {
+  const map = new Map();
+  if (!(await hasTable('system_health_checks'))) return map;
+  const [rows] = await pool.execute(
+    `SELECT module_key, status, last_checked_at
+       FROM system_health_checks`
+  );
+  rows.forEach(row => map.set(row.module_key, {
+    status: row.status,
+    last_checked_at: row.last_checked_at,
+  }));
+  return map;
+}
+
+function latestBackupForModule(backupSets, moduleKey) {
+  return backupSets.find(backup => {
+    if (backup.backup_type === 'FULL_BACKUP') return true;
+    const modules = parseModuleList(backup.included_modules);
+    return modules.includes(moduleKey);
+  }) || null;
+}
+
+async function buildBackupCoverage() {
+  const [backupSets, recoveryPoints, healthMap] = await Promise.all([
+    listBackupSets(200),
+    listModuleRecoveryPoints(200),
+    backupHealthStatusMap(),
+  ]);
+  const latestRecoveryByModule = new Map();
+  recoveryPoints.forEach(point => {
+    if (!latestRecoveryByModule.has(point.module_key)) latestRecoveryByModule.set(point.module_key, point);
+  });
+
+  return BACKUP_RECOVERY_MODULES.map(module => {
+    const health = healthMap.get(module.healthKey || module.key) || null;
+    const recoveryPoint = latestRecoveryByModule.get(module.key) || null;
+    const latestBackup = latestBackupForModule(backupSets, module.key);
+    const currentVersion = recoveryPoint?.current_version || moduleCurrentVersion(module.key);
+    const stableVersion = recoveryPoint?.stable_version || moduleStableVersion(module.key);
+    return {
+      module_key: module.key,
+      module_name: module.name,
+      data_backup_coverage: module.data ? 'Covered' : 'Not Covered',
+      file_backup_coverage: module.files ? 'Covered' : 'Not Applicable',
+      config_backup_coverage: module.config ? 'Covered' : 'Not Covered',
+      recovery_point_available: Boolean(recoveryPoint),
+      current_version: currentVersion,
+      stable_version: stableVersion,
+      last_known_stable_version: stableVersion,
+      last_backup_timestamp: latestBackup?.created_at || null,
+      last_health_status: health?.status || recoveryPoint?.health_status_at_backup || 'UNKNOWN',
+      recovery_point_id: recoveryPoint?.id || null,
+      backup_set_id: latestBackup?.backup_set_id || null,
+      rollback_available: Boolean(module.rollback && recoveryPoint?.rollback_available),
+      recommended_action: health && ['OFFLINE', 'WARNING', 'MAINTENANCE'].includes(health.status)
+        ? 'Check latest backup or view recovery point.'
+        : 'Keep verified recovery point current.',
+    };
+  });
+}
+
+async function buildBackupOverview() {
+  const [backupSets, restoreJobs, recoveryPoints, rollbackRequests, coverage] = await Promise.all([
+    listBackupSets(200),
+    listRestoreJobs(50),
+    listModuleRecoveryPoints(50),
+    listRollbackRequests(50),
+    buildBackupCoverage(),
+  ]);
+  const latestByType = {};
+  backupSets.forEach(backup => {
+    if (!latestByType[backup.backup_type]) latestByType[backup.backup_type] = backup;
+  });
+  const failedBackups = backupSets.filter(backup => backup.status === 'FAILED').length;
+  const warningBackups = backupSets.filter(backup => ['PENDING', 'RUNNING'].includes(backup.status)).length;
+  const status = !backupSets.length
+    ? 'Warning'
+    : failedBackups > 0
+      ? 'Failed'
+      : warningBackups > 0
+        ? 'Warning'
+        : 'Healthy';
+  const latestRecovery = recoveryPoints[0] || null;
+  const latestDeployment = latestByType.DEPLOYMENT_VERSION || recoveryPoints.find(point => point.artifact_location) || null;
+  return {
+    generated_at: new Date().toISOString(),
+    status,
+    cards: {
+      latest_database_backup: latestByType.DATABASE || null,
+      latest_file_backup: latestByType.FILES || null,
+      latest_configuration_backup: latestByType.CONFIGURATION || null,
+      latest_module_recovery_point: latestRecovery,
+      latest_deployment_version: latestDeployment,
+      backup_status: status,
+      total_backup_sets: backupSets.length,
+      failed_backup_jobs: failedBackups,
+      last_restore_attempt: restoreJobs[0] || null,
+    },
+    coverage,
+    backup_sets: backupSets.slice(0, 20),
+    restore_jobs: restoreJobs,
+    rollback_requests: rollbackRequests,
+    settings: {
+      database_provider: process.env.AWS_RDS_DB_INSTANCE_ID ? 'RDS Snapshot metadata / MySQL dump record' : 'Local MySQL dump record',
+      file_provider: process.env.AWS_S3_BUCKET || process.env.S3_BUCKET ? 'S3-ready file backup metadata' : 'Local file backup metadata',
+      config_provider: 'Non-secret configuration only',
+      deployment_provider: process.env.DEPLOYMENT_ARTIFACT_URI ? 'Deployment artifact reference' : 'Manual deployment artifact reference',
+      aws_region_configured: Boolean(process.env.AWS_REGION),
+      s3_bucket_configured: Boolean(process.env.AWS_S3_BUCKET || process.env.S3_BUCKET),
+      rds_snapshot_configured: Boolean(process.env.AWS_RDS_DB_INSTANCE_ID),
+    },
   };
 }
 
@@ -1361,25 +1772,39 @@ async function checkBlockchainHealth() {
 }
 
 async function checkBackupHealth() {
-  const backupTable = await firstExistingTable(['system_backup_log']);
+  const backupTable = await firstExistingTable(['backup_sets', 'system_backup_log']);
   let latest = null;
   if (backupTable) {
-    const [rows] = await pool.execute(
-      `SELECT backup_reference, backup_type, storage_target, status, created_at, completed_at, verified_at
-         FROM system_backup_log
-        ORDER BY created_at DESC
-        LIMIT 1`
-    );
+    const query = backupTable === 'backup_sets'
+      ? `SELECT backup_reference, backup_type, storage_provider AS storage_target, status, created_at, restored_at AS completed_at, verified_at
+           FROM backup_sets
+          ORDER BY created_at DESC
+          LIMIT 1`
+      : `SELECT backup_reference, backup_type, storage_target, status, created_at, completed_at, verified_at
+           FROM system_backup_log
+          ORDER BY created_at DESC
+          LIMIT 1`;
+    const [rows] = await pool.execute(query);
     latest = rows[0] || null;
   }
-  const status = !backupTable ? 'WARNING' : !latest ? 'WARNING' : ['FAILED', 'VERIFICATION_FAILED'].includes(latest.status) ? 'OFFLINE' : 'ONLINE';
+  const failedStatuses = ['FAILED', 'VERIFICATION_FAILED'];
+  const pendingStatuses = ['REQUESTED', 'PENDING', 'RUNNING'];
+  const status = !backupTable
+    ? 'WARNING'
+    : !latest
+      ? 'WARNING'
+      : failedStatuses.includes(latest.status)
+        ? 'OFFLINE'
+        : pendingStatuses.includes(latest.status)
+          ? 'WARNING'
+          : 'ONLINE';
   return healthResult(
     status,
     !backupTable
       ? 'Backup log table is not installed yet.'
       : !latest
         ? 'No backup request has been recorded yet.'
-        : ['FAILED', 'VERIFICATION_FAILED'].includes(latest.status)
+        : failedStatuses.includes(latest.status)
           ? 'Latest backup failed or failed verification.'
           : 'Latest backup record is available.',
     {
@@ -2026,8 +2451,8 @@ const SYSTEM_HEALTH_MODULES = [
     key: 'backup_restore',
     name: 'Backup and Restore',
     endpoint: '/api/admin/backups',
-    dependencies: ['system_backup_log', 'AWS S3 / RDS snapshot target'],
-    recommended_action: 'Confirm the latest backup completed and verification hash is recorded.',
+    dependencies: ['backup_sets', 'module_recovery_points', 'restore_jobs', 'module_rollback_requests', 'AWS S3 / RDS snapshot target'],
+    recommended_action: 'Confirm the latest backup completed, recovery points exist, and rollback requests stay controlled.',
     check: checkBackupHealth,
   },
   {
@@ -3198,51 +3623,159 @@ router.patch('/support-tickets/:ticketId', async (req, res) => {
 
 router.get('/backups', async (req, res) => {
   try {
-    if (!(await hasTable('system_backup_log'))) return res.json([]);
-    const [rows] = await pool.execute(
-      `SELECT bl.*, requester.username AS requested_by_username
-         FROM system_backup_log bl
-         LEFT JOIN users requester ON requester.id = bl.requested_by
-        ORDER BY bl.created_at DESC
-        LIMIT 100`
-    );
-    return res.json(rows.map(backupResponse));
+    return res.json(await listBackupSets(100));
   } catch (err) {
     console.error('[RBAC] backup list error:', err.message);
     return res.status(500).json({ error: 'Failed to load backup history.' });
   }
 });
 
+router.get('/backups/overview', async (req, res) => {
+  try {
+    return res.json(await buildBackupOverview());
+  } catch (err) {
+    console.error('[RBAC] backup overview error:', err.message);
+    return res.status(500).json({ error: 'Failed to load backup dashboard.' });
+  }
+});
+
+router.get('/backups/recovery-points', async (req, res) => {
+  try {
+    return res.json(await listModuleRecoveryPoints(100));
+  } catch (err) {
+    console.error('[RBAC] recovery point list error:', err.message);
+    return res.status(500).json({ error: 'Failed to load module recovery points.' });
+  }
+});
+
+router.get('/backups/restore-jobs', async (req, res) => {
+  try {
+    return res.json(await listRestoreJobs(100));
+  } catch (err) {
+    console.error('[RBAC] restore job list error:', err.message);
+    return res.status(500).json({ error: 'Failed to load restore jobs.' });
+  }
+});
+
+router.get('/backups/rollback-requests', async (req, res) => {
+  try {
+    return res.json(await listRollbackRequests(100));
+  } catch (err) {
+    console.error('[RBAC] rollback request list error:', err.message);
+    return res.status(500).json({ error: 'Failed to load rollback requests.' });
+  }
+});
+
 router.post('/backups/request', async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    if (!(await hasTable('system_backup_log'))) {
-      return res.status(409).json({ error: 'Backup log schema is not ready. Run migrations first.' });
+    const backupSetsAvailable = await hasTable('backup_sets');
+    const legacyBackupAvailable = await hasTable('system_backup_log');
+    if (!backupSetsAvailable && !legacyBackupAvailable) {
+      return res.status(409).json({ error: 'Backup schema is not ready. Run migrations first.' });
     }
 
-    const backupType = normalizeEnum(req.body?.backup_type, BACKUP_TYPES, 'DATABASE');
-    const storageTarget = normalizeEnum(req.body?.storage_target, BACKUP_TARGETS, 'EXTERNAL');
+    const backupType = normalizeBackupSetType(req.body?.backup_type, 'DATABASE');
+    const storageProvider = normalizeBackupStorageProvider(req.body?.storage_provider || req.body?.storage_target, 'MANUAL');
+    const includedModules = cleanModuleSelection(req.body?.included_modules);
     const notes = cleanText(req.body?.notes, 2000);
     const reference = makeReference('BKP');
+    const backupName = cleanText(req.body?.backup_name, 160) || `${backupType.replace(/_/g, ' ')} ${reference}`;
+    const checksum = cleanText(req.body?.checksum || req.body?.manifest_hash, 64).toLowerCase();
+    const fileSize = Number.parseInt(req.body?.file_size, 10);
+    if (checksum && !/^[a-f0-9]{64}$/.test(checksum)) {
+      return res.status(400).json({ error: 'checksum must be a SHA-256 hex digest.' });
+    }
+    const healthMap = await backupHealthStatusMap();
 
     await conn.beginTransaction();
-    const [result] = await conn.execute(
-      `INSERT INTO system_backup_log
-         (backup_reference, backup_type, storage_target, status, requested_by, notes_encrypted)
-       VALUES (?, ?, ?, 'REQUESTED', ?, ?)`,
-      [reference, backupType, storageTarget, req.user.id, protectedText(notes)]
-    );
+    let backupSetId = null;
+    if (backupSetsAvailable) {
+      const [result] = await conn.execute(
+        `INSERT INTO backup_sets
+           (backup_reference, backup_name, backup_type, storage_provider, status, included_modules,
+            checksum, file_size, created_by, remarks_encrypted)
+         VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)`,
+        [
+          reference,
+          backupName,
+          backupType,
+          storageProvider,
+          JSON.stringify(includedModules),
+          checksum || null,
+          Number.isSafeInteger(fileSize) && fileSize >= 0 ? fileSize : null,
+          req.user.id,
+          protectedText(notes),
+        ]
+      );
+      backupSetId = result.insertId;
+    }
+
+    if (legacyBackupAvailable) {
+      await conn.execute(
+        `INSERT INTO system_backup_log
+           (backup_reference, backup_type, storage_target, status, requested_by, manifest_hash, notes_encrypted)
+         VALUES (?, ?, ?, 'REQUESTED', ?, ?, ?)`,
+        [
+          reference,
+          backupSetTypeToLegacy(backupType),
+          backupProviderToLegacy(storageProvider),
+          req.user.id,
+          checksum || null,
+          protectedText(notes),
+        ]
+      );
+    }
+
+    if (
+      backupSetId &&
+      (await hasTable('module_recovery_points')) &&
+      ['MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(backupType)
+    ) {
+      const selected = new Set(includedModules);
+      for (const module of BACKUP_RECOVERY_MODULES.filter(item => selected.has(item.key))) {
+        const health = healthMap.get(module.healthKey || module.key);
+        await conn.execute(
+          `INSERT INTO module_recovery_points
+             (module_key, module_name, current_version, stable_version, deployment_commit,
+              artifact_location_encrypted, storage_provider, health_status_at_backup,
+              backup_set_id, rollback_available, created_by, remarks_encrypted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            module.key,
+            module.name,
+            moduleCurrentVersion(module.key),
+            moduleStableVersion(module.key),
+            deploymentCommit(),
+            protectedText(deploymentArtifactReference()),
+            storageProvider,
+            health?.status || 'UNKNOWN',
+            backupSetId,
+            module.rollback ? 1 : 0,
+            req.user.id,
+            protectedText(`Recovery point captured from ${reference}. ${notes}`),
+          ]
+        );
+      }
+    }
 
     await logAuditEntryWithExecutor(conn, req, {
-      action: `BACKUP_REQUESTED: ${reference}`,
+      action: `CREATE_BACKUP: ${reference}`,
       module: 'BACKUP_RESTORE',
-      newValue: JSON.stringify({ backup_id: result.insertId, backup_reference: reference, backup_type: backupType, storage_target: storageTarget }),
+      newValue: JSON.stringify({
+        backup_set_id: backupSetId,
+        backup_reference: reference,
+        backup_type: backupType,
+        storage_provider: storageProvider,
+        included_modules: includedModules,
+      }),
     });
 
     await conn.commit();
     return res.status(201).json({
-      message: 'Backup request logged for system administrator follow-up.',
-      backup_id: result.insertId,
+      message: 'Backup request logged for controlled recovery follow-up.',
+      backup_set_id: backupSetId,
+      backup_id: backupSetId,
       backup_reference: reference,
     });
   } catch (err) {
@@ -3254,70 +3787,403 @@ router.post('/backups/request', async (req, res) => {
   }
 });
 
-router.patch('/backups/:backupId', async (req, res) => {
+router.post('/backups/:backupId/restore', async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    if (!(await hasTable('system_backup_log'))) {
-      return res.status(409).json({ error: 'Backup log schema is not ready. Run migrations first.' });
+    if (!(await hasTable('backup_sets')) || !(await hasTable('restore_jobs'))) {
+      return res.status(409).json({ error: 'Restore job schema is not ready. Run migrations first.' });
+    }
+    if (String(req.body?.confirmation_phrase || '').trim() !== 'RESTORE') {
+      return res.status(400).json({ error: 'Type RESTORE to confirm this recovery request.' });
     }
 
-    const backupId = normalizePositiveInteger(req.params.backupId, 'backup_id');
-    const status = req.body?.status ? normalizeEnum(req.body.status, BACKUP_STATUSES, null) : null;
-    const manifestHash = cleanText(req.body?.manifest_hash, 64).toLowerCase();
-    const backupLocation = req.body?.backup_location !== undefined ? cleanText(req.body.backup_location, 1000) : null;
-    const notes = req.body?.notes !== undefined ? cleanText(req.body.notes, 2000) : null;
-    if (req.body?.status && !status) return res.status(400).json({ error: 'Invalid backup status.' });
-    if (manifestHash && !/^[a-f0-9]{64}$/.test(manifestHash)) {
-      return res.status(400).json({ error: 'manifest_hash must be a SHA-256 hex digest.' });
+    const backupId = normalizePositiveInteger(req.params.backupId, 'backup_set_id');
+    const restoreType = normalizeEnum(req.body?.restore_type, RESTORE_TYPES, 'DATABASE');
+    const affectedModule = cleanText(req.body?.affected_module, 80) || null;
+    const reason = cleanText(req.body?.reason, 2000);
+    const placeUnderMaintenance = Boolean(req.body?.place_under_maintenance);
+
+    await conn.beginTransaction();
+    const [backupRows] = await conn.execute(
+      'SELECT id, backup_reference, status FROM backup_sets WHERE id = ? FOR UPDATE',
+      [backupId]
+    );
+    if (!backupRows.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Backup set not found.' });
     }
+    const backup = backupRows[0];
+    if (!['COMPLETED', 'VERIFIED', 'RESTORED'].includes(backup.status)) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Only completed or verified backups can be queued for restore.' });
+    }
+
+    const [jobResult] = await conn.execute(
+      `INSERT INTO restore_jobs
+         (backup_set_id, restore_type, affected_module, status, requested_by, reason_encrypted, result_message_encrypted)
+       VALUES (?, ?, ?, 'PENDING', ?, ?, ?)`,
+      [
+        backupId,
+        restoreType,
+        affectedModule,
+        req.user.id,
+        protectedText(reason),
+        protectedText('Restore request queued. Run dry-run validation before applying recovery.'),
+      ]
+    );
+
+    if (placeUnderMaintenance && affectedModule && (await hasTable('system_health_checks'))) {
+      const module = BACKUP_RECOVERY_MODULES.find(item => item.key === affectedModule);
+      const healthKey = module?.healthKey || affectedModule;
+      const healthDefinition = SYSTEM_HEALTH_MODULE_MAP.get(healthKey);
+      await conn.execute(
+        `INSERT INTO system_health_checks
+           (module_key, module_name, status, remarks, endpoint_checked, checked_by, last_checked_at)
+         VALUES (?, ?, 'MAINTENANCE', ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           status = 'MAINTENANCE',
+           remarks = VALUES(remarks),
+           checked_by = VALUES(checked_by),
+           last_checked_at = NOW(),
+           updated_at = NOW()`,
+        [
+          healthKey,
+          healthDefinition?.name || module?.name || affectedModule,
+          `Placed under maintenance for restore job ${jobResult.insertId}.`,
+          '/api/admin/backups',
+          req.user.id,
+        ]
+      );
+    }
+
+    await logAuditEntryWithExecutor(conn, req, {
+      action: `RESTORE_BACKUP: ${backup.backup_reference}`,
+      module: 'BACKUP_RESTORE',
+      newValue: JSON.stringify({
+        restore_job_id: jobResult.insertId,
+        backup_set_id: backupId,
+        restore_type: restoreType,
+        affected_module: affectedModule,
+        place_under_maintenance: placeUnderMaintenance,
+        result: 'PENDING',
+      }),
+    });
+
+    await conn.commit();
+    return res.status(201).json({
+      message: 'Restore request queued for controlled validation.',
+      restore_job_id: jobResult.insertId,
+    });
+  } catch (err) {
+    await conn.rollback().catch(() => {});
+    console.error('[RBAC] restore request error:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to queue restore request.' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/backups/rollback-requests', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    if (!(await hasTable('module_rollback_requests'))) {
+      return res.status(409).json({ error: 'Rollback request schema is not ready. Run migrations first.' });
+    }
+
+    const affectedModule = cleanText(req.body?.affected_module, 80);
+    const module = BACKUP_RECOVERY_MODULES.find(item => item.key === affectedModule);
+    if (!module) return res.status(400).json({ error: 'Affected module is invalid.' });
+
+    let latestRecovery = null;
+    if (await hasTable('module_recovery_points')) {
+      const [rows] = await pool.execute(
+        `SELECT current_version, stable_version, artifact_location_encrypted, rollback_available
+           FROM module_recovery_points
+          WHERE module_key = ?
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [affectedModule]
+      );
+      latestRecovery = rows[0] || null;
+    }
+
+    const currentVersion = cleanText(req.body?.current_version, 80) || latestRecovery?.current_version || moduleCurrentVersion(affectedModule);
+    const targetVersion = cleanText(req.body?.target_version, 80) || latestRecovery?.stable_version || moduleStableVersion(affectedModule);
+    const artifactLocation = cleanText(req.body?.artifact_location, 1000)
+      || revealProtectedText(latestRecovery?.artifact_location_encrypted)
+      || deploymentArtifactReference();
+    const reason = cleanText(req.body?.reason, 2000);
+    if (!reason) return res.status(400).json({ error: 'Rollback reason is required.' });
+    if (!module.rollback) return res.status(409).json({ error: 'Rollback is not supported for this module.' });
+
+    await conn.beginTransaction();
+    const [result] = await conn.execute(
+      `INSERT INTO module_rollback_requests
+         (affected_module, current_version, target_version, artifact_location_encrypted, reason_encrypted, status, requested_by)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
+      [
+        affectedModule,
+        currentVersion,
+        targetVersion,
+        protectedText(artifactLocation),
+        protectedText(reason),
+        req.user.id,
+      ]
+    );
+
+    await logAuditEntryWithExecutor(conn, req, {
+      action: `REQUEST_MODULE_ROLLBACK: ${affectedModule}`,
+      module: 'BACKUP_RESTORE',
+      newValue: JSON.stringify({
+        rollback_request_id: result.insertId,
+        affected_module: affectedModule,
+        current_version: currentVersion,
+        target_version: targetVersion,
+        result: 'PENDING',
+      }),
+    });
+
+    await conn.commit();
+    return res.status(201).json({
+      message: 'Rollback request logged for controlled approval.',
+      rollback_request_id: result.insertId,
+    });
+  } catch (err) {
+    await conn.rollback().catch(() => {});
+    console.error('[RBAC] rollback request error:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to request rollback.' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.patch('/backups/rollback-requests/:requestId', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    if (!(await hasTable('module_rollback_requests'))) {
+      return res.status(409).json({ error: 'Rollback request schema is not ready. Run migrations first.' });
+    }
+    const requestId = normalizePositiveInteger(req.params.requestId, 'rollback_request_id');
+    const status = normalizeEnum(req.body?.status, ROLLBACK_STATUSES, null);
+    const resultMessage = req.body?.result_message !== undefined ? cleanText(req.body.result_message, 2000) : null;
+    if (!status && resultMessage === null) return res.status(400).json({ error: 'No rollback update provided.' });
 
     const fields = [];
     const values = [];
     if (status) {
       fields.push('status = ?');
       values.push(status);
-      if (['COMPLETED', 'VERIFIED'].includes(status)) fields.push('completed_at = COALESCE(completed_at, NOW())');
-      if (status === 'VERIFIED') {
-        fields.push('verified_by = ?', 'verified_at = NOW()');
+      if (status === 'APPROVED') {
+        fields.push('approved_by = ?');
         values.push(req.user.id);
       }
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)) fields.push('completed_at = NOW()');
     }
-    if (manifestHash) {
-      fields.push('manifest_hash = ?');
-      values.push(manifestHash);
+    if (resultMessage !== null) {
+      fields.push('result_message_encrypted = ?');
+      values.push(protectedText(resultMessage));
     }
-    if (backupLocation !== null) {
-      fields.push('backup_location_encrypted = ?');
-      values.push(protectedText(backupLocation));
-    }
-    if (notes !== null) {
-      fields.push('notes_encrypted = ?');
-      values.push(protectedText(notes));
-    }
-    if (!fields.length) return res.status(400).json({ error: 'No backup updates provided.' });
 
     await conn.beginTransaction();
     const [existingRows] = await conn.execute(
-      'SELECT backup_id, backup_reference FROM system_backup_log WHERE backup_id = ? FOR UPDATE',
-      [backupId]
+      'SELECT id, affected_module FROM module_rollback_requests WHERE id = ? FOR UPDATE',
+      [requestId]
     );
     if (!existingRows.length) {
       await conn.rollback();
-      return res.status(404).json({ error: 'Backup record not found.' });
+      return res.status(404).json({ error: 'Rollback request not found.' });
     }
 
-    values.push(backupId);
+    values.push(requestId);
     await conn.execute(
-      `UPDATE system_backup_log
+      `UPDATE module_rollback_requests
           SET ${fields.join(', ')}
-        WHERE backup_id = ?`,
+        WHERE id = ?`,
       values
     );
 
+    const actionName = status === 'APPROVED'
+      ? 'APPROVE_MODULE_ROLLBACK'
+      : status === 'COMPLETED'
+        ? 'COMPLETE_MODULE_ROLLBACK'
+        : status === 'FAILED'
+          ? 'FAIL_MODULE_ROLLBACK'
+          : 'REQUEST_MODULE_ROLLBACK';
     await logAuditEntryWithExecutor(conn, req, {
-      action: `BACKUP_RECORD_UPDATED: ${existingRows[0].backup_reference}`,
+      action: `${actionName}: ${existingRows[0].affected_module}`,
       module: 'BACKUP_RESTORE',
-      newValue: JSON.stringify({ backup_id: backupId, status, manifest_hash_recorded: Boolean(manifestHash), location_updated: backupLocation !== null }),
+      newValue: JSON.stringify({ rollback_request_id: requestId, status, result_updated: resultMessage !== null }),
+    });
+
+    await conn.commit();
+    return res.json({ message: 'Rollback request updated.' });
+  } catch (err) {
+    await conn.rollback().catch(() => {});
+    console.error('[RBAC] rollback update error:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to update rollback request.' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.patch('/backups/:backupId', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const backupSetsAvailable = await hasTable('backup_sets');
+    const legacyBackupAvailable = await hasTable('system_backup_log');
+    if (!backupSetsAvailable && !legacyBackupAvailable) {
+      return res.status(409).json({ error: 'Backup schema is not ready. Run migrations first.' });
+    }
+
+    const backupId = normalizePositiveInteger(req.params.backupId, 'backup_id');
+    const status = req.body?.status
+      ? (backupSetsAvailable ? normalizeBackupSetStatus(req.body.status, null) : normalizeEnum(req.body.status, BACKUP_STATUSES, null))
+      : null;
+    const manifestHash = cleanText(req.body?.checksum || req.body?.manifest_hash, 64).toLowerCase();
+    const backupLocation = req.body?.storage_location !== undefined
+      ? cleanText(req.body.storage_location, 1000)
+      : (req.body?.backup_location !== undefined ? cleanText(req.body.backup_location, 1000) : null);
+    const notes = req.body?.notes !== undefined ? cleanText(req.body.notes, 2000) : null;
+    if (req.body?.status && !status) return res.status(400).json({ error: 'Invalid backup status.' });
+    if (manifestHash && !/^[a-f0-9]{64}$/.test(manifestHash)) {
+      return res.status(400).json({ error: 'manifest_hash must be a SHA-256 hex digest.' });
+    }
+
+    await conn.beginTransaction();
+    let backupReference = null;
+    if (backupSetsAvailable) {
+      const fields = [];
+      const values = [];
+      if (status) {
+        fields.push('status = ?');
+        values.push(status);
+        if (status === 'VERIFIED') fields.push('verified_at = NOW()');
+        if (status === 'RESTORED') fields.push('restored_at = NOW()');
+      }
+      if (manifestHash) {
+        fields.push('checksum = ?');
+        values.push(manifestHash);
+      }
+      if (backupLocation !== null) {
+        fields.push('storage_location_encrypted = ?');
+        values.push(protectedText(backupLocation));
+      }
+      if (notes !== null) {
+        fields.push('remarks_encrypted = ?');
+        values.push(protectedText(notes));
+      }
+      if (!fields.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'No backup updates provided.' });
+      }
+
+      const [existingRows] = await conn.execute(
+        'SELECT id, backup_reference FROM backup_sets WHERE id = ? FOR UPDATE',
+        [backupId]
+      );
+      if (!existingRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Backup set not found.' });
+      }
+      backupReference = existingRows[0].backup_reference;
+      values.push(backupId);
+      await conn.execute(
+        `UPDATE backup_sets
+            SET ${fields.join(', ')}
+          WHERE id = ?`,
+        values
+      );
+
+      if (legacyBackupAvailable) {
+        const legacyFields = [];
+        const legacyValues = [];
+        if (status) {
+          legacyFields.push('status = ?');
+          legacyValues.push(backupStatusToLegacy(status));
+          if (['COMPLETED', 'VERIFIED', 'RESTORED'].includes(status)) legacyFields.push('completed_at = COALESCE(completed_at, NOW())');
+          if (status === 'VERIFIED') {
+            legacyFields.push('verified_by = ?', 'verified_at = NOW()');
+            legacyValues.push(req.user.id);
+          }
+        }
+        if (manifestHash) {
+          legacyFields.push('manifest_hash = ?');
+          legacyValues.push(manifestHash);
+        }
+        if (backupLocation !== null) {
+          legacyFields.push('backup_location_encrypted = ?');
+          legacyValues.push(protectedText(backupLocation));
+        }
+        if (notes !== null) {
+          legacyFields.push('notes_encrypted = ?');
+          legacyValues.push(protectedText(notes));
+        }
+        if (legacyFields.length) {
+          legacyValues.push(backupReference);
+          await conn.execute(
+            `UPDATE system_backup_log
+                SET ${legacyFields.join(', ')}
+              WHERE backup_reference = ?`,
+            legacyValues
+          );
+        }
+      }
+    } else {
+      const fields = [];
+      const values = [];
+      if (status) {
+        fields.push('status = ?');
+        values.push(status);
+        if (['COMPLETED', 'VERIFIED'].includes(status)) fields.push('completed_at = COALESCE(completed_at, NOW())');
+        if (status === 'VERIFIED') {
+          fields.push('verified_by = ?', 'verified_at = NOW()');
+          values.push(req.user.id);
+        }
+      }
+      if (manifestHash) {
+        fields.push('manifest_hash = ?');
+        values.push(manifestHash);
+      }
+      if (backupLocation !== null) {
+        fields.push('backup_location_encrypted = ?');
+        values.push(protectedText(backupLocation));
+      }
+      if (notes !== null) {
+        fields.push('notes_encrypted = ?');
+        values.push(protectedText(notes));
+      }
+      if (!fields.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'No backup updates provided.' });
+      }
+
+      const [existingRows] = await conn.execute(
+        'SELECT backup_id, backup_reference FROM system_backup_log WHERE backup_id = ? FOR UPDATE',
+        [backupId]
+      );
+      if (!existingRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Backup record not found.' });
+      }
+      backupReference = existingRows[0].backup_reference;
+      values.push(backupId);
+      await conn.execute(
+        `UPDATE system_backup_log
+            SET ${fields.join(', ')}
+          WHERE backup_id = ?`,
+        values
+      );
+    }
+
+    await logAuditEntryWithExecutor(conn, req, {
+      action: `${status === 'VERIFIED' ? 'VERIFY_BACKUP' : 'CHANGE_BACKUP_SETTINGS'}: ${backupReference}`,
+      module: 'BACKUP_RESTORE',
+      newValue: JSON.stringify({
+        backup_set_id: backupId,
+        status,
+        checksum_recorded: Boolean(manifestHash),
+        location_updated: backupLocation !== null,
+      }),
     });
 
     await conn.commit();
