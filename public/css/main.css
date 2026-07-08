@@ -67,6 +67,7 @@ body *:not(code):not(pre) {
   width: 220px;
   min-width: 220px;
   max-width: 220px;
+  height: 100vh;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex;
@@ -75,7 +76,7 @@ body *:not(code):not(pre) {
   flex-shrink: 0;
   position: relative;
   z-index: 10;
-  overflow: visible;
+  overflow: hidden;
   transition: width .18s ease, min-width .18s ease, max-width .18s ease;
 }
 .sidebar-logo {
@@ -84,6 +85,7 @@ body *:not(code):not(pre) {
   gap: 8px;
   padding: 0 16px 20px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
   min-width: 0;
   overflow: visible;
 }
@@ -157,7 +159,26 @@ body.sidebar-collapsed .sidebar-collapse-toggle {
   background: #ffffff;
   border-color: rgba(203, 213, 225, .95);
 }
-.nav-items { flex: 1; padding: 16px 0; }
+.nav-items {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(102, 112, 133, .45) transparent;
+}
+.nav-items::-webkit-scrollbar {
+  width: 8px;
+}
+.nav-items::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 133, .35);
+  border-radius: 999px;
+}
+.nav-items::-webkit-scrollbar-track {
+  background: transparent;
+}
 .nav-item {
   display: flex;
   align-items: center;
@@ -201,6 +222,7 @@ body.sidebar-collapsed .sidebar-collapse-toggle {
 .sidebar-user {
   padding: 14px 16px;
   border-top: 1px solid var(--border);
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
@@ -2270,6 +2292,62 @@ input.lgsv-date-native[type="date"] {
 .payroll-form-status.success { color: var(--green); }
 .payroll-form-status.error { color: var(--red); }
 
+.payroll-step-up-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40020;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.payroll-step-up-dialog {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+}
+
+.payroll-step-up-dialog h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.payroll-step-up-dialog p {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.payroll-step-up-dialog label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.payroll-step-up-dialog input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--input-bg, var(--card));
+  color: var(--text);
+}
+
+.payroll-step-up-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .logistics-payroll-page {
   display: grid;
   gap: 18px;
@@ -4025,7 +4103,11 @@ tr:hover td,
 .payroll-record-filter {
   display: grid;
   gap: 5px;
-  min-width: 210px;
+  min-width: 180px;
+}
+
+.payroll-record-search {
+  min-width: 280px;
 }
 
 .payroll-record-filter > span {
@@ -4035,6 +4117,7 @@ tr:hover td,
   text-transform: uppercase;
 }
 
+.payroll-record-filter input,
 .payroll-record-filter select {
   min-height: 36px;
 }
@@ -4053,6 +4136,10 @@ tr:hover td,
 
   .payroll-record-filter {
     grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .payroll-record-search {
     min-width: 0;
   }
 
@@ -6447,4 +6534,59 @@ tr:hover td,
     color: #dc2626 !important;
     background: #ffffff !important;
   }
+}
+
+.draft-save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.draft-save-status.saving {
+  color: #fbbf24;
+}
+
+.draft-save-status.saved {
+  color: #86efac;
+}
+
+.draft-save-status.error {
+  color: #fca5a5;
+}
+
+.draft-restore-banner {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10020;
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+  color: var(--text);
+}
+
+.draft-restore-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.draft-restore-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.draft-restore-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }

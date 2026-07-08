@@ -13,7 +13,7 @@ const {
   getDeviceSecret,
 } = require('./attendance-service');
 const { encryptAES256 } = require('./crypto');
-const { decryptColumnValue } = require('./data-protection');
+const { decryptColumnValue, isEncryptedValue } = require('./data-protection');
 const { emitAttendanceCreated } = require('./realtime');
 const {
   getActiveAttendancePolicy,
@@ -35,10 +35,16 @@ function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>]/g, '').slice(0, maxLength);
 }
 
+const BIOMETRIC_DISPLAY_DECRYPT_FAILURE_LIMIT = 1;
+let biometricDisplayDecryptFailures = 0;
+
 function safeBiometricText(value) {
+  if (isEncryptedValue(value)) return '';
+  if (biometricDisplayDecryptFailures >= BIOMETRIC_DISPLAY_DECRYPT_FAILURE_LIMIT && isEncryptedValue(value)) return '';
   try {
     return decryptColumnValue(value) || '';
   } catch (_error) {
+    biometricDisplayDecryptFailures += 1;
     return '';
   }
 }

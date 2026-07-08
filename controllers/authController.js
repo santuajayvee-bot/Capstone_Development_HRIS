@@ -39,7 +39,7 @@ const {
   publicRecaptchaConfig,
   verifyRecaptchaToken,
 } = require('../services/recaptchaService');
-
+const { auditSecurityEvent } = require('../server/security-controls');
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
 const MISCONFIGURED_ACCOUNT_MESSAGE = 'Account is not fully configured. Please contact your administrator.';
@@ -519,9 +519,40 @@ async function lockoutStatus(req, res) {
   }
 }
 
+async function clientSecurityEvent(req, res) {
+  const body = req.body || {};
+  const eventType = String(body.event_type || '').trim();
+  const form = String(body.form || '').trim();
+  const fields = Array.isArray(body.fields)
+    ? body.fields.map(field => String(field || '').trim()).filter(Boolean).slice(0, 10)
+    : [];
+  const categories = Array.isArray(body.categories)
+    ? body.categories.map(category => String(category || '').trim()).filter(Boolean).slice(0, 10)
+    : [];
+
+  if (eventType !== 'blocked_login_suspicious_input' || form !== 'login') {
+    return res.status(400).json({ success: false, message: 'Invalid security event.' });
+  }
+
+  await auditSecurityEvent(req, {
+    action: 'blocked_login_suspicious_input',
+    module: 'AUTH_SECURITY',
+    targetTable: '/api/auth/login',
+    newValue: {
+      source: 'login_client_validation',
+      fields,
+      categories,
+    },
+    result: 'blocked',
+  });
+
+  return res.json({ success: true });
+}
+
 module.exports = {
   login,
   captchaConfig,
+  clientSecurityEvent,
   logout,
   verifyMfa,
   resendMfa,

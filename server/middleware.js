@@ -14,7 +14,6 @@ const {
   getCurrentDpaVersion,
   hasAcceptedCurrentDpa,
 } = require('./dpa-service');
-
 const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
   '/api/account/password',
   '/api/auth/me',

@@ -282,6 +282,138 @@ function redactAuditValue(value) {
   return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
 }
 
+const AUDIT_ANOMALY_TYPES = new Set([
+  'SQL_INJECTION',
+  'XSS',
+  'BRUTE_FORCE',
+  'SESSION_MANIPULATION',
+]);
+
+function normalizeAuditText(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function auditAnomalyHaystack(row) {
+  return [
+    row.module,
+    row.action_performed,
+    row.action_type,
+    row.old_value,
+    row.new_value,
+    row.details,
+    row.ip_address,
+    row.user_agent,
+  ].map(normalizeAuditText).join(' ').toLowerCase();
+}
+
+function auditAnomalyKey(row) {
+  return String(row.ip_address || row.admin_username || row.user_id || 'unknown').trim() || 'unknown';
+}
+
+function isFailedLoginAudit(row) {
+  const text = auditAnomalyHaystack(row);
+  return /\blogin_failed\b|failed login|invalid login|invalid credentials/.test(text);
+}
+
+function isFailedMfaAudit(row) {
+  const text = auditAnomalyHaystack(row);
+  return /\bmfa_verification_failed\b|\bmfa_too_many_attempts\b|invalid verification code/.test(text);
+}
+
+function auditAnomalyContext(rows) {
+  const failedLoginsByKey = new Map();
+  const failedMfaByKey = new Map();
+  for (const row of rows) {
+    const key = auditAnomalyKey(row);
+    if (isFailedLoginAudit(row)) failedLoginsByKey.set(key, (failedLoginsByKey.get(key) || 0) + 1);
+    if (isFailedMfaAudit(row)) failedMfaByKey.set(key, (failedMfaByKey.get(key) || 0) + 1);
+  }
+  return { failedLoginsByKey, failedMfaByKey };
+}
+
+function classifyAuditAnomaly(row, context) {
+  const text = auditAnomalyHaystack(row);
+  const key = auditAnomalyKey(row);
+
+  const sqlInjectionPattern = /(\bsql_injection\b|sql injection|\bunion\s+(all\s+)?select\b|\binformation_schema\b|\bor\s+1\s*=\s*1\b|\band\s+1\s*=\s*1\b|'\s*or\s*'1'\s*=\s*'1|--\s|\/\*|\*\/|\bsleep\s*\(|\bbenchmark\s*\(|\bdrop\s+table\b|\binsert\s+into\b|\bselect\s+.+\bfrom\b)/i;
+  if (sqlInjectionPattern.test(text)) {
+    return {
+      anomaly_type: 'SQL_INJECTION',
+      anomaly_label: 'SQLi Pattern',
+      anomaly_severity: 'High',
+      anomaly_reason: 'Audit content contains SQL injection indicators such as UNION SELECT, boolean bypass, SQL comments, or database metadata access.',
+    };
+  }
+
+  const xssPattern = /(\bxss\b|<\s*script\b|javascript\s*:|onerror\s*=|onload\s*=|<\s*img\b|<\s*svg\b|document\.cookie|localstorage|<\s*iframe\b|eval\s*\()/i;
+  if (xssPattern.test(text)) {
+    return {
+      anomaly_type: 'XSS',
+      anomaly_label: 'XSS Pattern',
+      anomaly_severity: 'High',
+      anomaly_reason: 'Audit content contains script, event-handler, JavaScript URI, or browser storage indicators.',
+    };
+  }
+
+  const failedLoginCount = context.failedLoginsByKey.get(key) || 0;
+  const failedMfaCount = context.failedMfaByKey.get(key) || 0;
+  if (
+    failedLoginCount >= 5
+    || failedMfaCount >= 3
+    || /\blogin_blocked_locked_account\b|account locked|account lockout|blocked_auth_rate_limit_exceeded|mfa_too_many_attempts/.test(text)
+  ) {
+    return {
+      anomaly_type: 'BRUTE_FORCE',
+      anomaly_label: 'Brute Force',
+      anomaly_severity: failedLoginCount >= 5 || /rate_limit|too_many|lockout/.test(text) ? 'Critical' : 'High',
+      anomaly_reason: `Repeated failed authentication activity detected for ${key}.`,
+    };
+  }
+
+  if (
+    /invalid_or_tampered_jwt_attempt|expired_jwt_attempt|blocked_client_authority_field_tampering|blocked_inactive_account_token_use|session expired|invalid session|revoked session|token_version|unauthorized request fields/.test(text)
+  ) {
+    return {
+      anomaly_type: 'SESSION_MANIPULATION',
+      anomaly_label: 'Session Manipulation',
+      anomaly_severity: /tampered|authority_field|inactive_account|revoked/.test(text) ? 'High' : 'Medium',
+      anomaly_reason: 'Session/token tampering, expired token reuse, revoked session reuse, or client authority-field manipulation was detected.',
+    };
+  }
+
+  return null;
+}
+
+function enrichAuditAnomalies(rows) {
+  const context = auditAnomalyContext(rows);
+  return rows.map(row => {
+    const anomaly = classifyAuditAnomaly(row, context);
+    return {
+      ...row,
+      anomaly_type: anomaly?.anomaly_type || null,
+      anomaly_label: anomaly?.anomaly_label || null,
+      anomaly_severity: anomaly?.anomaly_severity || null,
+      anomaly_reason: anomaly?.anomaly_reason || null,
+    };
+  });
+}
+
+function filterAuditAnomalies(rows, anomalyType) {
+  const normalized = String(anomalyType || '').trim().toUpperCase();
+  return rows.filter(row => {
+    if (!row.anomaly_type) return false;
+    return !normalized || normalized === row.anomaly_type;
+  });
+}
+
 async function queryCanonicalSystemAuditLog({
   limit,
   offset,
@@ -1184,8 +1316,19 @@ async function getBlockchainSupportSnapshot() {
   if (snapshot.audit.available) {
     const [criticalRows] = await pool.execute(
       `SELECT COUNT(*) AS count
-         FROM BLOCKCHAIN_AUDIT_LOG
-        WHERE Status IN ('CRITICAL','FAILED','VERIFICATION_FAILED')`
+         FROM BLOCKCHAIN_AUDIT_LOG critical
+        WHERE critical.Status IN ('CRITICAL','FAILED','VERIFICATION_FAILED')
+          AND NOT EXISTS (
+            SELECT 1
+              FROM BLOCKCHAIN_AUDIT_LOG later
+             WHERE later.Payroll_ID <=> critical.Payroll_ID
+               AND later.Event_Type = critical.Event_Type
+               AND later.Status IN ('VERIFIED','RECORDED')
+               AND (
+                 later.Created_At > critical.Created_At
+                 OR (later.Created_At = critical.Created_At AND later.Audit_ID > critical.Audit_ID)
+               )
+          )`
     );
     const [recentRows] = await pool.execute(
       `SELECT Audit_ID, Payroll_ID, Event_Type, Status, Transaction_Hash, Payload_Hash, Created_At
@@ -4831,19 +4974,34 @@ router.get('/audit-log', async (req, res) => {
     const module = String(req.query.module || '').trim();
     const search = String(req.query.search || '').trim().toLowerCase();
     const eventType = req.query.event_type || req.query.action_type;
+    const anomalyType = String(req.query.anomaly_type || '').trim().toUpperCase();
+    const anomalyOnly = String(eventType || '').trim().toLowerCase() === 'anomaly'
+      || req.query.anomaly_only === '1'
+      || Boolean(anomalyType);
     const includeLegacy = req.query.include_legacy === '1';
+    const queryLimit = anomalyOnly ? Math.min(Math.max(limit * 4, 100), 500) : limit;
+    const queryOffset = anomalyOnly ? 0 : offset;
+    const queryEventType = anomalyOnly ? null : eventType;
     if (!includeLegacy) {
-      const rows = await queryCanonicalSystemAuditLog({ limit, offset, module, search, eventType });
-      return res.json(rows.map(row => ({
+      const rows = await queryCanonicalSystemAuditLog({ limit: queryLimit, offset: queryOffset, module, search, eventType: queryEventType });
+      const enrichedRows = enrichAuditAnomalies(rows);
+      const visibleRows = anomalyOnly
+        ? filterAuditAnomalies(enrichedRows, anomalyType).slice(offset, offset + limit)
+        : enrichedRows;
+      return res.json(visibleRows.map(row => ({
         ...row,
         old_value: redactAuditValue(row.old_value),
         new_value: redactAuditValue(row.new_value),
       })));
     }
 
-    const rows = await queryGeneralAuditSources({ limit, offset, module, search, eventType, includeLegacy });
+    const rows = await queryGeneralAuditSources({ limit: queryLimit, offset: queryOffset, module, search, eventType: queryEventType, includeLegacy });
+    const enrichedRows = enrichAuditAnomalies(rows);
+    const visibleRows = anomalyOnly
+      ? filterAuditAnomalies(enrichedRows, anomalyType).slice(offset, offset + limit)
+      : enrichedRows;
 
-    return res.json(rows.map(row => ({
+    return res.json(visibleRows.map(row => ({
       ...row,
       old_value: redactAuditValue(row.old_value),
       new_value: redactAuditValue(row.new_value),

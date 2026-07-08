@@ -47,6 +47,20 @@ const COMPUTED_PAYROLL_FIELDS = new Set([
 ]);
 
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const SENSITIVE_REQUEST_KEY = /(password|token|secret|authorization|cookie|mfa|otp|code|hash)/i;
+
+const REQUEST_ANOMALY_RULES = [
+  {
+    type: 'SQL_INJECTION',
+    action: 'detected_sql_injection_probe',
+    pattern: /(\bunion\s+(all\s+)?select\b|\binformation_schema\b|\bor\s+1\s*=\s*1\b|\band\s+1\s*=\s*1\b|'\s*or\s*'1'\s*=\s*'1|--\s|\/\*|\*\/|\bsleep\s*\(|\bbenchmark\s*\(|\bdrop\s+table\b|\binsert\s+into\b)/i,
+  },
+  {
+    type: 'XSS',
+    action: 'detected_xss_probe',
+    pattern: /(<\s*script\b|javascript\s*:|onerror\s*=|onload\s*=|<\s*svg\b|document\.cookie|localstorage|<\s*iframe\b|eval\s*\()/i,
+  },
+];
 
 function requestIp(req) {
   return req.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
@@ -66,6 +80,29 @@ function safeJson(value) {
   } catch (_) {
     return String(value);
   }
+}
+
+function collectRequestStrings(value, pathPrefix = 'request', output = []) {
+  if (value === null || value === undefined) return output;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    output.push({ path: pathPrefix, value: String(value) });
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.slice(0, 20).forEach((item, index) => collectRequestStrings(item, `${pathPrefix}[${index}]`, output));
+    return output;
+  }
+  if (typeof value === 'object') {
+    for (const [key, nestedValue] of Object.entries(value).slice(0, 50)) {
+      const nextPath = `${pathPrefix}.${key}`;
+      if (SENSITIVE_REQUEST_KEY.test(key)) {
+        output.push({ path: nextPath, value: '[sensitive]' });
+      } else {
+        collectRequestStrings(nestedValue, nextPath, output);
+      }
+    }
+  }
+  return output;
 }
 
 const SENSITIVE_AUDIT_KEY = /(name|email|phone|contact|address|reason|remark|note|birth|gender|religion|blood|sss|philhealth|pagibig|tin|bank|account|latitude|longitude|\blat\b|\blng\b|password|token|secret|photo|file_path|old_value|new_value|requested_value)/i;
@@ -113,6 +150,44 @@ async function auditSecurityEvent(req, {
   } catch (error) {
     console.warn('Security audit logging skipped:', error.message);
   }
+}
+
+function auditSuspiciousRequestPatterns(req, _res, next) {
+  try {
+    const values = [
+      { path: 'url', value: String(req.originalUrl || '') },
+      ...collectRequestStrings(req.query, 'query'),
+      ...collectRequestStrings(req.body, 'body'),
+    ];
+    const findings = [];
+
+    for (const rule of REQUEST_ANOMALY_RULES) {
+      const fields = values
+        .filter(entry => entry.value !== '[sensitive]' && rule.pattern.test(entry.value))
+        .map(entry => entry.path);
+      if (fields.length) findings.push({ ...rule, fields: [...new Set(fields)].slice(0, 10) });
+    }
+
+    if (!findings.length) return next();
+
+    for (const finding of findings) {
+      auditSecurityEvent(req, {
+        action: finding.action,
+        module: 'APP_ANOMALY',
+        targetTable: String(req.originalUrl || '').split('?')[0] || null,
+        newValue: {
+          anomaly_type: finding.type,
+          method: req.method,
+          path: String(req.originalUrl || '').split('?')[0],
+          fields: finding.fields,
+        },
+        result: 'flagged',
+      }).catch(() => {});
+    }
+  } catch (error) {
+    console.warn('Suspicious request pattern audit skipped:', error.message);
+  }
+  return next();
 }
 
 function rejectWithAudit(req, res, status, message, audit) {
@@ -327,6 +402,7 @@ function secureUploadedFile(req, res, next) {
 module.exports = {
   ALLOWED_UPLOAD_TYPES,
   COMPUTED_PAYROLL_FIELDS,
+  auditSuspiciousRequestPatterns,
   auditSecurityEvent,
   createRateLimiter,
   deleteUploadedFile,

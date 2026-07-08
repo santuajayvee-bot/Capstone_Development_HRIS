@@ -6,6 +6,8 @@ let CURRENT_USER = null;
 let LEAVE_TYPES = [];
 const LEAVE_MANAGER_ROLES = new Set(['hr_admin', 'hr_manager', 'admin', 'system_admin', 'payroll_officer', 'payroll_manager']);
 const LEAVE_APPROVER_ROLES = new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']);
+const LEAVE_PAYROLL_APPROVER_ROLES = new Set(['payroll_officer', 'payroll_manager']);
+const LEAVE_HR_FINAL_APPROVER_ROLES = new Set(['hr_admin', 'hr_manager']);
 
 function normalizeLeaveRole(role) {
   if (typeof normalizeClientRole === 'function') return normalizeClientRole(role);
@@ -39,6 +41,24 @@ function isLeaveManager() {
 
 function isLeaveApprover() {
   return LEAVE_APPROVER_ROLES.has(currentLeaveRole());
+}
+
+function isLeavePayrollApprover() {
+  return LEAVE_PAYROLL_APPROVER_ROLES.has(currentLeaveRole());
+}
+
+function isLeaveHrFinalApprover() {
+  return LEAVE_HR_FINAL_APPROVER_ROLES.has(currentLeaveRole());
+}
+
+function isLeavePendingForCurrentRole(leave) {
+  const status = leaveStatusValue(leave?.status);
+  return (isLeavePayrollApprover() && status === 'Pending')
+    || (isLeaveHrFinalApprover() && status === 'Payroll Approved');
+}
+
+function leaveApprovalActionLabel(leave) {
+  return leaveStatusValue(leave?.status) === 'Payroll Approved' ? 'Final Approve' : 'Payroll Approve';
 }
 
 function isLeaveEmployee() {
@@ -125,13 +145,129 @@ function leaveRemarksPrompt({
   });
 }
 
+function closeLeavePasswordPrompt(value = null) {
+  const modal = document.getElementById('leave-password-prompt-modal');
+  const resolver = modal?._leaveResolve;
+  if (modal) {
+    modal._leaveResolve = null;
+    modal.remove();
+  }
+  if (resolver) resolver(value);
+}
+
+function leavePasswordPrompt({
+  title = 'Confirm Password',
+  message = 'Enter your current password to view protected leave information.',
+  confirmText = 'Continue',
+} = {}) {
+  document.getElementById('leave-password-prompt-modal')?.remove();
+  return new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.id = 'leave-password-prompt-modal';
+    modal.className = 'leave-modal';
+    modal.style.display = 'flex';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'leave-password-prompt-title');
+    modal._leaveResolve = resolve;
+    modal.innerHTML = `
+      <div class="leave-modal-card" style="width:min(460px,94vw);">
+        <div class="leave-modal-head">
+          <h3 class="leave-section-title" id="leave-password-prompt-title">${escapeLeaveText(title)}</h3>
+          <button class="btn btn-outline" type="button" data-leave-password-cancel>Close</button>
+        </div>
+        <div class="leave-modal-body">
+          <p style="margin:0 0 12px;color:var(--muted);font-size:13px;">${escapeLeaveText(message)}</p>
+          <input id="leave-password-prompt-input" type="password" autocomplete="current-password" placeholder="Current password" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);padding:10px;">
+          <div id="leave-password-prompt-error" style="display:none;margin-top:8px;color:var(--red);font-size:12px;">Current password is required.</div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+            <button class="btn btn-outline" type="button" data-leave-password-cancel>Cancel</button>
+            <button class="btn btn-primary" type="button" data-leave-password-submit>${escapeLeaveText(confirmText)}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', event => {
+      if (event.target === modal || event.target.closest('[data-leave-password-cancel]')) {
+        closeLeavePasswordPrompt(null);
+      }
+    });
+    modal.querySelector('[data-leave-password-submit]')?.addEventListener('click', () => {
+      const input = modal.querySelector('#leave-password-prompt-input');
+      const error = modal.querySelector('#leave-password-prompt-error');
+      const password = String(input?.value || '');
+      if (!password.trim()) {
+        if (error) error.style.display = 'block';
+        input?.focus();
+        return;
+      }
+      closeLeavePasswordPrompt(password);
+    });
+    modal.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeLeavePasswordPrompt(null);
+      if (event.key === 'Enter') modal.querySelector('[data-leave-password-submit]')?.click();
+    });
+    document.body.appendChild(modal);
+    setTimeout(() => modal.querySelector('#leave-password-prompt-input')?.focus(), 30);
+  });
+}
+
+function leaveSensitiveDetailValue(label, value) {
+  return `
+    <div class="leave-sensitive-field">
+      <span>${escapeLeaveText(label)}</span>
+      <strong>${escapeLeaveText(value || '-')}</strong>
+    </div>
+  `;
+}
+
+function leaveAttachmentRevealHtml(data) {
+  if (data?.attachment_available) {
+    return '<button type="button" class="btn btn-outline" data-leave-attachment-download>Download attachment</button>';
+  }
+  if (data?.attachment_missing || String(data?.attachment_status || '').toLowerCase() === 'missing') {
+    return '<span class="leave-attachment-missing">Attachment missing</span>';
+  }
+  return '<span class="leave-sensitive-empty">No attachment</span>';
+}
+
+function renderLeaveSensitiveDetailsPanel(leaveId, data, currentPassword) {
+  const panel = document.getElementById(`leave-sensitive-panel-${Number(leaveId)}`);
+  if (!panel) return false;
+  panel.innerHTML = `
+    <strong>Sensitive details</strong>
+    <div class="leave-sensitive-revealed">
+      ${leaveSensitiveDetailValue('Reason', data.reason)}
+      ${leaveSensitiveDetailValue('Remarks', data.remarks)}
+      ${leaveSensitiveDetailValue('Rejection remarks', data.rejection_remarks)}
+      ${leaveSensitiveDetailValue('Payroll remarks', data.payroll_approval_remarks)}
+      ${leaveSensitiveDetailValue('Approval remarks', data.approval_remarks)}
+      <div class="leave-sensitive-field">
+        <span>Attachment</span>
+        <strong>${leaveAttachmentRevealHtml(data)}</strong>
+      </div>
+    </div>
+  `;
+  panel.querySelector('[data-leave-attachment-download]')?.addEventListener('click', () => {
+    downloadLeaveAttachment(leaveId, currentPassword);
+  });
+  return true;
+}
+
 async function revealLeaveSensitiveDetails(leaveId) {
+  const currentPassword = await leavePasswordPrompt({
+    title: 'View Leave Details',
+    message: 'Enter your current password to view sensitive leave details and attachment access.',
+    confirmText: 'View Details',
+  });
+  if (!currentPassword) return;
   const response = await apiFetch(`/api/leave/${encodeURIComponent(leaveId)}/reveal-sensitive`, {
     method: 'POST',
-    body: '{}',
+    body: JSON.stringify({ currentPassword }),
   });
   const data = await response?.json().catch(() => ({}));
-  if (!response?.ok) return alert(data.error || 'Failed to reveal leave details.');
+  if (!response?.ok) return leaveNotice(data.error || 'Failed to reveal leave details.', 'Leave Details', 'error');
+  if (renderLeaveSensitiveDetailsPanel(leaveId, data, currentPassword)) return;
   const lines = [
     `Reason: ${data.reason || '-'}`,
     `Remarks: ${data.remarks || '-'}`,
@@ -141,13 +277,31 @@ async function revealLeaveSensitiveDetails(leaveId) {
   alert(lines.join('\n'));
 }
 
-async function downloadLeaveAttachment(leaveId) {
-  const response = await apiFetch(`/api/leave/${encodeURIComponent(leaveId)}/attachment`);
-  if (!response?.ok) return alert('Failed to download leave attachment.');
+function leaveAttachmentDownloadName(response) {
+  const header = response?.headers?.get('Content-Disposition') || '';
+  const match = header.match(/filename="([^"]+)"/i) || header.match(/filename=([^;]+)/i);
+  return match ? String(match[1] || '').trim() : 'leave-attachment';
+}
+
+async function downloadLeaveAttachment(leaveId, confirmedPassword = null) {
+  const currentPassword = confirmedPassword || await leavePasswordPrompt({
+    title: 'Download Attachment',
+    message: 'Enter your current password to download this leave attachment.',
+    confirmText: 'Download',
+  });
+  if (!currentPassword) return;
+  const response = await apiFetch(`/api/leave/${encodeURIComponent(leaveId)}/attachment`, {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword }),
+  });
+  if (!response?.ok) {
+    const data = await response?.json().catch(() => ({}));
+    return leaveNotice(data.error || 'Failed to download leave attachment.', 'Leave Attachment', 'error');
+  }
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'leave-attachment';
+  link.download = leaveAttachmentDownloadName(response);
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -380,13 +534,13 @@ window.renderLeaveTable = function() {
   
   // 1. Filter by Tab (Pending vs History) for Admins
   if (CURRENT_LEAVE_TAB === 'pending') {
-    filtered = filtered.filter(r => r.status === 'Pending');
+    filtered = filtered.filter(r => ['Pending', 'Payroll Approved'].includes(leaveStatusValue(r.status)));
     if (actionColHead) {
       actionColHead.textContent = canApprove ? 'Actions' : 'Status';
       actionColHead.style.textAlign = canApprove ? 'right' : 'left';
     }
   } else {
-    filtered = filtered.filter(r => r.status !== 'Pending');
+    filtered = filtered.filter(r => !['Pending', 'Payroll Approved'].includes(leaveStatusValue(r.status)));
     if (actionColHead) {
       actionColHead.textContent = 'Status';
       actionColHead.style.textAlign = 'left';
@@ -448,22 +602,21 @@ window.renderLeaveTable = function() {
       <td style="padding:16px 24px;font-size:13px;color:var(--muted);max-width:200px;">
         <div style="display:flex;flex-direction:column;gap:6px;">
           <button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(leave.id)})">Show details</button>
-          ${leave.attachment_available ? `<button type="button" class="btn btn-outline" onclick="downloadLeaveAttachment(${Number(leave.id)})">Download attachment</button>` : ''}
         </div>
       </td>
       <td style="padding:16px 24px;text-align:${(CURRENT_LEAVE_TAB === 'pending' && canApprove) ? 'right' : 'left'};">
-        ${CURRENT_LEAVE_TAB === 'pending' ? (canApprove ? `
+        ${CURRENT_LEAVE_TAB === 'pending' ? (canApprove && isLeavePendingForCurrentRole(leave) ? `
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button class="btn" style="background:var(--green);color:white;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="approveLeave(this)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Approve
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> ${leaveApprovalActionLabel(leave)}
             </button>
             <button class="btn btn-outline" style="color:var(--red);border-color:rgba(244,67,54,0.3);padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;" onclick="denyLeave(this)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Reject
             </button>
           </div>
-        ` : `<span class="badge badge-yellow" style="padding:4px 8px;border-radius:20px;">Pending</span>`) : `
+        ` : `<span class="badge badge-yellow" style="padding:4px 8px;border-radius:20px;">${leaveStatusValue(leave.status)}</span>`) : `
           <div style="display:flex;align-items:center;gap:8px;">
-            <span class="badge badge-${leave.status === 'Approved' ? 'green' : leave.status === 'Cancelled' ? 'yellow' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${leave.status}</span>
+            <span class="badge badge-${leave.status === 'Approved' ? 'green' : ['Cancelled', 'Payroll Approved', 'Pending'].includes(leaveStatusValue(leave.status)) ? 'yellow' : 'red'}" style="padding:4px 8px;border-radius:20px;font-weight:600;">${leaveStatusValue(leave.status)}</span>
             ${(canApprove && leave.status === 'Approved') ? `<button class="btn" style="background:none;border:1px solid rgba(244,67,54,0.3);color:var(--red);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" onclick="cancelLeave(this)">Cancel</button>` : ''}
           </div>
         `}
@@ -477,13 +630,16 @@ async function approveLeave(btn) {
   const row = btn.closest('tr');
   const leaveId = row?.dataset.leaveId;
   if (!leaveId) { await leaveNotice('Error: Could not find leave request', 'Leave Request', 'error'); return; }
-  if (!(await leaveConfirm('Approve this leave request?', 'Approve Leave Request', 'Approve', 'Cancel'))) return;
+  const leave = ALL_LEAVES_DATA.find(item => Number(item.id) === Number(leaveId));
+  const actionLabel = leaveApprovalActionLabel(leave);
+  if (!(await leaveConfirm(`${actionLabel} this leave request?`, 'Leave Request Approval', actionLabel, 'Cancel'))) return;
   try {
     const res = await apiFetch(`/api/leave/${leaveId}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Approved' })
     });
-    if (!res || !res.ok) throw new Error('Failed to approve');
-    await leaveNotice('Leave approved successfully', 'Leave Request', 'success');
+    const data = await res?.json().catch(() => ({}));
+    if (!res || !res.ok) throw new Error(data.error || 'Failed to approve');
+    await leaveNotice(data.message || 'Leave status updated.', 'Leave Request', 'success');
     loadLeaveRequests();
   } catch (err) { await leaveNotice('Failed to approve leave: ' + err.message, 'Leave Request', 'error'); }
 }
@@ -574,7 +730,7 @@ function renderAllRequests(leaves, genReqs) {
 
   const countEl = document.getElementById('req-count');
   if (countEl) {
-    const pending = all.filter(r => r.status === 'Pending').length;
+    const pending = all.filter(r => ['Pending', 'Payroll Approved'].includes(leaveStatusValue(r.status))).length;
     countEl.textContent = `${pending} pending · ${all.length} total`;
   }
 }
@@ -1124,6 +1280,15 @@ function leaveStatusValue(status) {
   return status === 'Denied' ? 'Rejected' : (status || 'Pending');
 }
 
+function leaveStatusTone(status) {
+  const value = leaveStatusValue(status);
+  if (value === 'Approved') return 'approved';
+  if (value === 'Rejected' || value === 'Denied') return 'rejected';
+  if (value === 'Payroll Approved') return 'pending';
+  if (value === 'Cancelled') return 'pending';
+  return 'pending';
+}
+
 function leavePayType(wageType) {
   const value = String(wageType || '').toLowerCase();
   if (value.includes('hour')) return 'Per Hour';
@@ -1133,7 +1298,7 @@ function leavePayType(wageType) {
 }
 
 function leaveBadge(value, kind = '') {
-  return `<span class="leave-badge ${(kind || value || '').toLowerCase()}">${value || '-'}</span>`;
+  return `<span class="leave-badge ${(kind || value || '').toLowerCase().replace(/\s+/g, '-')}">${value || '-'}</span>`;
 }
 
 function leaveEmployeeLabel(emp) {
@@ -1177,10 +1342,24 @@ async function loadLeaveRequests() {
       isLeaveManager() ? apiFetch('/api/leave/audit') : Promise.resolve(null)
     ]);
 
-    ALL_LEAVES_DATA = leaveRes && leaveRes.ok ? await leaveRes.json() : [];
-    LEAVE_EMPLOYEES = empRes && empRes.ok ? await empRes.json() : [];
-    LEAVE_TYPES = typeRes && typeRes.ok ? await typeRes.json() : [];
-    LEAVE_AUDIT = auditRes && auditRes.ok ? await auditRes.json() : [];
+    if (leaveRes && leaveRes.ok) {
+      ALL_LEAVES_DATA = await leaveRes.json();
+    }
+    if (empRes && empRes.ok) {
+      LEAVE_EMPLOYEES = await empRes.json();
+    } else if (empRes && !empRes.ok) {
+      console.warn('Leave employee options were not refreshed.', empRes.status);
+    }
+    if (typeRes && typeRes.ok) {
+      LEAVE_TYPES = await typeRes.json();
+    } else if (typeRes && !typeRes.ok) {
+      console.warn('Leave type options were not refreshed.', typeRes.status);
+    }
+    if (auditRes && auditRes.ok) {
+      LEAVE_AUDIT = await auditRes.json();
+    } else if (auditRes && !auditRes.ok) {
+      console.warn('Leave audit was not refreshed.', auditRes.status);
+    }
 
     ALL_LEAVES_DATA = ALL_LEAVES_DATA.map(row => ({
       ...row,
@@ -1206,7 +1385,12 @@ async function loadLeaveRequests() {
 }
 
 function setupLeaveUi() {
-  document.getElementById('page-leave')?.classList.toggle('leave-employee-mode', isLeaveEmployee());
+  const employeeMode = isLeaveEmployee();
+  document.getElementById('page-leave')?.classList.toggle('leave-employee-mode', employeeMode);
+
+  document.querySelectorAll('[data-leave-manager-only]').forEach(element => {
+    element.style.display = employeeMode ? 'none' : '';
+  });
 
   document.querySelectorAll('#page-leave .page-header-right .btn').forEach(button => {
     button.style.display = isLeaveManager() ? '' : 'none';
@@ -1229,7 +1413,7 @@ function setupLeaveUi() {
   if (manualCard) manualCard.style.display = isLeaveManager() ? 'block' : 'none';
 
   const employeeSelect = document.getElementById('manual-employee');
-  if (employeeSelect) {
+  if (employeeSelect && LEAVE_EMPLOYEES.length) {
     const currentEmployeeId = employeeSelect.value;
     employeeSelect.innerHTML = leaveEmployeeOptions(LEAVE_EMPLOYEES);
     if ([...employeeSelect.options].some(option => option.value === currentEmployeeId)) {
@@ -1240,7 +1424,7 @@ function setupLeaveUi() {
   const balanceCard = document.getElementById('leave-balance-config-card');
   if (balanceCard) balanceCard.style.display = isLeaveManager() ? 'block' : 'none';
   const balanceEmployee = document.getElementById('balance-employee');
-  if (balanceEmployee) {
+  if (balanceEmployee && LEAVE_EMPLOYEES.length) {
     const current = balanceEmployee.value;
     balanceEmployee.innerHTML = leaveEmployeeOptions(LEAVE_EMPLOYEES);
     balanceEmployee.value = current;
@@ -1343,6 +1527,34 @@ function escapeLeaveText(value) {
   }[char]));
 }
 
+function leaveBalanceIntegrityStatus(row) {
+  return String(row?.integrity_status || '').trim().toUpperCase();
+}
+
+function leaveBalanceIsTampered(row) {
+  return leaveBalanceIntegrityStatus(row) === 'TAMPERED';
+}
+
+function leaveBalanceIntegrityBadge(row) {
+  if (leaveBalanceIsTampered(row)) {
+    return '<span class="leave-integrity-badge leave-integrity-badge-tampered">Tampered</span>';
+  }
+  if (leaveBalanceIntegrityStatus(row) === 'UNSEALED') {
+    return '<span class="leave-integrity-badge leave-integrity-badge-unsealed">Unsealed</span>';
+  }
+  return '';
+}
+
+function leaveAttachmentControl(leave) {
+  if (leave?.attachment_available) {
+    return `<button type="button" class="btn btn-outline" onclick="downloadLeaveAttachment(${Number(leave.id)})">Download attachment</button>`;
+  }
+  if (leave?.attachment_missing || String(leave?.attachment_status || '').toLowerCase() === 'missing') {
+    return '<span class="leave-attachment-missing">Attachment missing</span>';
+  }
+  return '';
+}
+
 function renderLeaveSummary() {
   const today = window.LGSVDatePicker?.todayValue?.() || (() => {
     const date = new Date();
@@ -1351,7 +1563,7 @@ function renderLeaveSummary() {
   const monthPrefix = today.slice(0, 7);
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
 
-  set('sum-pending', ALL_LEAVES_DATA.filter(l => l.status === 'Pending').length);
+  set('sum-pending', ALL_LEAVES_DATA.filter(l => ['Pending', 'Payroll Approved'].includes(leaveStatusValue(l.status))).length);
   set('sum-approved', ALL_LEAVES_DATA.filter(l => l.status === 'Approved').length);
   set('sum-rejected', ALL_LEAVES_DATA.filter(l => l.status === 'Rejected').length);
   set('sum-today', new Set(ALL_LEAVES_DATA.filter(l => l.status === 'Approved' && l.date_from <= today && l.date_to >= today).map(l => l.employee_id)).size);
@@ -1359,12 +1571,13 @@ function renderLeaveSummary() {
 }
 
 function getFilteredLeaves() {
-  const search = (document.getElementById('leave-filter-search')?.value || '').toLowerCase();
-  const dept = document.getElementById('leave-filter-dept')?.value || '';
-  const payType = document.getElementById('leave-filter-pay-type')?.value || '';
+  const employeeMode = isLeaveEmployee();
+  const search = employeeMode ? '' : (document.getElementById('leave-filter-search')?.value || '').toLowerCase();
+  const dept = employeeMode ? '' : (document.getElementById('leave-filter-dept')?.value || '');
+  const payType = employeeMode ? '' : (document.getElementById('leave-filter-pay-type')?.value || '');
   const type = document.getElementById('leave-filter-type')?.value || '';
   const status = document.getElementById('leave-filter-status')?.value || '';
-  const source = document.getElementById('leave-filter-source')?.value || '';
+  const source = employeeMode ? '' : (document.getElementById('leave-filter-source')?.value || '');
   const from = document.getElementById('leave-filter-from')?.value || '';
   const to = document.getElementById('leave-filter-to')?.value || '';
 
@@ -1400,16 +1613,16 @@ window.renderLeaveTable = function() {
 
   tbody.innerHTML = pageData.map(leave => `
     <tr data-leave-id="${leave.id}">
-      <td><strong>${leave.employee_name || '-'}</strong><div style="color:var(--muted);font-size:11px;">${leave.created_at ? new Date(leave.created_at).toLocaleString() : ''}</div></td>
-      <td>${leave.department || '-'}</td>
-      <td>${leave.pay_type || '-'}</td>
+      <td data-leave-manager-only><strong>${leave.employee_name || '-'}</strong><div style="color:var(--muted);font-size:11px;">${leave.created_at ? new Date(leave.created_at).toLocaleString() : ''}</div></td>
+      <td data-leave-manager-only>${leave.department || '-'}</td>
+      <td data-leave-manager-only>${leave.pay_type || '-'}</td>
       <td>${leave.type || '-'}</td>
       <td>${formatLeaveDate(leave.date_from)} to ${formatLeaveDate(leave.date_to)}<div style="color:var(--muted);font-size:11px;">${leave.days || 1} day(s)</div></td>
-      <td>${leaveBadge(leave.filing_source, leave.filing_source)}</td>
-      <td>${leaveBadge(leave.status, leave.status)}</td>
+      <td data-leave-manager-only>${leaveBadge(leave.filing_source, leave.filing_source)}</td>
+      <td>${leaveBadge(leaveStatusValue(leave.status), leaveStatusTone(leave.status))}</td>
       <td><div class="leave-actions">
         <button class="btn btn-outline" onclick="viewLeaveDetails(${leave.id})">View</button>
-        ${isLeaveApprover() && leave.status === 'Pending' ? `<button class="btn btn-primary" onclick="approveLeaveById(${leave.id})">Approve</button><button class="btn btn-outline" onclick="rejectLeaveById(${leave.id})">Reject</button>` : ''}
+        ${isLeaveApprover() && isLeavePendingForCurrentRole(leave) ? `<button class="btn btn-primary" onclick="approveLeaveById(${leave.id})">${leaveApprovalActionLabel(leave)}</button><button class="btn btn-outline" onclick="rejectLeaveById(${leave.id})">Reject</button>` : ''}
       </div></td>
     </tr>
   `).join('');
@@ -1418,7 +1631,7 @@ window.renderLeaveTable = function() {
       <article class="leave-mobile-request">
         <div class="leave-mobile-request-head">
           <span>${escapeLeaveText(leave.type || 'Leave Request')}</span>
-          ${leaveBadge(leave.status, leave.status)}
+          ${leaveBadge(leaveStatusValue(leave.status), leaveStatusTone(leave.status))}
         </div>
         <div class="leave-mobile-request-dates">${formatLeaveDate(leave.date_from)} - ${formatLeaveDate(leave.date_to)}</div>
         <div class="leave-mobile-request-meta">
@@ -1428,18 +1641,24 @@ window.renderLeaveTable = function() {
       </article>
     `).join('') : '<div class="leave-mobile-empty">No leave records found.</div>';
   }
+  document.querySelectorAll('[data-leave-manager-only]').forEach(element => {
+    element.style.display = isLeaveEmployee() ? 'none' : '';
+  });
 };
 
 async function approveLeaveById(id) {
-  if (!(await leaveConfirm('Approve this leave request?', 'Approve Leave Request', 'Approve', 'Cancel'))) return;
+  const leave = ALL_LEAVES_DATA.find(item => Number(item.id) === Number(id));
+  const actionLabel = leaveApprovalActionLabel(leave);
+  if (!(await leaveConfirm(`${actionLabel} this leave request?`, 'Leave Request Approval', actionLabel, 'Cancel'))) return;
   const res = await apiFetch(`/api/leave/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status: 'Approved', remarks: 'Approved' })
   });
+  const data = await res?.json().catch(() => ({}));
   if (!res || !res.ok) {
-    const error = await res?.json().catch(() => ({}));
-    return leaveNotice(error.error || 'Failed to approve leave.', 'Leave Request', 'error');
+    return leaveNotice(data.error || 'Failed to approve leave.', 'Leave Request', 'error');
   }
+  await leaveNotice(data.message || 'Leave status updated.', 'Leave Request', 'success');
   await loadLeaveRequests();
 }
 
@@ -1479,8 +1698,7 @@ function viewLeaveDetails(id) {
       <div><strong>Duration</strong><br>${leave.days || 1} day(s)</div>
       <div><strong>Source</strong><br>${leave.filing_source || 'Portal'}</div>
       <div><strong>Status</strong><br>${leave.status}</div>
-      <div><strong>Sensitive details</strong><br><button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(leave.id)})">Show details</button></div>
-      ${leave.attachment_available ? `<div><button type="button" class="btn btn-outline" onclick="downloadLeaveAttachment(${Number(leave.id)})">Download attachment</button></div>` : ''}
+      <div id="leave-sensitive-panel-${Number(leave.id)}" class="leave-sensitive-panel"><strong>Sensitive details</strong><br><button type="button" class="btn btn-outline" onclick="revealLeaveSensitiveDetails(${Number(leave.id)})">Show details</button></div>
     </div>
     <div style="margin-top:14px;">
       <strong>Leave Balance Before Approval</strong>
@@ -1574,10 +1792,10 @@ async function loadLeaveBalancesForSelection(employeeId = null) {
   LEAVE_BALANCES = balances;
   if (list) {
     list.innerHTML = balances.map(row => `
-      <div>
-        <div class="leave-card-label">${row.leave_type}</div>
+      <div class="${leaveBalanceIsTampered(row) ? 'leave-balance-tampered' : ''}">
+        <div class="leave-card-label">${escapeLeaveText(row.leave_type)} ${leaveBalanceIntegrityBadge(row)}</div>
         <div class="leave-card-value">${Number(row.remaining_days ?? row.remaining ?? 0).toFixed(1)} / ${Number(row.total_days ?? row.balance ?? 0).toFixed(1)}</div>
-        <div style="color:var(--muted);font-size:11px;">${row.category || 'Company'} · used ${Number(row.used || 0).toFixed(1)}</div>
+        <div style="color:var(--muted);font-size:11px;">${escapeLeaveText(row.category || 'Company')} · used ${Number(row.used || 0).toFixed(1)}</div>
       </div>
     `).join('') || '<div style="color:var(--muted);font-size:13px;">No leave balances configured yet. Open the Leave Types tab and use Employee Leave Balance Setup.</div>';
   }
@@ -1588,13 +1806,13 @@ function renderLeaveBalanceConfigTable() {
   const tbody = document.getElementById('leave-balance-config-tbody');
   if (!tbody) return;
   tbody.innerHTML = LEAVE_BALANCES.map(row => `
-    <tr>
-      <td><strong>${row.leave_type || '-'}</strong><div style="color:var(--muted);font-size:11px;">${row.category || 'Company'}</div></td>
+    <tr class="${leaveBalanceIsTampered(row) ? 'leave-balance-row-tampered' : ''}">
+      <td><strong>${escapeLeaveText(row.leave_type || '-')}</strong> ${leaveBalanceIntegrityBadge(row)}<div style="color:var(--muted);font-size:11px;">${escapeLeaveText(row.category || 'Company')}</div></td>
       <td>${row.year || '-'}</td>
       <td>${Number(row.total_days ?? row.balance ?? 0).toFixed(1)}</td>
       <td>${Number(row.used_days ?? row.used ?? 0).toFixed(1)}</td>
       <td>${Number(row.remaining_days ?? row.remaining ?? 0).toFixed(1)}</td>
-      <td>${row.last_updated_by_name || '-'}</td>
+      <td>${escapeLeaveText(row.last_updated_by_name || '-')}</td>
       <td><button class="btn btn-outline" type="button" onclick="editLeaveBalanceConfig(${row.id})">Edit</button></td>
     </tr>
   `).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">No configured balances for this employee/year.</td></tr>';
@@ -1715,9 +1933,11 @@ function renderBalancePreview(targetId, balance, requestedDays, label = 'Balance
   const used = Number(balance.used_days ?? balance.used ?? 0);
   const remaining = Number(balance.remaining_days ?? balance.remaining ?? 0);
   const after = remaining - Number(requestedDays || 0);
+  const tampered = leaveBalanceIsTampered(balance);
   target.innerHTML = `
+    ${tampered ? '<div class="leave-integrity-warning">Leave balance integrity failed.</div>' : ''}
     <div class="leave-table-wrap" style="margin-top:10px;">
-      <table class="leave-table" style="min-width:520px;">
+      <table class="leave-table ${tampered ? 'leave-balance-row-tampered' : ''}" style="min-width:520px;">
         <tbody>
           <tr><th>Total Days</th><td>${total.toFixed(1)}</td><th>Used Days</th><td>${used.toFixed(1)}</td></tr>
           <tr><th>Remaining Days</th><td>${remaining.toFixed(1)}</td><th>Requested Days</th><td>${Number(requestedDays || 0).toFixed(1)}</td></tr>
@@ -1998,12 +2218,12 @@ let CALENDAR_DATE = new Date();
 let CALENDAR_LEAVES = [];
 
 async function openLeaveCalendar() {
-  // Fetch all leave requests — only keep Approved & Pending (exclude Denied/Cancelled)
+  // Fetch all leave requests — keep final approved and in-progress approvals.
   try {
     const response = await apiFetch('/api/leave');
     if (!response || !response.ok) return;
     const allLeaves = await response.json();
-    CALENDAR_LEAVES = allLeaves.filter(l => l.status === 'Approved' || l.status === 'Pending');
+    CALENDAR_LEAVES = allLeaves.filter(l => ['Approved', 'Pending', 'Payroll Approved'].includes(leaveStatusValue(l.status)));
   } catch (err) {
     console.error('Error fetching leaves for calendar:', err);
   }
@@ -2141,7 +2361,7 @@ function renderLeaveCalendar() {
       const buildBadge = (leave) => {
         const badge = document.createElement('div');
         const isApproved = leave.status === 'Approved';
-        const isPending = leave.status === 'Pending';
+        const isPending = ['Pending', 'Payroll Approved'].includes(leaveStatusValue(leave.status));
         let shortName = leave.employee_name;
         if (shortName.includes(' ')) {
           const parts = shortName.split(' ');
@@ -2167,7 +2387,7 @@ function renderLeaveCalendar() {
       if (overflow > 0) {
         const moreBtn = document.createElement('div');
         const approvedCount = leavesOnDate.filter(l => l.status === 'Approved').length;
-        const pendingCount = leavesOnDate.filter(l => l.status === 'Pending').length;
+        const pendingCount = leavesOnDate.filter(l => ['Pending', 'Payroll Approved'].includes(leaveStatusValue(l.status))).length;
         moreBtn.innerHTML = `<span style="font-weight:700;">+${overflow} more</span><span style="opacity:0.6;margin-left:4px;font-size:10px;">(${approvedCount}✓ ${pendingCount}⏳)</span>`;
         moreBtn.style.cssText = 'font-size:11px;padding:3px 8px;background:rgba(99,102,241,0.12);color:var(--text);border-radius:4px;display:flex;align-items:center;cursor:pointer;transition:background 0.2s;';
         moreBtn.onmouseover = () => moreBtn.style.background = 'rgba(99,102,241,0.22)';
@@ -2210,7 +2430,7 @@ function showCalendarDayPopup(dateStr, leaves) {
   const dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   const approvedLeaves = leaves.filter(l => l.status === 'Approved');
-  const pendingLeaves = leaves.filter(l => l.status === 'Pending');
+  const pendingLeaves = leaves.filter(l => ['Pending', 'Payroll Approved'].includes(leaveStatusValue(l.status)));
 
   const popup = document.createElement('div');
   popup.id = 'calendar-day-popup';

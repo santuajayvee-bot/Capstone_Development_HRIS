@@ -59,6 +59,7 @@ const CHANGE_REQUEST_FIELDS = {
   full_legal_name: { label: 'Full legal name correction' },
   civil_status: { column: 'marital_status', label: 'Civil status' },
   permanent_address: { column: 'residential_address', label: 'Permanent/residential address' },
+  contact_number: { column: 'contact_number', label: 'Contact number' },
   sss_number: { column: 'sss_number', label: 'SSS number' },
   philhealth_number: { column: 'philhealth_number', label: 'PhilHealth number' },
   pagibig_number: { column: 'pagibig_number', label: 'Pag-IBIG number' },
@@ -100,6 +101,9 @@ const SELF_SERVICE_FORBIDDEN_FIELDS = new Set([
   'employee_level', 'status', 'position', 'supervisor', 'work_location', 'date_hired',
   'end_of_contract', 'sss_number', 'philhealth_number', 'pagibig_number', 'tin',
   'tax_status', 'bank_name', 'bank_account'
+]);
+const SELF_SERVICE_REVIEW_REQUIRED_FIELDS = new Set([
+  'contact_number'
 ]);
 const SELF_TEXT_PATTERN = /^[A-Za-zÀ-ÖØ-öø-ÿÑñ\s'.-]+$/;
 const SELF_ADDRESS_PATTERN = /^[A-Za-z0-9À-ÖØ-öø-ÿÑñ\s,.'#/-]+$/;
@@ -169,6 +173,37 @@ function validateSelfProfileValue(field, value) {
   if (field === 'emergency_contact_name' || field === 'emergency_contact_relationship') {
     if (text.length > 120 || !SELF_TEXT_PATTERN.test(text)) throw selfInvalid(field);
     return text.replace(/\s+/g, ' ');
+  }
+  if (field.includes('address')) {
+    if (text.length > 700 || !SELF_ADDRESS_PATTERN.test(text)) throw selfInvalid(field);
+    return text;
+  }
+  if (text.length > 255) throw selfInvalid(field);
+  return text;
+}
+
+function validateSelfChangeRequestValue(field, value) {
+  if (field === 'contact_number') return validateSelfProfileValue(field, value);
+  const text = selfRejectUnsafe(field, value);
+  if (text == null) throw selfInvalid(field);
+
+  const governmentIdPatterns = {
+    sss_number: /^\d{10}$/,
+    philhealth_number: /^\d{12}$/,
+    pagibig_number: /^\d{12}$/,
+    tin: /^\d{9}$/
+  };
+  if (governmentIdPatterns[field]) {
+    if (!/^[\d\s-]+$/.test(text)) throw selfInvalid(field);
+    const digits = text.replace(/\D/g, '');
+    if (!governmentIdPatterns[field].test(digits)) throw selfInvalid(field);
+    return digits;
+  }
+  if (field === 'full_legal_name') {
+    if (text.length > 180 || !SELF_TEXT_PATTERN.test(text)) throw selfInvalid(field);
+    const parts = text.replace(/\s+/g, ' ').split(' ');
+    if (parts.length < 2) throw selfInvalid(field);
+    return parts.join(' ');
   }
   if (field.includes('address')) {
     if (text.length > 700 || !SELF_ADDRESS_PATTERN.test(text)) throw selfInvalid(field);
@@ -580,17 +615,13 @@ router.put('/self-service/profile', async (req, res) => {
       }
     }
 
-    const updates = [];
-    const params = [];
     const changed = [];
     for (const [inputName, columnName] of Object.entries(DIRECT_EDIT_FIELDS)) {
       if (!Object.prototype.hasOwnProperty.call(req.body, inputName)) continue;
       const oldValue = profile[columnName];
       const newValue = validateSelfProfileValue(inputName, req.body[inputName]);
       if (String(oldValue ?? '') === String(newValue ?? '')) continue;
-      updates.push(`${columnName} = ?`);
-      params.push(SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(columnName) ? encryptColumnValue(newValue) : newValue);
-      changed.push({ field: inputName, oldValue, newValue });
+      changed.push({ field: inputName, column: columnName, oldValue, newValue });
     }
 
     const emailChange = changed.find(item => item.field === 'email');
@@ -602,22 +633,57 @@ router.put('/self-service/profile', async (req, res) => {
       }
     }
 
-    if (!updates.length) return res.json({ message: 'No profile changes to save.' });
+    if (!changed.length) return res.json({ message: 'No profile changes to save.' });
+
+    const reviewChanges = changed.filter(item => SELF_SERVICE_REVIEW_REQUIRED_FIELDS.has(item.field));
+    const directChanges = changed.filter(item => !SELF_SERVICE_REVIEW_REQUIRED_FIELDS.has(item.field));
 
     await connection.beginTransaction();
-    params.push(employeeId);
-    await connection.execute(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`, params);
-    if (emailChange) {
+    if (directChanges.length) {
+      const updates = [];
+      const params = [];
+      for (const item of directChanges) {
+        updates.push(`${item.column} = ?`);
+        params.push(SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(item.column) ? encryptColumnValue(item.newValue) : item.newValue);
+      }
+      params.push(employeeId);
+      await connection.execute(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+    if (emailChange && directChanges.includes(emailChange)) {
       await connection.execute(
         'UPDATE users SET email = NULL, email_hash = ?, email_encrypted = ? WHERE id = ?',
         [hashNullable(emailChange.newValue), encryptColumnValue(emailChange.newValue), userId]
       );
     }
-    for (const item of changed) {
+    for (const item of reviewChanges) {
+      await connection.execute(
+        `INSERT INTO user_profile_change_requests
+           (user_id, employee_id, field_name, old_value, requested_value, reason,
+            old_value_encrypted, requested_value_encrypted, reason_encrypted)
+         VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+        [
+          userId,
+          employeeId,
+          item.field,
+          encryptAuditValue(item.oldValue),
+          encryptAuditValue(item.newValue),
+          encryptAuditValue('Self-service profile update requires HR approval')
+        ]
+      );
+      await auditProfile(req, connection, 'Change request submitted', item.field, item.oldValue, item.newValue);
+    }
+    for (const item of directChanges) {
       await auditProfile(req, connection, item.field === 'email' ? 'Email changed' : 'Profile updated', item.field, item.oldValue, item.newValue);
     }
     await connection.commit();
-    res.json({ message: 'Profile updated successfully.', changed: changed.map(item => item.field) });
+    const status = reviewChanges.length && !directChanges.length ? 202 : 200;
+    res.status(status).json({
+      message: reviewChanges.length
+        ? 'Profile change request submitted for HR review.'
+        : 'Profile updated successfully.',
+      changed: directChanges.map(item => item.field),
+      pending_review: reviewChanges.map(item => item.field)
+    });
   } catch (error) {
     await connection.rollback();
     console.error('[self-service/profile:put]', error.message);
@@ -762,9 +828,9 @@ router.post('/self-service/change-requests', async (req, res) => {
     const employeeId = currentEmployeeId(req);
     const userId = currentUserId(req);
     const fieldName = String(req.body?.field_name || '').trim();
-    const requestedValue = cleanText(req.body?.requested_value, 1000);
-    const reason = cleanText(req.body?.reason, 1000);
     if (!CHANGE_REQUEST_FIELDS[fieldName]) return res.status(400).json({ error: 'Invalid change request field.' });
+    const requestedValue = validateSelfChangeRequestValue(fieldName, req.body?.requested_value);
+    const reason = cleanText(req.body?.reason, 1000);
     if (!requestedValue) return res.status(400).json({ error: 'Requested value is required.' });
 
     const profile = await loadOwnProfile(employeeId, userId);
@@ -786,6 +852,10 @@ router.post('/self-service/change-requests', async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('[self-service/change-requests:post]', error.message);
+    if (error.status === 400) {
+      await auditSelfServiceBlocked(req, error.field || 'change_request', req.body?.requested_value);
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to submit change request.' });
   } finally {
     connection.release();
@@ -874,7 +944,8 @@ async function applyApprovedChange(connection, employeeId, fieldName, requestedV
     );
     return;
   }
-  const value = SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(config.column) ? encryptColumnValue(requestedValue) : requestedValue;
+  const normalizedValue = validateSelfChangeRequestValue(fieldName, requestedValue);
+  const value = SELF_SERVICE_ENCRYPTED_EMPLOYEE_COLUMNS.has(config.column) ? encryptColumnValue(normalizedValue) : normalizedValue;
   await connection.execute(`UPDATE employees SET ${config.column} = ? WHERE id = ?`, [value, employeeId]);
 }
 

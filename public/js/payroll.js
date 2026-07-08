@@ -9,7 +9,11 @@ const PAYROLL_RECORDS_PAGE_SIZE = 10;
 let currentSalaryCalculationRecords = [];
 let salaryCalculationPage = 1;
 let payrollRecordWorkflowFilter = 'all';
+let payrollRecordSearchQuery = '';
+let payrollRecordDepartmentFilter = 'all';
+let payrollRecordWageFilter = 'all';
 const SALARY_CALCULATION_PAGE_SIZE = 10;
+const PAYROLL_STEP_UP_STATUSES = new Set(['Approved', 'Released', 'Locked', 'Paid']);
 let offboardingClearanceRows = [];
 let finalPayApprovalRows = [];
 let weeklyPayrollEmployees = [];
@@ -1186,10 +1190,77 @@ function payrollRecordHasAppliedDeductions(record = {}) {
   return /applied|generated|processed/i.test(String(snapshot.deduction_status || ''));
 }
 
+function payrollRecordIdLabel(record = {}) {
+  return `CALC-${String(record.id || '').padStart(5, '0')}`;
+}
+
+function payrollRecordSearchText(record = {}) {
+  return [
+    payrollRecordIdLabel(record),
+    record.employee_name,
+    record.employee_code,
+    record.payroll_period,
+    record.period_start,
+    record.period_end,
+    record.department,
+    record.wage_type,
+    record.status,
+    record.source_workflow_status,
+    record.agency_name,
+  ].map(value => String(value || '').toLowerCase()).join(' ');
+}
+
+function payrollRecordFilterKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function payrollRecordMatchesFilters(record = {}) {
+  if (payrollRecordWorkflowFilter !== 'all' && payrollRecordWorkflowGroup(record) !== payrollRecordWorkflowFilter) return false;
+  if (payrollRecordDepartmentFilter !== 'all' && payrollRecordFilterKey(record.department || '-') !== payrollRecordDepartmentFilter) return false;
+  if (payrollRecordWageFilter !== 'all' && payrollRecordFilterKey(record.wage_type || '-') !== payrollRecordWageFilter) return false;
+  const query = payrollRecordSearchQuery.trim().toLowerCase();
+  return !query || payrollRecordSearchText(record).includes(query);
+}
+
+function filteredSalaryCalculationRecords(records = currentSalaryCalculationRecords) {
+  return records.filter(record => payrollRecordMatchesFilters(record));
+}
+
+function uniquePayrollRecordOptions(records, key) {
+  const seen = new Map();
+  records.forEach(record => {
+    const label = String(record?.[key] || '-').trim() || '-';
+    const value = payrollRecordFilterKey(label);
+    if (!seen.has(value)) seen.set(value, label);
+  });
+  return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+function updatePayrollRecordSelectOptions(selectId, records, key, allLabel, selectedValue) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const options = uniquePayrollRecordOptions(records, key);
+  select.innerHTML = [
+    `<option value="all">${payrollEscape(allLabel)}</option>`,
+    ...options.map(([value, label]) => `<option value="${payrollEscape(value)}">${payrollEscape(label)}</option>`)
+  ].join('');
+  select.value = options.some(([value]) => value === selectedValue) ? selectedValue : 'all';
+}
+
+function syncPayrollRecordFilterControls(records = currentSalaryCalculationRecords) {
+  const searchInput = document.getElementById('payroll-record-search');
+  if (searchInput && searchInput.value !== payrollRecordSearchQuery) searchInput.value = payrollRecordSearchQuery;
+  updatePayrollRecordSelectOptions('payroll-record-department-filter', records, 'department', 'All Departments', payrollRecordDepartmentFilter);
+  updatePayrollRecordSelectOptions('payroll-record-wage-filter', records, 'wage_type', 'All Wage Types', payrollRecordWageFilter);
+  payrollRecordDepartmentFilter = document.getElementById('payroll-record-department-filter')?.value || 'all';
+  payrollRecordWageFilter = document.getElementById('payroll-record-wage-filter')?.value || 'all';
+}
+
 function renderSalaryCalculations(records) {
   const grid = document.getElementById('salary-calculations-grid');
   if (!grid) return;
 
+  syncPayrollRecordFilterControls(records);
   const classifiedRecords = records.map(record => ({
     record,
     workflow: payrollRecordWorkflowGroup(record)
@@ -1199,11 +1270,7 @@ function renderSalaryCalculations(records) {
     return counts;
   }, { source: 0, review: 0, finalized: 0 });
   updatePayrollRecordWorkflowOptions(records.length, workflowCounts);
-  const filteredRecords = payrollRecordWorkflowFilter === 'all'
-    ? records
-    : classifiedRecords
-      .filter(item => item.workflow === payrollRecordWorkflowFilter)
-      .map(item => item.record);
+  const filteredRecords = filteredSalaryCalculationRecords(records);
 
   const totalPages = Math.max(1, Math.ceil(filteredRecords.length / SALARY_CALCULATION_PAGE_SIZE));
   salaryCalculationPage = Math.min(Math.max(salaryCalculationPage, 1), totalPages);
@@ -1214,7 +1281,7 @@ function renderSalaryCalculations(records) {
     grid.innerHTML = `
       <div style="grid-column: 1/-1; padding: 40px 20px; text-align: center;">
         <div style="font-size: 14px; color: var(--muted);">
-          No records found for this status.
+          No payroll records match the selected filters.
         </div>
       </div>
     `;
@@ -1329,12 +1396,12 @@ function renderSalaryCalculations(records) {
             : '<span class="muted-small">Generate payroll to apply deductions.</span>';
           return `
             <tr>
-              <td>CALC-${String(r.id).padStart(5, '0')}</td>
-              <td>${r.employee_name}<br><span class="muted-small">${r.employee_code}</span></td>
-              <td>${calcDate}</td>
-              <td>${r.department || '-'}</td>
-              <td>${r.wage_type || '-'}</td>
-              <td>${calcDetails}</td>
+              <td>${payrollEscape(payrollRecordIdLabel(r))}</td>
+              <td>${payrollEscape(r.employee_name || r.employee_code || '-')}<br><span class="muted-small">${payrollEscape(r.employee_code || '')}</span></td>
+              <td>${payrollEscape(calcDate)}</td>
+              <td>${payrollEscape(r.department || '-')}</td>
+              <td>${payrollEscape(r.wage_type || '-')}</td>
+              <td>${payrollEscape(calcDetails)}</td>
               <td class="text-right">${money(hasPayrollAmounts ? r.gross_pay : (Number(r.gross_pay) || Number(r.source_output_amount)))}</td>
               <td class="text-right">${hasPayrollAmounts ? money(displayDeductions) : 'Deferred'}</td>
               <td class="text-right payroll-net">${money(hasPayrollAmounts ? displayNetPay : (displayNetPay || Number(r.source_output_amount)))}</td>
@@ -1389,6 +1456,39 @@ function setPayrollRecordWorkflowFilter(value) {
   renderSalaryCalculations(currentSalaryCalculationRecords);
 }
 
+function setPayrollRecordSearch(value) {
+  payrollRecordSearchQuery = String(value || '');
+  salaryCalculationPage = 1;
+  closePayrollActionMenus();
+  renderSalaryCalculations(currentSalaryCalculationRecords);
+}
+
+function setPayrollRecordDepartmentFilter(value) {
+  payrollRecordDepartmentFilter = value && value !== 'all' ? payrollRecordFilterKey(value) : 'all';
+  salaryCalculationPage = 1;
+  closePayrollActionMenus();
+  renderSalaryCalculations(currentSalaryCalculationRecords);
+}
+
+function setPayrollRecordWageFilter(value) {
+  payrollRecordWageFilter = value && value !== 'all' ? payrollRecordFilterKey(value) : 'all';
+  salaryCalculationPage = 1;
+  closePayrollActionMenus();
+  renderSalaryCalculations(currentSalaryCalculationRecords);
+}
+
+function clearPayrollRecordFilters() {
+  payrollRecordWorkflowFilter = 'all';
+  payrollRecordSearchQuery = '';
+  payrollRecordDepartmentFilter = 'all';
+  payrollRecordWageFilter = 'all';
+  salaryCalculationPage = 1;
+  closePayrollActionMenus();
+  const statusSelect = document.getElementById('payroll-record-workflow-filter');
+  if (statusSelect) statusSelect.value = 'all';
+  renderSalaryCalculations(currentSalaryCalculationRecords);
+}
+
 function renderSalaryCalculationPagination(totalRecords, startIndex, totalPages) {
   if (totalRecords <= SALARY_CALCULATION_PAGE_SIZE) return '';
   const endIndex = Math.min(startIndex + SALARY_CALCULATION_PAGE_SIZE, totalRecords);
@@ -1410,9 +1510,7 @@ function bindSalaryCalculationPagination(root) {
 }
 
 function changeSalaryCalculationPage(direction) {
-  const filteredCount = payrollRecordWorkflowFilter === 'all'
-    ? currentSalaryCalculationRecords.length
-    : currentSalaryCalculationRecords.filter(record => payrollRecordWorkflowGroup(record) === payrollRecordWorkflowFilter).length;
+  const filteredCount = filteredSalaryCalculationRecords().length;
   const totalPages = Math.max(1, Math.ceil(filteredCount / SALARY_CALCULATION_PAGE_SIZE));
   salaryCalculationPage = Math.min(Math.max(salaryCalculationPage + direction, 1), totalPages);
   renderSalaryCalculations(currentSalaryCalculationRecords);
@@ -1465,6 +1563,56 @@ async function reviewPayrollCalculation(calculationId) {
   if (refreshed) showCalculationBreakdown(refreshed);
 }
 
+async function requestPayrollStepUpPassword(status) {
+  const actionLabel = status === 'Approved'
+    ? 'approving and finalizing payroll'
+    : status === 'Released'
+      ? 'releasing the payslip'
+      : status === 'Locked'
+        ? 'locking the payroll record'
+        : 'updating finalized payroll';
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'payroll-step-up-overlay';
+    overlay.innerHTML = `
+      <div class="payroll-step-up-dialog" role="dialog" aria-modal="true" aria-labelledby="payroll-step-up-title">
+        <h3 id="payroll-step-up-title">Password Confirmation</h3>
+        <p>Re-enter your password before ${payrollEscape(actionLabel)}.</p>
+        <label>
+          <span>Current password</span>
+          <input type="password" autocomplete="current-password" id="payroll-step-up-password" />
+        </label>
+        <div class="payroll-step-up-actions">
+          <button type="button" class="btn btn-outline" data-step-up-cancel>Cancel</button>
+          <button type="button" class="btn btn-primary" data-step-up-confirm>Continue</button>
+        </div>
+      </div>
+    `;
+
+    const cleanup = (value) => {
+      overlay.remove();
+      resolve(value);
+    };
+
+    overlay.querySelector('[data-step-up-cancel]')?.addEventListener('click', () => cleanup(null));
+    overlay.querySelector('[data-step-up-confirm]')?.addEventListener('click', () => {
+      const password = overlay.querySelector('#payroll-step-up-password')?.value || '';
+      cleanup(password.trim() ? password : null);
+    });
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') cleanup(null);
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        overlay.querySelector('[data-step-up-confirm]')?.click();
+      }
+    });
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.querySelector('#payroll-step-up-password')?.focus());
+  });
+}
+
 async function updateSalaryCalculationStatus(calculationId, status, confirmText, options = {}) {
   if (!Number.isInteger(Number(calculationId))) return;
   if (confirmText) {
@@ -1473,11 +1621,17 @@ async function updateSalaryCalculationStatus(calculationId, status, confirmText,
       : window.confirm(confirmText);
     if (!confirmed) return;
   }
+  const body = { status };
+  if (PAYROLL_STEP_UP_STATUSES.has(status)) {
+    const currentPassword = await requestPayrollStepUpPassword(status);
+    if (!currentPassword) return;
+    body.currentPassword = currentPassword;
+  }
 
   try {
     const response = await apiFetch(`/api/payroll/salary-calculations/${calculationId}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(body),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Payroll status update failed.');
@@ -5254,6 +5408,10 @@ window.loadSalaryCalculations = loadSalaryCalculations;
 window.renderSalaryCalculations = renderSalaryCalculations;
 window.changeSalaryCalculationPage = changeSalaryCalculationPage;
 window.setPayrollRecordWorkflowFilter = setPayrollRecordWorkflowFilter;
+window.setPayrollRecordSearch = setPayrollRecordSearch;
+window.setPayrollRecordDepartmentFilter = setPayrollRecordDepartmentFilter;
+window.setPayrollRecordWageFilter = setPayrollRecordWageFilter;
+window.clearPayrollRecordFilters = clearPayrollRecordFilters;
 window.showCalculationBreakdown = showCalculationBreakdown;
 window.togglePayrollActionMenu = togglePayrollActionMenu;
 window.closePayrollActionMenus = closePayrollActionMenus;

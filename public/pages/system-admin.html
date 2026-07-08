@@ -136,6 +136,14 @@
         <option value="delete">Delete / Revoke</option>
         <option value="security">Security / Denied</option>
         <option value="auth">Authentication</option>
+        <option value="anomaly">Detected Anomalies</option>
+      </select>
+      <select id="audit-anomaly-filter" class="sysadmin-select" onchange="loadAuditLog()">
+        <option value="">All Threat Types</option>
+        <option value="SQL_INJECTION">SQL Injection</option>
+        <option value="XSS">XSS</option>
+        <option value="BRUTE_FORCE">Brute Force</option>
+        <option value="SESSION_MANIPULATION">Session Manipulation</option>
       </select>
       <input
         type="search"
@@ -161,11 +169,12 @@
           <th>Target</th>
           <th>Result / IP</th>
           <th>Source</th>
+          <th>Threat</th>
           <th>Details</th>
         </tr>
       </thead>
       <tbody id="audit-tbody">
-        <tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>
+        <tr><td colspan="9" class="table-empty">Loading audit trail...</td></tr>
       </tbody>
     </table>
   </div>

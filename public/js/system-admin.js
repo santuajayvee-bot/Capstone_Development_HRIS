@@ -472,6 +472,8 @@ const SYS_HEALTH_RELATED_NAV = {
 
 function switchSysAdminTab(tabId, el, options = {}) {
   const targetTab = SYS_ADMIN_TAB_TITLES[tabId] ? tabId : 'accounts';
+  const tabs = document.getElementById('sysadmin-tabs');
+  if (tabs) tabs.hidden = false;
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.sysadmin-panel').forEach(p => p.classList.remove('active'));
   const tabButton = el || document.querySelector(`.sysadmin-tab[data-tab="${targetTab}"]`);
@@ -504,6 +506,8 @@ function initSystemAdmin() {
   bindAccountActionButtons();
   bindSystemHealthButtons();
   loadRolesList();
+  const tabs = document.getElementById('sysadmin-tabs');
+  if (tabs) tabs.hidden = false;
 
   const activeTab =
     window.ROUTE_PARAMS?.sysAdminTab ||
@@ -511,18 +515,7 @@ function initSystemAdmin() {
     document.querySelector('.sysadmin-panel.active')?.id?.replace(/^panel-/, '') ||
     'accounts';
 
-  if (activeTab === 'accounts') {
-    loadUsersTable();
-    startAccountRealtime();
-  } else {
-    stopAccountRealtime();
-  }
-
-  if (activeTab === 'roles') loadRolesGrid();
-  if (activeTab === 'audit') loadAuditLog();
-  if (activeTab === 'health') loadSystemHealth();
-  if (activeTab === 'support') loadSupportTickets();
-  if (activeTab === 'backups') loadBackupLogs();
+  switchSysAdminTab(activeTab, null, { skipRouteUpdate: true });
 }
 
 function initSystemAdminIfActive() {
@@ -805,7 +798,7 @@ async function loadAuditLog() {
   const tbody = sysAuditTbody();
   const table = document.getElementById('audit-table');
   if (table) table.dataset.paginationPage = '1';
-  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Loading audit trail...</td></tr>';
 
   // Only the newest filter/refresh request may update the table. Aborting the
   // previous request also prevents overlapping audit downloads from leaving
@@ -827,10 +820,15 @@ async function loadAuditLog() {
   try {
     const module = document.getElementById('audit-module-filter')?.value || '';
     const eventType = document.getElementById('audit-action-filter')?.value || '';
+    const anomalyType = document.getElementById('audit-anomaly-filter')?.value || '';
     const search = document.getElementById('audit-search')?.value?.trim() || '';
     const params = new URLSearchParams({ limit: '50' });
     if (module) params.set('module', module);
     if (eventType) params.set('event_type', eventType);
+    if (anomalyType) {
+      params.set('event_type', 'anomaly');
+      params.set('anomaly_type', anomalyType);
+    }
     if (search) params.set('search', search);
     const url = `/api/admin/audit-log?${params.toString()}`;
 
@@ -842,13 +840,13 @@ async function loadAuditLog() {
     ]);
     if (requestId !== sysAuditRequestId) return;
     if (!res) {
-      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Session expired. Please log in again.</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Session expired. Please log in again.</td></tr>';
       return;
     }
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       console.error('Failed to load audit log:', errData);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
       return;
     }
 
@@ -869,7 +867,7 @@ async function loadAuditLog() {
     const message = ['AbortError', 'TimeoutError'].includes(err?.name)
       ? 'Audit trail request timed out. Please press Refresh to try again.'
       : 'Failed to load audit trail. Check console for details.';
-    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${sysEsc(message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">${sysEsc(message)}</td></tr>`;
   } finally {
     clearTimeout(timeoutError);
     if (requestId === sysAuditRequestId) sysAuditRequestController = null;
@@ -992,11 +990,191 @@ function auditWriteMetadata(log) {
   };
 }
 
+function auditLeaveActionText(log) {
+  if (String(log?.module || '').trim().toUpperCase() !== 'LEAVE') return '';
+  const action = String(log?.action_performed || '').trim();
+  const normalized = action.toLowerCase().replace(/[\s-]+/g, '_');
+  const leaveLabels = {
+    leave_created: 'Leave filed',
+    leave_manual_encoded: 'Manual leave encoded',
+    leave_payroll_approved: 'Leave payroll approved',
+    leave_approved: 'Leave approved',
+    leave_rejected: 'Leave rejected',
+    leave_cancelled: 'Leave cancelled',
+    leave_updated: 'Leave status updated',
+    leave_balance_adjusted: 'Leave balance adjusted',
+    leave_type_created: 'Leave type created',
+    leave_type_updated: 'Leave type updated',
+    leave_sensitive_details_revealed: 'Leave details revealed',
+    leave_attachment_downloaded: 'Leave attachment downloaded',
+  };
+  if (leaveLabels[normalized]) return leaveLabels[normalized];
+  if (/leave approved/i.test(action)) return 'Leave approved';
+  if (/leave rejected/i.test(action)) return 'Leave rejected';
+  if (/leave filed|leave created/i.test(action)) return 'Leave filed';
+
+  const write = auditWriteMetadata(log);
+  const path = String(write.path || '').toLowerCase();
+  const method = String(write.method || '').toUpperCase();
+  if (method === 'POST' && path === '/api/leave') return 'Leave filed';
+  if (method === 'PATCH' && /^\/api\/leave\/\d+\/status$/.test(path)) return 'Leave status updated';
+  if (method === 'PUT' && path === '/api/leave/balances') return 'Leave balance adjusted';
+  if (method === 'POST' && path === '/api/leave/types') return 'Leave type saved';
+  if (/^\/api\/leave\/\d+\/reveal-sensitive$/.test(path)) return 'Leave details revealed';
+  if (/^\/api\/leave\/\d+\/attachment$/.test(path)) return 'Leave attachment downloaded';
+  return '';
+}
+
+function auditRequestContext(log) {
+  const write = auditWriteMetadata(log);
+  const action = String(log?.action_performed || '');
+  const methodPath = action.match(/\b(GET|POST|PUT|PATCH|DELETE)\s+(\/api\/[^\s|]+)/i);
+  return {
+    method: String(write.method || methodPath?.[1] || '').toUpperCase(),
+    path: String(write.path || methodPath?.[2] || '').split('?')[0].toLowerCase(),
+  };
+}
+
+function auditStatusActionText(log, fallback) {
+  const newValue = auditJsonObject(log?.new_value) || {};
+  const status = String(newValue.status || newValue.approval_status || newValue.final_pay_status || newValue.payroll_clearance_status || '').trim();
+  return status ? `${fallback}: ${status}` : fallback;
+}
+
+function auditSpecificActionText(log) {
+  const { method, path } = auditRequestContext(log);
+  if (!path) return '';
+
+  if (path === '/api/admin/register-role' && method === 'POST') return 'User account created';
+  if (/^\/api\/admin\/update-role\/\d+$/.test(path) && method === 'PUT') return 'User role updated';
+  if (/^\/api\/admin\/users\/\d+\/reset-password$/.test(path)) return 'User password reset';
+  if (/^\/api\/admin\/users\/\d+\/credentials$/.test(path)) return 'User credentials updated';
+  if (/^\/api\/admin\/users\/\d+\/unlock$/.test(path)) return 'User account unlocked';
+  if (/^\/api\/admin\/users\/\d+\/reset-mfa$/.test(path)) return 'User MFA reset';
+  if (/^\/api\/admin\/users\/\d+\/revoke-sessions$/.test(path)) return 'User sessions revoked';
+  if (/^\/api\/admin\/users\/\d+\/deactivate$/.test(path)) return 'User account deactivated';
+  if (/^\/api\/admin\/users\/\d+\/activate$/.test(path)) return 'User account reactivated';
+  if (path.startsWith('/api/admin/system-health/check')) return 'System health check run';
+  if (path === '/api/admin/support-tickets' && method === 'POST') return 'Support ticket created';
+  if (/^\/api\/admin\/support-tickets\/\d+$/.test(path)) return auditStatusActionText(log, 'Support ticket status updated');
+  if (path === '/api/admin/backups/request') return 'Backup request created';
+  if (/^\/api\/admin\/backups\/\d+$/.test(path)) return auditStatusActionText(log, 'Backup request status updated');
+
+  if (path === '/api/form-drafts') return 'Form draft saved';
+  if (path === '/api/form-drafts/status') return 'Form draft status updated';
+  if (path === '/api/employees/id-config') return 'Employee ID format updated';
+  if (path === '/api/employees' && method === 'POST') return 'Employee record created';
+  if (/^\/api\/employees\/\d+$/.test(path) && method === 'PUT') return 'Employee profile updated';
+  if (/^\/api\/employees\/\d+$/.test(path) && method === 'DELETE') return 'Employee record deletion requested';
+  if (/^\/api\/employees\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Employee status updated');
+  if (/^\/api\/employees\/\d+\/reveal-sensitive$/.test(path)) return 'Employee sensitive fields revealed';
+  if (/^\/api\/employees\/\d+\/offboard$/.test(path)) return 'Employee offboarding requested';
+  if (/^\/api\/employees\/\d+\/reonboard$/.test(path)) return 'Employee re-onboarding requested';
+  if (/^\/api\/employees\/offboarding\/\d+$/.test(path)) return auditStatusActionText(log, 'Employee offboarding case updated');
+  if (/^\/api\/employees\/offboarding\/\d+\/documents$/.test(path)) return 'Offboarding document uploaded';
+  if (/^\/api\/employees\/\d+\/documents$/.test(path)) return 'Employee document uploaded';
+  if (/^\/api\/employees\/\d+\/documents\/\d+$/.test(path)) return 'Employee document deleted';
+  if (/^\/api\/employees\/\d+\/photo$/.test(path)) return method === 'DELETE' ? 'Employee profile photo removed' : 'Employee profile photo uploaded';
+  const employeeNested = path.match(/^\/api\/employees\/\d+\/(family|work-experiences|certifications|trainings|skills)(?:\/\d+)?$/);
+  if (employeeNested) {
+    const label = employeeNested[1].replaceAll('-', ' ');
+    return method === 'DELETE' ? `Employee ${label} deleted` : `Employee ${label} added`;
+  }
+  if (path === '/api/employee-setup/departments') return 'Department created';
+  if (/^\/api\/employee-setup\/departments\/\d+$/.test(path)) return method === 'DELETE' ? 'Department deleted' : 'Department updated';
+  if (path === '/api/employee-setup/positions') return 'Position created';
+  if (/^\/api\/employee-setup\/positions\/\d+$/.test(path)) return method === 'DELETE' ? 'Position deleted' : 'Position updated';
+
+  if (path === '/api/attendance/manual') return 'Manual attendance encoded';
+  if (/^\/api\/attendance\/\d+\/override$/.test(path)) return 'Attendance time record corrected';
+  if (/^\/api\/attendance\/\d+\/verify$/.test(path)) return auditStatusActionText(log, 'Attendance verification updated');
+  if (/^\/api\/attendance\/\d+\/overtime$/.test(path)) return 'Attendance overtime encoded';
+  if (/^\/api\/attendance\/\d+\/overtime-review$/.test(path)) return auditStatusActionText(log, 'Overtime review decision recorded');
+  if (path === '/api/attendance/policies') return 'Attendance policy updated';
+  if (path === '/api/attendance/biometric/devices') return 'Biometric device registered';
+  if (/^\/api\/attendance\/biometric\/devices\/\d+$/.test(path)) return 'Biometric device updated';
+  if (path === '/api/attendance/biometric/mappings') return 'Biometric employee mapping created';
+  if (/^\/api\/attendance\/biometric\/mappings\/\d+$/.test(path)) return 'Biometric employee mapping deleted';
+  if (/^\/api\/attendance\/biometric\/sync\/\d+$/.test(path)) return 'Biometric attendance sync started';
+  if (path === '/api/attendance/integrity/anchor-pending') return 'Pending attendance hashes anchored';
+  if (/^\/api\/attendance\/geofence\/\d+$/.test(path)) return 'Attendance geofence updated';
+  if (path === '/api/biometric/attendance') return 'Biometric attendance event recorded';
+  if (path === '/api/biometric/bridge-commands') return 'Biometric bridge command queued';
+
+  if (path === '/api/requests') return 'Employee request submitted';
+  if (/^\/api\/requests\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Employee request status updated');
+  if (path === '/api/payroll/runs') return 'Payroll run created';
+  if (/^\/api\/payroll\/runs\/\d+\/approve$/.test(path)) return 'Payroll run approved';
+  if (path === '/api/payroll/salary-calculation') return 'Draft salary calculation created';
+  if (path === '/api/payroll/generate/preview') return 'Payroll generation previewed';
+  if (path === '/api/payroll/generate') return 'Payroll generated';
+  if (/^\/api\/payroll\/salary-calculations\/\d+\/recalculate$/.test(path)) return 'Salary calculation recalculated';
+  if (/^\/api\/payroll\/salary-calculations\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Salary calculation status updated');
+  if (path === '/api/payroll/convert-calculations-to-payslips') return 'Payslips generated from salary calculations';
+  if (path.includes('/government-contributions/reveal')) return 'Government contribution details revealed';
+  if (path.includes('/reveal-remarks')) return 'Payroll remarks revealed';
+  if (path === '/api/payroll/transactions/production') return 'Production payroll log encoded';
+  if (path === '/api/payroll/transactions/logistics') return 'Logistics trip payroll log encoded';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/submit$/.test(path)) return 'Piece-rate output submitted for review';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/approve$/.test(path)) return 'Piece-rate output approved';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/reject$/.test(path)) return 'Piece-rate output rejected';
+  if (/^\/api\/payroll\/piece-rate-outputs(?:\/\d+)?$/.test(path)) return method === 'DELETE' ? 'Piece-rate output deleted' : method === 'PATCH' ? 'Piece-rate output updated' : 'Piece-rate output encoded';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/submit$/.test(path)) return 'Logistics trip log submitted for review';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/approve$/.test(path)) return 'Logistics trip log approved';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/reject$/.test(path)) return 'Logistics trip log rejected';
+  if (/^\/api\/payroll\/logistics\/trips(?:\/\d+)?$/.test(path)) return method === 'DELETE' ? 'Logistics trip log deleted' : method === 'PUT' ? 'Logistics trip log updated' : 'Logistics trip log encoded';
+  if (path.includes('/deduction-settings')) return method === 'DELETE' ? 'Deduction setting deleted' : 'Deduction setting saved';
+  if (path.includes('/sss-tables')) return path.endsWith('/preview') ? 'SSS table import previewed' : path.endsWith('/activate') ? 'SSS table activated' : 'SSS table imported';
+  if (path.includes('/employee-cash-advances')) return 'Employee cash advance saved';
+  if (path.includes('/employee-loans')) return 'Employee loan saved';
+  if (path.includes('/employee-deductions')) return auditStatusActionText(log, 'Employee deduction status updated');
+  if (path.includes('/policy-settings')) return 'Payroll policy setting saved';
+  if (path.includes('/attendance-configurations')) return method === 'DELETE' ? 'Payroll attendance configuration deleted' : 'Payroll attendance configuration saved';
+  if (/^\/api\/payroll\/employees\/\d+\/wage-config$/.test(path)) return 'Employee wage configuration saved';
+  if (path.includes('/logistics/') || path.includes('/piece-') || path.includes('/sew-types') || path.includes('/size-ranges') || path.includes('/production-share')) {
+    return method === 'DELETE' ? 'Payroll configuration deleted' : 'Payroll configuration saved';
+  }
+  if (/^\/api\/payroll\/offboarding-clearance\/\d+$/.test(path)) return auditStatusActionText(log, 'Payroll offboarding clearance updated');
+  if (/^\/api\/payroll\/final-pay-approval\/\d+$/.test(path)) return auditStatusActionText(log, 'Final pay approval updated');
+
+  if (path === '/api/onboarding/integrity/anchor-pending') return 'Pending onboarding hashes anchored';
+  if (path === '/api/onboarding/positions') return 'Onboarding position created';
+  if (/^\/api\/onboarding\/positions\/[^/]+$/.test(path)) return method === 'DELETE' ? 'Onboarding position deleted' : 'Onboarding position updated';
+  if (path === '/api/onboarding/applicants') return 'Applicant record created';
+  if (/^\/api\/onboarding\/applicants\/\d+\/progress$/.test(path)) return auditStatusActionText(log, 'Applicant progress updated');
+  if (/^\/api\/onboarding\/applicants\/\d+\/decision$/.test(path)) return auditStatusActionText(log, 'Applicant hiring decision recorded');
+  if (/^\/api\/onboarding\/applicants\/\d+\/transfer$/.test(path)) return 'Applicant transferred to employee directory';
+  if (/^\/api\/onboarding\/applicants\/\d+\/reveal-sensitive$/.test(path)) return 'Applicant sensitive details revealed';
+  if (/^\/api\/onboarding\/applicants\/\d+$/.test(path)) return 'Applicant removed from active onboarding';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents$/.test(path)) return 'Applicant document uploaded';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents\/\d+\/verify$/.test(path)) return 'Applicant document verification updated';
+
+  if (path === '/api/self-service/profile') return 'Employee self-service profile updated';
+  if (path === '/api/self-service/password') return 'Employee password changed';
+  if (path === '/api/self-service/profile-picture') return 'Employee profile picture changed';
+  if (/^\/api\/self-service\/restricted-fields\/[^/]+\/reveal$/.test(path)) return 'Self-service restricted field revealed';
+  if (path === '/api/self-service/change-requests') return 'Profile change request submitted';
+  if (/^\/api\/self-service\/change-requests\/\d+\/reveal$/.test(path)) return 'Profile change request details revealed';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/approve$/.test(path)) return 'Profile change request approved';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/reject$/.test(path)) return 'Profile change request rejected';
+  if (path.startsWith('/api/reports')) return 'Report generated or exported';
+  if (/^\/api\/blockchain\/payroll\/finalize\/\d+$/.test(path)) return 'Final payroll recorded on blockchain';
+  if (/^\/api\/blockchain\/payroll\/adjustment\/\d+$/.test(path)) return 'Payroll blockchain adjustment recorded';
+  if (/^\/api\/blockchain\/dtr\/generate\/\d+$/.test(path)) return 'DTR blockchain hash generated';
+  if (/^\/api\/blockchain\/dtr\/anchor\/\d+$/.test(path)) return 'DTR record anchored on blockchain';
+  if (/^\/api\/blockchain\/dtr\/adjustment\/\d+$/.test(path)) return 'DTR blockchain adjustment recorded';
+  return '';
+}
+
 function auditActionText(log) {
   const actionType = String(log?.action_type || '').trim().toUpperCase();
   const action = String(log?.action_performed || '').trim();
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete) return 'Employee record deletion requested';
+  const leaveAction = auditLeaveActionText(log);
+  if (leaveAction) return leaveAction;
+  const specificAction = auditSpecificActionText(log);
+  if (specificAction) return specificAction;
   const authLabels = {
     LOGIN_SUCCESS: 'Successful login recorded',
     LOGIN_FAILED: 'Failed login attempt recorded',
@@ -1013,15 +1191,16 @@ function auditActionText(log) {
   };
   if (authLabels[actionType]) return authLabels[actionType];
   if (!action) return '—';
-  if (/failed_unauthorized_access_attempt/i.test(action)) return 'Unauthorized access attempt blocked';
-  if (/failed_permission_check/i.test(action)) return 'Permission check failed';
-  if (/blocked_client_authority_field_tampering/i.test(action)) return 'Unauthorized request fields blocked';
-  if (/blocked_rate_limit_exceeded/i.test(action)) return 'Rate limit exceeded';
-  if (/invalid_or_tampered_jwt_attempt/i.test(action)) return 'Invalid session token attempt blocked';
-  if (/expired_jwt_attempt/i.test(action)) return 'Expired session token rejected';
-  if (/log_integrity_blocked/i.test(action)) return 'Audit log tampering attempt blocked';
-  if (auditLooksBackendOnly(action)) return `${auditModuleLabel(log?.module)} activity recorded`;
-  return action;
+  const displayAction = action.replace(/^(SUCCESS|FAILED|BLOCKED):\s*/i, '').trim();
+  if (/failed_unauthorized_access_attempt/i.test(displayAction)) return 'Unauthorized access attempt blocked';
+  if (/failed_permission_check/i.test(displayAction)) return 'Permission check failed';
+  if (/blocked_client_authority_field_tampering/i.test(displayAction)) return 'Unauthorized request fields blocked';
+  if (/blocked_rate_limit_exceeded/i.test(displayAction)) return 'Rate limit exceeded';
+  if (/invalid_or_tampered_jwt_attempt/i.test(displayAction)) return 'Invalid session token attempt blocked';
+  if (/expired_jwt_attempt/i.test(displayAction)) return 'Expired session token rejected';
+  if (/log_integrity_blocked/i.test(displayAction)) return 'Audit log tampering attempt blocked';
+  if (auditLooksBackendOnly(displayAction)) return `${auditModuleLabel(log?.module)} activity recorded`;
+  return displayAction;
 }
 
 function auditSourceText(log) {
@@ -1036,7 +1215,8 @@ function auditDetails(log) {
   const parts = [];
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete && write.statusCode) parts.push(`Status: ${write.statusCode}`);
-  if (log.action_type && !auditLooksBackendOnly(log.action_type)) parts.push(`Event: ${log.action_type}`);
+  const actionType = String(log.action_type || '').trim().toUpperCase();
+  if (log.action_type && actionType !== 'SYSTEM_EVENT' && !auditLooksBackendOnly(log.action_type)) parts.push(`Event: ${log.action_type}`);
   if (log.field_changed && !auditLooksBackendOnly(log.field_changed)) parts.push(`Field: ${log.field_changed}`);
   if (log.details && !auditLooksBackendOnly(log.details)) parts.push(log.details);
 
@@ -1059,12 +1239,40 @@ function auditTarget(log) {
   return '—';
 }
 
+function auditAnomalyLabel(log) {
+  const label = String(log?.anomaly_label || '').trim();
+  const type = String(log?.anomaly_type || '').trim().toUpperCase();
+  if (label) return label;
+  const labels = {
+    SQL_INJECTION: 'SQLi Pattern',
+    XSS: 'XSS Pattern',
+    BRUTE_FORCE: 'Brute Force',
+    SESSION_MANIPULATION: 'Session Manipulation',
+  };
+  return labels[type] || '';
+}
+
+function auditAnomalyClass(log) {
+  const severity = String(log?.anomaly_severity || '').trim().toLowerCase();
+  if (severity === 'critical') return 'critical';
+  if (severity === 'high') return 'high';
+  if (severity === 'medium') return 'medium';
+  return 'none';
+}
+
+function auditThreatBadge(log) {
+  const label = auditAnomalyLabel(log);
+  if (!label) return '<span class="audit-threat-badge audit-threat-none">None</span>';
+  const severity = String(log?.anomaly_severity || '').trim() || 'Medium';
+  return `<span class="audit-threat-badge audit-threat-${sysEsc(auditAnomalyClass(log))}" title="${sysEsc(log?.anomaly_reason || label)}">${sysEsc(label)} · ${sysEsc(severity)}</span>`;
+}
+
 function renderAuditLog(logs) {
   const tbody = sysAuditTbody();
   if (!tbody) return;
 
   if (logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No audit entries found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No audit entries found.</td></tr>';
     return;
   }
 
@@ -1084,6 +1292,7 @@ function renderAuditLog(logs) {
         <td><small>${sysEsc(auditTarget(log))}</small></td>
         <td><small>${sysEsc(resultOrIp)}</small></td>
         <td><small>${sysEsc(auditSourceText(log))}</small></td>
+        <td>${auditThreatBadge(log)}</td>
         <td><small style="color:var(--muted)">${sysEsc(auditDetails(log))}</small></td>
       </tr>
     `;

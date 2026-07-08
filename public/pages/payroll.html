@@ -379,6 +379,10 @@
         <p>Submitted calculations, payroll entries, and payslip generation by period.</p>
       </div>
       <div class="button-row payroll-record-toolbar">
+        <label class="payroll-record-filter payroll-record-search">
+          <span>Search</span>
+          <input id="payroll-record-search" type="search" placeholder="Search payroll ID, employee, period..." oninput="setPayrollRecordSearch(this.value)" />
+        </label>
         <label class="payroll-record-filter">
           <span>Status</span>
           <select id="payroll-record-workflow-filter" onchange="setPayrollRecordWorkflowFilter(this.value)">
@@ -388,8 +392,19 @@
             <option value="finalized">Finalized / Released</option>
           </select>
         </label>
-        <button class="btn btn-primary" onclick="generatePayslipsFromRecords()">Generate Payslips</button>
-        <button class="btn btn-outline" onclick="loadSalaryCalculations()">Refresh</button>
+        <label class="payroll-record-filter">
+          <span>Department</span>
+          <select id="payroll-record-department-filter" onchange="setPayrollRecordDepartmentFilter(this.value)">
+            <option value="all">All Departments</option>
+          </select>
+        </label>
+        <label class="payroll-record-filter">
+          <span>Wage Type</span>
+          <select id="payroll-record-wage-filter" onchange="setPayrollRecordWageFilter(this.value)">
+            <option value="all">All Wage Types</option>
+          </select>
+        </label>
+        <button class="btn btn-outline" onclick="clearPayrollRecordFilters()">Clear Filters</button>
       </div>
     </div>
     <div id="salary-calculations-grid"></div>
