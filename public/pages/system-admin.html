@@ -436,6 +436,10 @@
     <button type="button" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')">Backup Settings</button>
   </div>
 
+  <div class="backup-recovery-note">
+    Backup and Recovery records support controlled recovery planning. The system does not automatically overwrite source code or destructively restore data. Database recovery uses SQL dump or RDS snapshot procedures, file recovery uses local/S3 backup references, and module recovery uses rollback requests tied to version control or deployment artifacts. These technical recovery actions do not bypass HR or Payroll business approval workflows.
+  </div>
+
   <section class="backup-recovery-section active" data-backup-panel="overview">
     <div class="backup-summary-grid" id="backup-summary-grid"></div>
 
@@ -553,10 +557,11 @@
             <th>Status</th>
             <th>Requested By</th>
             <th>Result</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="restore-jobs-tbody">
-          <tr><td colspan="7" class="table-empty">No restore jobs loaded.</td></tr>
+          <tr><td colspan="8" class="table-empty">No restore jobs loaded.</td></tr>
         </tbody>
       </table>
     </div>

@@ -2314,7 +2314,7 @@ async function loadBackupLogs() {
       'backup-coverage-tbody': 9,
       'backup-logs-tbody': 7,
       'module-recovery-tbody': 8,
-      'restore-jobs-tbody': 7,
+      'restore-jobs-tbody': 8,
       'rollback-requests-tbody': 8,
     };
     Object.keys(colspans).forEach(id => {
@@ -2337,6 +2337,15 @@ function switchBackupRecoveryTab(tab) {
 
 function backupTypeLabel(value) {
   return String(value || '-').replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function isRestorableBackupType(type) {
+  return ['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'FULL_BACKUP'].includes(String(type || '').toUpperCase());
+}
+
+function backupRestoreType(type) {
+  const normalized = String(type || 'DATABASE').toUpperCase();
+  return isRestorableBackupType(normalized) ? normalized : 'DATABASE';
 }
 
 function backupModuleName(moduleKey) {
@@ -2410,8 +2419,15 @@ function renderBackupCoverage() {
     return;
   }
   tbody.innerHTML = sysBackupCoverage.map(module => {
-    const restoreDisabled = module.backup_set_id ? '' : 'disabled';
+    const isDeploymentBackup = String(module.last_backup_type || '').toUpperCase() === 'DEPLOYMENT_VERSION';
+    const restoreDisabled = module.backup_set_id && !isDeploymentBackup ? '' : 'disabled';
     const rollbackDisabled = module.rollback_available ? '' : 'disabled';
+    const maintenanceNote = module.under_maintenance || String(module.last_health_status || '').toUpperCase() === 'MAINTENANCE'
+      ? '<small class="backup-maintenance-note">Under maintenance for controlled restore</small>'
+      : '';
+    const recoveryAction = isDeploymentBackup
+      ? `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})" ${restoreDisabled}>Restore Data</button>`;
     return `
       <tr>
         <td><strong>${sysEsc(module.module_name)}</strong><br><small>${sysEsc(module.module_key)}</small></td>
@@ -2421,12 +2437,12 @@ function renderBackupCoverage() {
         <td>${module.recovery_point_available ? sysStatusBadge('YES') : sysStatusBadge('NO')}</td>
         <td><small>Current: ${sysEsc(module.current_version || '-')}<br>Stable: ${sysEsc(module.stable_version || '-')}</small></td>
         <td><small>${sysEsc(sysFormatDateTime(module.last_backup_timestamp))}</small></td>
-        <td>${sysStatusBadge(module.last_health_status)}</td>
+        <td>${sysStatusBadge(module.last_health_status)}${maintenanceNote}</td>
         <td>
           <div class="support-row-actions">
             <button class="btn-sysadmin-sm" onclick="switchBackupRecoveryTab('sets')">View Backups</button>
-            <button class="btn-sysadmin-sm" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, 'DATABASE')" ${restoreDisabled}>Restore Data</button>
-            <button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Rollback Version</button>
+            ${recoveryAction}
+            ${isDeploymentBackup ? '' : `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Rollback Version</button>`}
             <button class="btn-sysadmin-sm" onclick="createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})">Create Incident</button>
           </div>
         </td>
@@ -2444,12 +2460,17 @@ function renderBackupLogs() {
   }
   tbody.innerHTML = sysBackupLogs.map(record => {
     const id = Number(record.backup_set_id || record.backup_id || record.id);
+    const backupType = String(record.backup_type || '').toUpperCase();
+    const backupReady = ['COMPLETED', 'VERIFIED', 'RESTORED'].includes(String(record.status || '').toUpperCase());
+    const recoveryAction = backupType === 'DEPLOYMENT_VERSION'
+      ? `<button class="btn-sysadmin-sm" onclick="requestBackupSetRollback(${id})" ${backupReady ? '' : 'disabled'}>Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${backupReady && isRestorableBackupType(record.backup_type) ? '' : 'disabled'}>Restore</button>`;
     const actions = [
       `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'RUNNING')">Run</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'COMPLETED')">Complete</button>`,
       `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Verify</button>`,
-      `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(record.backup_type || 'DATABASE')})" ${['COMPLETED', 'VERIFIED', 'RESTORED'].includes(String(record.status || '').toUpperCase()) ? '' : 'disabled'}>Restore</button>`,
+      recoveryAction,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'FAILED')">Fail</button>`,
     ];
     return `
@@ -2496,20 +2517,31 @@ function renderRestoreJobs() {
   const tbody = document.getElementById('restore-jobs-tbody');
   if (!tbody) return;
   if (!sysRestoreJobs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No restore jobs found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No restore jobs found.</td></tr>';
     return;
   }
-  tbody.innerHTML = sysRestoreJobs.map(job => `
-    <tr>
-      <td><strong>#${Number(job.restore_job_id || job.id)}</strong><br><small>${sysEsc(sysFormatDateTime(job.created_at))}</small></td>
-      <td>${sysEsc(job.backup_reference || job.backup_set_id || '-')}</td>
-      <td>${sysEsc(backupTypeLabel(job.restore_type))}</td>
-      <td>${sysEsc(job.affected_module ? backupModuleName(job.affected_module) : '-')}</td>
-      <td>${sysStatusBadge(job.status)}</td>
-      <td>${sysEsc(job.requested_by_username || job.requested_by || '-')}</td>
-      <td><small>${sysEsc(job.result_message || '-')}</small></td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = sysRestoreJobs.map(job => {
+    const id = Number(job.restore_job_id || job.id);
+    const status = String(job.status || '').toUpperCase();
+    const actions = [];
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'IN_PROGRESS')">Start</button>`);
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'FAILED')">Fail</button>`);
+    if (['PENDING', 'IN_PROGRESS'].includes(status)) actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'CANCELLED')">Cancel</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'COMPLETED')">Complete</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'FAILED')">Fail</button>`);
+    return `
+      <tr>
+        <td><strong>#${id}</strong><br><small>${sysEsc(sysFormatDateTime(job.created_at))}</small></td>
+        <td>${sysEsc(job.backup_reference || job.backup_set_id || '-')}</td>
+        <td>${sysEsc(backupTypeLabel(job.restore_type))}</td>
+        <td>${sysEsc(job.affected_module ? backupModuleName(job.affected_module) : '-')}</td>
+        <td>${sysStatusBadge(job.status)}</td>
+        <td>${sysEsc(job.requested_by_username || job.requested_by || '-')}</td>
+        <td><small>${sysEsc(job.result_message || '-')}</small></td>
+        <td><div class="support-row-actions">${actions.join('') || '<span class="sysadmin-muted">No actions</span>'}</div></td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function renderRollbackRequests() {
@@ -2653,6 +2685,10 @@ async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABA
     showSysToast('Select a completed backup before requesting restore.', 'error');
     return;
   }
+  if (!isRestorableBackupType(restoreType)) {
+    showSysToast('Deployment version backups use rollback requests, not restore jobs.', 'error');
+    return;
+  }
   const warning = 'This action may affect current system data. Please ensure that a valid backup is selected.\n\nType RESTORE to queue the restore job:';
   const phrase = prompt(warning, '');
   if (phrase === null) return;
@@ -2678,6 +2714,48 @@ async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABA
   } catch (err) {
     showSysToast(err.message || 'Network error.', 'error');
   }
+}
+
+async function updateRestoreJobStatus(jobId, status) {
+  const resultMessage = prompt(`${backupTypeLabel(status)} notes:`, '');
+  if (resultMessage === null) return;
+  try {
+    const res = await apiFetch(`/api/admin/backups/restore-jobs/${Number(jobId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, result_message: resultMessage }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update restore job.');
+    showSysToast(data.message || 'Restore job updated.', 'success');
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+function requestBackupSetRollback(backupId) {
+  const record = sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === Number(backupId));
+  if (!record) {
+    showSysToast('Backup set not found.', 'error');
+    return;
+  }
+  const modules = Array.isArray(record.included_modules) ? record.included_modules.filter(Boolean) : [];
+  if (!modules.length) {
+    showSysToast('This deployment backup has no module recovery list.', 'error');
+    return;
+  }
+  let moduleKey = modules[0];
+  if (modules.length > 1) {
+    const selected = prompt(`Module key to roll back:\n${modules.join(', ')}`, moduleKey);
+    if (selected === null) return;
+    moduleKey = selected.trim();
+    if (!modules.includes(moduleKey)) {
+      showSysToast('Selected module is not included in this deployment backup.', 'error');
+      return;
+    }
+  }
+  requestModuleRollback(moduleKey);
 }
 
 async function requestModuleRollback(moduleKey) {
@@ -2824,6 +2902,8 @@ window.requestBackup         = requestBackup;
 window.updateBackupStatus    = updateBackupStatus;
 window.verifyBackup          = verifyBackup;
 window.requestRestoreJob     = requestRestoreJob;
+window.updateRestoreJobStatus = updateRestoreJobStatus;
+window.requestBackupSetRollback = requestBackupSetRollback;
 window.requestModuleRollback = requestModuleRollback;
 window.updateRollbackRequestStatus = updateRollbackRequestStatus;
 window.createBackupIncident  = createBackupIncident;

@@ -175,6 +175,18 @@
   display: block;
 }
 
+.backup-recovery-note {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid #fed7aa;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #7c2d12;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .backup-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -240,6 +252,14 @@
 
 .backup-detail-dialog {
   max-width: 680px;
+}
+
+.backup-maintenance-note {
+  display: block;
+  margin-top: 6px;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .sysadmin-muted {

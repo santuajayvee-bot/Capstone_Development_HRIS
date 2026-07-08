@@ -566,6 +566,14 @@ const BACKUP_SET_STATUSES = new Set(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED'
 const RESTORE_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'FULL_BACKUP']);
 const RESTORE_STATUSES = new Set(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']);
 const ROLLBACK_STATUSES = new Set(['PENDING', 'APPROVED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']);
+const RESTORABLE_BACKUP_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'FULL_BACKUP']);
+const RESTORE_JOB_TRANSITIONS = {
+  PENDING: new Set(['PENDING', 'IN_PROGRESS', 'FAILED', 'CANCELLED']),
+  IN_PROGRESS: new Set(['IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']),
+  COMPLETED: new Set(['COMPLETED']),
+  FAILED: new Set(['FAILED']),
+  CANCELLED: new Set(['CANCELLED']),
+};
 
 const BACKUP_RECOVERY_MODULES = [
   { key: 'authentication', name: 'Authentication / Login', data: true, files: false, config: true, rollback: true },
@@ -1036,7 +1044,9 @@ async function buildBackupCoverage() {
       stable_version: stableVersion,
       last_known_stable_version: stableVersion,
       last_backup_timestamp: latestBackup?.created_at || null,
+      last_backup_type: latestBackup?.backup_type || null,
       last_health_status: health?.status || recoveryPoint?.health_status_at_backup || 'UNKNOWN',
+      under_maintenance: (health?.status || recoveryPoint?.health_status_at_backup) === 'MAINTENANCE',
       recovery_point_id: recoveryPoint?.id || null,
       backup_set_id: latestBackup?.backup_set_id || null,
       rollback_available: Boolean(module.rollback && recoveryPoint?.rollback_available),
@@ -3081,6 +3091,12 @@ async function buildSystemHealthModules({
     if (storedRow) {
       result.last_success_at = result.last_success_at || storedRow.last_success_at || null;
       result.last_failure_at = result.last_failure_at || storedRow.last_failure_at || null;
+      if (normalizeHealthStatus(storedRow.status) === 'MAINTENANCE') {
+        result.status = 'MAINTENANCE';
+        result.remarks = storedRow.remarks || 'Module is under controlled maintenance.';
+        result.error_message = storedRow.error_message || null;
+        result.recommended_action = 'Complete the controlled recovery workflow before returning this module to normal operation. This does not bypass HR or Payroll approval workflows.';
+      }
     }
     if (persist) {
       await persistSystemHealthModule(result, checkedByUserId);
@@ -3095,7 +3111,7 @@ async function getSystemHealthSnapshot(options = {}) {
   const legacy = await getLegacySystemHealthSnapshot();
   const modules = await buildSystemHealthModules(options);
   const summary = summarizeSystemHealth(modules);
-  const issueCount = summary.offline + summary.warning;
+  const issueCount = summary.offline + summary.warning + summary.maintenance;
   return {
     ...legacy,
     generated_at: new Date().toISOString(),
@@ -3798,14 +3814,15 @@ router.post('/backups/:backupId/restore', async (req, res) => {
     }
 
     const backupId = normalizePositiveInteger(req.params.backupId, 'backup_set_id');
-    const restoreType = normalizeEnum(req.body?.restore_type, RESTORE_TYPES, 'DATABASE');
+    const restoreType = normalizeEnum(req.body?.restore_type, RESTORE_TYPES, null);
+    if (!restoreType) return res.status(400).json({ error: 'Restore type is invalid for this backup.' });
     const affectedModule = cleanText(req.body?.affected_module, 80) || null;
     const reason = cleanText(req.body?.reason, 2000);
     const placeUnderMaintenance = Boolean(req.body?.place_under_maintenance);
 
     await conn.beginTransaction();
     const [backupRows] = await conn.execute(
-      'SELECT id, backup_reference, status FROM backup_sets WHERE id = ? FOR UPDATE',
+      'SELECT id, backup_reference, backup_type, status FROM backup_sets WHERE id = ? FOR UPDATE',
       [backupId]
     );
     if (!backupRows.length) {
@@ -3813,6 +3830,14 @@ router.post('/backups/:backupId/restore', async (req, res) => {
       return res.status(404).json({ error: 'Backup set not found.' });
     }
     const backup = backupRows[0];
+    if (!RESTORABLE_BACKUP_TYPES.has(backup.backup_type)) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Deployment version backups use rollback requests, not restore jobs.' });
+    }
+    if (backup.backup_type !== 'FULL_BACKUP' && restoreType !== backup.backup_type) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Restore type must match the selected backup type unless it is a full backup.' });
+    }
     if (!['COMPLETED', 'VERIFIED', 'RESTORED'].includes(backup.status)) {
       await conn.rollback();
       return res.status(409).json({ error: 'Only completed or verified backups can be queued for restore.' });
@@ -3828,7 +3853,7 @@ router.post('/backups/:backupId/restore', async (req, res) => {
         affectedModule,
         req.user.id,
         protectedText(reason),
-        protectedText('Restore request queued. Run dry-run validation before applying recovery.'),
+        protectedText('Restore request queued. Run dry-run validation before applying recovery. This does not bypass HR or Payroll business approvals.'),
       ]
     );
 
@@ -3878,6 +3903,84 @@ router.post('/backups/:backupId/restore', async (req, res) => {
     await conn.rollback().catch(() => {});
     console.error('[RBAC] restore request error:', err.message);
     return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to queue restore request.' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.patch('/backups/restore-jobs/:jobId', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    if (!(await hasTable('restore_jobs'))) {
+      return res.status(409).json({ error: 'Restore job schema is not ready. Run migrations first.' });
+    }
+
+    const jobId = normalizePositiveInteger(req.params.jobId, 'restore_job_id');
+    const status = normalizeEnum(req.body?.status, RESTORE_STATUSES, null);
+    const resultMessage = cleanText(req.body?.result_message, 2000);
+    if (!status) return res.status(400).json({ error: 'Restore job status is invalid.' });
+    if (resultMessage.length < 3) return res.status(400).json({ error: 'Result message is required for restore job updates.' });
+
+    await conn.beginTransaction();
+    const [existingRows] = await conn.execute(
+      `SELECT rj.id, rj.status, rj.restore_type, rj.affected_module,
+              bs.backup_reference, bs.id AS backup_set_id
+         FROM restore_jobs rj
+         LEFT JOIN backup_sets bs ON bs.id = rj.backup_set_id
+        WHERE rj.id = ?
+        FOR UPDATE`,
+      [jobId]
+    );
+    if (!existingRows.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Restore job not found.' });
+    }
+
+    const existing = existingRows[0];
+    const allowedTransitions = RESTORE_JOB_TRANSITIONS[existing.status] || new Set();
+    if (!allowedTransitions.has(status)) {
+      await conn.rollback();
+      return res.status(409).json({ error: `Restore job cannot move from ${existing.status} to ${status}.` });
+    }
+
+    const fields = ['status = ?', 'result_message_encrypted = ?'];
+    const values = [status, protectedText(resultMessage)];
+    if (status === 'IN_PROGRESS') {
+      fields.push('approved_by = COALESCE(approved_by, ?)', 'started_at = COALESCE(started_at, NOW())');
+      values.push(req.user.id);
+    }
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)) {
+      fields.push('completed_at = COALESCE(completed_at, NOW())');
+    }
+
+    values.push(jobId);
+    await conn.execute(
+      `UPDATE restore_jobs
+          SET ${fields.join(', ')}
+        WHERE id = ?`,
+      values
+    );
+
+    await logAuditEntryWithExecutor(conn, req, {
+      action: `RESTORE_JOB_UPDATED: ${existing.backup_reference || `JOB-${jobId}`}`,
+      module: 'BACKUP_RESTORE',
+      newValue: JSON.stringify({
+        restore_job_id: jobId,
+        backup_set_id: existing.backup_set_id,
+        previous_status: existing.status,
+        status,
+        restore_type: existing.restore_type,
+        affected_module: existing.affected_module,
+        result: resultMessage,
+      }),
+    });
+
+    await conn.commit();
+    return res.json({ message: 'Restore job updated.' });
+  } catch (err) {
+    await conn.rollback().catch(() => {});
+    console.error('[RBAC] restore job update error:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to update restore job.' });
   } finally {
     conn.release();
   }

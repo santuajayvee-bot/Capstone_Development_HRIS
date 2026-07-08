@@ -41,6 +41,7 @@ for (const route of [
   '/backups/restore-jobs',
   '/backups/rollback-requests',
   '/backups/:backupId/restore',
+  '/backups/restore-jobs/:jobId',
   '/system-health/check',
   '/system-health/check/:moduleKey',
   '/system-health/history',
@@ -103,6 +104,8 @@ assert(systemAdminPage.includes('id="backup-coverage-tbody"'), 'Backup dashboard
 assert(systemAdminPage.includes('id="module-recovery-tbody"'), 'Backup dashboard must show module recovery points.');
 assert(systemAdminPage.includes('id="restore-jobs-tbody"'), 'Backup dashboard must show restore jobs.');
 assert(systemAdminPage.includes('id="rollback-requests-tbody"'), 'Backup dashboard must show rollback requests.');
+assert(systemAdminPage.includes('does not automatically overwrite source code'), 'Backup page must explain controlled recovery limits.');
+assert(systemAdminPage.includes('do not bypass HR or Payroll business approval workflows'), 'Backup page must state recovery does not bypass approvals.');
 assert(systemAdminPage.includes('value="SYSTEM_HEALTH"'), 'Audit Trail must include System Health module filter.');
 assert(blockchainPage.includes('bc-view-support'), 'Blockchain support view must live inside the Blockchain module.');
 assert(attendancePage.includes('bio-device-settings-card'), 'Biometric settings must live inside Attendance Sync.');
@@ -190,6 +193,9 @@ assert(admin.includes('BACKUP_RECOVERY_MODULES'), 'Backup and Recovery must defi
 assert(admin.includes('RESTORE_BACKUP'), 'Restore requests must be audit logged.');
 assert(admin.includes('REQUEST_MODULE_ROLLBACK'), 'Rollback requests must be audit logged.');
 assert(admin.includes('confirmation_phrase'), 'Critical restore actions must require typed confirmation.');
+assert(admin.includes('RESTORE_JOB_TRANSITIONS'), 'Restore jobs must enforce lifecycle transitions.');
+assert(admin.includes('RESTORE_JOB_UPDATED'), 'Restore job updates must be audit logged.');
+assert(admin.includes('Deployment version backups use rollback requests'), 'Deployment version backups must not create restore jobs.');
 assert(systemAdminScript.includes('health-detail-probable-cause'), 'System Health UI must render probable cause.');
 assert(systemAdminScript.includes('health-detail-runbook'), 'System Health UI must render runbook steps.');
 assert(systemAdminScript.includes('applySystemHealthHistory'), 'System Health UI must preserve current-run history when stored history is empty.');
@@ -198,6 +204,8 @@ assert(systemAdminScript.includes('mergeSystemHealthHistory'), 'System Health UI
 assert(systemAdminScript.includes('/api/admin/users?include_stats=1'), 'Account Management must use lightweight account stats endpoint.');
 assert(systemAdminScript.includes('ensureSysAdminEmployeesLoaded'), 'Employee directory must be loaded lazily for account registration.');
 assert(systemAdminScript.includes('requestRestoreJob'), 'Backup UI must expose controlled restore requests.');
+assert(systemAdminScript.includes('updateRestoreJobStatus'), 'Backup UI must expose restore job lifecycle updates.');
+assert(systemAdminScript.includes('requestBackupSetRollback'), 'Backup UI must show rollback action for deployment-version backups.');
 assert(systemAdminScript.includes('requestModuleRollback'), 'Backup UI must expose rollback requests.');
 assert(systemAdminScript.includes('createBackupIncident'), 'Backup UI must create incidents from recovery coverage.');
 assert(systemAdminScript.includes("limit: '50'"), 'Audit Trail must use a smaller default page size.');
