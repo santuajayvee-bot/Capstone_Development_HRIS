@@ -30,6 +30,7 @@ const APP_ROUTE_MAP = {
   '/salary-calculation': { page: 'payroll', params: { payrollTab: 'salary' } },
   '/reports': { page: 'reports' },
   '/settings': { page: 'self-service' },
+  '/settings/devices': { page: 'self-service', params: { selfTab: 'devices' } },
   '/organization-setup': { page: 'organization-setup' },
   '/register': { page: 'register' },
   '/employee-profile': { page: 'employee-profile' },
@@ -45,6 +46,8 @@ const APP_ROUTE_MAP = {
   '/admin/support': { page: 'system-admin', params: { sysAdminTab: 'support' } },
   '/admin/backups': { page: 'system-admin', params: { sysAdminTab: 'backups' } },
   '/my-profile': { page: 'self-service' },
+  '/security': { page: 'self-service', params: { selfTab: 'devices' } },
+  '/security-center': { page: 'self-service', params: { selfTab: 'devices' } },
 };
 
 function normalizeAppPath(path = window.location.pathname) {
@@ -99,6 +102,7 @@ function routeForPage(pageId, params = null) {
   }
   if (pageId === 'attendance' && routeParams.attTab === 'biometric') return '/attendance-sync';
   if (pageId === 'blockchain' && routeParams.blockchainView === 'support') return '/blockchain-support';
+  if (pageId === 'self-service' && routeParams.selfTab === 'devices') return '/settings/devices';
   if (pageId === 'system-admin') {
     const adminRoutes = {
       accounts: '/admin/accounts',
@@ -120,6 +124,7 @@ function navKeyForRoute(pageId, params = null) {
   if (pageId === 'system-admin' && routeParams.sysAdminTab) return `${pageId}:${routeParams.sysAdminTab}`;
   if (pageId === 'attendance' && routeParams.attTab) return `${pageId}:${routeParams.attTab}`;
   if (pageId === 'blockchain' && routeParams.blockchainView) return `${pageId}:${routeParams.blockchainView}`;
+  if (pageId === 'self-service' && routeParams.selfTab) return `${pageId}:${routeParams.selfTab}`;
   return pageId;
 }
 
@@ -168,6 +173,9 @@ function applyRoutePageState(pageId, params = null) {
   }
   if (pageId === 'blockchain' && routeParams.blockchainView && typeof switchBlockchainView === 'function') {
     switchBlockchainView(routeParams.blockchainView, { skipRouteUpdate: true });
+  }
+  if (pageId === 'self-service' && routeParams.selfTab && typeof setSelfServiceTab === 'function') {
+    setSelfServiceTab(routeParams.selfTab);
   }
 }
 
@@ -456,6 +464,7 @@ function navigate(pageId, navEl, params = null) {
       attendance: 'My Attendance',
       leave: 'My Leave',
       'self-service': 'My Profile',
+      'self-service:devices': 'Device Security',
       requests: 'My Requests',
     };
     const moduleTitles = {
@@ -467,6 +476,7 @@ function navigate(pageId, navEl, params = null) {
       'system-admin:backups': 'Backup and Restore',
       'attendance:biometric': 'Attendance Sync',
       'blockchain:support': 'Blockchain Support',
+      'self-service:devices': 'Device Security',
     };
     const titleKey = navKeyForRoute(pageId, routeParams);
     titleEl.textContent = isEmployeeUser && employeeTitles[titleKey]
@@ -573,6 +583,7 @@ function navigate(pageId, navEl, params = null) {
 
   if (pageId === 'self-service' && typeof initSelfServiceProfile === 'function') {
     initSelfServiceProfile();
+    requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
   }
 
   requestAnimationFrame(() => enhanceResponsiveTables(document.getElementById('page-' + pageId) || document));

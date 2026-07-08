@@ -14,6 +14,13 @@ let ACTIVE_EMPLOYEE_DRAFT_ID = null;
 let LAST_EMPLOYEE_WIZARD_REQUIRED_SECTION = 'personal';
 const EMPLOYEE_DRAFT_STORAGE_PREFIX = 'lgsv_employee_intake_drafts';
 
+function setEmployeeSaveBusy(isBusy) {
+  const saveButton = document.getElementById('employee-wizard-save');
+  if (!saveButton) return;
+  saveButton.disabled = Boolean(isBusy);
+  saveButton.textContent = isBusy ? 'Saving...' : 'Save Employee';
+}
+
 // Store uploaded files temporarily (in memory before save)
 const UPLOADED_FILES = {
   resume: [],
@@ -297,11 +304,14 @@ async function loadEmployeeDraft(draftId) {
   updateEmployeeDraftStatus(`Loaded draft: ${draft.title}`);
 }
 
-function deleteEmployeeDraft(draftId) {
+async function deleteEmployeeDraft(draftId) {
   const drafts = readEmployeeDrafts();
   const draft = drafts.find(item => item.id === draftId);
   if (!draft) return;
-  if (!confirm(`Delete draft "${draft.title}"?`)) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm(`Delete draft "${draft.title}"?`, 'Delete Draft', 'Delete', 'Cancel')
+    : confirm(`Delete draft "${draft.title}"?`);
+  if (!confirmed) return;
   writeEmployeeDrafts(drafts.filter(item => item.id !== draftId));
   if (ACTIVE_EMPLOYEE_DRAFT_ID === draftId) {
     ACTIVE_EMPLOYEE_DRAFT_ID = null;
@@ -310,10 +320,13 @@ function deleteEmployeeDraft(draftId) {
   renderEmployeeDraftArchive();
 }
 
-function clearEmployeeDraftArchive() {
+async function clearEmployeeDraftArchive() {
   const drafts = readEmployeeDrafts();
   if (!drafts.length) return;
-  if (!confirm('Clear all saved employee drafts?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Clear all saved employee drafts?', 'Clear Draft Archive', 'Clear', 'Cancel')
+    : confirm('Clear all saved employee drafts?');
+  if (!confirmed) return;
   writeEmployeeDrafts([]);
   ACTIVE_EMPLOYEE_DRAFT_ID = null;
   renderEmployeeDraftArchive();
@@ -1608,7 +1621,17 @@ function goEmployeeWizardBack() {
 async function validateEmployeeWizardRequiredStepsBeforeSubmit() {
   for (const sectionId of EMPLOYEE_WIZARD_REQUIRED_SECTIONS) {
     switchFormTab(sectionId);
-    if (!(await validateEmployeeWizardStep(sectionId))) return false;
+    try {
+      if (!(await validateEmployeeWizardStep(sectionId))) return false;
+    } catch (error) {
+      console.error(`Employee wizard ${sectionId} validation error:`, error);
+      if (typeof showAlert === 'function') {
+        await showAlert(error.message || `Unable to validate the ${sectionId} section.`, 'Validation Error', 'warning');
+      } else {
+        alert(error.message || `Unable to validate the ${sectionId} section.`);
+      }
+      return false;
+    }
   }
   switchFormTab('payroll');
   return true;
@@ -1702,11 +1725,13 @@ async function saveEmployee() {
     return;
   }
   IS_SAVING = true;
+  setEmployeeSaveBusy(true);
 
   // The form is assembled as a wizard. Validate only the required wizard
   // steps before final submit; Documents are optional during employee creation.
   if (!(await validateEmployeeWizardRequiredStepsBeforeSubmit())) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     return;
   }
   
@@ -1738,6 +1763,7 @@ async function saveEmployee() {
   // Validation: Employee code is required when HR uses an existing company ID.
   if (employeeIdMode === 'manual' && (!empId || empId.trim() === '')) {
     IS_SAVING = false;  // Reset double-submit flag
+    setEmployeeSaveBusy(false);
     alert('Employee ID is required when using an existing employee ID.');
     console.error('Employee code is empty!');
     return;
@@ -1745,6 +1771,7 @@ async function saveEmployee() {
 
   if (employeeIdMode === 'manual' && !isValidManualEmployeeCode(empId)) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     alert('Employee ID can only contain letters, numbers, hyphens, and underscores.');
     return;
   }
@@ -1753,6 +1780,7 @@ async function saveEmployee() {
     const isEmployeeCodeAvailable = await checkManualEmployeeCodeAvailability();
     if (!isEmployeeCodeAvailable) {
       IS_SAVING = false;
+      setEmployeeSaveBusy(false);
       alert('Employee ID already exists.');
       return;
     }
@@ -1764,6 +1792,7 @@ async function saveEmployee() {
   const addressResult = collectEmployeeAddressPayload('emp');
   if (addressResult.errors.length) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     alert(addressResult.errors.join('\n'));
     switchFormTab('contact');
     return;
@@ -1838,6 +1867,7 @@ async function saveEmployee() {
 
   if (!formData.first_name || !formData.last_name || !formData.email) {
     IS_SAVING = false;  // Reset double-submit flag
+    setEmployeeSaveBusy(false);
     alert('First name, last name, and email are required.');
     console.error('Missing required fields:', { 
       first_name: formData.first_name, 
@@ -1849,6 +1879,7 @@ async function saveEmployee() {
 
   if (!formData.position) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     alert('Please select a position / job title so the system can route the employee lifecycle correctly.');
     switchFormTab('employment');
     return;
@@ -1857,6 +1888,7 @@ async function saveEmployee() {
   const supervisorInput = document.querySelector('#form-employment input#emp-supervisor');
   if (!isValidEmployeeSupervisorName(formData.supervisor)) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     alert('Immediate supervisor must be a valid name. Numbers are not allowed.');
     switchFormTab('employment');
     supervisorInput?.classList.add('input-validation-error');
@@ -1866,6 +1898,7 @@ async function saveEmployee() {
 
   if (formData.lifecycle_action === 'ON_HOLD' && String(formData.lifecycle_note || '').trim().length < 8) {
     IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     alert('Please enter an HR note or reason of at least 8 characters when placing the record on hold.');
     switchFormTab('employment');
     return;
@@ -1874,10 +1907,13 @@ async function saveEmployee() {
   // Determine if this is a new employee or update
   const method = isEditing ? 'PUT' : 'POST';
   const endpoint = isEditing ? `/api/employees/${EDIT_EMPLOYEE_NUMERIC_ID || empId}` : '/api/employees';
+  const saveController = new AbortController();
+  const saveTimeout = setTimeout(() => saveController.abort(), 30000);
 
   // Use apiFetch which auto-attaches token
-  apiFetch(endpoint, {
+  return apiFetch(endpoint, {
     method: method,
+    signal: saveController.signal,
     headers: {
       'Content-Type': 'application/json'
     },
@@ -2000,6 +2036,10 @@ async function saveEmployee() {
   .catch(err => {
     IS_SAVING = false;  // Reset double-submit flag on error
     console.error('Save error:', err);
+    if (err.name === 'AbortError') {
+      alert('Employee save timed out. Please try again. If it happens again, refresh the page and check that MySQL is running.');
+      return;
+    }
     if (err.payload?.duplicate?.field === 'employee_code' && err.payload?.next_employee_code) {
       const empIdInput = document.getElementById('emp-id');
       const mode = document.getElementById('emp-id-mode')?.value || 'auto';
@@ -2015,6 +2055,9 @@ async function saveEmployee() {
     alert('Failed to save employee: ' + err.message);
   })
   .finally(() => {
+    clearTimeout(saveTimeout);
+    IS_SAVING = false;
+    setEmployeeSaveBusy(false);
     if (saveCompleted && !routedToOnboarding) {
       EDIT_MODE = false;
       EDIT_EMPLOYEE_ID = null;
@@ -2677,7 +2720,10 @@ function displayDocuments(documents) {
 
 // Delete a document
 async function deleteDocument(docId) {
-  if (!confirm('Are you sure you want to delete this document?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Are you sure you want to delete this document?', 'Delete Document', 'Delete', 'Cancel')
+    : confirm('Are you sure you want to delete this document?');
+  if (!confirmed) return;
   
   try {
     const response = await apiFetch(`/api/employees/${EDIT_EMPLOYEE_ID}/documents/${docId}`, {
@@ -2727,3 +2773,16 @@ document.addEventListener('DOMContentLoaded', initializeRegisterPage);
 document.addEventListener('partialsLoaded', initializeRegisterPage);
 window.initializeRegisterPage = initializeRegisterPage;
 window.onEmployeeIdModeChange = onEmployeeIdModeChange;
+
+window.addEventListener('unhandledrejection', event => {
+  if (!IS_SAVING) return;
+  IS_SAVING = false;
+  setEmployeeSaveBusy(false);
+  console.error('Unhandled employee save error:', event.reason);
+  const message = event.reason?.message || 'Unable to save employee. Please review the form and try again.';
+  if (typeof showAlert === 'function') {
+    showAlert(message, 'Employee Save Error', 'error');
+  } else {
+    alert(message);
+  }
+});

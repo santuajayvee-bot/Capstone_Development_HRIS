@@ -17,6 +17,10 @@ const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 const { decryptAuditValue, encryptAuditValue } = require('./privacy-protection');
 const { requireAuth, requireRole } = require('./middleware');
 const { requestJson } = require('./secure-http');
+const {
+  auditSecurityEvent,
+  createRateLimiter,
+} = require('./security-controls');
 const { optionalDateOnly } = require('./utils/dateValidation');
 const {
   PAYROLL_SCHEDULE_LABELS,
@@ -67,13 +71,29 @@ const ARGON2ID_OPTIONS = {
   parallelism: 4,
   hashLength: 32,
 };
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const ONBOARDING_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.ONBOARDING_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.ONBOARDING_RATE_LIMIT_MAX || 40),
+  keyGenerator: req => `onboarding:${req.user?.id || clientIp(req)}`,
+  auditAction: 'blocked_onboarding_rate_limit_exceeded',
+  module: 'ONBOARDING_SECURITY',
+});
+const ONBOARDING_ACTION_THROTTLE_MS = Number(process.env.ONBOARDING_ACTION_THROTTLE_MS || 1500);
+const ONBOARDING_UPLOAD_MAX_BYTES = Number(process.env.ONBOARDING_UPLOAD_MAX_BYTES || 5 * 1024 * 1024);
+const ONBOARDING_UPLOAD_MAX_MB = Math.max(1, Math.floor(ONBOARDING_UPLOAD_MAX_BYTES / (1024 * 1024)));
+const ONBOARDING_UPLOAD_CONCURRENT_MAX = Number(process.env.ONBOARDING_UPLOAD_CONCURRENT_MAX || 2);
+const ONBOARDING_DRAFT_EXPIRY_HOURS = Number(process.env.ONBOARDING_DRAFT_EXPIRY_HOURS || 72);
+const ONBOARDING_DRAFT_CLEANUP_INTERVAL_MS = Number(process.env.ONBOARDING_DRAFT_CLEANUP_INTERVAL_MS || 60 * 60 * 1000);
+const throttleBuckets = new Map();
+const activeUploadsByUser = new Map();
 
 const vaultDirectory = path.join(__dirname, '..', 'secure_uploads', 'onboarding');
 if (!fs.existsSync(vaultDirectory)) fs.mkdirSync(vaultDirectory, { recursive: true });
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: ONBOARDING_UPLOAD_MAX_BYTES },
   fileFilter: (_req, file, callback) => {
     const allowedMimeTypes = new Set([
       'application/pdf',
@@ -134,9 +154,61 @@ router.post('/integrity/anchor-pending', requireRole(SYSTEM_ADMIN_ROLES), async 
 });
 
 router.use(requireRole(HR_ROLES));
+router.use((req, res, next) => {
+  if (!MUTATING_METHODS.has(req.method)) return next();
+  return ONBOARDING_RATE_LIMIT(req, res, next);
+});
 
 function cleanText(value, maxLength = 255) {
   return String(value ?? '').trim().replace(/[\x00<>]/g, '').slice(0, maxLength);
+}
+
+function throttleOnboardingAction(action) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${req.user?.id || clientIp(req)}:${action}:${req.params?.applicantId || req.originalUrl}`;
+    const lastAt = throttleBuckets.get(key) || 0;
+    if (now - lastAt < ONBOARDING_ACTION_THROTTLE_MS) {
+      auditSecurityEvent(req, {
+        action: 'blocked_onboarding_action_throttle',
+        module: 'ONBOARDING_SECURITY',
+        targetTable: req.originalUrl,
+        newValue: { action, throttleMs: ONBOARDING_ACTION_THROTTLE_MS },
+        result: 'blocked',
+      }).catch(() => {});
+      return res.status(429).json({ error: 'Please wait a moment before repeating this onboarding action.' });
+    }
+    throttleBuckets.set(key, now);
+    return next();
+  };
+}
+
+function limitConcurrentOnboardingUploads(req, res, next) {
+  const key = String(req.user?.id || clientIp(req));
+  const active = activeUploadsByUser.get(key) || 0;
+  if (active >= ONBOARDING_UPLOAD_CONCURRENT_MAX) {
+    auditSecurityEvent(req, {
+      action: 'blocked_onboarding_concurrent_upload_limit',
+      module: 'ONBOARDING_SECURITY',
+      targetTable: req.originalUrl,
+      newValue: { active, max: ONBOARDING_UPLOAD_CONCURRENT_MAX },
+      result: 'blocked',
+    }).catch(() => {});
+    return res.status(429).json({ error: 'Too many onboarding uploads are already in progress. Please wait and try again.' });
+  }
+
+  activeUploadsByUser.set(key, active + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const remaining = (activeUploadsByUser.get(key) || 1) - 1;
+    if (remaining > 0) activeUploadsByUser.set(key, remaining);
+    else activeUploadsByUser.delete(key);
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  return next();
 }
 
 function requiredText(value, field, maxLength = 255) {
@@ -194,6 +266,22 @@ function optionalNonNegativeNumber(value, field) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) throw new Error(`${field} must be a valid non-negative number.`);
   return number;
+}
+
+function validateOnboardingUpload(file) {
+  if (!file?.buffer) return 'A document file is required.';
+  const extension = path.extname(String(file.originalname || '')).toLowerCase();
+  const signatures = {
+    '.pdf': buffer => buffer.subarray(0, 4).toString('ascii') === '%PDF',
+    '.doc': buffer => buffer.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])),
+    '.docx': buffer => buffer.subarray(0, 4).toString('binary') === 'PK\u0003\u0004',
+    '.jpg': buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+    '.jpeg': buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+    '.png': buffer => buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  };
+  if (!signatures[extension]) return 'File type is not allowed.';
+  if (!signatures[extension](file.buffer)) return 'File content does not match its extension.';
+  return null;
 }
 
 function sha256(value) {
@@ -287,8 +375,8 @@ async function writeModuleAudit(connection, req, action, oldValue = null, newVal
       req.user.employeeId || null,
       targetEmployeeId,
       action,
-      null,
-      null,
+      serializeAuditValue(oldValue),
+      serializeAuditValue(newValue),
       clientIp(req),
       cleanText(req.headers['user-agent'], 500),
     ]
@@ -306,6 +394,37 @@ function normalizeJsonValue(value) {
   } catch {
     return value;
   }
+}
+
+function serializeAuditValue(value) {
+  if (value === undefined || value === null || value === '') return null;
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function parseAuditStorageValue(value) {
+  if (value === undefined || value === null || value === '') return null;
+  return normalizeJsonValue(value);
+}
+
+function safeDecryptAuditStorageValue(value) {
+  if (!value) return null;
+  try {
+    return parseAuditStorageValue(decryptAuditValue(value));
+  } catch {
+    return parseAuditStorageValue(value);
+  }
+}
+
+function auditValuePreview(value) {
+  const parsed = parseAuditStorageValue(value);
+  if (parsed === null || parsed === undefined || parsed === '') return '';
+  if (typeof parsed === 'object') {
+    return Object.entries(parsed)
+      .slice(0, 8)
+      .map(([key, entryValue]) => `${key}: ${entryValue === null || entryValue === undefined ? '' : String(entryValue)}`)
+      .join('; ');
+  }
+  return String(parsed);
 }
 
 function hashActivity(activityId, applicantId, action, reason, oldValue, newValue, previousHash) {
@@ -705,7 +824,7 @@ router.get('/positions', async (_req, res) => {
   }
 });
 
-router.post('/positions', async (req, res) => {
+router.post('/positions', throttleOnboardingAction('position-save'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const positionName = requiredText(req.body.position_name, 'Position name', 120);
@@ -746,7 +865,7 @@ router.post('/positions', async (req, res) => {
   }
 });
 
-router.put('/positions/:positionRouteId', async (req, res) => {
+router.put('/positions/:positionRouteId', throttleOnboardingAction('position-save'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const positionRouteId = positiveInteger(req.params.positionRouteId, 'positionRouteId');
@@ -801,7 +920,7 @@ router.put('/positions/:positionRouteId', async (req, res) => {
 
 // Soft-delete preserves historical routing decisions and the audit trail while
 // keeping the route out of all future onboarding decisions and dropdowns.
-router.delete('/positions/:positionRouteId', async (req, res) => {
+router.delete('/positions/:positionRouteId', throttleOnboardingAction('position-delete'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const positionRouteId = positiveInteger(req.params.positionRouteId, 'positionRouteId');
@@ -959,7 +1078,7 @@ router.get('/applicants/:applicantId', async (req, res) => {
   }
 });
 
-router.post('/applicants/:applicantId/reveal-sensitive', async (req, res) => {
+router.post('/applicants/:applicantId/reveal-sensitive', throttleOnboardingAction('reveal-sensitive'), async (req, res) => {
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     const applicant = await getApplicant(pool, applicantId);
@@ -979,7 +1098,7 @@ router.post('/applicants/:applicantId/reveal-sensitive', async (req, res) => {
   }
 });
 
-router.delete('/applicants/:applicantId', async (req, res) => {
+router.delete('/applicants/:applicantId', throttleOnboardingAction('applicant-delete'), async (req, res) => {
   const connection = await pool.getConnection();
   let documentPaths = [];
   try {
@@ -1038,7 +1157,7 @@ router.delete('/applicants/:applicantId', async (req, res) => {
   }
 });
 
-router.post('/applicants', async (req, res) => {
+router.post('/applicants', throttleOnboardingAction('applicant-create'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -1054,7 +1173,7 @@ router.post('/applicants', async (req, res) => {
   }
 });
 
-router.patch('/applicants/:applicantId/progress', async (req, res) => {
+router.patch('/applicants/:applicantId/progress', throttleOnboardingAction('progress-update'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
@@ -1265,7 +1384,7 @@ async function transferApprovedApplicant(connection, req, applicant, reason, emp
   return { employee_id: employeeId, employee_code: employeeCode };
 }
 
-router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_ROLES), async (req, res) => {
+router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_ROLES), throttleOnboardingAction('decision'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
@@ -1319,7 +1438,7 @@ router.patch('/applicants/:applicantId/decision', requireRole(HR_FINAL_APPROVAL_
   }
 });
 
-router.post('/applicants/:applicantId/transfer', requireRole(HR_FINAL_APPROVAL_ROLES), async (req, res) => {
+router.post('/applicants/:applicantId/transfer', requireRole(HR_FINAL_APPROVAL_ROLES), throttleOnboardingAction('transfer'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
@@ -1361,10 +1480,21 @@ router.get('/applicants/:applicantId/documents', async (req, res) => {
   }
 });
 
-router.post('/applicants/:applicantId/documents', (req, res, next) => {
+router.post('/applicants/:applicantId/documents', throttleOnboardingAction('document-upload'), limitConcurrentOnboardingUploads, (req, res, next) => {
   upload.single('file')(req, res, error => {
     if (!error) return next();
-    res.status(400).json({ error: error.message || 'Document upload failed.' });
+    const isTooLarge = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE';
+    const message = isTooLarge
+      ? `Document is too large. Maximum onboarding upload size is ${ONBOARDING_UPLOAD_MAX_MB}MB.`
+      : error.message || 'Document upload failed.';
+    auditSecurityEvent(req, {
+      action: isTooLarge ? 'blocked_onboarding_upload_too_large' : 'blocked_onboarding_upload_rejected',
+      module: 'ONBOARDING_SECURITY',
+      targetTable: req.originalUrl,
+      newValue: { message, maxBytes: ONBOARDING_UPLOAD_MAX_BYTES },
+      result: 'blocked',
+    }).catch(() => {});
+    res.status(isTooLarge ? 413 : 400).json({ error: message });
   });
 }, async (req, res) => {
   const connection = await pool.getConnection();
@@ -1372,6 +1502,8 @@ router.post('/applicants/:applicantId/documents', (req, res, next) => {
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     if (!req.file) return res.status(400).json({ error: 'A document file is required.' });
+    const uploadError = validateOnboardingUpload(req.file);
+    if (uploadError) return res.status(400).json({ error: uploadError });
     const documentType = cleanText(req.body.document_type, 80);
     if (!DOCUMENT_TYPES.includes(documentType)) return res.status(400).json({ error: 'Invalid document type.' });
     const applicant = await getApplicant(connection, applicantId);
@@ -1430,7 +1562,7 @@ router.get('/applicants/:applicantId/documents/:documentId/download', async (req
   }
 });
 
-router.patch('/applicants/:applicantId/documents/:documentId/verify', async (req, res) => {
+router.patch('/applicants/:applicantId/documents/:documentId/verify', throttleOnboardingAction('document-verify'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
@@ -1510,9 +1642,11 @@ router.get('/applicants/:applicantId/audit', async (req, res) => {
   try {
     const applicantId = positiveInteger(req.params.applicantId, 'applicantId');
     const [rows] = await pool.execute(
-      `SELECT oaa.*, u.username AS actor, oic.chain_hash, oic.anchor_status
+      `SELECT oaa.*, u.username AS actor, COALESCE(r.label, r.name) AS actor_role,
+              oic.chain_hash, oic.anchor_status
          FROM onboarding_applicant_activity oaa
          JOIN users u ON u.id = oaa.actor_user_id
+         LEFT JOIN roles r ON r.id = u.role_id
          LEFT JOIN onboarding_integrity_chain oic ON oic.activity_id = oaa.activity_id
         WHERE oaa.applicant_id = ?
         ORDER BY oaa.created_at DESC, oaa.activity_id DESC`,
@@ -1523,18 +1657,156 @@ router.get('/applicants/:applicantId/audit', async (req, res) => {
       applicant_id: row.applicant_id,
       action: row.action,
       actor: row.actor,
+      actor_role: row.actor_role || '',
       chain_hash: row.chain_hash,
       anchor_status: row.anchor_status,
       created_at: row.created_at,
-      reason_available: !!(row.reason_encrypted || row.reason),
-      change_details_available: !!(row.old_value_encrypted || row.new_value_encrypted || row.old_value || row.new_value),
+      reason: safeDecryptAuditStorageValue(row.reason_encrypted || row.reason) || '',
+      old_value: safeDecryptAuditStorageValue(row.old_value_encrypted || row.old_value),
+      new_value: safeDecryptAuditStorageValue(row.new_value_encrypted || row.new_value),
     })));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
+router.get('/audit', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 250);
+    const [rows] = await pool.query(
+      `SELECT sal.id AS log_id, sal.user_id, sal.employee_id, sal.target_employee_id,
+              sal.action_performed, sal.module, sal.old_value, sal.new_value,
+              sal.ip_address, sal.user_agent, sal.timestamp,
+              u.username AS actor, COALESCE(r.label, r.name) AS actor_role
+         FROM system_audit_log sal
+        LEFT JOIN users u ON u.id = sal.user_id
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE sal.module = 'ONBOARDING'
+        ORDER BY sal.timestamp DESC, sal.id DESC
+        LIMIT ?`,
+      [limit]
+    );
+    res.json(rows.map(row => ({
+      log_id: row.log_id,
+      user_id: row.user_id,
+      employee_id: row.employee_id,
+      target_employee_id: row.target_employee_id,
+      actor: row.actor || (Number(row.user_id) === 0 ? 'system' : 'unknown'),
+      actor_role: row.actor_role || '',
+      action: row.action_performed,
+      module: row.module,
+      old_value: parseAuditStorageValue(row.old_value),
+      new_value: parseAuditStorageValue(row.new_value),
+      details: auditValuePreview(row.new_value || row.old_value),
+      ip_address: row.ip_address,
+      user_agent: row.user_agent,
+      created_at: row.timestamp,
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load onboarding audit trail.' });
+  }
+});
+
+async function auditOnboardingCleanup(archivedCount, documentCount, draftCount, orphanCount) {
+  await pool.execute(
+    `INSERT INTO system_audit_log
+       (user_id, employee_id, target_employee_id, action_performed, module,
+        old_value, new_value, ip_address, user_agent)
+     VALUES (0, NULL, NULL, 'ONBOARDING_ABANDONED_DRAFT_CLEANUP', 'ONBOARDING',
+        NULL, ?, 'system', 'scheduled-cleanup')`,
+    [JSON.stringify({ archivedCount, documentCount, draftCount, orphanCount })]
+  );
+}
+
+async function cleanupAbandonedOnboardingDrafts() {
+  if (ONBOARDING_DRAFT_EXPIRY_HOURS <= 0) return;
+  const connection = await pool.getConnection();
+  let documentPaths = [];
+  let archivedCount = 0;
+  let draftCount = 0;
+  let orphanCount = 0;
+  try {
+    await connection.beginTransaction();
+    const [applicants] = await connection.execute(
+      `SELECT applicant_id
+         FROM onboarding_applicant
+        WHERE deleted_at IS NULL
+          AND converted_employee_id IS NULL
+          AND workflow_status NOT IN ('Approved','Rejected','Transferred')
+          AND updated_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
+        LIMIT 100`,
+      [ONBOARDING_DRAFT_EXPIRY_HOURS]
+    );
+    const applicantIds = applicants.map(row => row.applicant_id);
+    if (applicantIds.length) {
+      const placeholders = applicantIds.map(() => '?').join(',');
+      const [documents] = await connection.execute(
+        `SELECT encrypted_file_path
+           FROM onboarding_applicant_document
+          WHERE transferred_employee_id IS NULL
+            AND applicant_id IN (${placeholders})`,
+        applicantIds
+      );
+      documentPaths = documents.map(row => row.encrypted_file_path).filter(Boolean);
+      await connection.execute(
+        `DELETE FROM onboarding_applicant_document
+          WHERE transferred_employee_id IS NULL
+            AND applicant_id IN (${placeholders})`,
+        applicantIds
+      );
+      const [archiveResult] = await connection.execute(
+        `UPDATE onboarding_applicant
+            SET deleted_at = NOW(),
+                deleted_by = NULL,
+                deletion_reason = 'Abandoned onboarding draft expired.',
+                updated_by = NULL
+          WHERE applicant_id IN (${placeholders})
+            AND converted_employee_id IS NULL
+            AND workflow_status NOT IN ('Approved','Rejected','Transferred')`,
+        applicantIds
+      );
+      archivedCount = archiveResult.affectedRows || 0;
+    }
+
+    const [draftResult] = await connection.execute(
+      `DELETE FROM form_drafts
+        WHERE module_name = 'Onboarding'
+          AND status <> 'completed'
+          AND expires_at IS NOT NULL
+          AND expires_at < NOW()`
+    ).catch(error => {
+      if (error.code === 'ER_NO_SUCH_TABLE') return [{ affectedRows: 0 }];
+      throw error;
+    });
+    draftCount = draftResult.affectedRows || 0;
+
+    await connection.commit();
+
+    const cleanup = await Promise.allSettled(documentPaths.map(filePath => fs.promises.unlink(filePath)));
+    orphanCount = cleanup.filter(result => result.status === 'rejected' && result.reason?.code !== 'ENOENT').length;
+    if (archivedCount || documentPaths.length || draftCount || orphanCount) {
+      await auditOnboardingCleanup(archivedCount, documentPaths.length, draftCount, orphanCount);
+      console.log(`Onboarding cleanup archived ${archivedCount} draft(s), removed ${documentPaths.length - orphanCount} file(s), removed ${draftCount} saved form draft(s).`);
+    }
+  } catch (error) {
+    await connection.rollback();
+    console.warn('Onboarding abandoned draft cleanup skipped:', error.message);
+  } finally {
+    connection.release();
+  }
+}
+
+if (ONBOARDING_DRAFT_CLEANUP_INTERVAL_MS > 0) {
+  setTimeout(() => cleanupAbandonedOnboardingDrafts().catch(error => {
+    console.warn('Onboarding abandoned draft cleanup failed:', error.message);
+  }), 30_000).unref?.();
+  setInterval(() => cleanupAbandonedOnboardingDrafts().catch(error => {
+    console.warn('Onboarding abandoned draft cleanup failed:', error.message);
+  }), ONBOARDING_DRAFT_CLEANUP_INTERVAL_MS).unref?.();
+}
+
 router.createOnboardingApplicantRecord = createOnboardingApplicantRecord;
 router.getPositionRoute = getPositionRoute;
+router.cleanupAbandonedOnboardingDrafts = cleanupAbandonedOnboardingDrafts;
 
 module.exports = router;

@@ -8,8 +8,12 @@ let selfServiceState = {
   sensitiveVisible: {},
   trustedDevices: [],
   deviceHistory: [],
+  deviceActivity: [],
   deviceView: 'trusted'
 };
+
+const SELF_DEVICE_ACTIVITY_PAGE_SIZE = 25;
+let selfDeviceActivityPage = 0;
 
 const SELF_HR_ROLES = new Set(['hr_manager', 'hr_admin', 'system_admin', 'admin']);
 const SELF_SENSITIVE_FIELDS = [
@@ -44,7 +48,10 @@ function escapeHTML(value) {
 }
 
 function selfServiceNotify(message, type = 'info') {
-  if (typeof showToast === 'function') return showToast(message, type);
+  if (typeof showAlert === 'function') {
+    const title = type === 'error' ? 'Error' : type === 'success' ? 'Success' : 'Notice';
+    return showAlert(message, title, type);
+  }
   if (typeof showModal === 'function') return showModal(type === 'error' ? 'Error' : 'Notice', message);
   alert(message);
 }
@@ -179,6 +186,19 @@ function formatSelfDateTime(value) {
   });
 }
 
+function selfDeviceRiskBadge(value) {
+  const risk = String(value || 'Low');
+  const cls = risk === 'High' ? 'badge-red' : risk === 'Medium' ? 'badge-yellow' : 'badge-green';
+  return `<span class="badge ${cls}">${escapeHTML(risk)}</span>`;
+}
+
+async function selfDeviceJson(url, options = {}) {
+  const response = await apiFetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Device security request failed.');
+  return data;
+}
+
 function selfBadge(status) {
   const label = String(status || 'Pending');
   const key = label.toLowerCase().replace(/\s+/g, '-');
@@ -200,7 +220,7 @@ function setSelfServiceTab(tab) {
   document.querySelectorAll('.self-tab-panel').forEach(panel => panel.classList.remove('active'));
   document.querySelector(`[data-self-tab="${tab}"]`)?.classList.add('active');
   document.getElementById(`self-tab-${tab}`)?.classList.add('active');
-  if (tab === 'devices') loadSelfTrustedDevices();
+  if (tab === 'devices') loadSelfDeviceDashboard();
   if (tab === 'requests') loadSelfChangeRequests();
   if (tab === 'activity') loadSelfActivityLog();
   if (tab === 'hr-requests') loadHrProfileChangeRequests();
@@ -466,6 +486,13 @@ function selfDeviceIcon(type = 'Desktop') {
   return 'DE';
 }
 
+function selfDeviceIconLabel(type = 'Desktop') {
+  const normalized = String(type || 'Desktop').toLowerCase();
+  if (normalized === 'mobile') return 'Mobile device';
+  if (normalized === 'tablet') return 'Tablet';
+  return 'Desktop';
+}
+
 function selfTrustedDeviceStatus(device) {
   const status = String(device?.status || (device?.isTrusted ? 'Trusted' : 'Revoked')).trim();
   const statusClass = status === 'Trusted' ? 'status-approved' : status === 'Removed' ? 'status-rejected' : 'status-pending';
@@ -487,7 +514,7 @@ function renderSelfTrustedDevices(devices = []) {
   }
   container.innerHTML = devices.map(device => `
     <article class="self-device-card ${device.currentDevice ? 'is-current' : ''}">
-      <div class="self-device-icon" aria-hidden="true">${selfDeviceIcon(device.deviceType)}</div>
+      <div class="self-device-icon" aria-label="${escapeHTML(selfDeviceIconLabel(device.deviceType))}">${selfDeviceIcon(device.deviceType)}</div>
       <div class="self-device-main">
         <div class="self-device-title-row">
           <h3>${escapeHTML(device.deviceName || 'Trusted Device')}</h3>
@@ -497,6 +524,7 @@ function renderSelfTrustedDevices(devices = []) {
           </div>
         </div>
         <dl class="self-device-details">
+          <div><dt>Model</dt><dd>${escapeHTML(device.deviceModel || 'Not disclosed by browser')}</dd></div>
           <div><dt>Type</dt><dd>${escapeHTML(device.deviceType || '-')}</dd></div>
           <div><dt>Browser</dt><dd>${escapeHTML(device.browser || '-')}</dd></div>
           <div><dt>Operating System</dt><dd>${escapeHTML(device.operatingSystem || '-')}</dd></div>
@@ -535,6 +563,216 @@ async function loadSelfTrustedDevices() {
   }
 }
 
+async function loadSelfDeviceSummary() {
+  return null;
+}
+
+async function loadSelfDeviceDashboard() {
+  await loadSelfTrustedDevices();
+}
+
+async function loadSelfDeviceActivity() {
+  const body = document.getElementById('self-device-activity-body');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="11">Loading device activity...</td></tr>';
+  try {
+    const params = new URLSearchParams({
+      limit: String(SELF_DEVICE_ACTIVITY_PAGE_SIZE),
+      offset: String(selfDeviceActivityPage * SELF_DEVICE_ACTIVITY_PAGE_SIZE),
+    });
+    const search = document.getElementById('self-device-activity-search')?.value.trim();
+    const risk = document.getElementById('self-device-risk-filter')?.value;
+    if (search) params.set('search', search);
+    if (risk) params.set('riskLevel', risk);
+    const rows = await selfDeviceJson(`/api/trusted-devices/activity?${params}`);
+    selfServiceState.deviceActivity = Array.isArray(rows) ? rows : [];
+    if (!selfServiceState.deviceActivity.length) {
+      body.innerHTML = '<tr><td colspan="11">No device activity found.</td></tr>';
+    } else {
+      body.innerHTML = selfServiceState.deviceActivity.map(row => `
+        <tr>
+          <td>${escapeHTML(formatSelfDateTime(row.createdAt))}</td>
+          <td>${escapeHTML(row.user || '-')}</td>
+          <td>${escapeHTML(row.deviceName || '-')}</td>
+          <td>${escapeHTML(row.deviceModel || '-')}</td>
+          <td>${escapeHTML(row.browser || '-')}</td>
+          <td>${escapeHTML(row.operatingSystem || '-')}</td>
+          <td>${escapeHTML(row.ipAddress || '-')}</td>
+          <td>${escapeHTML(row.location || '-')}</td>
+          <td>${escapeHTML(row.status || row.action || '-')}</td>
+          <td>${selfDeviceRiskBadge(row.riskLevel)}</td>
+          <td><button type="button" class="btn btn-secondary btn-sm" onclick="viewSelfDeviceActivity(${Number(row.id)})">Details</button></td>
+        </tr>
+      `).join('');
+    }
+    const pageLabel = document.getElementById('self-device-page-label');
+    const prev = document.getElementById('self-device-prev');
+    const next = document.getElementById('self-device-next');
+    if (pageLabel) pageLabel.textContent = `Page ${selfDeviceActivityPage + 1}`;
+    if (prev) prev.disabled = selfDeviceActivityPage === 0;
+    if (next) next.disabled = selfServiceState.deviceActivity.length < SELF_DEVICE_ACTIVITY_PAGE_SIZE;
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="11">${escapeHTML(error.message)}</td></tr>`;
+  }
+}
+
+function viewSelfDeviceActivity(id) {
+  const event = (selfServiceState.deviceActivity || []).find(row => Number(row.id) === Number(id));
+  if (!event) return;
+  const message = [
+    `Action: ${event.action || '-'}`,
+    `Device: ${event.deviceName || '-'}`,
+    `Browser: ${event.browser || '-'}`,
+    `OS: ${event.operatingSystem || '-'}`,
+    `IP: ${event.ipAddress || '-'}`,
+    `Location: ${event.location || '-'}`,
+    `Risk: ${event.riskLevel || '-'}`,
+    `Time: ${formatSelfDateTime(event.createdAt)}`,
+  ].join('\n');
+  if (typeof showAlert === 'function') showAlert(message, 'Device Activity Details', 'info');
+  else alert(message);
+}
+
+async function loadSelfDeviceNotifications() {
+  const root = document.getElementById('self-devices-notifications');
+  if (!root) return;
+  root.innerHTML = '<div class="self-devices-empty">Loading notifications...</div>';
+  try {
+    const rows = await selfDeviceJson('/api/trusted-devices/notifications');
+    root.innerHTML = rows.length ? rows.map(row => `
+      <article class="sec-card ${row.isRead ? '' : 'is-unread'}">
+        <div><h3>${escapeHTML(row.title)}</h3><p>${escapeHTML(row.message)}</p><small>${escapeHTML(formatSelfDateTime(row.createdAt))}</small></div>
+        <div>${selfDeviceRiskBadge(row.riskLevel)}${row.isRead ? '' : `<button class="btn btn-secondary btn-sm" onclick="markSelfDeviceNotificationRead(${Number(row.id)})">Mark Read</button>`}</div>
+      </article>
+    `).join('') : '<div class="self-devices-empty">No security notifications.</div>';
+  } catch (error) {
+    root.innerHTML = `<div class="self-devices-empty">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+async function markSelfDeviceNotificationRead(id) {
+  try {
+    await selfDeviceJson(`/api/trusted-devices/notifications/${id}/read`, { method: 'POST' });
+    await Promise.all([loadSelfDeviceNotifications(), loadSelfDeviceSummary()]);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function loadSelfDeviceApprovals() {
+  const root = document.getElementById('self-devices-approvals');
+  if (!root) return;
+  root.innerHTML = '<div class="self-devices-empty">Loading approval requests...</div>';
+  try {
+    const rows = await selfDeviceJson('/api/trusted-devices/approval-requests');
+    root.innerHTML = rows.length ? rows.map(row => `
+      <article class="sec-card">
+        <div><h3>${escapeHTML(row.deviceName)}</h3><p>${escapeHTML(row.deviceModel || row.deviceType || 'Unknown device')} - ${escapeHTML(row.browser)} on ${escapeHTML(row.operatingSystem)} - ${escapeHTML(row.location || 'Location unavailable')} - ${escapeHTML(row.ipAddress || '-')}</p><small>${escapeHTML(formatSelfDateTime(row.requestedAt))}</small></div>
+        <div>${selfDeviceRiskBadge(row.riskLevel)}<span class="status-badge status-pending">${escapeHTML(row.status)}</span>
+          ${row.status === 'Pending' ? `<button class="btn btn-primary btn-sm" onclick="approveSelfDeviceRequest(${Number(row.id)})">Approve Device</button><button class="btn btn-secondary btn-sm" onclick="ignoreSelfDeviceRequest(${Number(row.id)})">Deny Access</button>` : ''}
+        </div>
+      </article>
+    `).join('') : '<div class="self-devices-empty">No device approval requests.</div>';
+  } catch (error) {
+    root.innerHTML = `<div class="self-devices-empty">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+async function approveSelfDeviceRequest(id) {
+  try {
+    await selfDeviceJson(`/api/trusted-devices/approval-requests/${id}/approve`, { method: 'POST' });
+    await Promise.all([loadSelfDeviceApprovals(), loadSelfTrustedDevices(), loadSelfDeviceSummary()]);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function ignoreSelfDeviceRequest(id) {
+  try {
+    await selfDeviceJson(`/api/trusted-devices/approval-requests/${id}/ignore`, { method: 'POST' });
+    await Promise.all([loadSelfDeviceApprovals(), loadSelfDeviceSummary()]);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function loadSelfDeviceSessions() {
+  const root = document.getElementById('self-device-sessions-list');
+  if (!root) return;
+  root.innerHTML = '<div class="self-devices-empty">Loading active sessions...</div>';
+  try {
+    const rows = await selfDeviceJson('/api/trusted-devices/active-sessions');
+    root.innerHTML = rows.length ? rows.map(row => `
+      <article class="sec-card">
+        <div><h3>${escapeHTML(selfDeviceSessionTitle(row))}${row.isCurrent ? ' <span class="self-current-device-badge">This Session</span>' : ''}</h3><p>${escapeHTML(row.deviceModel || row.deviceType || 'Unknown device')} - ${escapeHTML(row.browser || '-')} on ${escapeHTML(row.operatingSystem || '-')} - ${escapeHTML(row.ipAddress || '-')}</p><small>Login: ${escapeHTML(formatSelfDateTime(row.loginAt))} - Last activity: ${escapeHTML(formatSelfDateTime(row.lastActivity))}</small></div>
+        <div>${selfDeviceRiskBadge(row.riskLevel)}<button class="btn btn-secondary btn-sm" onclick="logoutSelfDeviceSession(${Number(row.id)}, ${row.isCurrent ? 'true' : 'false'})">Logout Session</button></div>
+      </article>
+    `).join('') : '<div class="self-devices-empty">No active sessions.</div>';
+  } catch (error) {
+    root.innerHTML = `<div class="self-devices-empty">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+function selfDeviceSessionTitle(row = {}) {
+  const deviceName = String(row.deviceName || '').trim();
+  if (deviceName && deviceName.toLowerCase() !== 'current device') return deviceName;
+  return 'Active Session';
+}
+
+async function logoutSelfDeviceSession(id, isCurrent = false) {
+  try {
+    const result = await selfDeviceJson(`/api/trusted-devices/active-sessions/${id}/logout`, { method: 'POST' });
+    if (isCurrent && (result.revoked || result.terminated)) {
+      if (typeof clearAuth === 'function') clearAuth();
+      if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
+      if (typeof showLoginRoute === 'function') {
+        showLoginRoute(true);
+      } else {
+        const app = document.getElementById('app');
+        const login = document.getElementById('login-screen');
+        if (app) app.style.display = 'none';
+        if (login) login.style.display = 'flex';
+      }
+      if (typeof window.resetLoginFlow === 'function') window.resetLoginFlow();
+      return;
+    }
+    await Promise.all([loadSelfDeviceSessions(), loadSelfDeviceSummary()]);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function logoutOtherSelfDeviceSessions() {
+  try {
+    await selfDeviceJson('/api/trusted-devices/active-sessions/logout-others', { method: 'POST' });
+    await Promise.all([loadSelfDeviceSessions(), loadSelfDeviceSummary()]);
+  } catch (error) {
+    selfServiceNotify(error.message, 'error');
+  }
+}
+
+async function exportSelfDeviceActivity() {
+  const params = new URLSearchParams();
+  const search = document.getElementById('self-device-activity-search')?.value.trim();
+  const risk = document.getElementById('self-device-risk-filter')?.value;
+  if (search) params.set('search', search);
+  if (risk) params.set('riskLevel', risk);
+  const response = await apiFetch(`/api/trusted-devices/activity/export?${params}`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || 'Export failed.');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'device-activity-logs.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function loadSelfDeviceHistory() {
   const container = document.getElementById('self-devices-history');
   if (!container) return;
@@ -550,11 +788,12 @@ async function loadSelfDeviceHistory() {
     }
     container.innerHTML = `
       <table class="self-device-history-table">
-        <thead><tr><th>Device</th><th>Type</th><th>Browser</th><th>OS</th><th>Registered</th><th>Last Active</th><th>Status</th></tr></thead>
+        <thead><tr><th>Device</th><th>Model</th><th>Type</th><th>Browser</th><th>OS</th><th>Registered</th><th>Last Active</th><th>Status</th></tr></thead>
         <tbody>
           ${selfServiceState.deviceHistory.map(device => `
             <tr>
               <td>${escapeHTML(device.deviceName || '-')}</td>
+              <td>${escapeHTML(device.deviceModel || '-')}</td>
               <td>${escapeHTML(device.deviceType || '-')}</td>
               <td>${escapeHTML(device.browser || '-')}</td>
               <td>${escapeHTML(device.operatingSystem || '-')}</td>
@@ -574,23 +813,45 @@ function setSelfDeviceView(view = 'trusted') {
   selfServiceState.deviceView = view;
   document.querySelectorAll('.self-device-subtab').forEach(button => button.classList.toggle('active', button.dataset.selfDeviceView === view));
   const trusted = document.getElementById('self-devices-list');
+  const activity = document.getElementById('self-devices-activity');
+  const notifications = document.getElementById('self-devices-notifications');
+  const approvals = document.getElementById('self-devices-approvals');
+  const sessions = document.getElementById('self-devices-sessions');
   const history = document.getElementById('self-devices-history');
   if (trusted) trusted.hidden = view !== 'trusted';
+  if (activity) activity.hidden = view !== 'activity';
+  if (notifications) notifications.hidden = view !== 'notifications';
+  if (approvals) approvals.hidden = view !== 'approvals';
+  if (sessions) sessions.hidden = view !== 'sessions';
   if (history) history.hidden = view !== 'history';
+  if (view === 'trusted') loadSelfTrustedDevices();
+  if (view === 'activity') loadSelfDeviceActivity();
+  if (view === 'notifications') loadSelfDeviceNotifications();
+  if (view === 'approvals') loadSelfDeviceApprovals();
+  if (view === 'sessions') loadSelfDeviceSessions();
   if (view === 'history') loadSelfDeviceHistory();
 }
 
 async function registerSelfCurrentDevice() {
-  const password = await showPrompt('Confirm your account password', 'Confirm your account password', 'Enter your password');
-  if (!password) return;
   try {
     const fingerprint = typeof buildTrustedDeviceFingerprint === 'function'
       ? await buildTrustedDeviceFingerprint()
       : {};
-    const name = await showPrompt('Device name', 'Register Trusted Device', typeof trustedDeviceDefaultName === 'function' ? trustedDeviceDefaultName(fingerprint) : 'Trusted Device');
+    const defaultName = typeof trustedDeviceDefaultName === 'function' ? trustedDeviceDefaultName(fingerprint) : 'Trusted Device';
+    const registration = typeof showTrustedDeviceRegistrationModal === 'function'
+      ? await showTrustedDeviceRegistrationModal(defaultName)
+      : {
+        password: await showPrompt('Confirm your account password', 'Register Trusted Device', ''),
+        deviceName: defaultName,
+      };
+    if (!registration?.password) return;
     const res = await apiFetch('/api/trusted-devices/register', {
       method: 'POST',
-      body: JSON.stringify({ password, fingerprint, deviceName: name || undefined })
+      body: JSON.stringify({
+        password: registration.password,
+        fingerprint,
+        deviceName: registration.deviceName || defaultName,
+      })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -610,7 +871,7 @@ async function registerSelfCurrentDevice() {
       throw new Error(data.error || 'Failed to register device.');
     }
     selfServiceNotify(data.message || 'Device registered.', 'success');
-    await loadSelfTrustedDevices();
+    await Promise.all([loadSelfTrustedDevices(), loadSelfDeviceSummary()]);
     await loadSelfActivityLog();
   } catch (error) {
     selfServiceNotify(error.message, 'error');
@@ -622,7 +883,9 @@ async function renameSelfTrustedDevice(id, currentName = '') {
     const device = (selfServiceState.trustedDevices || []).find(item => Number(item.id) === Number(id));
     currentName = device?.deviceName || '';
   }
-  const deviceName = prompt('New device name:', currentName);
+  const deviceName = typeof showPrompt === 'function'
+    ? await showPrompt('New device name:', 'Rename Trusted Device', currentName)
+    : prompt('New device name:', currentName);
   if (!deviceName) return;
   try {
     const res = await apiFetch(`/api/trusted-devices/${id}`, {
@@ -644,6 +907,7 @@ function viewSelfTrustedDevice(id) {
   const message = [
     `Device Name: ${device.deviceName || '-'}`,
     `Status: ${device.status || (device.isTrusted ? 'Trusted' : 'Revoked')}`,
+    `Model: ${device.deviceModel || 'Not disclosed by browser'}`,
     `Type: ${device.deviceType || '-'}`,
     `Browser: ${device.browser || '-'}`,
     `Operating System: ${device.operatingSystem || '-'}`,
@@ -666,7 +930,7 @@ async function revokeSelfTrustedDevice(id) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to remove device.');
     selfServiceNotify(data.message || 'Device revoked.', 'success');
-    await loadSelfTrustedDevices();
+    await Promise.all([loadSelfTrustedDevices(), loadSelfDeviceSummary()]);
     await loadSelfActivityLog();
   } catch (error) {
     selfServiceNotify(error.message, 'error');
@@ -713,7 +977,9 @@ async function approveHrProfileRequest(id) {
 }
 
 async function rejectHrProfileRequest(id) {
-  const reason = prompt('Reason for rejecting this change request:');
+  const reason = typeof showPrompt === 'function'
+    ? await showPrompt('Reason for rejecting this change request:', 'Reject Change Request', '')
+    : prompt('Reason for rejecting this change request:');
   if (!reason || !reason.trim()) return;
   try {
     const res = await apiFetch(`/api/hr/profile-change-requests/${id}/reject`, {
@@ -761,6 +1027,49 @@ function wireSelfServiceEvents() {
     button.dataset.selfDevicesBound = 'true';
     button.addEventListener('click', () => setSelfDeviceView(button.dataset.selfDeviceView));
   });
+  const logoutOthersButton = document.getElementById('self-device-logout-others');
+  if (logoutOthersButton && logoutOthersButton.dataset.selfDevicesBound !== 'true') {
+    logoutOthersButton.dataset.selfDevicesBound = 'true';
+    logoutOthersButton.addEventListener('click', logoutOtherSelfDeviceSessions);
+  }
+  const exportButton = document.getElementById('self-device-export');
+  if (exportButton && exportButton.dataset.selfDevicesBound !== 'true') {
+    exportButton.dataset.selfDevicesBound = 'true';
+    exportButton.addEventListener('click', () => exportSelfDeviceActivity().catch(error => selfServiceNotify(error.message, 'error')));
+  }
+  const prevButton = document.getElementById('self-device-prev');
+  if (prevButton && prevButton.dataset.selfDevicesBound !== 'true') {
+    prevButton.dataset.selfDevicesBound = 'true';
+    prevButton.addEventListener('click', () => {
+      selfDeviceActivityPage = Math.max(selfDeviceActivityPage - 1, 0);
+      loadSelfDeviceActivity();
+    });
+  }
+  const nextButton = document.getElementById('self-device-next');
+  if (nextButton && nextButton.dataset.selfDevicesBound !== 'true') {
+    nextButton.dataset.selfDevicesBound = 'true';
+    nextButton.addEventListener('click', () => {
+      selfDeviceActivityPage += 1;
+      loadSelfDeviceActivity();
+    });
+  }
+  const searchInput = document.getElementById('self-device-activity-search');
+  if (searchInput && searchInput.dataset.selfDevicesBound !== 'true') {
+    searchInput.dataset.selfDevicesBound = 'true';
+    searchInput.addEventListener('input', () => {
+      selfDeviceActivityPage = 0;
+      clearTimeout(window.SELF_DEVICE_SEARCH_TIMER);
+      window.SELF_DEVICE_SEARCH_TIMER = setTimeout(loadSelfDeviceActivity, 250);
+    });
+  }
+  const riskFilter = document.getElementById('self-device-risk-filter');
+  if (riskFilter && riskFilter.dataset.selfDevicesBound !== 'true') {
+    riskFilter.dataset.selfDevicesBound = 'true';
+    riskFilter.addEventListener('change', () => {
+      selfDeviceActivityPage = 0;
+      loadSelfDeviceActivity();
+    });
+  }
 }
 
 async function initSelfServiceProfile() {
@@ -787,7 +1096,7 @@ async function initSelfServiceProfile() {
     await loadSelfServiceProfile();
     await loadSelfChangeRequests();
     await loadSelfActivityLog();
-    await loadSelfTrustedDevices();
+    await loadSelfDeviceDashboard();
     if (isSelfHrReviewer()) await loadHrProfileChangeRequests();
   } catch (error) {
     selfServiceNotify(error.message, 'error');
@@ -795,7 +1104,9 @@ async function initSelfServiceProfile() {
 }
 
 document.addEventListener('partialsLoaded', () => {
-  if (document.querySelector('.self-service-page') && typeof initSelfServiceProfile === 'function') {
+  if (document.querySelector('.self-service-page')
+    && typeof initSelfServiceProfile === 'function'
+    && (typeof shouldRunProtectedPageInitializer !== 'function' || shouldRunProtectedPageInitializer('self-service'))) {
     initSelfServiceProfile();
   }
 });
@@ -806,4 +1117,10 @@ window.rejectHrProfileRequest = rejectHrProfileRequest;
 window.renameSelfTrustedDevice = renameSelfTrustedDevice;
 window.revokeSelfTrustedDevice = revokeSelfTrustedDevice;
 window.viewSelfTrustedDevice = viewSelfTrustedDevice;
+window.setSelfServiceTab = setSelfServiceTab;
+window.viewSelfDeviceActivity = viewSelfDeviceActivity;
+window.markSelfDeviceNotificationRead = markSelfDeviceNotificationRead;
+window.approveSelfDeviceRequest = approveSelfDeviceRequest;
+window.ignoreSelfDeviceRequest = ignoreSelfDeviceRequest;
+window.logoutSelfDeviceSession = logoutSelfDeviceSession;
 window.setSelfDeviceView = setSelfDeviceView;

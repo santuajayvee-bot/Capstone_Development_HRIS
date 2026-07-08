@@ -22,6 +22,7 @@
   <div class="onb-tabs">
     <button class="onb-tab active" data-onb-tab="applicants">Applicants</button>
     <button class="onb-tab" data-onb-tab="positions">Position Routing</button>
+    <button class="onb-tab" data-onb-tab="audit">Audit Trail</button>
   </div>
 
   <section class="onb-panel active" id="onb-panel-applicants">
@@ -83,6 +84,29 @@
       <table class="onb-position-table">
         <thead><tr><th>Position</th><th>Department</th><th>Screening</th><th>Training</th><th>Employee Directory path</th><th>Actions</th></tr></thead>
         <tbody id="onb-position-rows"><tr><td colspan="6" class="onb-empty">Loading position routes...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="onb-panel" id="onb-panel-audit">
+    <div class="onb-toolbar">
+      <button class="btn btn-secondary" id="onb-audit-refresh" type="button">Refresh Audit Trail</button>
+    </div>
+    <div class="table-wrap audit-trail-table-wrap">
+      <table class="responsive-card-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Actor</th>
+            <th>Action</th>
+            <th>Record</th>
+            <th>Details</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody id="onb-audit-rows">
+          <tr><td colspan="6" class="onb-empty">Open this tab to load onboarding audit events.</td></tr>
+        </tbody>
       </table>
     </div>
   </section>

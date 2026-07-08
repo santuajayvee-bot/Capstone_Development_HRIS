@@ -12,11 +12,13 @@ const modalCancelBtn = document.getElementById('modal-cancel');
 const modalCloseBtn = document.getElementById('modal-close');
 const nativeAlert = window.alert.bind(window);
 const nativeConfirm = window.confirm.bind(window);
+const nativePrompt = window.prompt.bind(window);
 
 let modalPromiseResolve = null;
 let bootstrapModal = null;
 let modalMode = 'alert';
 let promptInputElement = null;
+let deviceRegistrationFields = null;
 
 function elevateUniversalModalLayer() {
   if (modalElement) modalElement.style.zIndex = '40010';
@@ -99,6 +101,12 @@ function prepareModal(message, title, type) {
   modalMessage.textContent = finalMessage;
 }
 
+function promptInputType(message, title) {
+  return /password|passcode|current password|account password/i.test(`${message || ''} ${title || ''}`)
+    ? 'password'
+    : 'text';
+}
+
 function preparePromptModal(message, title, defaultValue = '') {
   setModalType('info');
   modalTitle.textContent = title;
@@ -107,10 +115,10 @@ function preparePromptModal(message, title, defaultValue = '') {
   label.className = 'form-label';
   label.textContent = message;
   const input = document.createElement('input');
-  input.type = 'password';
+  input.type = promptInputType(message, title);
   input.className = 'form-control';
   input.value = defaultValue || '';
-  input.autocomplete = 'current-password';
+  input.autocomplete = input.type === 'password' ? 'current-password' : 'off';
   modalMessage.appendChild(label);
   modalMessage.appendChild(input);
   promptInputElement = input;
@@ -122,6 +130,17 @@ function preparePromptModal(message, title, defaultValue = '') {
 }
 
 modalConfirmBtn?.addEventListener('click', () => {
+  if (modalMode === 'trustedDeviceRegistration') {
+    const deviceName = deviceRegistrationFields?.deviceName?.value?.trim() || '';
+    const password = deviceRegistrationFields?.password?.value || '';
+    if (!password) {
+      deviceRegistrationFields?.password?.focus();
+      return;
+    }
+    resolveModal({ deviceName, password });
+    closeModal();
+    return;
+  }
   if (modalMode === 'prompt') {
     resolveModal(promptInputElement?.value ?? '');
     closeModal();
@@ -149,6 +168,7 @@ modalElement?.addEventListener('hidden.bs.modal', () => {
   }
   modalMode = 'alert';
   promptInputElement = null;
+  deviceRegistrationFields = null;
 });
 
 modalElement?.addEventListener('shown.bs.modal', elevateUniversalModalLayer);
@@ -191,7 +211,7 @@ async function showConfirm(message, title = 'Confirm', confirmText = 'Yes', canc
 
 async function showPrompt(message, title = 'Input Required', defaultValue = '') {
   if (!modalElement || !modalTitle || !modalMessage || !modalConfirmBtn || !modalCancelBtn || !modalIcon) {
-    return nativeConfirm(String(message || ''));
+    return nativePrompt(String(message || ''), defaultValue || '');
   }
 
   return new Promise((resolve) => {
@@ -201,9 +221,47 @@ async function showPrompt(message, title = 'Input Required', defaultValue = '') 
   });
 }
 
+async function showTrustedDeviceRegistrationModal(defaultDeviceName = '') {
+  if (!modalElement || !modalTitle || !modalMessage || !modalConfirmBtn || !modalCancelBtn || !modalIcon) {
+    const approved = nativeConfirm('Register this browser and computer as a trusted device?');
+    if (!approved) return false;
+    return {
+      deviceName: defaultDeviceName || 'Trusted Device',
+      password: nativePrompt('Confirm your account password:') || '',
+    };
+  }
+
+  return new Promise((resolve) => {
+    modalPromiseResolve = resolve;
+    setModalType('info');
+    modalTitle.textContent = 'Register Trusted Device';
+    modalMessage.innerHTML = `
+      <div class="trusted-device-modal">
+        <p class="trusted-device-modal-note">Register this browser and computer only if it is private and controlled by you.</p>
+        <label class="form-label" for="trusted-device-name-input">Device name</label>
+        <input class="form-control" id="trusted-device-name-input" type="text" maxlength="120" autocomplete="off">
+        <label class="form-label" for="trusted-device-password-input">Account password</label>
+        <input class="form-control" id="trusted-device-password-input" type="password" autocomplete="current-password">
+      </div>
+    `;
+    const deviceName = document.getElementById('trusted-device-name-input');
+    const password = document.getElementById('trusted-device-password-input');
+    if (deviceName) deviceName.value = defaultDeviceName || 'Trusted Device';
+    deviceRegistrationFields = { deviceName, password };
+    modalConfirmBtn.textContent = 'Register Device';
+    modalConfirmBtn.className = 'btn btn-primary';
+    modalCancelBtn.textContent = 'Cancel';
+    modalCancelBtn.style.display = 'inline-flex';
+    modalMode = 'trustedDeviceRegistration';
+    openModal();
+    setTimeout(() => deviceName?.focus(), 120);
+  });
+}
+
 window.showAlert = showAlert;
 window.showConfirm = showConfirm;
 window.showPrompt = showPrompt;
+window.showTrustedDeviceRegistrationModal = showTrustedDeviceRegistrationModal;
 window.closeModal = closeModal;
 window.alert = (message) => {
   showAlert(String(message || ''), 'Notice', 'info');

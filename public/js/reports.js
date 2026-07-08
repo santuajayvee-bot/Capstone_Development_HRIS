@@ -56,6 +56,8 @@ if (reportsPage) {
 
 async function initReportsPage() {
   if (!document.getElementById('report-library-body')) return;
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('reports')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-reports')?.classList.contains('active')) return;
 
   if (!reportState.bound) {
     setDefaultReportDates();

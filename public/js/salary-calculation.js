@@ -89,6 +89,8 @@ async function salaryApiError(response, fallbackMessage) {
 
 // Init when DOM ready
 window.addEventListener('DOMContentLoaded', () => {
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('payroll')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-payroll')?.classList.contains('active')) return;
   console.log('📄 Salary page ready');
   console.log('✅ Initializing wage types...');
   
@@ -107,6 +109,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function loadSalaryCalculationPage() {
   if (!document.getElementById('salary-employee-search')) return;
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('payroll')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-payroll')?.classList.contains('active')) return;
 
   if (!salaryPageInitialized) {
     salaryPageInitialized = true;

@@ -7,6 +7,7 @@ const router = express.Router();
 const pool = require('../config/db');
 const { requireAuth } = require('./middleware');
 const { decryptColumnValue } = require('./data-protection');
+const { securitySummary } = require('../services/trustedDeviceService');
 
 router.use(requireAuth);
 
@@ -300,6 +301,10 @@ async function sharedWidgets(role, profile, permissions) {
     recentActivities: notifications,
     pendingTasks: [],
   };
+}
+
+async function securityStats(userId) {
+  return [];
 }
 
 async function hrDashboard(profile, permissions) {
@@ -623,6 +628,8 @@ router.get('/', async (req, res) => {
     }
 
     const shared = await sharedPromise;
+    const deviceSecurityStats = await securityStats(req.user.id);
+    rolePayload.stats = [...(rolePayload.stats || []), ...deviceSecurityStats];
     const payload = {
       role,
       roleLabel: req.user.roleLabel,

@@ -273,6 +273,9 @@ function getUser() {
 }
 
 let sidebarAvatarObjectUrl = null;
+let trustedDeviceApprovalPromptTimer = null;
+let trustedDeviceApprovalPromptActive = false;
+const promptedTrustedDeviceApprovalIds = new Set();
 
 function userAvatarInitials(user = null) {
   const normalized = normalizeClientUser(user || getUser());
@@ -313,6 +316,7 @@ async function refreshSidebarAvatar(user = null) {
 
 function clearAuth() {
   if (typeof resetEmployeeDashboardState === 'function') resetEmployeeDashboardState();
+  stopTrustedDeviceApprovalPrompts();
   if (sidebarAvatarObjectUrl) {
     URL.revokeObjectURL(sidebarAvatarObjectUrl);
     sidebarAvatarObjectUrl = null;
@@ -325,6 +329,103 @@ function clearAuth() {
 
 function isLoggedIn() {
   return !!getToken();
+}
+
+function shouldRunProtectedPageInitializer(pageId) {
+  if (!isLoggedIn()) return false;
+  return document.getElementById(`page-${pageId}`)?.classList.contains('active') === true;
+}
+
+function formatTrustedDeviceApprovalMessage(request = {}) {
+  return [
+    'A new untrusted device is trying to sign in to your account.',
+    '',
+    `Device: ${request.deviceName || 'Unknown Device'}`,
+    `Model: ${request.deviceModel || 'Not disclosed by browser'}`,
+    `Browser: ${request.browser || '-'}`,
+    `Operating System: ${request.operatingSystem || '-'}`,
+    `IP Address: ${request.ipAddress || '-'}`,
+    `Location: ${request.location || 'Unavailable'}`,
+    `Risk Level: ${request.riskLevel || 'Medium'}`,
+    '',
+    'Approve only if this sign-in attempt is yours.',
+  ].join('\n');
+}
+
+async function currentBrowserIsTrustedDevice() {
+  if (!isLoggedIn() || typeof buildTrustedDeviceFingerprint !== 'function') return false;
+  const fingerprint = await buildTrustedDeviceFingerprint();
+  const response = await apiFetch('/api/trusted-devices/status', {
+    method: 'POST',
+    body: JSON.stringify({ fingerprint }),
+  });
+  const status = await response.json().catch(() => ({}));
+  return response.ok && status.trusted === true;
+}
+
+async function handleTrustedDeviceApprovalRequest(request) {
+  trustedDeviceApprovalPromptActive = true;
+  promptedTrustedDeviceApprovalIds.add(Number(request.id));
+  try {
+    const approve = typeof showConfirm === 'function'
+      ? await showConfirm(
+        formatTrustedDeviceApprovalMessage(request),
+        'Untrusted Device Sign-In',
+        'Approve Device',
+        'Deny Access'
+      )
+      : window.confirm(formatTrustedDeviceApprovalMessage(request));
+    const endpoint = approve
+      ? `/api/trusted-devices/approval-requests/${Number(request.id)}/approve`
+      : `/api/trusted-devices/approval-requests/${Number(request.id)}/ignore`;
+    const response = await apiFetch(endpoint, { method: 'POST' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Device approval could not be updated.');
+    if (typeof showAlert === 'function') {
+      await showAlert(
+        approve ? 'The device was approved as trusted.' : 'The sign-in attempt was denied.',
+        approve ? 'Device Approved' : 'Access Denied',
+        approve ? 'success' : 'warning'
+      );
+    }
+    if (window.ROUTE_PARAMS?.pageId === 'self-service' && window.ROUTE_PARAMS?.selfTab === 'devices' && typeof setSelfDeviceView === 'function') {
+      setSelfDeviceView('approvals');
+    }
+  } catch (error) {
+    if (typeof showToast === 'function') showToast(error.message, 'error');
+    else console.warn(error.message);
+  } finally {
+    trustedDeviceApprovalPromptActive = false;
+  }
+}
+
+async function pollTrustedDeviceApprovalRequests() {
+  if (trustedDeviceApprovalPromptActive || !isLoggedIn()) return;
+  try {
+    if (!await currentBrowserIsTrustedDevice()) return;
+    const response = await apiFetch('/api/trusted-devices/approval-requests');
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !Array.isArray(rows)) return;
+    const pending = rows.find(row => row.status === 'Pending' && !promptedTrustedDeviceApprovalIds.has(Number(row.id)));
+    if (pending) await handleTrustedDeviceApprovalRequest(pending);
+  } catch (_error) {
+    // Approval prompts are opportunistic; the Devices tab still shows the queue.
+  }
+}
+
+function startTrustedDeviceApprovalPrompts() {
+  if (trustedDeviceApprovalPromptTimer || !isLoggedIn()) return;
+  setTimeout(pollTrustedDeviceApprovalRequests, 2500);
+  trustedDeviceApprovalPromptTimer = setInterval(pollTrustedDeviceApprovalRequests, 15000);
+}
+
+function stopTrustedDeviceApprovalPrompts() {
+  if (trustedDeviceApprovalPromptTimer) {
+    clearInterval(trustedDeviceApprovalPromptTimer);
+    trustedDeviceApprovalPromptTimer = null;
+  }
+  trustedDeviceApprovalPromptActive = false;
+  promptedTrustedDeviceApprovalIds.clear();
 }
 
 function markPasswordChangeRequired() {
@@ -465,6 +566,7 @@ function buildSidebar(user) {
   }
   refreshSidebarAvatar(user);
   buildEmployeeBottomNav(user);
+  startTrustedDeviceApprovalPrompts();
 }
 
 function buildEmployeeBottomNav(user) {
@@ -602,6 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typeof initAttendanceRealtime === 'function') {
               initAttendanceRealtime();
             }
+            startTrustedDeviceApprovalPrompts();
             if (typeof handleAppRoute === 'function') handleAppRoute({ replace: true });
           },
         });
@@ -612,6 +715,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof initAttendanceRealtime === 'function') {
       initAttendanceRealtime();
     }
+    startTrustedDeviceApprovalPrompts();
   }
   document.getElementById('btn-logout')?.addEventListener('click', logout);
   document.getElementById('mobile-menu-toggle')?.addEventListener('click', toggleMobileSidebar);
@@ -624,6 +728,7 @@ window.getToken = getToken;
 window.getUser = getUser;
 window.clearAuth = clearAuth;
 window.isLoggedIn = isLoggedIn;
+window.shouldRunProtectedPageInitializer = shouldRunProtectedPageInitializer;
 window.markPasswordChangeRequired = markPasswordChangeRequired;
 window.apiFetch = apiFetch;
 window.buildSidebar = buildSidebar;
@@ -637,3 +742,5 @@ window.toggleSidebarCollapsed = toggleSidebarCollapsed;
 window.applyUserRoleToDocument = applyUserRoleToDocument;
 window.normalizeClientRole = normalizeClientRole;
 window.isEmployeeRole = isEmployeeRole;
+window.startTrustedDeviceApprovalPrompts = startTrustedDeviceApprovalPrompts;
+window.stopTrustedDeviceApprovalPrompts = stopTrustedDeviceApprovalPrompts;

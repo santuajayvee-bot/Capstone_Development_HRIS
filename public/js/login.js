@@ -5,6 +5,9 @@
 let lockoutCountdownTimer = null;
 let lockoutPollTimer = null;
 let activeLockoutState = null;
+let activeMfaChallenge = null;
+let deviceApprovalPollTimer = null;
+let activeDeviceApprovalState = null;
 let recaptchaWidgetId = null;
 let recaptchaRequired = false;
 let recaptchaLoadPromise = null;
@@ -109,6 +112,14 @@ function stopLockoutCountdown() {
   activeLockoutState = null;
 }
 
+function stopDeviceApprovalPolling() {
+  if (deviceApprovalPollTimer) {
+    clearInterval(deviceApprovalPollTimer);
+    deviceApprovalPollTimer = null;
+  }
+  activeDeviceApprovalState = null;
+}
+
 function renderLockoutCountdown() {
   if (!activeLockoutState) return;
 
@@ -204,6 +215,7 @@ function continueAuthenticatedNavigation(data) {
 
 async function completeAuthenticatedLogin(data, options = {}) {
   stopLockoutCountdown();
+  stopDeviceApprovalPolling();
 
   saveAuth(data.accessToken || data.token, data.user);
 
@@ -289,6 +301,7 @@ function updateMfaDevelopmentCode(mockCode) {
 }
 
 function resetLoginFlow() {
+  stopDeviceApprovalPolling();
   activeMfaChallenge = null;
   const password = document.getElementById('password');
   const mfaCode = document.getElementById('mfa-code');
@@ -381,12 +394,107 @@ async function resendMfaCode() {
   }
 }
 
+async function pollDeviceApprovalStatus() {
+  if (!activeDeviceApprovalState) return;
+
+  const state = activeDeviceApprovalState;
+  const btnEl = document.getElementById('login-submit-btn');
+
+  try {
+    const response = await fetch('/api/auth/device-approval/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: state.username,
+        approvalRequestId: state.approvalRequestId,
+        deviceFingerprint: state.deviceFingerprint,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      stopDeviceApprovalPolling();
+      resetLoginCaptcha();
+      loginError(data.message || 'Device approval expired. Please sign in again.');
+      if (btnEl) {
+        btnEl.textContent = 'Login';
+        btnEl.disabled = false;
+      }
+      return;
+    }
+
+    if (data.mfaRequired) {
+      stopDeviceApprovalPolling();
+      showMfaStep(data);
+      if (btnEl) {
+        btnEl.textContent = 'Login';
+        btnEl.disabled = false;
+      }
+      return;
+    }
+
+    if (data.denied) {
+      stopDeviceApprovalPolling();
+      resetLoginCaptcha();
+      loginError(data.message || 'Device sign-in was denied from a trusted device.');
+      if (typeof showAlert === 'function') {
+        showAlert(data.message || 'Device sign-in was denied from a trusted device.', 'Device Access Denied', 'error');
+      }
+      if (btnEl) {
+        btnEl.textContent = 'Login';
+        btnEl.disabled = false;
+      }
+      return;
+    }
+
+    if (data.deviceApprovalRequired || data.status === 'Pending') {
+      loginError(data.message || 'Waiting for approval from a trusted device.', true);
+      return;
+    }
+
+    if (data.accessToken || data.token) {
+      stopDeviceApprovalPolling();
+      if (btnEl) {
+        btnEl.textContent = 'Login';
+        btnEl.disabled = false;
+      }
+      await completeAuthenticatedLogin(data);
+      return;
+    }
+  } catch (_) {
+    loginError('Waiting for approval. Reconnecting to the server...', true);
+  }
+}
+
+function startDeviceApprovalPolling({ username, approvalRequestId, deviceFingerprint, message, pollIntervalMs }) {
+  const btnEl = document.getElementById('login-submit-btn');
+  stopDeviceApprovalPolling();
+
+  activeDeviceApprovalState = {
+    username,
+    approvalRequestId,
+    deviceFingerprint,
+  };
+
+  loginError(message || 'Waiting for approval from a trusted device.', true);
+  if (btnEl) {
+    btnEl.textContent = 'Waiting for approval...';
+    btnEl.disabled = true;
+  }
+
+  const interval = Math.max(Number(pollIntervalMs || 3000), 2000);
+  deviceApprovalPollTimer = setInterval(pollDeviceApprovalStatus, interval);
+  setTimeout(pollDeviceApprovalStatus, 1000);
+}
+
 async function doLogin() {
   const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
   const btnEl = document.getElementById('login-submit-btn');
+  let keepButtonDisabled = false;
 
   stopLockoutCountdown();
+  stopDeviceApprovalPolling();
   clearLoginError();
 
   if (!username || !password) {
@@ -409,6 +517,9 @@ async function doLogin() {
   btnEl.disabled = true;
 
   try {
+    const deviceFingerprint = typeof buildTrustedDeviceFingerprint === 'function'
+      ? await buildTrustedDeviceFingerprint()
+      : {};
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -416,9 +527,7 @@ async function doLogin() {
         username,
         password,
         captchaToken,
-        deviceFingerprint: typeof buildTrustedDeviceFingerprint === 'function'
-          ? await buildTrustedDeviceFingerprint()
-          : {},
+        deviceFingerprint,
       }),
     });
 
@@ -441,14 +550,28 @@ async function doLogin() {
       showMfaStep(data);
       return;
     }
+    if (data.deviceApprovalRequired) {
+      keepButtonDisabled = true;
+      resetLoginCaptcha();
+      startDeviceApprovalPolling({
+        username,
+        approvalRequestId: data.approvalRequestId,
+        deviceFingerprint,
+        message: data.message,
+        pollIntervalMs: data.pollIntervalMs,
+      });
+      return;
+    }
 
     await completeAuthenticatedLogin(data);
   } catch (err) {
     resetLoginCaptcha();
     loginError('Cannot reach server. Is it running?');
   } finally {
-    btnEl.textContent = 'Login';
-    btnEl.disabled = false;
+    if (!keepButtonDisabled) {
+      btnEl.textContent = 'Login';
+      btnEl.disabled = false;
+    }
   }
 }
 

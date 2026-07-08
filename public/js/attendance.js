@@ -976,7 +976,9 @@ async function bulkValidateAttendance() {
 async function bulkRejectAttendance() {
   const ids = selectedAttendanceIds();
   if (!ids.length) return alert('Select at least one attendance record to reject.');
-  const reason = prompt('Reason for rejecting selected attendance record(s):');
+  const reason = typeof showPrompt === 'function'
+    ? await showPrompt('Reason for rejecting selected attendance record(s):', 'Reject Attendance Records', '')
+    : prompt('Reason for rejecting selected attendance record(s):');
   if (!reason) return;
   for (const id of ids) await verifyAttendance(id, 'REJECTED', { reason, silent: true });
   alert(`${ids.length} attendance record(s) rejected.`);
@@ -1170,7 +1172,9 @@ async function verifyAttendance(attendanceId, verificationStatus, options = {}) 
   closeAttendanceActionMenus();
   let reason = options.reason || '';
   if (verificationStatus !== 'VALIDATED') {
-    reason = reason || prompt(`Reason for marking this record ${verificationStatus}:`);
+    reason = reason || (typeof showPrompt === 'function'
+      ? await showPrompt(`Reason for marking this record ${verificationStatus}:`, 'Attendance Review', '')
+      : prompt(`Reason for marking this record ${verificationStatus}:`));
     if (!reason) return;
   }
   try {
@@ -1203,10 +1207,15 @@ async function reviewAttendanceOvertime(attendanceId, decision) {
 
   let reason = '';
   if (normalizedDecision === 'REJECTED') {
-    reason = prompt('Reason for rejecting this overtime:');
+    reason = typeof showPrompt === 'function'
+      ? await showPrompt('Reason for rejecting this overtime:', 'Reject Overtime', '')
+      : prompt('Reason for rejecting this overtime:');
     if (!reason) return;
-  } else if (!confirm(`Approve ${formatMinutes(detectedOvertimeMinutes(record))} overtime for payroll? Standard working hours will not be changed.`)) {
-    return;
+  } else {
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm(`Approve ${formatMinutes(detectedOvertimeMinutes(record))} overtime for payroll? Standard working hours will not be changed.`, 'Approve Overtime', 'Approve', 'Cancel')
+      : confirm(`Approve ${formatMinutes(detectedOvertimeMinutes(record))} overtime for payroll? Standard working hours will not be changed.`);
+    if (!confirmed) return;
   }
 
   try {

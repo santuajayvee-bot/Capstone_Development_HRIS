@@ -341,7 +341,10 @@ async function fetchOnboardingEmployees() {
 }
 
 async function finalizeEnrollment(empId) {
-  if (!confirm("Finalize enrollment? This will anchor the wage structure to the blockchain.")) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Finalize enrollment? This will anchor the wage structure to the blockchain.', 'Finalize Hiring', 'Finalize', 'Cancel')
+    : confirm('Finalize enrollment? This will anchor the wage structure to the blockchain.');
+  if (!confirmed) return;
   try {
     const res = await apiFetch(`/api/onboarding/finalize/${empId}`, { method: 'POST' });
     if (res && res.ok) {

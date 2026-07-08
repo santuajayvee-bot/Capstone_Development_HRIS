@@ -1353,7 +1353,10 @@ async function submitRoleUpdate() {
 
 async function toggleUserStatus(userId, activate) {
   const action = activate ? 'activate' : 'deactivate';
-  if (!confirm(`Are you sure you want to ${action} this account?`)) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm(`Are you sure you want to ${action} this account?`, 'Account Status', activate ? 'Activate' : 'Deactivate', 'Cancel')
+    : confirm(`Are you sure you want to ${action} this account?`);
+  if (!confirmed) return;
 
   try {
     const res = await apiFetch(`/api/admin/users/${userId}/${action}`, { method: 'PATCH' });
@@ -1376,7 +1379,10 @@ async function toggleUserStatus(userId, activate) {
 // ═══════════════════════════════════════════════════════════════
 
 async function unlockUserAccount(userId) {
-  if (!confirm('Clear this account lockout?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Clear this account lockout?', 'Clear Lockout', 'Clear', 'Cancel')
+    : confirm('Clear this account lockout?');
+  if (!confirmed) return;
   try {
     const res = await apiFetch(`/api/admin/users/${userId}/unlock`, { method: 'PATCH' });
     const data = await res.json();
@@ -1389,7 +1395,9 @@ async function unlockUserAccount(userId) {
 }
 
 async function revokeUserSessions(userId) {
-  const reason = prompt('Reason for session revocation:', 'support_request');
+  const reason = typeof showPrompt === 'function'
+    ? await showPrompt('Reason for session revocation:', 'Revoke Sessions', 'support_request')
+    : prompt('Reason for session revocation:', 'support_request');
   if (reason === null) return;
   try {
     const res = await apiFetch(`/api/admin/users/${userId}/revoke-sessions`, {
@@ -1406,13 +1414,18 @@ async function revokeUserSessions(userId) {
 }
 
 async function resetUserMfa(userId) {
-  const reason = prompt('Reason for MFA reset after identity verification:');
+  const reason = typeof showPrompt === 'function'
+    ? await showPrompt('Reason for MFA reset after identity verification:', 'Reset MFA', '')
+    : prompt('Reason for MFA reset after identity verification:');
   if (reason === null) return;
   if (reason.trim().length < 8) {
     showSysToast('Reason must be at least 8 characters.', 'error');
     return;
   }
-  if (!confirm('Confirm identity was verified before resetting MFA.')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Confirm identity was verified before resetting MFA.', 'Identity Verification', 'Confirm', 'Cancel')
+    : confirm('Confirm identity was verified before resetting MFA.');
+  if (!confirmed) return;
   try {
     const res = await apiFetch(`/api/admin/users/${userId}/reset-mfa`, {
       method: 'PATCH',
@@ -2255,7 +2268,9 @@ async function createSupportTicket() {
 async function updateSupportTicket(ticketId, status) {
   const body = { status };
   if (status === 'RESOLVED') {
-    const resolution = prompt('Resolution notes:');
+    const resolution = typeof showPrompt === 'function'
+      ? await showPrompt('Resolution notes:', 'Resolve Support Ticket', '')
+      : prompt('Resolution notes:');
     if (resolution === null) return;
     body.resolution_notes = resolution;
   }
@@ -2342,15 +2357,21 @@ async function requestBackup() {
 async function updateBackupStatus(backupId, status) {
   const body = { status };
   if (['COMPLETED', 'VERIFIED'].includes(status)) {
-    const manifestHash = prompt('SHA-256 manifest hash:', '');
+    const manifestHash = typeof showPrompt === 'function'
+      ? await showPrompt('SHA-256 manifest hash:', 'Backup Manifest', '')
+      : prompt('SHA-256 manifest hash:', '');
     if (manifestHash === null) return;
     if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
-    const location = prompt('Backup location/reference:', '');
+    const location = typeof showPrompt === 'function'
+      ? await showPrompt('Backup location/reference:', 'Backup Location', '')
+      : prompt('Backup location/reference:', '');
     if (location === null) return;
     if (location.trim()) body.backup_location = location.trim();
   }
   if (status === 'FAILED') {
-    const notes = prompt('Failure notes:', '');
+    const notes = typeof showPrompt === 'function'
+      ? await showPrompt('Failure notes:', 'Backup Failure Notes', '')
+      : prompt('Failure notes:', '');
     if (notes === null) return;
     body.notes = notes;
   }

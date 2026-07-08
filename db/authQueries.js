@@ -664,6 +664,25 @@ async function revokeSessionByJwtId(jwtId, reason) {
   }
 }
 
+async function revokeSessionById(sessionId, reason) {
+  ensureEmployeeId(sessionId);
+
+  try {
+    const [result] = await pool.execute(
+      `UPDATE USER_SESSION
+          SET Revoked_At = NOW(),
+              Revocation_Reason = ?
+        WHERE Session_ID = ?
+          AND Revoked_At IS NULL`,
+      [normalizeReason(reason), sessionId]
+    );
+
+    return result.affectedRows;
+  } catch (error) {
+    logAndThrow(error, 'revokeSessionById');
+  }
+}
+
 async function revokeSessionByRefreshTokenHash(refreshTokenHash, reason) {
   ensureNonEmptyString(refreshTokenHash);
 
@@ -851,6 +870,7 @@ module.exports = {
   createUserSession,
   findActiveSessionByRefreshTokenHash,
   revokeSessionByJwtId,
+  revokeSessionById,
   revokeSessionByRefreshTokenHash,
   revokeAllUserSessions,
   rotateRefreshToken,

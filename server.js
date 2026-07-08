@@ -37,6 +37,7 @@ const trustedDeviceRoutes                   = require('./server/trusted-devices'
 const { clientErrorResponse }                = require('./server/error-response');
 const { validateRequestBody }                = require('./validators/inputValidation');
 const { hashTemporaryPassword }              = require('./services/passwordService');
+const { attachSocketDeviceDetection }        = require('./services/socketDeviceDetectionService');
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
 const { encryptAuditValue, maskSensitiveValue, preventStorageCiphertextResponses } = require('./server/privacy-protection');
 const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./server/encrypted-file-vault');
@@ -156,6 +157,7 @@ const EMPLOYEE_BANK_ACCOUNT_FORMATS = [
   { label: 'LandBank', aliases: ['landbank', 'land bank', 'land bank of the philippines'], lengths: [10, 16] },
   { label: 'RCBC', aliases: ['rcbc', 'rizal commercial banking corporation'], lengths: [10, 16] },
 ];
+const EMPLOYEE_PII_DECRYPT_WARNED_FIELDS = new Set();
 const EMPLOYEE_HR_PROTECTED_FIELDS = new Set([
   'department_id', 'position', 'employment_type', 'hiring_type', 'deployment_status',
   'date_hired', 'end_of_contract', 'employee_level', 'status', 'employment_status', 'supervisor',
@@ -506,12 +508,16 @@ function safeDecryptEmployeeColumnValue(row, field) {
   try {
     return decryptColumnValue(row?.[field]);
   } catch (error) {
-    console.warn('Employee PII decrypt failed; returning null for field.', {
-      employee_id: row?.id || null,
-      employee_code: row?.employee_code || null,
-      field,
-      reason: error.message,
-    });
+    const warningKey = `${row?.id || 'unknown'}:${field}:${error.message}`;
+    if (!EMPLOYEE_PII_DECRYPT_WARNED_FIELDS.has(warningKey)) {
+      EMPLOYEE_PII_DECRYPT_WARNED_FIELDS.add(warningKey);
+      console.warn('Employee PII decrypt failed; returning null for field.', {
+        employee_id: row?.id || null,
+        employee_code: row?.employee_code || null,
+        field,
+        reason: error.message,
+      });
+    }
     return null;
   }
 }
@@ -615,6 +621,7 @@ app.use('/api', requireSameOriginForBrowserWrites);
 app.use(validateRequestBody);
 app.use([
   '/api/auth/login',
+  '/api/auth/device-approval/status',
   '/api/auth/mfa/verify',
   '/api/auth/mfa/resend',
   '/api/auth/lockout-status',
@@ -650,6 +657,8 @@ const SPA_ROUTE_PATHS = new Set([
   '/salary-calculation',
   '/reports',
   '/settings',
+  '/security',
+  '/security-center',
   '/organization-setup',
   '/register',
   '/employee-profile',
@@ -6514,12 +6523,14 @@ if (process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH) {
     minVersion: 'TLSv1.3',
   };
   const server = https.createServer(tlsOptions, app);
+  attachSocketDeviceDetection(server);
   server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR running with TLS 1.3 on ${HOST}:${PORT}`);
     logServerUrls('https');
   });
 } else {
   const server = http.createServer(app);
+  attachSocketDeviceDetection(server);
   server.listen(PORT, HOST, () => {
     console.log(`LGSV_HR local development server listening on ${HOST}:${PORT}`);
     logServerUrls('http');

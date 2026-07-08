@@ -200,7 +200,11 @@ async function upload201Document() {
 }
 
 async function verifyDocument(employeeId, docId, status) {
-  const reason = status === 'Rejected' ? prompt('Rejection reason (optional):') : null;
+  const reason = status === 'Rejected'
+    ? (typeof showPrompt === 'function'
+      ? await showPrompt('Rejection reason (optional):', 'Reject Document', '')
+      : prompt('Rejection reason (optional):'))
+    : null;
   const res = await apiFetch(`/api/201-files/${employeeId}/verify-document/${docId}`, {
     method: 'PUT',
     body: JSON.stringify({ verification_status: status, rejection_reason: reason }),
@@ -214,7 +218,10 @@ async function verifyDocument(employeeId, docId, status) {
 }
 
 async function deleteDocument(employeeId, docId) {
-  if (!confirm('Delete this document?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Delete this document?', 'Delete Document', 'Delete', 'Cancel')
+    : confirm('Delete this document?');
+  if (!confirmed) return;
   const res = await apiFetch(`/api/201-files/${employeeId}/documents/${docId}`, { method: 'DELETE' });
   if (!res || !res.ok) {
     const err = await res?.json().catch(() => ({}));

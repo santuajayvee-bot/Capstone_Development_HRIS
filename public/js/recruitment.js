@@ -6,7 +6,14 @@ let ONB_LOOKUPS = { departments: [], wage_types: [], biometric_devices: [], docu
 let ONB_POSITIONS = [];
 let ONB_ACTIVE_APPLICANT = null;
 let ONB_REFRESH_TIMER = null;
+let ONB_INIT_PROMISE = null;
+let ONB_REFRESH_PROMISE = null;
+let ONB_LOOKUPS_PROMISE = null;
+let ONB_APPLICANTS_CONTROLLER = null;
 
+const ONB_UPLOAD_MAX_BYTES = Number(window.ONBOARDING_UPLOAD_MAX_BYTES || 5 * 1024 * 1024);
+const ONB_UPLOAD_MAX_MB = Math.max(1, Math.floor(ONB_UPLOAD_MAX_BYTES / (1024 * 1024)));
+const ONB_REQUEST_TIMEOUT_MS = 15000;
 const ONB_SCREENING = ['Pending Screening', 'For Interview', 'For Requirements Checking', 'Passed Screening', 'Failed Screening', 'Not Required'];
 const ONB_TRAINING = ['Not Yet Started', 'In Training', 'Completed Training', 'Failed Training', 'For Final Evaluation', 'Not Required'];
 const ONB_DECISIONS = ['Approved', 'Rejected', 'For Re-evaluation', 'On Hold'];
@@ -62,16 +69,35 @@ function onbOptions(values, selected, placeholder = '') {
 }
 
 async function onbJson(url, options = {}) {
-  const response = await apiFetch(url, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || `Request failed (${response.status}).`);
-    error.status = response.status;
-    error.code = data.code || '';
-    error.details = data.details || '';
+  const { timeoutMs = ONB_REQUEST_TIMEOUT_MS, signal, ...fetchOptions } = options;
+  const controller = signal ? null : new AbortController();
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
+  try {
+    const response = await apiFetch(url, {
+      ...fetchOptions,
+      signal: signal || controller?.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.error || `Request failed (${response.status}).`);
+      error.status = response.status;
+      error.code = data.code || '';
+      error.details = data.details || '';
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      if (signal?.aborted) throw error;
+      throw new Error('Onboarding request timed out. Please try again.');
+    }
     throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
-  return data;
 }
 
 function onbToast(message, type = 'success') {
@@ -106,6 +132,7 @@ function onbCloseModals() {
 function onbSwitchTab(tab) {
   document.querySelectorAll('.onb-tab').forEach(button => button.classList.toggle('active', button.dataset.onbTab === tab));
   document.querySelectorAll('.onb-panel').forEach(panel => panel.classList.toggle('active', panel.id === `onb-panel-${tab}`));
+  if (tab === 'audit') onbLoadModuleAudit();
 }
 
 function onbRenderStats(stats) {
@@ -207,6 +234,20 @@ function onbPopulateLookups() {
   onbUpdateRateHelp();
 }
 
+async function onbLoadLookupsOnce(force = false) {
+  if (!force && ONB_LOOKUPS_PROMISE) return ONB_LOOKUPS_PROMISE;
+  ONB_LOOKUPS_PROMISE = onbJson('/api/onboarding/lookups')
+    .then(lookups => {
+      ONB_LOOKUPS = lookups;
+      return lookups;
+    })
+    .catch(error => {
+      ONB_LOOKUPS_PROMISE = null;
+      throw error;
+    });
+  return ONB_LOOKUPS_PROMISE;
+}
+
 async function onbLoadDashboard() {
   const [stats, positions] = await Promise.all([
     onbJson('/api/onboarding/dashboard'),
@@ -218,18 +259,51 @@ async function onbLoadDashboard() {
 }
 
 async function onbLoadApplicants() {
+  if (ONB_APPLICANTS_CONTROLLER) ONB_APPLICANTS_CONTROLLER.abort();
+  const controller = new AbortController();
+  ONB_APPLICANTS_CONTROLLER = controller;
   const search = document.getElementById('onb-search')?.value.trim() || '';
   const workflow = document.getElementById('onb-status-filter')?.value || '';
   const params = new URLSearchParams();
   if (search) params.set('search', search);
   if (workflow) params.set('workflow_status', workflow);
-  const applicants = await onbJson(`/api/onboarding/applicants${params.toString() ? `?${params}` : ''}`);
-  onbRenderApplicants(applicants);
+  try {
+    const applicants = await onbJson(`/api/onboarding/applicants${params.toString() ? `?${params}` : ''}`, {
+      signal: controller.signal,
+    });
+    onbRenderApplicants(applicants);
+  } catch (error) {
+    if (error?.name === 'AbortError') return;
+    throw error;
+  } finally {
+    if (ONB_APPLICANTS_CONTROLLER === controller) ONB_APPLICANTS_CONTROLLER = null;
+  }
 }
 
-async function onbRefresh() {
-  try {
+function onbLoadApplicantsSafely() {
+  onbLoadApplicants().catch(error => {
+    if (error?.name !== 'AbortError') onbToast(onbErrorMessage(error), 'error');
+  });
+}
+
+async function onbRefresh(options = {}) {
+  const force = Boolean(options.force);
+  if (ONB_REFRESH_PROMISE && !force) return ONB_REFRESH_PROMISE;
+  if (force && ONB_APPLICANTS_CONTROLLER) ONB_APPLICANTS_CONTROLLER.abort();
+
+  const refreshButton = document.getElementById('onb-refresh');
+  const previousLabel = refreshButton?.textContent;
+  if (refreshButton) {
+    refreshButton.disabled = true;
+    refreshButton.textContent = 'Loading...';
+  }
+
+  ONB_REFRESH_PROMISE = (async () => {
     await Promise.all([onbLoadDashboard(), onbLoadApplicants()]);
+  })();
+
+  try {
+    await ONB_REFRESH_PROMISE;
   } catch (error) {
     onbToast(onbErrorMessage(error), 'error');
     const body = document.getElementById('onb-review-body');
@@ -244,6 +318,12 @@ async function onbRefresh() {
         </div>
       `;
     }
+  } finally {
+    if (refreshButton) {
+      refreshButton.disabled = false;
+      refreshButton.textContent = previousLabel || 'Refresh';
+    }
+    ONB_REFRESH_PROMISE = null;
   }
 }
 
@@ -743,10 +823,278 @@ function onbAuditRows(audit) {
   if (!audit.length) return '<div class="onb-muted">No workflow activity recorded.</div>';
   return audit.map(item => `
     <div class="onb-audit">
-      <div><strong>${onbEscape(item.action.replace(/_/g, ' '))}</strong><div class="onb-muted">${onbEscape(item.reason || 'System-recorded action')}</div></div>
-      <small class="onb-muted">${onbEscape(item.actor)}<br>${onbEscape(typeof formatPhilippineDateTime === 'function' ? formatPhilippineDateTime(item.created_at, { timeStyle: 'short' }) : `${new Date(item.created_at).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`)}</small>
+      <div>
+        <strong>${onbEscape(item.action.replace(/_/g, ' '))}</strong>
+        <div class="onb-muted">${onbEscape(item.reason || onbAuditValueText(item.new_value || item.old_value) || 'System-recorded action')}</div>
+        <div class="onb-muted">Integrity: ${onbEscape(item.anchor_status || 'PENDING')} ${item.chain_hash ? `Â· ${onbEscape(String(item.chain_hash).slice(0, 16))}...` : ''}</div>
+      </div>
+      <small class="onb-muted">${onbEscape(item.actor)}${item.actor_role ? `<br>${onbEscape(item.actor_role)}` : ''}<br>${onbEscape(onbFormatDateTime(item.created_at))}</small>
     </div>
   `).join('');
+}
+
+function onbFormatDateTime(value) {
+  return typeof formatPhilippineDateTime === 'function'
+    ? formatPhilippineDateTime(value, { timeStyle: 'short' })
+    : `${new Date(value).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' })} PHT`;
+}
+
+function onbAuditValueText(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .slice(0, 6)
+      .map(([key, entryValue]) => `${key.replace(/_/g, ' ')}: ${entryValue ?? ''}`)
+      .join(' | ');
+  }
+  return String(value);
+}
+
+function onbRenderModuleAudit(events) {
+  const body = document.getElementById('onb-audit-rows');
+  if (!body) return;
+  if (!events.length) {
+    body.innerHTML = '<tr><td colspan="6" class="onb-empty">No onboarding audit events recorded yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = events.map(event => `
+    <tr>
+      <td>${onbEscape(onbFormatDateTime(event.created_at))}</td>
+      <td><strong>${onbEscape(event.actor || 'unknown')}</strong><div class="onb-muted">${onbEscape(event.actor_role || 'Role unavailable')}</div></td>
+      <td>${onbEscape(String(event.action || '').replace(/_/g, ' '))}</td>
+      <td>${event.target_employee_id ? `Employee #${Number(event.target_employee_id)}` : onbEscape(String(event.action || '').match(/\[APPLICANT:(\d+)\]/)?.[1] ? `Applicant #${String(event.action || '').match(/\[APPLICANT:(\d+)\]/)[1]}` : 'Onboarding module')}</td>
+      <td>${onbEscape(event.details || onbAuditValueText(event.new_value || event.old_value) || 'Recorded')}</td>
+      <td><span class="onb-muted">${onbEscape(event.ip_address || 'unknown')}</span></td>
+    </tr>
+  `).join('');
+}
+
+function onbAuditPayload(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'object') return value;
+  const text = String(value).trim();
+  if (!text) return null;
+  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+    try {
+      return JSON.parse(text);
+    } catch (_error) {
+      return text;
+    }
+  }
+  return text;
+}
+
+function onbTitleCase(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function onbCleanAuditAction(action = '') {
+  return String(action || '')
+    .replace(/\s*\[APPLICANT:\d+\]\s*/gi, ' ')
+    .replace(/\s*\[.*?\]\s*/g, ' ')
+    .trim();
+}
+
+function onbAuditActionLabel(action = '') {
+  const clean = onbCleanAuditAction(action).toUpperCase();
+  const labels = {
+    APPLICANT_CREATED: 'Applicant Created',
+    APPLICANT_UPDATED: 'Applicant Updated',
+    APPLICANT_DECISION_RECORDED: 'Decision Recorded',
+    APPLICANT_TRANSFERRED: 'Transferred to Employee Directory',
+    ONBOARDING_DOCUMENT_UPLOADED: 'Document Uploaded',
+    ONBOARDING_DOCUMENT_VERIFIED: 'Document Verified',
+    ONBOARDING_DOCUMENT_REJECTED: 'Document Rejected',
+    ONBOARDING_POSITION_ROUTE_CREATED: 'Position Route Created',
+    ONBOARDING_POSITION_ROUTE_UPDATED: 'Position Route Updated',
+    ONBOARDING_POSITION_ROUTE_DELETED: 'Position Route Removed',
+    ONBOARDING_ABANDONED_DRAFT_CLEANUP: 'Abandoned Draft Cleanup',
+    EMPLOYEE_ACCOUNT_CREATED_FROM_ONBOARDING: 'Employee Account Created',
+  };
+  return labels[clean] || onbTitleCase(clean || action || 'Recorded Action');
+}
+
+function onbAuditStatusLabel(event = {}) {
+  const action = String(event.action || '').toUpperCase();
+  if (/REJECT|FAILED|DELETE|REMOVED/.test(action)) return 'Attention';
+  if (/APPROVED|TRANSFER|VERIFIED|CREATED|COMPLETED/.test(action)) return 'Completed';
+  if (/UPDATED|DECISION|ROUTE/.test(action)) return 'Updated';
+  return event.anchor_status === 'ANCHORED' ? 'Anchored' : 'Recorded';
+}
+
+function onbAuditRecordLabel(event = {}) {
+  const action = String(event.action || '');
+  const match = action.match(/\[APPLICANT:(\d+)\]/i);
+  if (match) return `Applicant #${match[1]}`;
+  if (event.applicant_id) return `Applicant #${Number(event.applicant_id)}`;
+  if (event.target_employee_id) return `Employee #${Number(event.target_employee_id)}`;
+  if (event.employee_id) return `Employee #${Number(event.employee_id)}`;
+  return 'Onboarding';
+}
+
+function onbAuditChipValue(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'object') return onbAuditValueText(value);
+  return String(value);
+}
+
+function onbAuditDetailChips(event = {}) {
+  const payload = onbAuditPayload(event.new_value) || onbAuditPayload(event.old_value) || onbAuditPayload(event.details);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  const hidden = new Set(['password', 'temporary_password', 'password_hash', 'token', 'secret', 'raw_body']);
+  return Object.entries(payload)
+    .filter(([key, value]) => !hidden.has(String(key).toLowerCase()) && value !== null && value !== undefined && value !== '')
+    .slice(0, 5)
+    .map(([key, value]) => ({
+      label: `${onbTitleCase(key)}: `,
+      value: onbAuditChipValue(value),
+    }));
+}
+
+function onbAuditDetailEntries(event = {}, formatted = {}) {
+  const hidden = new Set(['password', 'temporary_password', 'password_hash', 'token', 'secret', 'raw_body']);
+  const rows = [
+    ['Summary', formatted.summary || onbAuditSummary(event)],
+    ['Record', formatted.recordLabel || onbAuditRecordLabel(event)],
+    ['Source', formatted.sourceText || 'System source'],
+    ['Integrity', formatted.integrityText || 'Integrity PENDING'],
+  ];
+  [
+    ['New value', onbAuditPayload(event.new_value)],
+    ['Old value', onbAuditPayload(event.old_value)],
+    ['Details', onbAuditPayload(event.details)],
+  ].forEach(([group, payload]) => {
+    if (!payload) return;
+    if (typeof payload === 'string') {
+      rows.push([group, payload]);
+      return;
+    }
+    if (typeof payload !== 'object' || Array.isArray(payload)) {
+      rows.push([group, onbAuditChipValue(payload)]);
+      return;
+    }
+    Object.entries(payload)
+      .filter(([key, value]) => !hidden.has(String(key).toLowerCase()) && value !== null && value !== undefined && value !== '')
+      .slice(0, 12)
+      .forEach(([key, value]) => rows.push([onbTitleCase(key), onbAuditChipValue(value)]));
+  });
+  return rows.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+}
+
+function onbAuditDetailButton(event = {}, formatted = {}, id = '') {
+  const detailId = `onb-audit-detail-${id}`;
+  const content = onbAuditDetailEntries(event, formatted).map(([label, value]) => `
+    <div>
+      <dt>${onbEscape(label)}</dt>
+      <dd>${onbEscape(value)}</dd>
+    </div>
+  `).join('');
+  return `
+    <button class="onb-audit-detail-toggle" type="button" aria-expanded="false" aria-controls="${detailId}" onclick="onbToggleAuditDetails('${detailId}', this)">Details</button>
+    <dl class="onb-audit-detail-panel" id="${detailId}" hidden>${content}</dl>
+  `;
+}
+
+function onbToggleAuditDetails(detailId, button) {
+  const panel = document.getElementById(detailId);
+  if (!panel) return;
+  const willOpen = panel.hidden;
+  panel.hidden = !willOpen;
+  if (button) {
+    button.setAttribute('aria-expanded', String(willOpen));
+    button.textContent = willOpen ? 'Hide Details' : 'Details';
+  }
+}
+
+function onbAuditSummary(event = {}) {
+  if (event.reason) return event.reason;
+  const payload = onbAuditPayload(event.new_value) || onbAuditPayload(event.old_value) || onbAuditPayload(event.details);
+  if (typeof payload === 'string') return payload;
+  if (payload && typeof payload === 'object') {
+    const preferred = ['workflow_status', 'approval_status', 'screening_status', 'training_status', 'document_type', 'employee_code', 'position_name', 'result', 'message'];
+    const parts = preferred
+      .filter(key => payload[key] !== undefined && payload[key] !== null && payload[key] !== '')
+      .map(key => `${onbTitleCase(key)}: ${onbAuditChipValue(payload[key])}`);
+    if (parts.length) return parts.slice(0, 2).join(' | ');
+  }
+  return 'Workflow activity recorded.';
+}
+
+function onbFormatAuditEvent(event = {}) {
+  const hash = event.chain_hash ? `${String(event.chain_hash).slice(0, 12)}...` : '';
+  const anchor = event.anchor_status || 'PENDING';
+  return {
+    actionLabel: onbAuditActionLabel(event.action),
+    statusLabel: onbAuditStatusLabel(event),
+    recordLabel: onbAuditRecordLabel(event),
+    actor: event.actor || (Number(event.user_id) === 0 ? 'system' : 'unknown'),
+    actorRole: event.actor_role || '',
+    when: onbFormatDateTime(event.created_at),
+    summary: onbAuditSummary(event),
+    chips: onbAuditDetailChips(event),
+    integrityText: `Integrity ${anchor}${hash ? ` | ${hash}` : ''}`,
+    sourceText: [event.ip_address || '', event.user_agent ? 'browser session' : ''].filter(Boolean).join(' | ') || 'System source',
+  };
+}
+
+function onbAuditRows(audit) {
+  if (!audit.length) return '<div class="onb-muted">No workflow activity recorded.</div>';
+  return audit.map((item, index) => {
+    const formatted = onbFormatAuditEvent(item);
+    return `
+      <div class="onb-audit">
+        <div class="onb-audit-main">
+          <div class="onb-audit-title"><strong>${onbEscape(formatted.actionLabel)}</strong>${onbBadge(formatted.statusLabel)}</div>
+          ${formatted.summary ? `<div class="onb-audit-summary">${onbEscape(formatted.summary)}</div>` : ''}
+          ${onbAuditDetailButton(item, formatted, `applicant-${index}-${Number(item.audit_id || item.id || 0)}`)}
+          <div class="onb-audit-source">${onbEscape(formatted.integrityText)}</div>
+        </div>
+        <small class="onb-audit-actor">${onbEscape(formatted.actor)}${formatted.actorRole ? `<br>${onbEscape(formatted.actorRole)}` : ''}<br>${onbEscape(formatted.when)}</small>
+      </div>
+    `;
+  }).join('');
+}
+
+function onbRenderModuleAudit(events) {
+  const body = document.getElementById('onb-audit-rows');
+  if (!body) return;
+  if (!events.length) {
+    body.innerHTML = '<tr><td colspan="6" class="onb-empty">No onboarding audit events recorded yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = events.map((event, index) => {
+    const formatted = onbFormatAuditEvent(event);
+    return `
+      <tr>
+        <td><strong>${onbEscape(formatted.when)}</strong></td>
+        <td><div class="onb-audit-person"><strong>${onbEscape(formatted.actor)}</strong><span>${onbEscape(formatted.actorRole || 'Role unavailable')}</span></div></td>
+        <td><div class="onb-audit-action"><strong>${onbEscape(formatted.actionLabel)}</strong>${onbBadge(formatted.statusLabel)}</div></td>
+        <td><span class="onb-audit-record">${onbEscape(formatted.recordLabel)}</span></td>
+        <td>
+          <div class="onb-audit-summary">${onbEscape(formatted.summary)}</div>
+          ${onbAuditDetailButton(event, formatted, `module-${index}-${Number(event.audit_id || event.id || 0)}`)}
+        </td>
+        <td><div class="onb-audit-source">${onbEscape(formatted.sourceText)}<br>${onbEscape(formatted.integrityText)}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function onbLoadModuleAudit() {
+  const body = document.getElementById('onb-audit-rows');
+  if (body) body.innerHTML = '<tr><td colspan="6" class="onb-empty">Loading onboarding audit trail...</td></tr>';
+  try {
+    const events = await onbJson('/api/onboarding/audit?limit=150');
+    onbRenderModuleAudit(events);
+  } catch (error) {
+    if (body) body.innerHTML = `<tr><td colspan="6" class="onb-empty">${onbEscape(onbErrorMessage(error))}</td></tr>`;
+    onbToast(onbErrorMessage(error), 'error');
+  }
 }
 
 function onbEmployeeAccountSection(applicant, account) {
@@ -905,7 +1253,10 @@ async function onbSaveDecision() {
 
 async function onbTransferApplicant() {
   if (!onbCanFinalApprove()) return onbToast('Only HR Manager can transfer approved hires.', 'error');
-  if (!confirm('Transfer this approved hire into the official Employee Directory?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Transfer this approved hire into the official Employee Directory?', 'Transfer Applicant', 'Transfer', 'Cancel')
+    : confirm('Transfer this approved hire into the official Employee Directory?');
+  if (!confirmed) return;
   try {
     const data = await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/transfer`, {
       method: 'POST',
@@ -975,7 +1326,10 @@ async function onbCreateEmployeeAccount(event) {
 async function onbDeleteApplicant() {
   const confirmation = document.getElementById('onb-delete-confirmation')?.value.trim().toLowerCase() || '';
   if (confirmation !== 'delete') return onbToast('Type delete to confirm removal.', 'error');
-  if (!confirm('Delete this applicant from active onboarding? This cannot be undone from the dashboard.')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Delete this applicant from active onboarding? This cannot be undone from the dashboard.', 'Delete Applicant', 'Delete', 'Cancel')
+    : confirm('Delete this applicant from active onboarding? This cannot be undone from the dashboard.');
+  if (!confirmed) return;
   try {
     const data = await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}`, {
       method: 'DELETE',
@@ -993,6 +1347,9 @@ async function onbDeleteApplicant() {
 async function onbUploadDocument() {
   const file = document.getElementById('onb-document-file')?.files[0];
   if (!file) return onbToast('Select a document to upload.', 'error');
+  if (file.size > ONB_UPLOAD_MAX_BYTES) {
+    return onbToast(`Document is too large. Maximum onboarding upload size is ${ONB_UPLOAD_MAX_MB}MB.`, 'error');
+  }
   try {
     const form = new FormData();
     form.append('document_type', document.getElementById('onb-document-type').value);
@@ -1023,7 +1380,11 @@ async function onbDownloadDocument(documentId) {
 }
 
 async function onbVerifyDocument(documentId, verificationStatus) {
-  const reason = verificationStatus === 'Rejected' ? prompt('Enter the document rejection reason:') : '';
+  const reason = verificationStatus === 'Rejected'
+    ? (typeof showPrompt === 'function'
+      ? await showPrompt('Enter the document rejection reason:', 'Reject Document', '')
+      : prompt('Enter the document rejection reason:'))
+    : '';
   if (verificationStatus === 'Rejected' && !reason) return;
   try {
     await onbJson(`/api/onboarding/applicants/${ONB_ACTIVE_APPLICANT}/documents/${documentId}/verify`, {
@@ -1122,14 +1483,18 @@ async function onbDeletePositionRoute(positionRouteId) {
 async function initOnboarding() {
   const root = document.querySelector('.onb-shell');
   if (!root) return;
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('onboarding')) return;
+  if (ONB_INIT_PROMISE) return ONB_INIT_PROMISE;
+
   if (!root.dataset.bound) {
     root.dataset.bound = 'true';
     document.getElementById('onb-add-applicant')?.addEventListener('click', () => onbOpenModal('onb-create-modal'));
-    document.getElementById('onb-refresh')?.addEventListener('click', onbRefresh);
-    document.getElementById('onb-status-filter')?.addEventListener('change', onbLoadApplicants);
+    document.getElementById('onb-refresh')?.addEventListener('click', () => onbRefresh({ force: true }));
+    document.getElementById('onb-audit-refresh')?.addEventListener('click', onbLoadModuleAudit);
+    document.getElementById('onb-status-filter')?.addEventListener('change', onbLoadApplicantsSafely);
     document.getElementById('onb-search')?.addEventListener('input', event => {
       clearTimeout(event.currentTarget._onbTimer);
-      event.currentTarget._onbTimer = setTimeout(onbLoadApplicants, 250);
+      event.currentTarget._onbTimer = setTimeout(onbLoadApplicantsSafely, 250);
     });
     document.getElementById('onb-create-form')?.addEventListener('submit', onbCreateApplicant);
     document.getElementById('onb-account-create-form')?.addEventListener('submit', onbCreateEmployeeAccount);
@@ -1145,15 +1510,22 @@ async function initOnboarding() {
       if (!target?.closest('.onb-date-field')) onbCloseDatePickers();
     });
   }
-  try {
-    ONB_LOOKUPS = await onbJson('/api/onboarding/lookups');
+
+  ONB_INIT_PROMISE = (async () => {
+    await onbLoadLookupsOnce();
     onbPopulateLookups();
     onbToggleAgency();
     onbInitializeLocationDropdowns();
     onbEnhanceDateInputs();
     await onbRefresh();
+  })();
+
+  try {
+    await ONB_INIT_PROMISE;
   } catch (error) {
     onbToast(onbErrorMessage(error), 'error');
+  } finally {
+    ONB_INIT_PROMISE = null;
   }
 }
 
@@ -1173,3 +1545,4 @@ window.onbDownloadDocument = onbDownloadDocument;
 window.onbVerifyDocument = onbVerifyDocument;
 window.onbEditPositionRoute = onbEditPositionRoute;
 window.onbDeletePositionRoute = onbDeletePositionRoute;
+window.onbToggleAuditDetails = onbToggleAuditDetails;

@@ -4637,7 +4637,9 @@ async function saveSssTableDraft() {
 }
 
 async function activateSssTableVersion(versionId) {
-  const confirmed = window.confirm('Activating this SSS table will archive the current active version. Future payroll runs will use the new table. Continue?');
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Activating this SSS table will archive the current active version. Future payroll runs will use the new table. Continue?', 'Activate SSS Table', 'Activate', 'Cancel')
+    : window.confirm('Activating this SSS table will archive the current active version. Future payroll runs will use the new table. Continue?');
   if (!confirmed) return;
   try {
     const res = await apiFetch(`/api/payroll/sss-tables/${Number(versionId)}/activate`, { method: 'POST' });
@@ -4954,7 +4956,10 @@ function editPayrollAttendanceConfig(id) {
 
 async function deactivatePayrollAttendanceConfig(id) {
   if (!canManagePayrollAttendancePolicies()) return;
-  if (!window.confirm('Deactivate this payroll attendance configuration?')) return;
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Deactivate this payroll attendance configuration?', 'Deactivate Attendance Policy', 'Deactivate', 'Cancel')
+    : window.confirm('Deactivate this payroll attendance configuration?');
+  if (!confirmed) return;
   const status = document.getElementById('payroll-att-config-status');
   try {
     const res = await apiFetch(`/api/payroll/attendance-configurations/${Number(id)}`, { method: 'DELETE' });
@@ -5320,6 +5325,8 @@ window.editPieceIncentive = editPieceIncentive;
 
 // Load data when DOM is ready or if already ready
 function initializePayroll() {
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('payroll')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-payroll')?.classList.contains('active')) return;
   initializePayrollModule();
   loadWeeklyPayrollFilterOptions();
   loadPayrollDashboard();

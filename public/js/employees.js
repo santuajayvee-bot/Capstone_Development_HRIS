@@ -447,7 +447,9 @@ async function employeeSetupConfirm(message) {
 async function editEmployeeSetupDepartment(departmentId) {
   const department = getEmployeeDepartments?.().find(item => Number(item.id) === Number(departmentId));
   if (!department) return;
-  const name = prompt('Edit department name:', department.name);
+  const name = typeof showPrompt === 'function'
+    ? await showPrompt('Edit department name:', 'Edit Department', department.name)
+    : prompt('Edit department name:', department.name);
   if (name === null) return;
   const cleanName = name.trim();
   if (!cleanName) return showAlert?.('Department name is required.', 'Validation Error', 'warning') || alert('Department name is required.');
@@ -480,7 +482,9 @@ async function deleteEmployeeSetupDepartment(departmentId) {
 async function editEmployeeSetupPosition(positionId) {
   const position = getEmployeePositions?.().find(item => Number(item.id) === Number(positionId));
   if (!position) return;
-  const name = prompt('Edit position / job title:', position.name);
+  const name = typeof showPrompt === 'function'
+    ? await showPrompt('Edit position / job title:', 'Edit Position', position.name)
+    : prompt('Edit position / job title:', position.name);
   if (name === null) return;
   const cleanName = name.trim();
   if (!cleanName) return showAlert?.('Position / job title is required.', 'Validation Error', 'warning') || alert('Position / job title is required.');
@@ -520,6 +524,11 @@ async function fetchEmployees() {
     }
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        const error = new Error(errorData.error || 'Session expired. Please log in again.');
+        error.status = 401;
+        throw error;
+      }
       throw new Error(`HTTP ${response.status}: ${errorData.error || response.statusText}`);
     }
     
@@ -568,7 +577,8 @@ async function fetchEmployees() {
     EMPLOYEES = [];
     EMPLOYEES_RAW = [];
     
-    const message = error.message.includes('HTTP 401')
+    const sessionExpired = error.status === 401 || error.message.includes('HTTP 401') || /session expired/i.test(error.message);
+    const message = sessionExpired
       ? 'Session expired. Please log in again.'
       : error.message;
     const tbody = document.getElementById('emp-tbody');
@@ -578,7 +588,7 @@ async function fetchEmployees() {
           <td colspan="10" style="padding:32px;text-align:center;color:#ff6b6b;">
             <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Failed to Load Employees</div>
             <div style="font-size:14px;color:var(--muted);">${employeeSetupEscape(message)}</div>
-            <button onclick="location.reload()" style="margin-top:16px;padding:8px 16px;background:#4f7cff;color:white;border:none;border-radius:4px;cursor:pointer;">Retry</button>
+            <button onclick="${sessionExpired ? 'employeeSessionLoginAgain()' : 'fetchEmployees()'}" style="margin-top:16px;padding:8px 16px;background:#4f7cff;color:white;border:none;border-radius:4px;cursor:pointer;">${sessionExpired ? 'Log in again' : 'Retry'}</button>
           </td>
         </tr>
       `;
@@ -587,6 +597,18 @@ async function fetchEmployees() {
     if (countEl) countEl.textContent = 'Unable to load employees';
     
     return [];
+  }
+}
+
+function employeeSessionLoginAgain() {
+  if (typeof clearAuth === 'function') clearAuth();
+  if (typeof showLoginRoute === 'function') {
+    showLoginRoute(true);
+  } else {
+    const app = document.getElementById('app');
+    const login = document.getElementById('login-screen');
+    if (app) app.style.display = 'none';
+    if (login) login.style.display = 'flex';
   }
 }
 
@@ -1488,7 +1510,9 @@ async function submitLifecycleForm(event, endpoint, fallbackMessage) {
   if (!(await validateSupervisorFieldElement(reonboardSupervisor, 'New supervisor'))) return;
 
   if (endpoint.includes('/offboard')) {
-    const confirmed = confirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.');
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.', 'Offboard Employee', 'Offboard', 'Cancel')
+      : confirm('Are you sure you want to offboard this employee? This may disable the account and revoke system access.');
     if (!confirmed) return;
   }
   const payload = sanitizeLifecyclePayload(Object.fromEntries(new FormData(form).entries()));
@@ -1553,11 +1577,15 @@ async function submitOffboardingCaseUpdate(event, caseId) {
   const offboardingUploads = collectOffboardingDocumentUploads(form);
   payload.clearance_items = collectOffboardingClearanceItems(form);
   if (['Offboarded', 'Inactive'].includes(payload.offboarding_status || '')) {
-    const confirmed = confirm('Complete final approval? This will disable the linked account and prevent future login.');
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm('Complete final approval? This will disable the linked account and prevent future login.', 'Final Offboarding Approval', 'Complete', 'Cancel')
+      : confirm('Complete final approval? This will disable the linked account and prevent future login.');
     if (!confirmed) return;
   }
   if (payload.offboarding_status === 'Cancelled') {
-    const confirmed = confirm('Cancel this offboarding request and restore the employee to Active?');
+    const confirmed = typeof showConfirm === 'function'
+      ? await showConfirm('Cancel this offboarding request and restore the employee to Active?', 'Cancel Offboarding', 'Restore Employee', 'Keep Request')
+      : confirm('Cancel this offboarding request and restore the employee to Active?');
     if (!confirmed) return;
   }
 
@@ -1882,8 +1910,11 @@ function renderManagementTable(list) {
 }
 
 /* Delete Employee */
-function deleteEmployee(empId, empName) {
-  if (!confirm(`Are you sure you want to delete ${empName}? This action cannot be undone.`)) {
+async function deleteEmployee(empId, empName) {
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm(`Are you sure you want to delete ${empName}? This action cannot be undone.`, 'Delete Employee', 'Delete', 'Cancel')
+    : confirm(`Are you sure you want to delete ${empName}? This action cannot be undone.`);
+  if (!confirmed) {
     return;
   }
   
@@ -2235,18 +2266,30 @@ function editEmployeeOld(empId) {
 }
 
 let EMPLOYEE_PAGE_INITIALIZED = false;
+let EMPLOYEE_REFRESH_INTERVAL = null;
+
+function isEmployeePageActive() {
+  return document.getElementById('page-employees')?.classList.contains('active');
+}
+
+function refreshEmployeesIfActive() {
+  if (isEmployeePageActive()) fetchEmployees();
+}
 
 function initializeEmployeePage() {
   if (!document.getElementById('emp-tbody')) return;
-  if (!document.getElementById('page-employees')?.classList.contains('active')) return;
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('employees')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-employees')?.classList.contains('active')) return;
 
   refreshEmployeeSetupUI();
   fetchEmployees();
 
   // Auto-refresh employees every 5 seconds to catch new additions
   if (!EMPLOYEE_PAGE_INITIALIZED) {
-    setInterval(fetchEmployees, 5000);
+    EMPLOYEE_REFRESH_INTERVAL = setInterval(refreshEmployeesIfActive, 5000);
     EMPLOYEE_PAGE_INITIALIZED = true;
+  } else if (!EMPLOYEE_REFRESH_INTERVAL) {
+    EMPLOYEE_REFRESH_INTERVAL = setInterval(refreshEmployeesIfActive, 5000);
   }
 
   document.getElementById('emp-search') ?.addEventListener('input',  filterEmployees);
@@ -2257,7 +2300,8 @@ function initializeEmployeePage() {
 
 function initializeOrganizationSetupPage() {
   if (!document.getElementById('org-setup-departments-tbody')) return;
-  if (!document.getElementById('page-organization-setup')?.classList.contains('active')) return;
+  if (typeof shouldRunProtectedPageInitializer === 'function' && !shouldRunProtectedPageInitializer('organization-setup')) return;
+  if (typeof shouldRunProtectedPageInitializer !== 'function' && !document.getElementById('page-organization-setup')?.classList.contains('active')) return;
   refreshEmployeeSetupUI();
 }
 
@@ -4470,6 +4514,7 @@ window.deleteTraining = deleteTraining;
 // Expose refresh function globally for manual refresh
 window.refreshEmployees = fetchEmployees;
 window.fetchEmployees = fetchEmployees;
+window.employeeSessionLoginAgain = employeeSessionLoginAgain;
 window.switchRegisterView = switchRegisterView;
 window.applyOrganizationSetupPositionFilters = applyOrganizationSetupPositionFilters;
 window.resetOrganizationSetupPositionFilters = resetOrganizationSetupPositionFilters;

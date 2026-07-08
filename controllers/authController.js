@@ -41,8 +41,14 @@ const {
   verifyRecaptchaToken,
 } = require('../services/recaptchaService');
 const {
+  countTrustedDevices,
+  createDeviceSession,
+  getDeviceApprovalRequestStatus,
   getTrustedDeviceStatus,
+  recordLoginDeviceEvent,
+  recordUnknownDeviceAttempt,
   updateLastUsed: updateTrustedDeviceLastUsed,
+  updateSessionStatus: updateDeviceSessionStatus,
 } = require('../services/trustedDeviceService');
 
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
@@ -52,7 +58,9 @@ const UNEXPECTED_LOGIN_MESSAGE = 'Unable to process login request.';
 const MAX_FAILED_ATTEMPTS = positiveIntegerFromEnv('AUTH_MAX_FAILED_ATTEMPTS', 5, 20);
 const LOCK_MINUTES = positiveIntegerFromEnv('AUTH_LOCKOUT_MINUTES', 15, 1440);
 const REFRESH_COOKIE_NAME = 'refreshToken';
+const DEVICE_APPROVAL_CONTEXT_TTL_MS = 10 * 60 * 1000;
 const pendingDeviceLoginContexts = new Map();
+const pendingDeviceApprovalLoginContexts = new Map();
 
 function positiveIntegerFromEnv(name, fallback, maximum) {
   const value = Number.parseInt(process.env[name], 10);
@@ -217,7 +225,7 @@ function rememberPendingDeviceLogin(challengeId, context = {}) {
   const key = String(challengeId);
   pendingDeviceLoginContexts.set(key, {
     ...context,
-    expiresAt: Date.now() + (10 * 60 * 1000),
+    expiresAt: Date.now() + DEVICE_APPROVAL_CONTEXT_TTL_MS,
   });
 }
 
@@ -227,6 +235,30 @@ function takePendingDeviceLogin(challengeId) {
   pendingDeviceLoginContexts.delete(key);
   if (!context || context.expiresAt < Date.now()) return null;
   return context;
+}
+
+function rememberPendingDeviceApprovalLogin(approvalRequestId, context = {}) {
+  if (!approvalRequestId) return;
+  const key = String(approvalRequestId);
+  pendingDeviceApprovalLoginContexts.set(key, {
+    ...context,
+    expiresAt: Date.now() + DEVICE_APPROVAL_CONTEXT_TTL_MS,
+  });
+}
+
+function getPendingDeviceApprovalLogin(approvalRequestId) {
+  const key = String(approvalRequestId || '');
+  const context = pendingDeviceApprovalLoginContexts.get(key);
+  if (!context) return null;
+  if (context.expiresAt < Date.now()) {
+    pendingDeviceApprovalLoginContexts.delete(key);
+    return null;
+  }
+  return context;
+}
+
+function clearPendingDeviceApprovalLogin(approvalRequestId) {
+  pendingDeviceApprovalLoginContexts.delete(String(approvalRequestId || ''));
 }
 
 async function issueAuthenticatedSession(req, res, user, extras = {}) {
@@ -245,7 +277,7 @@ async function issueAuthenticatedSession(req, res, user, extras = {}) {
   const refreshTokenHash = hashRefreshToken(refreshToken);
   const refreshTokenExpiresAt = getRefreshTokenExpiryDate();
 
-  await createUserSession({
+  const userSessionId = await createUserSession({
     Employee_ID: employeeId,
     Refresh_Token_Hash: refreshTokenHash,
     JWT_ID: jwtId,
@@ -253,6 +285,21 @@ async function issueAuthenticatedSession(req, res, user, extras = {}) {
     User_Agent: userAgent,
     Expires_At: refreshTokenExpiresAt,
   });
+
+  if (extras.deviceFingerprint || extras.deviceStatus) {
+    await createDeviceSession({
+      userId: user.id,
+      deviceId: extras.deviceStatus?.device?.id || null,
+      userSessionId,
+      jwtId,
+      req,
+      fingerprint: extras.deviceFingerprint || {},
+      loginMethod: extras.loginMethod || (extras.trustedDevice ? 'Trusted Device' : 'Password'),
+      sessionStatus: 'Active',
+      riskLevel: extras.riskLevel || null,
+      location: extras.location || null,
+    }).catch(error => console.error('[authController] device session failed:', error.message));
+  }
 
   res.cookie(REFRESH_COOKIE_NAME, refreshToken, getRefreshCookieOptions());
 
@@ -350,9 +397,19 @@ async function login(req, res) {
       return lockedAccountResponse(res, lockState || { lockedUntil: user.Locked_Until });
     }
 
+    const deviceFingerprint = req.body?.deviceFingerprint || req.body?.fingerprint || {};
     const passwordMatches = await verifyPassword(user.Password_Hash, password);
 
     if (!passwordMatches) {
+      const failedDeviceStatus = await getTrustedDeviceStatus(user.id, deviceFingerprint, req).catch(() => null);
+      await recordLoginDeviceEvent({
+        userId: user.id,
+        action: 'Failed Login',
+        fingerprint: deviceFingerprint,
+        req,
+        deviceStatus: failedDeviceStatus,
+        loginStatus: 'Failed',
+      }).catch(() => {});
       const failure = await recordFailedLoginFailureForUser(user.id, {
         maxAttempts: MAX_FAILED_ATTEMPTS,
         lockMinutes: LOCK_MINUTES,
@@ -383,8 +440,60 @@ async function login(req, res) {
     // A correct password resets password-lockout state, but never creates an
     // access token until the MFA challenge has been successfully verified.
     await resetFailedLoginAttemptsForUser(user.id);
-    const deviceFingerprint = req.body?.deviceFingerprint || req.body?.fingerprint || {};
     const deviceStatus = await getTrustedDeviceStatus(user.id, deviceFingerprint, req);
+    let deviceRisk = null;
+    if (deviceStatus.trusted) {
+      deviceRisk = await recordLoginDeviceEvent({
+        userId: user.id,
+        action: 'Trusted Device Login',
+        fingerprint: deviceFingerprint,
+        req,
+        deviceStatus,
+        loginStatus: 'Password Verified',
+      });
+    } else {
+      deviceRisk = await recordUnknownDeviceAttempt({
+        userId: user.id,
+        fingerprint: deviceFingerprint,
+        req,
+        deviceStatus,
+        loginStatus: 'Password Verified',
+      });
+      const trustedDeviceCount = await countTrustedDevices(user.id);
+      if (trustedDeviceCount > 0) {
+        const approvalStatus = await getDeviceApprovalRequestStatus({
+          userId: user.id,
+          requestId: deviceRisk.approvalRequestId,
+          deviceHash: deviceStatus.deviceHash,
+        });
+        if (['Ignored', 'Secured', 'Expired'].includes(approvalStatus?.status)) {
+          return res.status(403).json({
+            success: false,
+            message: approvalStatus.status === 'Expired'
+              ? 'Device approval expired. Please sign in again.'
+              : 'Device sign-in was denied from a trusted device.',
+          });
+        }
+        rememberPendingDeviceApprovalLogin(deviceRisk.approvalRequestId, {
+          userId: user.id,
+          normalizedLoginIdentifier,
+          deviceFingerprint,
+          deviceHash: deviceStatus.deviceHash,
+          deviceStatus,
+          riskLevel: deviceRisk.riskLevel,
+          location: deviceRisk.location,
+        });
+        return res.status(202).json({
+          success: true,
+          deviceApprovalRequired: true,
+          message: 'Waiting for approval from a trusted device before login can continue.',
+          approvalRequestId: deviceRisk.approvalRequestId,
+          riskLevel: deviceRisk.riskLevel,
+          status: 'Pending',
+          pollIntervalMs: 3000,
+        });
+      }
+    }
     const deviceVerificationRequired = isMfaEnabled();
     const mfaRequired = isMfaRequiredForRole(user.role_name) || deviceVerificationRequired;
     if (mfaRequired) {
@@ -399,6 +508,10 @@ async function login(req, res) {
           deviceHash: deviceStatus.deviceHash,
           trustedDevice: deviceStatus.trusted,
           promptRegisterTrustedDevice: !deviceStatus.trusted,
+          deviceFingerprint,
+          deviceStatus,
+          riskLevel: deviceRisk?.riskLevel,
+          location: deviceRisk?.location,
         });
         return res.status(202).json({
           success: true,
@@ -438,6 +551,10 @@ async function login(req, res) {
     return issueAuthenticatedSession(req, res, user, {
       trustedDevice: deviceStatus.trusted,
       promptRegisterTrustedDevice: !deviceStatus.trusted,
+      deviceFingerprint,
+      deviceStatus,
+      riskLevel: deviceRisk?.riskLevel,
+      location: deviceRisk?.location,
     });
   } catch (error) {
     if (error instanceof RecaptchaServiceError) {
@@ -463,6 +580,146 @@ async function login(req, res) {
   }
 }
 
+async function deviceApprovalStatus(req, res) {
+  const loginIdentifier = req.body?.email || req.body?.username;
+  const approvalRequestId = Number(req.body?.approvalRequestId);
+  const deviceFingerprint = req.body?.deviceFingerprint || req.body?.fingerprint || {};
+  const ipAddress = getRequestIp(req);
+  const userAgent = getUserAgent(req);
+
+  if (!isNonEmptyString(loginIdentifier) || !Number.isInteger(approvalRequestId) || approvalRequestId <= 0) {
+    return res.status(400).json({ success: false, message: 'Device approval request is invalid.' });
+  }
+
+  const normalizedLoginIdentifier = loginIdentifier.trim().toLowerCase();
+
+  try {
+    const user = await findUserByEmail(normalizedLoginIdentifier);
+    if (!user || isInactiveUser(user)) {
+      return res.status(404).json({ success: false, message: 'Device approval request is unavailable.' });
+    }
+
+    const deviceStatus = await getTrustedDeviceStatus(user.id, deviceFingerprint, req);
+    const approval = await getDeviceApprovalRequestStatus({
+      userId: user.id,
+      requestId: approvalRequestId,
+      deviceHash: deviceStatus.deviceHash,
+    });
+
+    if (!approval) {
+      return res.status(404).json({ success: false, message: 'Device approval request is unavailable.' });
+    }
+
+    if (approval.status === 'Pending') {
+      return res.json({
+        success: true,
+        deviceApprovalRequired: true,
+        status: 'Pending',
+        message: 'Waiting for approval from a trusted device.',
+        pollIntervalMs: 3000,
+      });
+    }
+
+    if (['Ignored', 'Secured', 'Expired'].includes(approval.status)) {
+      clearPendingDeviceApprovalLogin(approvalRequestId);
+      return res.json({
+        success: true,
+        deviceApprovalRequired: false,
+        denied: true,
+        status: approval.status,
+        message: approval.status === 'Expired'
+          ? 'Device approval expired. Please sign in again.'
+          : 'Device sign-in was denied from a trusted device.',
+      });
+    }
+
+    if (approval.status !== 'Approved') {
+      return res.status(409).json({ success: false, message: 'Device approval request is no longer pending.' });
+    }
+
+    const pendingContext = getPendingDeviceApprovalLogin(approvalRequestId);
+    if (
+      !pendingContext
+      || pendingContext.userId !== user.id
+      || pendingContext.deviceHash !== deviceStatus.deviceHash
+    ) {
+      return res.status(410).json({
+        success: false,
+        message: 'Device approval session expired. Please sign in again.',
+      });
+    }
+
+    clearPendingDeviceApprovalLogin(approvalRequestId);
+    const approvedDeviceStatus = await getTrustedDeviceStatus(user.id, deviceFingerprint, req);
+    if (approvedDeviceStatus.trusted) {
+      await updateTrustedDeviceLastUsed(user.id, approvedDeviceStatus.deviceHash, req);
+    }
+
+    const employeeId = getAuthEmployeeId(user);
+    const roleMfaRequired = isMfaRequiredForRole(user.role_name);
+    if (roleMfaRequired) {
+      try {
+        const challenge = await createMfaChallenge({
+          employeeId,
+          accountName: user.username || user.Email || normalizedLoginIdentifier,
+          req,
+        });
+        rememberPendingDeviceLogin(challenge.challengeId, {
+          userId: user.id,
+          deviceHash: approvedDeviceStatus.deviceHash,
+          trustedDevice: approvedDeviceStatus.trusted,
+          promptRegisterTrustedDevice: false,
+          deviceFingerprint,
+          deviceStatus: approvedDeviceStatus,
+          riskLevel: pendingContext.riskLevel,
+          location: pendingContext.location,
+        });
+        return res.status(202).json({
+          success: true,
+          mfaRequired: true,
+          deviceVerificationRequired: false,
+          trustedDevice: approvedDeviceStatus.trusted,
+          promptRegisterTrustedDevice: false,
+          challengeId: challenge.challengeId,
+          mfaToken: challenge.mfaToken,
+          codeLength: challenge.codeLength,
+          expiresIn: challenge.expiresIn,
+          enrollmentRequired: challenge.enrollmentRequired,
+          method: challenge.method,
+          qrCodeDataUrl: challenge.qrCodeDataUrl,
+          manualEntryKey: challenge.manualEntryKey,
+          issuer: challenge.issuer,
+          accountName: challenge.accountName,
+        });
+      } catch (error) {
+        console.error('[authController] MFA challenge after device approval failed:', error.code || error.message);
+        return mfaErrorResponse(res, error);
+      }
+    }
+
+    await safeCreateAuditLog({
+      Employee_ID: employeeId,
+      Action_Type: 'DEVICE_LOGIN_APPROVED',
+      Description: 'Login continued after trusted-device approval.',
+      IP_Address: ipAddress,
+      User_Agent: userAgent,
+    });
+
+    return issueAuthenticatedSession(req, res, user, {
+      trustedDevice: approvedDeviceStatus.trusted,
+      promptRegisterTrustedDevice: false,
+      deviceFingerprint,
+      deviceStatus: approvedDeviceStatus,
+      riskLevel: pendingContext.riskLevel,
+      location: pendingContext.location,
+      loginMethod: 'Trusted Device Approval',
+    });
+  } catch (error) {
+    console.error('[authController] device approval status failed:', error.message);
+    return res.status(500).json({ success: false, message: UNEXPECTED_LOGIN_MESSAGE });
+  }
+}
+
 function captchaConfig(_req, res) {
   try {
     return res.json(publicRecaptchaConfig());
@@ -481,6 +738,14 @@ async function logout(req, res) {
     const revoked = req.user?.jti
       ? await revokeSessionByJwtId(req.user.jti, 'user_logout')
       : 0;
+    if (req.user?.jti && req.user?.id) {
+      await updateDeviceSessionStatus({
+        userId: req.user.id,
+        jwtId: req.user.jti,
+        sessionStatus: 'Logged Out',
+        req,
+      }).catch(error => console.warn('[authController] device session logout update failed:', error.message));
+    }
     const { maxAge: _maxAge, ...cookieOptions } = getRefreshCookieOptions();
     res.clearCookie(REFRESH_COOKIE_NAME, cookieOptions);
     await safeCreateAuditLog({
@@ -516,6 +781,11 @@ async function verifyMfa(req, res) {
     return issueAuthenticatedSession(req, res, authenticatedUser, {
       trustedDevice: Boolean(deviceContext?.trustedDevice),
       promptRegisterTrustedDevice: Boolean(deviceContext?.promptRegisterTrustedDevice),
+      deviceFingerprint: deviceContext?.deviceFingerprint || {},
+      deviceStatus: deviceContext?.deviceStatus || null,
+      riskLevel: deviceContext?.riskLevel || null,
+      location: deviceContext?.location || null,
+      loginMethod: 'MFA',
     });
   } catch (error) {
     console.error('[authController] MFA verification failed:', error.code || error.message);
@@ -573,6 +843,7 @@ async function lockoutStatus(req, res) {
 module.exports = {
   login,
   captchaConfig,
+  deviceApprovalStatus,
   logout,
   verifyMfa,
   resendMfa,

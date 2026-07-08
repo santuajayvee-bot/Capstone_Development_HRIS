@@ -584,7 +584,7 @@ async function approveRequest(btn) {
   const id = row?.dataset.reqId;
   const source = row?.dataset.reqSource;
   if (!id) { alert('Error: Could not find request'); return; }
-  if (!confirm('Approve this request?')) return;
+  if (!await leaveConfirm('Approve this request?', 'Approve Request', 'Approve', 'Cancel')) return;
   try {
     const url = source === 'leave' ? `/api/leave/${id}/status` : `/api/requests/${id}/status`;
     const res = await apiFetch(url, { method: 'PATCH', body: JSON.stringify({ status: 'Approved' }) });
@@ -599,7 +599,7 @@ async function denyRequest(btn) {
   const id = row?.dataset.reqId;
   const source = row?.dataset.reqSource;
   if (!id) { alert('Error: Could not find request'); return; }
-  if (!confirm('Deny this request?')) return;
+  if (!await leaveConfirm('Deny this request?', 'Deny Request', 'Deny', 'Cancel')) return;
   try {
     const url = source === 'leave' ? `/api/leave/${id}/status` : `/api/requests/${id}/status`;
     const res = await apiFetch(url, { method: 'PATCH', body: JSON.stringify({ status: 'Rejected' }) });
@@ -1087,7 +1087,7 @@ async function approveGenRequest(btn) {
   const row = btn.closest('tr');
   const id = row?.dataset.genId;
   if (!id) { alert('Error: Could not find request'); return; }
-  if (!confirm('Approve this request?')) return;
+  if (!await leaveConfirm('Approve this request?', 'Approve Request', 'Approve', 'Cancel')) return;
   try {
     const res = await apiFetch(`/api/requests/${id}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Approved' })
@@ -1102,7 +1102,7 @@ async function denyGenRequest(btn) {
   const row = btn.closest('tr');
   const id = row?.dataset.genId;
   if (!id) { alert('Error: Could not find request'); return; }
-  if (!confirm('Deny this request?')) return;
+  if (!await leaveConfirm('Deny this request?', 'Deny Request', 'Deny', 'Cancel')) return;
   try {
     const res = await apiFetch(`/api/requests/${id}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Rejected' })
@@ -2267,7 +2267,7 @@ async function cancelLeave(btn) {
   const row = btn.closest('tr');
   const leaveId = row?.dataset.leaveId;
   if (!leaveId) { alert('Error: Could not find leave request'); return; }
-  if (!confirm('Are you sure you want to cancel this approved leave?\n\nThis will revert the leave status to "Cancelled" and restore the employee\'s leave balance.')) return;
+  if (!await leaveConfirm('Are you sure you want to cancel this approved leave?\n\nThis will revert the leave status to "Cancelled" and restore the employee\'s leave balance.', 'Cancel Approved Leave', 'Cancel Leave', 'Keep Leave')) return;
   try {
     const res = await apiFetch(`/api/leave/${leaveId}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: 'Cancelled' })

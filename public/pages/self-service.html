@@ -203,16 +203,51 @@
   <div class="erp-panel self-tab-panel" id="self-tab-devices">
     <div class="self-devices-header">
       <div>
-        <div class="erp-section-title">Trusted devices</div>
-        <p class="form-note">Manage devices registered to your account. Registered devices are recognized during login and can be revoked at any time.</p>
+        <div class="erp-section-title">Devices and sign-in security</div>
+        <p class="form-note">Manage trusted devices, sessions, sign-in alerts, and device activity for your account.</p>
       </div>
       <button type="button" class="btn btn-primary" id="self-register-device-btn">Register Current Device</button>
     </div>
     <div class="self-device-subtabs" role="tablist" aria-label="Device management sections">
       <button type="button" class="self-device-subtab active" data-self-device-view="trusted">Trusted Devices</button>
+      <button type="button" class="self-device-subtab" data-self-device-view="activity">Device Activity</button>
+      <button type="button" class="self-device-subtab" data-self-device-view="notifications">Notifications</button>
+      <button type="button" class="self-device-subtab" data-self-device-view="approvals">Approval Requests</button>
+      <button type="button" class="self-device-subtab" data-self-device-view="sessions">Active Sessions</button>
       <button type="button" class="self-device-subtab" data-self-device-view="history">Device History</button>
     </div>
     <div id="self-devices-list" class="self-devices-list"></div>
+    <div id="self-devices-activity" class="self-devices-list" hidden>
+      <div class="sec-toolbar self-device-toolbar">
+        <input id="self-device-activity-search" class="search-input" type="search" placeholder="Search device, browser, IP, location">
+        <select id="self-device-risk-filter" class="filter-select">
+          <option value="">All risk levels</option>
+          <option>Low</option>
+          <option>Medium</option>
+          <option>High</option>
+        </select>
+        <button type="button" class="btn btn-secondary" id="self-device-export">Export Logs</button>
+      </div>
+      <div class="erp-table-wrap">
+        <table>
+          <thead><tr><th>Date/Time</th><th>User</th><th>Device</th><th>Model</th><th>Browser</th><th>OS</th><th>IP Address</th><th>Location</th><th>Status</th><th>Risk</th><th></th></tr></thead>
+          <tbody id="self-device-activity-body"><tr><td colspan="11">Loading device activity...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="sec-pagination self-device-pagination">
+        <button type="button" class="btn btn-secondary btn-sm" id="self-device-prev">Previous</button>
+        <span id="self-device-page-label">Page 1</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="self-device-next">Next</button>
+      </div>
+    </div>
+    <div id="self-devices-notifications" class="self-devices-list" hidden></div>
+    <div id="self-devices-approvals" class="self-devices-list" hidden></div>
+    <div id="self-devices-sessions" class="self-devices-list" hidden>
+      <div class="erp-actions self-device-panel-actions">
+        <button type="button" class="btn btn-secondary" id="self-device-logout-others">Logout All Other Devices</button>
+      </div>
+      <div id="self-device-sessions-list" class="self-devices-list"></div>
+    </div>
     <div id="self-devices-history" class="self-devices-list" hidden></div>
   </div>
 
