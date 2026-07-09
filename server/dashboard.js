@@ -323,7 +323,7 @@ async function hrDashboard(profile, permissions) {
     scalar("SELECT COUNT(*) FROM employees WHERE status = 'Active'"),
     scalar('SELECT COUNT(*) FROM employees WHERE date_hired >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)'),
     scalar("SELECT COUNT(DISTINCT employee_id) FROM leave_requests WHERE status = 'Approved' AND CURDATE() BETWEEN date_from AND date_to"),
-    scalar("SELECT COUNT(*) FROM leave_requests WHERE status = 'Pending'"),
+    scalar("SELECT COUNT(*) FROM leave_requests WHERE status IN ('Pending','Payroll Approved')"),
     scalar("SELECT COUNT(*) FROM employees WHERE onboarding_status = 'active'"),
     scalar("SELECT COUNT(*) FROM attendance_log WHERE verification_status IN ('PENDING_VALIDATION','INCOMPLETE','NEEDS_REVIEW')"),
     rows(
@@ -450,7 +450,7 @@ async function managerDashboard(profile, permissions) {
   ] = departmentId ? await Promise.all([
     scalar('SELECT COUNT(*) FROM employees WHERE department_id = ?', [departmentId]),
     scalar(`SELECT COUNT(DISTINCT al.employee_id) FROM attendance_log al JOIN employees e ON e.id = al.employee_id WHERE e.department_id = ? AND al.date = CURDATE() AND al.time_in IS NOT NULL`, [departmentId]),
-    scalar(`SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id WHERE e.department_id = ? AND lr.status = 'Pending'`, [departmentId]),
+    scalar(`SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id WHERE e.department_id = ? AND lr.status IN ('Pending','Payroll Approved')`, [departmentId]),
     scalar(`SELECT COUNT(*) FROM attendance_log al JOIN employees e ON e.id = al.employee_id WHERE e.department_id = ? AND al.date = CURDATE() AND al.status IN ('Late','Absent')`, [departmentId]),
     rows(
       `SELECT e.first_name, e.last_name, e.employee_code, al.date, al.time_in, al.time_out, al.status

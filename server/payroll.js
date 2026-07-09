@@ -27,7 +27,7 @@ const {
 } = require('./employee-payroll-policy');
 const { selectCurrentStatutoryDeductions } = require('./services/statutoryDeductionSelection');
 const { computePayrollHash } = require('./utils/payrollHash');
-const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
+const { decryptColumnValue, encryptColumnValue, isEncryptedValue } = require('./data-protection');
 const { maskSensitiveValue } = require('./privacy-protection');
 const {
   completePerformanceLog,
@@ -46,6 +46,7 @@ const {
   rejectForbiddenFields,
   rejectUnexpectedFields,
 } = require('./security-controls');
+const { verifyPassword } = require('../services/passwordService');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager'],
@@ -68,6 +69,7 @@ const DEDUCTION_PRORATION_MODES = new Set(['Fixed Divisor', 'Calendar-Based Payr
 const LOAN_STATUSES = new Set(['Active', 'Fully Paid', 'Suspended', 'Cancelled']);
 const INSUFFICIENT_NET_PAY_RULES = new Set(['Deduct Partial Amount', 'Skip Deduction for This Period']);
 const LOCKED_PAYROLL_STATUSES = new Set(['Approved', 'Finalized', 'Paid', 'Released', 'Locked']);
+const PAYROLL_STEP_UP_STATUSES = new Set(['Approved', 'Released', 'Locked', 'Paid']);
 const REVIEWABLE_PAYROLL_STATUSES = new Set(['Draft', 'Calculated', 'For Review']);
 const SSS_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 const SSS_IMPORT_MAX_ROWS = 3000;
@@ -328,6 +330,26 @@ function currentUserId(req) {
   return req.user?.id || req.user?.userId || req.user?.sub || null;
 }
 
+function payrollStepUpPassword(req) {
+  return String(req.body?.currentPassword || req.body?.current_password || req.body?.password_confirmation || '');
+}
+
+async function verifyPayrollStepUpPassword(pool, req) {
+  const userId = Number(currentUserId(req));
+  const currentPassword = payrollStepUpPassword(req);
+  if (!Number.isInteger(userId) || userId <= 0 || !currentPassword.trim()) return false;
+
+  const [rows] = await pool.execute(`
+    SELECT COALESCE(u.password_hash, e.Password_Hash) AS password_hash
+      FROM users u
+      LEFT JOIN employees e ON e.id = u.employee_id
+     WHERE u.id = ?
+     LIMIT 1
+  `, [userId]);
+
+  return verifyPassword(rows[0]?.password_hash, currentPassword);
+}
+
 function currentRequestIp(req) {
   return req.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
     || req.socket?.remoteAddress
@@ -348,10 +370,16 @@ function safePayrollError(err, fallback) {
   return message || fallback;
 }
 
+const PAYROLL_DISPLAY_DECRYPT_FAILURE_LIMIT = 1;
+let payrollDisplayDecryptFailures = 0;
+
 function decryptPayrollDisplayValue(value) {
+  if (!value) return '';
+  if (payrollDisplayDecryptFailures >= PAYROLL_DISPLAY_DECRYPT_FAILURE_LIMIT && isEncryptedValue(value)) return '';
   try {
     return decryptColumnValue(value) || '';
-  } catch (_) {
+  } catch (error) {
+    if (isEncryptedValue(value)) payrollDisplayDecryptFailures += 1;
     return '';
   }
 }
@@ -2516,20 +2544,32 @@ function encryptedPayslipStorageAssignments(columns, payload = {}) {
   return { assignments, values };
 }
 
+const PAYSLIP_STORAGE_DECRYPT_FAILURE_LIMIT = 8;
+let payslipStorageDecryptFailures = 0;
+let payslipStorageDecryptWarningShown = false;
+
+function safeDecryptPayslipStorageValue(value) {
+  if (payslipStorageDecryptFailures >= PAYSLIP_STORAGE_DECRYPT_FAILURE_LIMIT && isEncryptedValue(value)) return null;
+  try {
+    return decryptColumnValue(value);
+  } catch (error) {
+    payslipStorageDecryptFailures += 1;
+    if (!payslipStorageDecryptWarningShown) {
+      payslipStorageDecryptWarningShown = true;
+      console.warn('Payslip encrypted storage could not be decrypted; additional failures will be suppressed.', {
+        reason: error.message,
+      });
+    }
+    return null;
+  }
+}
+
 function decryptPayslipStorageRow(row = {}) {
   const result = { ...row };
-  try {
-    if (result.total_earning_encrypted) result.total_earning = numeric(decryptColumnValue(result.total_earning_encrypted));
-    if (result.total_deduction_encrypted) result.total_deduction = numeric(decryptColumnValue(result.total_deduction_encrypted));
-    if (result.net_pay_encrypted) result.net_pay = numeric(decryptColumnValue(result.net_pay_encrypted));
-    if (result.source_summary_encrypted) result.source_summary = decryptColumnValue(result.source_summary_encrypted);
-  } catch (err) {
-    console.error('Failed to decrypt payslip storage row:', err.message);
-    result.total_earning = 0;
-    result.total_deduction = 0;
-    result.net_pay = 0;
-    result.source_summary = null;
-  }
+  if (result.total_earning_encrypted) result.total_earning = numeric(safeDecryptPayslipStorageValue(result.total_earning_encrypted));
+  if (result.total_deduction_encrypted) result.total_deduction = numeric(safeDecryptPayslipStorageValue(result.total_deduction_encrypted));
+  if (result.net_pay_encrypted) result.net_pay = numeric(safeDecryptPayslipStorageValue(result.net_pay_encrypted));
+  if (result.source_summary_encrypted) result.source_summary = safeDecryptPayslipStorageValue(result.source_summary_encrypted);
   return result;
 }
 
@@ -3426,7 +3466,20 @@ async function computeLogisticsCrewPayroll(pool, body) {
   };
 }
 
-async function ensurePieceRatePayrollSchema(pool) {
+let pieceRatePayrollSchemaReadyPromise = null;
+
+function ensurePieceRatePayrollSchema(pool) {
+  if (!pieceRatePayrollSchemaReadyPromise) {
+    pieceRatePayrollSchemaReadyPromise = ensurePieceRatePayrollSchemaUncached(pool)
+      .catch(error => {
+        pieceRatePayrollSchemaReadyPromise = null;
+        throw error;
+      });
+  }
+  return pieceRatePayrollSchemaReadyPromise;
+}
+
+async function ensurePieceRatePayrollSchemaUncached(pool) {
   const ensureColumn = async (table, column, definition) => {
     const [rows] = await pool.execute(
       `SELECT COUNT(*) AS count
@@ -5928,19 +5981,30 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
       incentives,
       incentive_entries: incentiveEntries.map(row => withPayrollEmployeeDisplay(row)),
       production_outputs: outputs.map(row => withPayrollEmployeeDisplay(row)),
-      production_pairs: pairs.map(row => ({
-        ...row,
-        worker1_name: payrollEmployeeDisplayName(row, {
-          firstKey: 'worker1_first_name',
-          middleKey: 'worker1_middle_name',
-          lastKey: 'worker1_last_name'
-        }),
-        worker2_name: payrollEmployeeDisplayName(row, {
-          firstKey: 'worker2_first_name',
-          middleKey: 'worker2_middle_name',
-          lastKey: 'worker2_last_name'
-        })
-      }))
+      production_pairs: pairs.map(row => {
+        const {
+          worker1_first_name,
+          worker1_middle_name,
+          worker1_last_name,
+          worker2_first_name,
+          worker2_middle_name,
+          worker2_last_name,
+          ...pair
+        } = row;
+        return {
+          ...pair,
+          worker1_name: payrollEmployeeDisplayName(row, {
+            firstKey: 'worker1_first_name',
+            middleKey: 'worker1_middle_name',
+            lastKey: 'worker1_last_name'
+          }),
+          worker2_name: payrollEmployeeDisplayName(row, {
+            firstKey: 'worker2_first_name',
+            middleKey: 'worker2_middle_name',
+            lastKey: 'worker2_last_name'
+          })
+        };
+      })
     });
   } catch (err) {
     console.error('Error fetching piece-rate config:', err);
@@ -10747,6 +10811,31 @@ router.patch('/salary-calculations/:id/status', requireAuth, requireRole(ROLES.p
         metadata: { requested_status: status }
       });
       return res.status(403).json({ error: 'Only Payroll Manager can approve, release, or lock payroll.' });
+    }
+    if (PAYROLL_STEP_UP_STATUSES.has(status)) {
+      const reauthenticated = await verifyPayrollStepUpPassword(pool, req);
+      if (!reauthenticated) {
+        await auditSecurityEvent(req, {
+          action: 'blocked_payroll_step_up_authentication_failed',
+          module: 'PAYROLL_SECURITY',
+          targetTable: 'salary_calculations',
+          targetRecord: id,
+          newValue: { requested_status: status, role: role || 'unknown' },
+          result: 'blocked',
+        }).catch(() => {});
+        await logPayrollAudit(pool, req, 'payroll_step_up_authentication_failed', {
+          salary_calculation_id: id,
+          remarks: `Failed step-up authentication for payroll ${status}`,
+          result: 'denied',
+          metadata: { requested_status: status }
+        });
+        return res.status(401).json({ error: 'Password confirmation is required before approving or releasing payroll.' });
+      }
+      await logPayrollAudit(pool, req, 'payroll_step_up_authentication_verified', {
+        salary_calculation_id: id,
+        remarks: `Verified password before payroll ${status}`,
+        metadata: { requested_status: status }
+      });
     }
 
     connection = await pool.getConnection();

@@ -22,6 +22,8 @@ const IV_LENGTH   = 16;   // 128-bit IV for GCM
 const TAG_LENGTH  = 16;   // 128-bit authentication tag
 const ENCODING    = 'hex';
 const warnedInvalidDecryptionKeys = new Set();
+let cachedDecryptionKeyConfig = null;
+let cachedDecryptionKeys = null;
 
 function hexEnvKey() {
   if (process.env.AES_ENCRYPTION_KEY) {
@@ -77,6 +79,16 @@ function getEncryptionKey() {
 }
 
 function getDecryptionKeys() {
+  const config = [
+    process.env.AES_ENCRYPTION_KEY || '',
+    process.env.AES_256_SECRET_KEY || '',
+    process.env.JWT_SECRET || '',
+  ];
+  if (cachedDecryptionKeyConfig
+      && config.every((value, index) => value === cachedDecryptionKeyConfig[index])) {
+    return cachedDecryptionKeys;
+  }
+
   const keys = uniqueKeys([
     optionalDecryptionKey(hexEnvKey, 'AES_ENCRYPTION_KEY'),
     optionalDecryptionKey(base64EnvKey, 'AES_256_SECRET_KEY'),
@@ -85,6 +97,8 @@ function getDecryptionKeys() {
   if (!keys.length) {
     throw new Error('Neither AES_ENCRYPTION_KEY, AES_256_SECRET_KEY, nor JWT_SECRET is set. Cannot derive decryption key.');
   }
+  cachedDecryptionKeyConfig = config;
+  cachedDecryptionKeys = keys;
   return keys;
 }
 

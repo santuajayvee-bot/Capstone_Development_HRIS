@@ -15,6 +15,8 @@ const performanceMigration = read('migrations/sqls/20260706100000_system_admin_p
 const performanceDownMigration = read('migrations/sqls/20260706100000_system_admin_performance_indexes-down.sql');
 const healthHistoryMigration = read('migrations/sqls/20260706103000_system_health_history-up.sql');
 const healthHistoryDownMigration = read('migrations/sqls/20260706103000_system_health_history-down.sql');
+const backupRecoveryMigration = read('migrations/sqls/20260708120000_backup_recovery_readiness-up.sql');
+const backupRecoveryDownMigration = read('migrations/sqls/20260708120000_backup_recovery_readiness-down.sql');
 const systemAdminPage = read('public/pages/system-admin.html');
 const blockchainPage = read('public/pages/blockchain.html');
 const attendancePage = read('public/pages/attendance.html');
@@ -34,6 +36,12 @@ for (const route of [
   '/users/:userId/reset-mfa',
   '/support-tickets',
   '/backups/request',
+  '/backups/overview',
+  '/backups/recovery-points',
+  '/backups/restore-jobs',
+  '/backups/rollback-requests',
+  '/backups/:backupId/restore',
+  '/backups/restore-jobs/:jobId',
   '/system-health/check',
   '/system-health/check/:moduleKey',
   '/system-health/history',
@@ -73,6 +81,12 @@ assert(healthHistoryMigration.includes('CREATE TABLE IF NOT EXISTS system_health
 assert(healthHistoryMigration.includes("trigger_type ENUM('MANUAL','SCHEDULED')"), 'Health history must distinguish manual and scheduled checks.');
 assert(healthHistoryMigration.includes('idx_system_health_history_module_time'), 'Health history must index module/time trends.');
 assert(healthHistoryDownMigration.includes('DROP TABLE IF EXISTS system_health_check_history'), 'Health history down migration must drop history table.');
+assert(backupRecoveryMigration.includes('CREATE TABLE IF NOT EXISTS backup_sets'), 'Backup recovery migration must create backup sets.');
+assert(backupRecoveryMigration.includes('CREATE TABLE IF NOT EXISTS module_recovery_points'), 'Backup recovery migration must create module recovery points.');
+assert(backupRecoveryMigration.includes('CREATE TABLE IF NOT EXISTS restore_jobs'), 'Backup recovery migration must create restore jobs.');
+assert(backupRecoveryMigration.includes('CREATE TABLE IF NOT EXISTS module_rollback_requests'), 'Backup recovery migration must create rollback requests.');
+assert(backupRecoveryMigration.includes("storage_provider ENUM('LOCAL','S3','RDS_SNAPSHOT','MANUAL')"), 'Backup storage providers must be AWS/RDS-friendly.');
+assert(backupRecoveryDownMigration.includes('DROP TABLE IF EXISTS backup_sets'), 'Backup recovery down migration must drop backup sets.');
 
 assert(!systemAdminPage.includes('panel-blockchain-support'), 'Blockchain support UI must not remain inside System Admin tabs.');
 assert(!systemAdminPage.includes('panel-biometric-settings'), 'Biometric settings UI must not remain inside System Admin tabs.');
@@ -85,6 +99,13 @@ assert(systemAdminPage.includes('id="health-run-check-btn"'), 'System Health pag
 assert(systemAdminPage.includes('id="health-detail-probable-cause"'), 'System Health details must show probable cause.');
 assert(systemAdminPage.includes('id="health-detail-runbook"'), 'System Health details must show runbook steps.');
 assert(systemAdminPage.includes('id="health-detail-drilldowns"'), 'System Health details must show drilldown actions.');
+assert(systemAdminPage.includes('backup-recovery-tabs'), 'Backup and Recovery page must include section tabs.');
+assert(systemAdminPage.includes('id="backup-coverage-tbody"'), 'Backup dashboard must show module coverage.');
+assert(systemAdminPage.includes('id="module-recovery-tbody"'), 'Backup dashboard must show module recovery points.');
+assert(systemAdminPage.includes('id="restore-jobs-tbody"'), 'Backup dashboard must show restore jobs.');
+assert(systemAdminPage.includes('id="rollback-requests-tbody"'), 'Backup dashboard must show rollback requests.');
+assert(systemAdminPage.includes('does not automatically overwrite source code'), 'Backup page must explain controlled recovery limits.');
+assert(systemAdminPage.includes('do not bypass HR or Payroll business approval workflows'), 'Backup page must state recovery does not bypass approvals.');
 assert(systemAdminPage.includes('value="SYSTEM_HEALTH"'), 'Audit Trail must include System Health module filter.');
 assert(blockchainPage.includes('bc-view-support'), 'Blockchain support view must live inside the Blockchain module.');
 assert(attendancePage.includes('bio-device-settings-card'), 'Biometric settings must live inside Attendance Sync.');
@@ -168,6 +189,13 @@ assert(admin.includes('countRbacLevel4Roles'), 'RBAC health must count Level 4 r
 assert(admin.includes('level4'), 'RBAC health must detect varchar access levels such as "Level 4".');
 assert(admin.includes('systemHealthHistoryRows'), 'System Health check responses must include current-run history rows.');
 assert(admin.includes('mergeSystemHealthHistoryRows'), 'System Health check responses must merge current-run and stored history.');
+assert(admin.includes('BACKUP_RECOVERY_MODULES'), 'Backup and Recovery must define module coverage.');
+assert(admin.includes('RESTORE_BACKUP'), 'Restore requests must be audit logged.');
+assert(admin.includes('REQUEST_MODULE_ROLLBACK'), 'Rollback requests must be audit logged.');
+assert(admin.includes('confirmation_phrase'), 'Critical restore actions must require typed confirmation.');
+assert(admin.includes('RESTORE_JOB_TRANSITIONS'), 'Restore jobs must enforce lifecycle transitions.');
+assert(admin.includes('RESTORE_JOB_UPDATED'), 'Restore job updates must be audit logged.');
+assert(admin.includes('Deployment version backups use rollback requests'), 'Deployment version backups must not create restore jobs.');
 assert(systemAdminScript.includes('health-detail-probable-cause'), 'System Health UI must render probable cause.');
 assert(systemAdminScript.includes('health-detail-runbook'), 'System Health UI must render runbook steps.');
 assert(systemAdminScript.includes('applySystemHealthHistory'), 'System Health UI must preserve current-run history when stored history is empty.');
@@ -175,6 +203,11 @@ assert(systemAdminScript.includes('healthHistoryRowsFromModules'), 'System Healt
 assert(systemAdminScript.includes('mergeSystemHealthHistory'), 'System Health UI must merge new and existing history rows.');
 assert(systemAdminScript.includes('/api/admin/users?include_stats=1'), 'Account Management must use lightweight account stats endpoint.');
 assert(systemAdminScript.includes('ensureSysAdminEmployeesLoaded'), 'Employee directory must be loaded lazily for account registration.');
+assert(systemAdminScript.includes('requestRestoreJob'), 'Backup UI must expose controlled restore requests.');
+assert(systemAdminScript.includes('updateRestoreJobStatus'), 'Backup UI must expose restore job lifecycle updates.');
+assert(systemAdminScript.includes('requestBackupSetRollback'), 'Backup UI must show rollback action for deployment-version backups.');
+assert(systemAdminScript.includes('requestModuleRollback'), 'Backup UI must expose rollback requests.');
+assert(systemAdminScript.includes('createBackupIncident'), 'Backup UI must create incidents from recovery coverage.');
 assert(systemAdminScript.includes("limit: '50'"), 'Audit Trail must use a smaller default page size.');
 assert(!systemAdminScript.includes('setInterval(() => {') || systemAdminScript.includes('}, 30000);'), 'Account refresh interval should not poll every 5 seconds.');
 

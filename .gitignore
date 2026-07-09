@@ -14,6 +14,7 @@ secure_uploads/
 .vscode/settings.json
 dist/
 build/
+tmp/
 .idea/
 *.swp
 *.swo

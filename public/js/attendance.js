@@ -83,6 +83,54 @@ function canManageAttendanceRecords() { return isHr(); }
 function canManageBiometrics() { return isHr() || isSystemAdmin(); }
 function canViewAllAttendanceRecords() { return isHr() || isPayrollAttendanceViewer(); }
 
+function requestAttendanceStepUpPassword(actionLabel = 'continue') {
+  return new Promise(resolve => {
+    const existing = document.querySelector('.attendance-step-up-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'att-modal attendance-step-up-overlay';
+    overlay.innerHTML = `
+      <div class="att-modal-card attendance-step-up-card" role="dialog" aria-modal="true" aria-labelledby="attendance-step-up-title">
+        <div class="att-card-heading">
+          <h3 id="attendance-step-up-title">Confirm Attendance Action</h3>
+          <p>Re-enter your password before you ${esc(actionLabel)}.</p>
+        </div>
+        <label>
+          Current Password
+          <input type="password" id="attendance-step-up-password" autocomplete="current-password" />
+        </label>
+        <div class="att-modal-actions">
+          <button type="button" class="btn btn-outline" id="attendance-step-up-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="attendance-step-up-confirm">Confirm</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cleanup = value => {
+      overlay.remove();
+      resolve(value);
+    };
+    overlay.querySelector('#attendance-step-up-cancel')?.addEventListener('click', () => cleanup(null));
+    overlay.querySelector('#attendance-step-up-confirm')?.addEventListener('click', () => {
+      const password = overlay.querySelector('#attendance-step-up-password')?.value || '';
+      cleanup(password.trim() ? password : null);
+    });
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) cleanup(null);
+    });
+    overlay.addEventListener('keydown', event => {
+      if (event.key === 'Escape') cleanup(null);
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        overlay.querySelector('#attendance-step-up-confirm')?.click();
+      }
+    });
+    requestAnimationFrame(() => overlay.querySelector('#attendance-step-up-password')?.focus());
+  });
+}
+
 async function refreshAttendanceUserFromServer() {
   try {
     const res = await apiFetch('/api/auth/me');
@@ -902,20 +950,20 @@ function closeAttendanceActionMenus() {
   });
 }
 
-function toggleAttendanceActionMenu(event, attendanceId) {
-  event.stopPropagation();
-  const menu = document.getElementById(`att-menu-${attendanceId}`);
-  if (!menu) return;
-  const isOpen = menu.classList.contains('open');
+function handleAttendanceActionMenuDocumentClick(event) {
+  const target = event.target;
+  if (target?.closest?.('.att-row-menu, .att-menu-panel, .att-menu-trigger')) return;
   closeAttendanceActionMenus();
-  if (isOpen) return;
+}
 
-  const trigger = event.currentTarget;
-  menu.classList.add('open');
-  trigger.setAttribute('aria-expanded', 'true');
+function positionAttendanceActionMenu(menu, trigger) {
+  if (!menu || !trigger) return false;
   const triggerRect = trigger.getBoundingClientRect();
-  const menuRect = menu.getBoundingClientRect();
   const viewportGap = 8;
+  if (triggerRect.width === 0 && triggerRect.height === 0) return false;
+
+  menu.classList.add('open');
+  const menuRect = menu.getBoundingClientRect();
   const left = Math.min(
     window.innerWidth - menuRect.width - viewportGap,
     Math.max(viewportGap, triggerRect.right - menuRect.width)
@@ -924,8 +972,31 @@ function toggleAttendanceActionMenu(event, attendanceId) {
   const top = fitsBelow
     ? triggerRect.bottom + 6
     : Math.max(viewportGap, triggerRect.top - menuRect.height - 6);
+
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
+  return true;
+}
+
+function repositionAttendanceActionMenus() {
+  document.querySelectorAll('.att-menu-panel.open').forEach(menu => {
+    const trigger = menu.closest('.att-row-menu')?.querySelector('.att-menu-trigger');
+    if (!positionAttendanceActionMenu(menu, trigger)) closeAttendanceActionMenus();
+  });
+}
+
+function toggleAttendanceActionMenu(event, attendanceId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const menu = document.getElementById(`att-menu-${attendanceId}`);
+  if (!menu) return;
+  const isOpen = menu.classList.contains('open');
+  closeAttendanceActionMenus();
+  if (isOpen) return;
+
+  const trigger = event.currentTarget;
+  trigger.setAttribute('aria-expanded', 'true');
+  positionAttendanceActionMenu(menu, trigger);
 }
 
 function clearAttFilters() {
@@ -967,7 +1038,9 @@ async function bulkValidateAttendance() {
   if (incomplete.length) {
     return alert('Some selected records are missing Time In or Time Out. Correct them before marking payroll ready.');
   }
-  for (const id of ids) await verifyAttendance(id, 'VALIDATED', { silent: true });
+  const currentPassword = await requestAttendanceStepUpPassword(`validate ${ids.length} attendance record(s)`);
+  if (!currentPassword) return;
+  for (const id of ids) await verifyAttendance(id, 'VALIDATED', { silent: true, currentPassword });
   alert(`${ids.length} attendance record(s) validated.`);
   loadAttRecords();
   loadOverviewStats();
@@ -980,7 +1053,9 @@ async function bulkRejectAttendance() {
     ? await showPrompt('Reason for rejecting selected attendance record(s):', 'Reject Attendance Records', '')
     : prompt('Reason for rejecting selected attendance record(s):');
   if (!reason) return;
-  for (const id of ids) await verifyAttendance(id, 'REJECTED', { reason, silent: true });
+  const currentPassword = await requestAttendanceStepUpPassword(`reject ${ids.length} attendance record(s)`);
+  if (!currentPassword) return;
+  for (const id of ids) await verifyAttendance(id, 'REJECTED', { reason, silent: true, currentPassword });
   alert(`${ids.length} attendance record(s) rejected.`);
   loadAttRecords();
   loadOverviewStats();
@@ -1177,10 +1252,18 @@ async function verifyAttendance(attendanceId, verificationStatus, options = {}) 
       : prompt(`Reason for marking this record ${verificationStatus}:`));
     if (!reason) return;
   }
+  const requiresStepUp = ['VALIDATED', 'REJECTED'].includes(String(verificationStatus || '').toUpperCase());
+  const actionLabel = verificationStatus === 'VALIDATED'
+    ? 'validate this attendance record'
+    : 'reject this attendance record';
+  const currentPassword = requiresStepUp
+    ? (options.currentPassword || await requestAttendanceStepUpPassword(actionLabel))
+    : '';
+  if (requiresStepUp && !currentPassword) return;
   try {
     const res = await apiFetch(`/api/attendance/${attendanceId}/verify`, {
       method: 'PATCH',
-      body: JSON.stringify({ verification_status: verificationStatus, reason })
+      body: JSON.stringify({ verification_status: verificationStatus, reason, currentPassword })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
@@ -2691,6 +2774,6 @@ window.syncHolidayCalendar = syncHolidayCalendar;
 window.saveHolidayOverride = saveHolidayOverride;
 window.setHolidayCalendarPage = setHolidayCalendarPage;
 window.switchAttendancePolicyTab = switchAttendancePolicyTab;
-document.addEventListener('click', closeAttendanceActionMenus);
+document.addEventListener('click', handleAttendanceActionMenuDocumentClick);
 window.addEventListener('resize', closeAttendanceActionMenus);
-window.addEventListener('scroll', closeAttendanceActionMenus, true);
+window.addEventListener('scroll', repositionAttendanceActionMenus, true);

@@ -56,6 +56,25 @@
   .profile-field { border: 1px solid var(--form-line); border-radius: 8px; padding: 12px; background: var(--bg); }
   .profile-label { display: block; color: var(--form-muted); font-size: 12px; margin-bottom: 5px; }
   .profile-value { color: var(--text); font-weight: 700; overflow-wrap: anywhere; }
+  .profile-sensitive-field { position: relative; padding-right: 46px; min-height: 68px; }
+  .profile-sensitive-eye {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--form-line);
+    border-radius: 8px;
+    display: inline-grid;
+    place-items: center;
+    background: var(--card2);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .profile-sensitive-eye:hover { border-color: var(--form-accent); color: var(--form-accent); background: rgba(79,124,255,.1); }
+  .profile-sensitive-eye.is-visible { border-color: var(--form-accent); color: var(--form-accent); background: rgba(79,124,255,.12); }
+  .profile-sensitive-eye svg { width: 16px; height: 16px; fill: currentColor; }
   .profile-tabs-shell { margin-top: 0; border: 0; border-radius: 0; overflow: hidden; background: var(--form-panel); }
   .profile-tabs { display: flex; align-items: stretch; flex-wrap: wrap; border-bottom: 1px solid var(--form-line); }
   .profile-tab { min-height: 42px; border: 0; border-right: 1px solid var(--border); background: var(--card2); color: var(--muted); padding: 0 16px; font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 800; letter-spacing: 0; text-transform: none; cursor: pointer; }

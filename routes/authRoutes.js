@@ -5,6 +5,7 @@ const { requireAuth } = require('../server/middleware');
 const router = express.Router();
 
 router.get('/captcha-config', authController.captchaConfig);
+router.post('/client-security-event', authController.clientSecurityEvent);
 router.post('/login', authController.login);
 router.post('/device-approval/status', authController.deviceApprovalStatus);
 router.post('/logout', requireAuth, authController.logout);

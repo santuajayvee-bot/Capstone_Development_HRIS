@@ -72,6 +72,69 @@ function clearLoginError() {
   errEl.style.display = 'none';
 }
 
+const LOGIN_SQLI_PATTERNS = [
+  /\bunion\b\s+(?:all\s+)?\bselect\b/i,
+  /\bselect\b[\s\S]{0,80}\bfrom\b/i,
+  /\bsleep\s*\(/i,
+  /\bbenchmark\s*\(/i,
+  /(?:--|#|\/\*)/,
+  /(?:'|")\s*(?:or|and)\s+(?:'|"|\d|true|false)/i,
+];
+const LOGIN_XSS_PATTERNS = [
+  /<\s*\/?\s*script\b/i,
+  /\bon[a-z]+\s*=/i,
+  /\b(?:javascript|vbscript|data)\s*:/i,
+  /<\/?[a-z][\s\S]*>/i,
+];
+const loginSecurityAuditCache = new Map();
+
+function suspiciousLoginCategories(value) {
+  const text = String(value || '');
+  const categories = [];
+  if (LOGIN_SQLI_PATTERNS.some(pattern => pattern.test(text))) categories.push('sql_injection');
+  if (LOGIN_XSS_PATTERNS.some(pattern => pattern.test(text))) categories.push('xss');
+  return categories;
+}
+
+function detectSuspiciousLoginInput() {
+  const fields = [
+    { name: 'username', value: document.getElementById('username')?.value || '' },
+    { name: 'password', value: document.getElementById('password')?.value || '' },
+  ];
+  const findings = fields
+    .map(field => ({ name: field.name, categories: suspiciousLoginCategories(field.value) }))
+    .filter(field => field.categories.length);
+  return {
+    fields: findings.map(field => field.name),
+    categories: [...new Set(findings.flatMap(field => field.categories))],
+  };
+}
+
+async function auditBlockedLoginSuspiciousInput(reason = 'login_validation') {
+  const finding = detectSuspiciousLoginInput();
+  if (!finding.fields.length) return;
+
+  const cacheKey = `${reason}:${finding.fields.sort().join(',')}:${finding.categories.sort().join(',')}`;
+  const now = Date.now();
+  if (now - Number(loginSecurityAuditCache.get(cacheKey) || 0) < 10_000) return;
+  loginSecurityAuditCache.set(cacheKey, now);
+
+  try {
+    await fetch('/api/auth/client-security-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_type: 'blocked_login_suspicious_input',
+        form: 'login',
+        fields: finding.fields,
+        categories: finding.categories,
+      }),
+    });
+  } catch (_) {
+    // Login validation still blocks locally; audit delivery is best-effort.
+  }
+}
+
 function formatLockoutDuration(seconds) {
   const total = Math.max(Number(seconds || 0), 0);
   if (!Number.isFinite(total) || total <= 0) return '';
@@ -502,6 +565,13 @@ async function doLogin() {
     return;
   }
 
+  const suspiciousInput = detectSuspiciousLoginInput();
+  if (suspiciousInput.fields.length) {
+    await auditBlockedLoginSuspiciousInput('login_submit');
+    loginError('Input contains disallowed characters or patterns.');
+    return;
+  }
+
   const captchaToken = recaptchaRequired && recaptchaWidgetId !== null && window.grecaptcha
     ? window.grecaptcha.getResponse(recaptchaWidgetId)
     : '';
@@ -577,7 +647,13 @@ async function doLogin() {
 
 document.addEventListener('DOMContentLoaded', () => {
   const passwordInput = document.getElementById('password');
+  const usernameInput = document.getElementById('username');
   const passwordToggle = document.getElementById('mobile-password-toggle');
+  [usernameInput, passwordInput].forEach(input => {
+    input?.addEventListener('invalid', () => {
+      auditBlockedLoginSuspiciousInput('login_invalid_event');
+    });
+  });
   passwordInput?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
   passwordToggle?.addEventListener('click', () => {
     const isHidden = passwordInput?.type === 'password';

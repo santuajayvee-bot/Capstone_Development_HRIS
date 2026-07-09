@@ -17,6 +17,9 @@
   }
   .leave-field textarea { min-height: 76px; resize: vertical; }
   .leave-filter-bar { display: grid; grid-template-columns: 1.4fr repeat(6, minmax(130px, 1fr)); gap: 10px; }
+  #page-leave.leave-employee-mode #leave-manager-filters,
+  #page-leave.leave-employee-mode [data-leave-manager-only] { display: none !important; }
+  #page-leave.leave-employee-mode .leave-table { min-width: 620px; }
   .leave-check-grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px 14px; margin-top: 12px; }
   .leave-check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
   .leave-check input { width: 16px; height: 16px; }
@@ -27,7 +30,8 @@
   .leave-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
   .leave-badge.portal { background: rgba(79,124,255,.15); color: #9bb7ff; }
   .leave-badge.manual { background: rgba(220,173,119,.16); color: #dcad77; }
-  .leave-badge.pending { background: rgba(245,158,11,.16); color: #fbbf24; }
+  .leave-badge.pending,
+  .leave-badge.payroll-approved { background: rgba(245,158,11,.16); color: #fbbf24; }
   .leave-badge.approved { background: rgba(34,197,94,.16); color: #86efac; }
   .leave-badge.rejected { background: rgba(239,68,68,.16); color: #fca5a5; }
   .leave-actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -148,14 +152,14 @@
 </div>
 
 <div id="leave-panel-requests" class="leave-tab-panel">
-<div class="leave-card">
+<div id="leave-manager-filters" class="leave-card" data-leave-manager-only>
   <h3 class="leave-section-title">Filters</h3>
   <div class="leave-filter-bar" style="margin-top:12px;">
     <div class="leave-field"><input id="leave-filter-search" placeholder="Search employee" oninput="renderLeaveTable()"></div>
     <div class="leave-field"><select id="leave-filter-dept" onchange="renderLeaveTable()"><option value="">All Departments</option></select></div>
     <div class="leave-field"><select id="leave-filter-pay-type" onchange="renderLeaveTable()"><option value="">All Pay Types</option><option>Per Day</option><option>Per Hour</option><option>Per Trip</option><option>Per Piece</option></select></div>
     <div class="leave-field"><select id="leave-filter-type" onchange="renderLeaveTable()"><option value="">All Leave Types</option></select></div>
-    <div class="leave-field"><select id="leave-filter-status" onchange="renderLeaveTable()"><option value="">All Status</option><option>Pending</option><option>Approved</option><option>Rejected</option></select></div>
+    <div class="leave-field"><select id="leave-filter-status" onchange="renderLeaveTable()"><option value="">All Status</option><option>Pending</option><option>Payroll Approved</option><option>Approved</option><option>Rejected</option></select></div>
     <div class="leave-field"><select id="leave-filter-source" onchange="renderLeaveTable()"><option value="">All Sources</option><option>Portal</option><option>Manual</option></select></div>
     <div class="leave-field"><input id="leave-filter-from" type="date" onchange="renderLeaveTable()"></div>
     <div class="leave-field"><input id="leave-filter-to" type="date" onchange="renderLeaveTable()"></div>
@@ -166,12 +170,12 @@
   <table class="leave-table">
     <thead>
       <tr>
-        <th>Employee</th>
-        <th>Department</th>
-        <th>Pay Type</th>
+        <th data-leave-manager-only>Employee</th>
+        <th data-leave-manager-only>Department</th>
+        <th data-leave-manager-only>Pay Type</th>
         <th>Leave Type</th>
         <th>Dates & Duration</th>
-        <th>Filing Source</th>
+        <th data-leave-manager-only>Filing Source</th>
         <th>Status</th>
         <th>Actions</th>
       </tr>

@@ -500,7 +500,7 @@ async function leaveReport(filters, mode) {
   addCondition(where, params, 'lr.date_from >= ?', filters.dateFrom);
   addCondition(where, params, 'lr.date_to <= ?', filters.dateTo);
   employeeFilters(where, params, filters);
-  if (mode === 'pending-leave') addCondition(where, params, 'lr.status = ?', 'Pending');
+  if (mode === 'pending-leave') where.push("lr.status IN ('Pending','Payroll Approved')");
   if (mode === 'rejected-leave') addCondition(where, params, 'lr.status = ?', 'Rejected');
   if (mode === 'leave-approval' && filters.status) addCondition(where, params, 'lr.status = ?', filters.status);
 

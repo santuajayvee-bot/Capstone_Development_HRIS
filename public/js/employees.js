@@ -2886,11 +2886,6 @@ async function loadEmployeeProfilePage(params = {}) {
   switchProfileTab(selectedTab);
 }
 
-function profileSensitiveAction() {
-  if (currentProfileEmployee?.sensitive_fields_masked === false) return '';
-  return `<button class="btn btn-outline" type="button" onclick="toggleEmployeeSensitiveDetails()">${currentProfileSensitiveRevealed ? 'Hide sensitive details' : 'Show sensitive details'}</button>`;
-}
-
 async function toggleEmployeeSensitiveDetails() {
   if (!currentProfileEmployee?.id) return;
   if (currentProfileSensitiveRevealed) {
@@ -2913,6 +2908,11 @@ async function toggleEmployeeSensitiveDetails() {
   renderProfileTabs(currentProfileEmployee);
   populateProfileEditForm(currentProfileEmployee);
   switchProfileTab(currentProfileTab);
+}
+
+async function revealEmployeeSensitiveField(_fieldName) {
+  if (!currentProfileEmployee?.id) return;
+  await toggleEmployeeSensitiveDetails();
 }
 
 function normalizeProfileTab(tabName) {
@@ -2969,6 +2969,35 @@ function field(label, value) {
     <div class="profile-field">
       <span class="profile-label">${escapeHtml(label)}</span>
       <span class="profile-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function profileEyeIcon(visible = false) {
+  if (visible) {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M3 3.8 4.2 2.6l17.2 17.2-1.2 1.2-3.1-3.1A11.8 11.8 0 0 1 12 19C6.7 19 2.7 15.9 1 12c.8-1.9 2.2-3.6 4-4.8L3 3.8Zm6.1 6.1A3.7 3.7 0 0 0 12 15.7c.8 0 1.5-.2 2.1-.7l-5-5.1ZM12 5c5.3 0 9.3 3.1 11 7-.5 1.2-1.3 2.4-2.3 3.4l-3-3A5.7 5.7 0 0 0 10.5 6c.5-.1 1-.1 1.5-.1Z"></path>
+      </svg>
+    `;
+  }
+  return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 5c5.3 0 9.3 3.1 11 7-1.7 3.9-5.7 7-11 7S2.7 15.9 1 12c1.7-3.9 5.7-7 11-7Zm0 2C8 7 4.8 9 3.3 12 4.8 15 8 17 12 17s7.2-2 8.7-5C19.2 9 16 7 12 7Zm0 2.2A2.8 2.8 0 1 1 12 14.8 2.8 2.8 0 0 1 12 9.2Z"></path>
+      </svg>
+    `;
+}
+
+function sensitiveField(label, value, fieldName) {
+  const isMasked = currentProfileEmployee?.sensitive_fields_masked !== false && !currentProfileSensitiveRevealed;
+  const actionLabel = isMasked ? `Reveal ${label}` : `Mask ${label}`;
+  return `
+    <div class="profile-field profile-sensitive-field">
+      <span class="profile-label">${escapeHtml(label)}</span>
+      <span class="profile-value">${escapeHtml(value)}</span>
+      <button class="profile-sensitive-eye${isMasked ? '' : ' is-visible'}" type="button" onclick="revealEmployeeSensitiveField('${escapeHtml(fieldName)}')" aria-label="${escapeHtml(actionLabel)}" title="${escapeHtml(actionLabel)}" aria-pressed="${isMasked ? 'false' : 'true'}">
+        ${profileEyeIcon(!isMasked)}
+      </button>
     </div>
   `;
 }
@@ -3034,7 +3063,6 @@ function renderProfileTabs(employee) {
   if (personal) {
     personal.innerHTML = `
       <section class="profile-section">
-        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <div class="profile-field-grid">
           ${field('First Name', employee.first_name)}
           ${field('Middle Name', employee.middle_name)}
@@ -3086,7 +3114,6 @@ function renderProfileTabs(employee) {
     contact.innerHTML = `
       <section class="profile-section">
         <h2 class="profile-section-title">Primary Contact Info</h2>
-        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <div class="profile-field-grid">
           ${field('Full Legal Name', getEmployeeFullName(employee))}
           ${field('Permanent Home Address', employeeProfileAddress(employee, 'residential_address'))}
@@ -3299,7 +3326,6 @@ function renderProfileTabs(employee) {
   if (bankTax) {
     bankTax.innerHTML = `
       <section class="profile-section">
-        <div class="profile-doc-toolbar">${profileSensitiveAction()}</div>
         <h2 class="profile-section-title">Salary Configuration</h2>
         <div class="profile-field-grid">
           ${field('Wage Type', employee.wage_type)}
@@ -3312,17 +3338,17 @@ function renderProfileTabs(employee) {
       <section class="profile-section">
         <h2 class="profile-section-title">Bank Account</h2>
         <div class="profile-field-grid">
-          ${field('Bank Account Number', employee.bank_account ? '****-****-' + String(employee.bank_account).slice(-4) : '-')}
+          ${sensitiveField('Bank Account Number', employee.bank_account, 'bank_account')}
           ${field('Bank Name', employee.bank_name)}
         </div>
       </section>
       <section class="profile-section">
         <h2 class="profile-section-title">Government & Tax Information</h2>
         <div class="profile-field-grid">
-          ${field('SSS', employee.sss_number)}
-          ${field('PhilHealth', employee.philhealth_number)}
-          ${field('Pag-IBIG', employee.pagibig_number)}
-          ${field('TIN', employee.tin)}
+          ${sensitiveField('SSS', employee.sss_number, 'sss_number')}
+          ${sensitiveField('PhilHealth', employee.philhealth_number, 'philhealth_number')}
+          ${sensitiveField('Pag-IBIG', employee.pagibig_number, 'pagibig_number')}
+          ${sensitiveField('TIN', employee.tin, 'tin')}
           ${field('Tax Status', employee.tax_status)}
         </div>
       </section>
@@ -4484,6 +4510,7 @@ window.loadEmployeePhotoPreview = loadEmployeePhotoPreview;
 window.openEmployeeProfile = openEmployeeProfile;
 window.loadEmployeeProfilePage = loadEmployeeProfilePage;
 window.toggleEmployeeSensitiveDetails = toggleEmployeeSensitiveDetails;
+window.revealEmployeeSensitiveField = revealEmployeeSensitiveField;
 window.revealProfilePhoto = revealProfilePhoto;
 window.switchProfileTab = switchProfileTab;
 window.toggleProfileEditMode = toggleProfileEditMode;

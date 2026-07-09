@@ -28,7 +28,7 @@ const adminRbacRoutes                        = require('./server/admin-rbac');
 const accountCreationRequestRoutes           = require('./server/account-creation-requests');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
-const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson, hashNullable } = require('./server/data-protection');
+const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson, hashNullable, isEncryptedValue } = require('./server/data-protection');
 const dashboardRoutes                        = require('./server/dashboard');
 const reportsRoutes                          = require('./server/reports');
 const selfServiceRoutes                      = require('./server/self-service');
@@ -36,11 +36,11 @@ const dpaRoutes                              = require('./server/dpa').router;
 const trustedDeviceRoutes                   = require('./server/trusted-devices');
 const { clientErrorResponse }                = require('./server/error-response');
 const { validateRequestBody }                = require('./validators/inputValidation');
-const { hashTemporaryPassword }              = require('./services/passwordService');
+const { hashTemporaryPassword, verifyPassword } = require('./services/passwordService');
 const { attachSocketDeviceDetection }        = require('./services/socketDeviceDetectionService');
 const { encryptedCommunicationMiddleware }   = require('./server/middleware/encryptedCommunication');
 const { encryptAuditValue, maskSensitiveValue, preventStorageCiphertextResponses } = require('./server/privacy-protection');
-const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer } = require('./server/encrypted-file-vault');
+const { deleteEncryptedFile, readEncryptedBuffer, storeEncryptedBuffer, VAULT_ROOT } = require('./server/encrypted-file-vault');
 const {
   inclusiveDays,
   strictDateOnly,
@@ -52,6 +52,7 @@ const {
 }                                             = require('./server/utils/payrollSchedule');
 const {
   auditSecurityEvent,
+  auditSuspiciousRequestPatterns,
   createRateLimiter,
   multerFileFilter,
   randomSafeFilename,
@@ -60,10 +61,14 @@ const {
   secureUploadedFile,
   validateUploadedBuffer,
 }                                             = require('./server/security-controls');
+const { createAttendanceRouteRateLimiter }    = require('./server/attendance-rate-limits');
+const { createPayrollRouteRateLimiter }       = require('./server/payroll-rate-limits');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -80,10 +85,26 @@ app.use((req, res, next) => {
   }
   return next();
 });
-const API_RATE_LIMIT = createRateLimiter({
+
+function rateLimitPrincipal(req) {
+  const authHeader = String(req.headers?.authorization || '').trim();
+  if (authHeader) {
+    return `auth:${nodeCrypto.createHash('sha256').update(authHeader).digest('hex').slice(0, 24)}`;
+  }
+  return `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+}
+
+const API_READ_RATE_LIMIT = createRateLimiter({
   windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000),
-  max: Number(process.env.API_RATE_LIMIT_MAX || 300),
-  auditAction: 'blocked_api_rate_limit_exceeded',
+  max: Number(process.env.API_READ_RATE_LIMIT_MAX || process.env.API_RATE_LIMIT_MAX || 1200),
+  keyGenerator: req => `read:${rateLimitPrincipal(req)}`,
+  auditAction: 'blocked_api_read_rate_limit_exceeded',
+});
+const API_WRITE_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.API_WRITE_RATE_LIMIT_MAX || process.env.API_RATE_LIMIT_MAX || 300),
+  keyGenerator: req => `write:${rateLimitPrincipal(req)}`,
+  auditAction: 'blocked_api_write_rate_limit_exceeded',
 });
 const AUTH_RATE_LIMIT = createRateLimiter({
   windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
@@ -91,6 +112,14 @@ const AUTH_RATE_LIMIT = createRateLimiter({
   keyGenerator: req => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.body?.username || req.body?.email || '').toLowerCase()}`,
   auditAction: 'blocked_auth_rate_limit_exceeded',
 });
+const ATTENDANCE_ROUTE_RATE_LIMIT = createAttendanceRouteRateLimiter();
+const PAYROLL_ROUTE_RATE_LIMIT = createPayrollRouteRateLimiter();
+function apiRateLimit(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return API_READ_RATE_LIMIT(req, res, next);
+  }
+  return API_WRITE_RATE_LIMIT(req, res, next);
+}
 const EMPLOYEE_ID_ADMIN_ROLES = ROLES.staff_management;
 const EMPLOYEE_PARAMETER_TAMPER_GUARD = rejectForbiddenFields(new Set([
   'role',
@@ -157,7 +186,6 @@ const EMPLOYEE_BANK_ACCOUNT_FORMATS = [
   { label: 'LandBank', aliases: ['landbank', 'land bank', 'land bank of the philippines'], lengths: [10, 16] },
   { label: 'RCBC', aliases: ['rcbc', 'rizal commercial banking corporation'], lengths: [10, 16] },
 ];
-const EMPLOYEE_PII_DECRYPT_WARNED_FIELDS = new Set();
 const EMPLOYEE_HR_PROTECTED_FIELDS = new Set([
   'department_id', 'position', 'employment_type', 'hiring_type', 'deployment_status',
   'date_hired', 'end_of_contract', 'employee_level', 'status', 'employment_status', 'supervisor',
@@ -252,6 +280,7 @@ const LEAVE_TYPE_ALLOWED_FIELDS = new Set([
 const LEAVE_BALANCE_ALLOWED_FIELDS = new Set(['employee_id', 'leave_type_id', 'leave_type', 'year', 'total_days', 'balance', 'used_days', 'used']);
 const LEAVE_REQUEST_ALLOWED_FIELDS = new Set(['type', 'leave_type_id', 'date_from', 'date_to', 'days', 'reason', 'employee_id', 'filing_source', 'remarks']);
 const LEAVE_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks', 'review_note', 'reason']);
+const LEAVE_STEP_UP_ALLOWED_FIELDS = new Set(['currentPassword', 'current_password', 'password_confirmation']);
 const GENERAL_REQUEST_ALLOWED_FIELDS = new Set(['type', 'request_type', 'purpose', 'details', 'reason', 'remarks']);
 const GENERAL_REQUEST_STATUS_ALLOWED_FIELDS = new Set(['status', 'remarks']);
 const PAYROLL_RUN_ALLOWED_FIELDS = new Set(['period_start', 'period_end']);
@@ -341,8 +370,6 @@ const EMPLOYEE_PAYROLL_SETUP_STATUSES = new Set(['Pending', 'Ready']);
 const EMPLOYEE_LIFECYCLE_PENDING_STATUSES = new Set(['Pending']);
 let philippineAddressCache = null;
 let philippineAddressError = null;
-
-app.set('trust proxy', 1);
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
@@ -504,20 +531,63 @@ function decryptEmployeeStrictPii(row) {
   return row;
 }
 
+const EMPLOYEE_PII_DECRYPT_WARNING_LIMIT = 20;
+const employeePiiDecryptWarningKeys = new Set();
+let employeePiiDecryptWarningsSuppressed = false;
+const EMPLOYEE_DIRECTORY_PII_COLUMNS = [
+  'first_name',
+  'middle_name',
+  'last_name',
+  'suffix',
+  'email',
+  'contact_number',
+];
+
+function logEmployeePiiDecryptFailure(row, field, error) {
+  const warningKey = `${row?.id || 'unknown'}:${field}`;
+  if (employeePiiDecryptWarningKeys.size < EMPLOYEE_PII_DECRYPT_WARNING_LIMIT && !employeePiiDecryptWarningKeys.has(warningKey)) {
+    employeePiiDecryptWarningKeys.add(warningKey);
+    console.warn('Employee PII decrypt failed; returning null for field.', {
+      employee_id: row?.id || null,
+      employee_code: row?.employee_code || null,
+      field,
+      reason: error.message,
+    });
+  } else if (!employeePiiDecryptWarningsSuppressed && employeePiiDecryptWarningKeys.size >= EMPLOYEE_PII_DECRYPT_WARNING_LIMIT) {
+    employeePiiDecryptWarningsSuppressed = true;
+    console.warn('Additional employee PII decrypt warnings suppressed to keep API responses responsive.');
+  }
+}
+
+function safeDecryptEmployeeDirectoryColumnValue(row, field, budget) {
+  const value = row?.[field];
+  if (!isEncryptedValue(value)) return value ?? null;
+  if (budget && budget.failures >= budget.limit) return null;
+
+  try {
+    return decryptColumnValue(value);
+  } catch (error) {
+    if (budget) budget.failures += 1;
+    logEmployeePiiDecryptFailure(row, field, error);
+    return null;
+  }
+}
+
+function decryptEmployeeDirectoryPii(row, budget) {
+  if (!row) return row;
+  for (const field of EMPLOYEE_DIRECTORY_PII_COLUMNS) {
+    if (Object.prototype.hasOwnProperty.call(row, field)) {
+      row[field] = safeDecryptEmployeeDirectoryColumnValue(row, field, budget);
+    }
+  }
+  return row;
+}
+
 function safeDecryptEmployeeColumnValue(row, field) {
   try {
     return decryptColumnValue(row?.[field]);
   } catch (error) {
-    const warningKey = `${row?.id || 'unknown'}:${field}:${error.message}`;
-    if (!EMPLOYEE_PII_DECRYPT_WARNED_FIELDS.has(warningKey)) {
-      EMPLOYEE_PII_DECRYPT_WARNED_FIELDS.add(warningKey);
-      console.warn('Employee PII decrypt failed; returning null for field.', {
-        employee_id: row?.id || null,
-        employee_code: row?.employee_code || null,
-        field,
-        reason: error.message,
-      });
-    }
+    logEmployeePiiDecryptFailure(row, field, error);
     return null;
   }
 }
@@ -554,6 +624,7 @@ function auditModuleFromPath(pathname = '') {
   if (pathOnly.startsWith('/api/onboarding')) return 'ONBOARDING';
   if (pathOnly.startsWith('/api/reports')) return 'REPORTS';
   if (pathOnly.startsWith('/api/blockchain')) return 'BLOCKCHAIN';
+  if (pathOnly.startsWith('/api/self-service') || pathOnly.startsWith('/api/hr/profile-change-requests')) return 'SELF_SERVICE';
   if (pathOnly.startsWith('/api/employee')) return 'SELF_SERVICE';
   if (pathOnly.startsWith('/api/requests')) return 'SELF_SERVICE';
   return 'SYSTEM';
@@ -564,6 +635,171 @@ function auditVerbFromMethod(method) {
   if (method === 'PUT' || method === 'PATCH') return 'UPDATE';
   if (method === 'DELETE') return 'DELETE';
   return 'WRITE';
+}
+
+function auditPathMatches(path, pattern) {
+  return pattern.test(String(path || '').toLowerCase());
+}
+
+function auditStatusLabel(req, fallback = 'status updated') {
+  const status = String(req.body?.status || req.body?.approval_status || req.body?.final_pay_status || req.body?.payroll_clearance_status || '')
+    .trim();
+  return status ? `${fallback}: ${status}` : fallback;
+}
+
+function auditActionFromRequest(req, pathOnly, verb) {
+  const method = String(req.method || '').toUpperCase();
+  const path = String(pathOnly || '').toLowerCase();
+  const employeeRecord = /^\/api\/employees\/\d+$/;
+  const employeeDocument = /^\/api\/employees\/\d+\/documents(?:\/\d+)?$/;
+  const employeeNested = /^\/api\/employees\/\d+\/(family|work-experiences|certifications|trainings|skills)(?:\/\d+)?$/;
+  const payrollRecord = /^\/api\/payroll\/salary-calculations\/\d+/;
+
+  if (path === '/api/admin/register-role' && method === 'POST') return 'User account created';
+  if (/^\/api\/admin\/update-role\/\d+$/.test(path) && method === 'PUT') return 'User role updated';
+  if (/^\/api\/admin\/users\/\d+\/reset-password$/.test(path)) return 'User password reset';
+  if (/^\/api\/admin\/users\/\d+\/credentials$/.test(path)) return 'User credentials updated';
+  if (/^\/api\/admin\/users\/\d+\/unlock$/.test(path)) return 'User account unlocked';
+  if (/^\/api\/admin\/users\/\d+\/reset-mfa$/.test(path)) return 'User MFA reset';
+  if (/^\/api\/admin\/users\/\d+\/revoke-sessions$/.test(path)) return 'User sessions revoked';
+  if (/^\/api\/admin\/users\/\d+\/deactivate$/.test(path)) return 'User account deactivated';
+  if (/^\/api\/admin\/users\/\d+\/activate$/.test(path)) return 'User account reactivated';
+  if (path.startsWith('/api/admin/system-health/check')) return 'System health check run';
+  if (path === '/api/admin/support-tickets' && method === 'POST') return 'Support ticket created';
+  if (/^\/api\/admin\/support-tickets\/\d+$/.test(path) && method === 'PATCH') return auditStatusLabel(req, 'Support ticket status updated');
+  if (path === '/api/admin/backups/request') return 'Backup request created';
+  if (/^\/api\/admin\/backups\/\d+$/.test(path) && method === 'PATCH') return auditStatusLabel(req, 'Backup request status updated');
+
+  if (path === '/api/form-drafts' && method === 'POST') return 'Form draft saved';
+  if (path === '/api/form-drafts/status' && method === 'PATCH') return 'Form draft status updated';
+  if (path === '/api/employees/id-config' && method === 'PUT') return 'Employee ID format updated';
+  if (path === '/api/employees' && method === 'POST') return 'Employee record created';
+  if (auditPathMatches(path, employeeRecord) && method === 'PUT') return 'Employee profile updated';
+  if (auditPathMatches(path, employeeRecord) && method === 'DELETE') return 'Employee record deletion requested';
+  if (/^\/api\/employees\/\d+\/status$/.test(path)) return auditStatusLabel(req, 'Employee status updated');
+  if (/^\/api\/employees\/\d+\/reveal-sensitive$/.test(path)) return 'Employee sensitive fields revealed';
+  if (/^\/api\/employees\/\d+\/offboard$/.test(path)) return 'Employee offboarding requested';
+  if (/^\/api\/employees\/\d+\/reonboard$/.test(path)) return 'Employee re-onboarding requested';
+  if (/^\/api\/employees\/offboarding\/\d+$/.test(path)) return auditStatusLabel(req, 'Employee offboarding case updated');
+  if (/^\/api\/employees\/offboarding\/\d+\/documents$/.test(path)) return 'Offboarding document uploaded';
+  if (auditPathMatches(path, employeeDocument) && method === 'POST') return 'Employee document uploaded';
+  if (auditPathMatches(path, employeeDocument) && method === 'DELETE') return 'Employee document deleted';
+  if (/^\/api\/employees\/\d+\/photo$/.test(path) && method === 'POST') return 'Employee profile photo uploaded';
+  if (/^\/api\/employees\/\d+\/photo$/.test(path) && method === 'DELETE') return 'Employee profile photo removed';
+  if (auditPathMatches(path, employeeNested)) {
+    const section = path.match(/^\/api\/employees\/\d+\/([^/]+)/)?.[1] || 'profile record';
+    const label = section.replaceAll('-', ' ');
+    if (method === 'POST') return `Employee ${label} added`;
+    if (method === 'DELETE') return `Employee ${label} deleted`;
+  }
+  if (path === '/api/employee-setup/departments' && method === 'POST') return 'Department created';
+  if (/^\/api\/employee-setup\/departments\/\d+$/.test(path) && method === 'PUT') return 'Department updated';
+  if (/^\/api\/employee-setup\/departments\/\d+$/.test(path) && method === 'DELETE') return 'Department deleted';
+  if (path === '/api/employee-setup/positions' && method === 'POST') return 'Position created';
+  if (/^\/api\/employee-setup\/positions\/\d+$/.test(path) && method === 'PUT') return 'Position updated';
+  if (/^\/api\/employee-setup\/positions\/\d+$/.test(path) && method === 'DELETE') return 'Position deleted';
+
+  if (path === '/api/attendance/manual') return 'Manual attendance encoded';
+  if (/^\/api\/attendance\/\d+\/override$/.test(path)) return 'Attendance time record corrected';
+  if (/^\/api\/attendance\/\d+\/verify$/.test(path)) return auditStatusLabel(req, 'Attendance verification updated');
+  if (/^\/api\/attendance\/\d+\/overtime$/.test(path)) return 'Attendance overtime encoded';
+  if (/^\/api\/attendance\/\d+\/overtime-review$/.test(path)) return auditStatusLabel(req, 'Overtime review decision recorded');
+  if (path === '/api/attendance/policies') return 'Attendance policy updated';
+  if (path === '/api/attendance/biometric/devices' && method === 'POST') return 'Biometric device registered';
+  if (/^\/api\/attendance\/biometric\/devices\/\d+$/.test(path) && method === 'PUT') return 'Biometric device updated';
+  if (path === '/api/attendance/biometric/mappings' && method === 'POST') return 'Biometric employee mapping created';
+  if (/^\/api\/attendance\/biometric\/mappings\/\d+$/.test(path) && method === 'DELETE') return 'Biometric employee mapping deleted';
+  if (/^\/api\/attendance\/biometric\/sync\/\d+$/.test(path)) return 'Biometric attendance sync started';
+  if (path === '/api/attendance/integrity/anchor-pending') return 'Pending attendance hashes anchored';
+  if (/^\/api\/attendance\/geofence\/\d+$/.test(path)) return 'Attendance geofence updated';
+  if (path === '/api/biometric/attendance') return 'Biometric attendance event recorded';
+  if (path === '/api/biometric/bridge-commands') return 'Biometric bridge command queued';
+
+  if (path === '/api/leave' && method === 'POST') {
+    return req.body?.filing_source === 'Manual' ? 'Manual leave encoded' : 'Leave filed';
+  }
+  if (/^\/api\/leave\/\d+\/status$/.test(path) && method === 'PATCH') {
+    const status = String(req.body?.status || '').trim().toLowerCase();
+    if (status === 'approved') return 'Leave approved';
+    if (status === 'rejected' || status === 'denied') return 'Leave rejected';
+    if (status === 'cancelled') return 'Leave cancelled';
+    return 'Leave status updated';
+  }
+  if (path === '/api/leave/balances' && method === 'PUT') return 'Leave balance adjusted';
+  if (path === '/api/leave/types' && method === 'POST') return req.body?.id ? 'Leave type updated' : 'Leave type created';
+  if (/^\/api\/leave\/\d+\/reveal-sensitive$/.test(path)) return 'Leave details revealed';
+  if (/^\/api\/leave\/\d+\/attachment$/.test(path)) return 'Leave attachment downloaded';
+  if (path === '/api/requests' && method === 'POST') return 'Employee request submitted';
+  if (/^\/api\/requests\/\d+\/status$/.test(path)) return auditStatusLabel(req, 'Employee request status updated');
+
+  if (path === '/api/payroll/runs' && method === 'POST') return 'Payroll run created';
+  if (/^\/api\/payroll\/runs\/\d+\/approve$/.test(path)) return 'Payroll run approved';
+  if (path === '/api/payroll/salary-calculation') return 'Draft salary calculation created';
+  if (path === '/api/payroll/generate/preview') return 'Payroll generation previewed';
+  if (path === '/api/payroll/generate') return 'Payroll generated';
+  if (auditPathMatches(path, payrollRecord) && path.endsWith('/recalculate')) return 'Salary calculation recalculated';
+  if (/^\/api\/payroll\/salary-calculations\/\d+\/status$/.test(path)) return auditStatusLabel(req, 'Salary calculation status updated');
+  if (path === '/api/payroll/convert-calculations-to-payslips') return 'Payslips generated from salary calculations';
+  if (/^\/api\/payroll\/payslips\/encryption\/backfill$/.test(path)) return 'Payslip encryption backfill started';
+  if (path.includes('/government-contributions/reveal')) return 'Government contribution details revealed';
+  if (path.includes('/reveal-remarks')) return 'Payroll remarks revealed';
+  if (path === '/api/payroll/transactions/production') return 'Production payroll log encoded';
+  if (path === '/api/payroll/transactions/logistics') return 'Logistics trip payroll log encoded';
+  if (path === '/api/payroll/production-output') return 'Production output encoded';
+  if (path === '/api/payroll/production-pairs') return 'Production pair rule saved';
+  if (/^\/api\/payroll\/piece-rate-outputs(?:\/\d+)?$/.test(path)) return method === 'PATCH' ? 'Piece-rate output updated' : method === 'DELETE' ? 'Piece-rate output deleted' : 'Piece-rate output encoded';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/submit$/.test(path)) return 'Piece-rate output submitted for review';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/approve$/.test(path)) return 'Piece-rate output approved';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/reject$/.test(path)) return 'Piece-rate output rejected';
+  if (/^\/api\/payroll\/logistics\/trips(?:\/\d+)?$/.test(path)) return method === 'PUT' ? 'Logistics trip log updated' : method === 'DELETE' ? 'Logistics trip log deleted' : 'Logistics trip log encoded';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/submit$/.test(path)) return 'Logistics trip log submitted for review';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/approve$/.test(path)) return 'Logistics trip log approved';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/reject$/.test(path)) return 'Logistics trip log rejected';
+  if (path.includes('/deduction-settings')) return method === 'DELETE' ? 'Deduction setting deleted' : 'Deduction setting saved';
+  if (path.includes('/sss-tables')) return path.endsWith('/preview') ? 'SSS table import previewed' : path.endsWith('/activate') ? 'SSS table activated' : 'SSS table imported';
+  if (path.includes('/allowance-settings')) return 'Allowance setting saved';
+  if (path.includes('/employee-deductions')) return auditStatusLabel(req, 'Employee deduction status updated');
+  if (path.includes('/employee-cash-advances')) return 'Employee cash advance saved';
+  if (path.includes('/employee-loans')) return 'Employee loan saved';
+  if (path.includes('/policy-settings')) return 'Payroll policy setting saved';
+  if (path.includes('/attendance-configurations')) return method === 'DELETE' ? 'Payroll attendance configuration deleted' : 'Payroll attendance configuration saved';
+  if (/^\/api\/payroll\/employees\/\d+\/wage-config$/.test(path)) return 'Employee wage configuration saved';
+  if (path.includes('/logistics/') || path.includes('/piece-') || path.includes('/sew-types') || path.includes('/size-ranges') || path.includes('/production-share')) {
+    return method === 'DELETE' ? 'Payroll configuration deleted' : 'Payroll configuration saved';
+  }
+  if (path.endsWith('/generate') && path.includes('/api/payroll/')) return 'Payroll report generated';
+  if (/^\/api\/payroll\/offboarding-clearance\/\d+$/.test(path)) return auditStatusLabel(req, 'Payroll offboarding clearance updated');
+  if (/^\/api\/payroll\/final-pay-approval\/\d+$/.test(path)) return auditStatusLabel(req, 'Final pay approval updated');
+
+  if (path === '/api/onboarding/integrity/anchor-pending') return 'Pending onboarding hashes anchored';
+  if (path === '/api/onboarding/positions') return 'Onboarding position created';
+  if (/^\/api\/onboarding\/positions\/[^/]+$/.test(path)) return method === 'DELETE' ? 'Onboarding position deleted' : 'Onboarding position updated';
+  if (path === '/api/onboarding/applicants') return 'Applicant record created';
+  if (/^\/api\/onboarding\/applicants\/\d+\/progress$/.test(path)) return auditStatusLabel(req, 'Applicant progress updated');
+  if (/^\/api\/onboarding\/applicants\/\d+\/decision$/.test(path)) return auditStatusLabel(req, 'Applicant hiring decision recorded');
+  if (/^\/api\/onboarding\/applicants\/\d+\/transfer$/.test(path)) return 'Applicant transferred to employee directory';
+  if (/^\/api\/onboarding\/applicants\/\d+\/reveal-sensitive$/.test(path)) return 'Applicant sensitive details revealed';
+  if (/^\/api\/onboarding\/applicants\/\d+$/.test(path) && method === 'DELETE') return 'Applicant removed from active onboarding';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents$/.test(path)) return 'Applicant document uploaded';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents\/\d+\/verify$/.test(path)) return 'Applicant document verification updated';
+
+  if (path === '/api/self-service/profile') return 'Employee self-service profile updated';
+  if (path === '/api/self-service/password') return 'Employee password changed';
+  if (path === '/api/self-service/profile-picture') return 'Employee profile picture changed';
+  if (/^\/api\/self-service\/restricted-fields\/[^/]+\/reveal$/.test(path)) return 'Self-service restricted field revealed';
+  if (path === '/api/self-service/change-requests') return 'Profile change request submitted';
+  if (/^\/api\/self-service\/change-requests\/\d+\/reveal$/.test(path)) return 'Profile change request details revealed';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/approve$/.test(path)) return 'Profile change request approved';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/reject$/.test(path)) return 'Profile change request rejected';
+
+  if (path.startsWith('/api/reports')) return 'Report generated or exported';
+  if (/^\/api\/blockchain\/payroll\/finalize\/\d+$/.test(path)) return 'Final payroll recorded on blockchain';
+  if (/^\/api\/blockchain\/payroll\/adjustment\/\d+$/.test(path)) return 'Payroll blockchain adjustment recorded';
+  if (/^\/api\/blockchain\/dtr\/generate\/\d+$/.test(path)) return 'DTR blockchain hash generated';
+  if (/^\/api\/blockchain\/dtr\/anchor\/\d+$/.test(path)) return 'DTR record anchored on blockchain';
+  if (/^\/api\/blockchain\/dtr\/adjustment\/\d+$/.test(path)) return 'DTR blockchain adjustment recorded';
+
+  return `${verb}_API: ${method} ${pathOnly}`;
 }
 
 function firstNumericPathId(pathname = '') {
@@ -590,7 +826,7 @@ function generalWriteAuditMiddleware(req, res, next) {
     const result = statusCode >= 200 && statusCode < 400 ? 'success' : 'failed';
 
     auditSecurityEvent(req, {
-      action: `${verb}_API: ${req.method} ${pathOnly}`,
+      action: auditActionFromRequest(req, pathOnly, verb),
       module,
       targetTable: pathOnly,
       targetRecord: firstNumericPathId(pathOnly),
@@ -616,6 +852,7 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(encryptedCommunicationMiddleware);
 app.use(preventStorageCiphertextResponses);
 app.use('/api', requireSameOriginForBrowserWrites);
+app.use('/api', auditSuspiciousRequestPatterns);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
@@ -625,8 +862,11 @@ app.use([
   '/api/auth/mfa/verify',
   '/api/auth/mfa/resend',
   '/api/auth/lockout-status',
+  '/api/auth/client-security-event',
 ], AUTH_RATE_LIMIT);
-app.use('/api', API_RATE_LIMIT);
+app.use(['/api/attendance', '/api/biometric'], ATTENDANCE_ROUTE_RATE_LIMIT);
+app.use(['/api/payroll', '/api/blockchain/payroll'], PAYROLL_ROUTE_RATE_LIMIT);
+app.use('/api', apiRateLimit);
 app.use('/api', generalWriteAuditMiddleware);
 app.use((req, res, next) => {
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
@@ -1099,6 +1339,18 @@ async function ensurePhilippineAddressColumns(pool) {
   }
 }
 
+let philippineAddressColumnsReadyPromise = null;
+function ensurePhilippineAddressColumnsOnce(pool) {
+  if (!philippineAddressColumnsReadyPromise) {
+    philippineAddressColumnsReadyPromise = ensurePhilippineAddressColumns(pool)
+      .catch(error => {
+        philippineAddressColumnsReadyPromise = null;
+        throw error;
+      });
+  }
+  return philippineAddressColumnsReadyPromise;
+}
+
 function validateEmployeeAddresses(body) {
   const addresses = normalizeAddressPayload(body);
   const errors = [];
@@ -1154,11 +1406,12 @@ function employeeDirectoryPayload(employee, options = {}) {
   };
 }
 
-const EMPLOYEE_REVEAL_FIELDS = new Set([
-  ...EMPLOYEE_STRICT_PII_COLUMNS,
-  'residential_address_lat', 'residential_address_lng',
-  'current_address_lat', 'current_address_lng',
-  'mailing_address_lat', 'mailing_address_lng',
+const EMPLOYEE_PROFILE_MASKED_FIELDS = new Set([
+  'sss_number',
+  'philhealth_number',
+  'pagibig_number',
+  'tin',
+  'bank_account',
 ]);
 
 function decryptEmployeeGps(row) {
@@ -1172,13 +1425,10 @@ function decryptEmployeeGps(row) {
 
 function maskEmployeeDetail(row) {
   const safe = { ...row, sensitive_fields_masked: true };
-  for (const field of EMPLOYEE_REVEAL_FIELDS) {
-    if (['first_name', 'middle_name', 'last_name', 'suffix'].includes(field)) continue;
+  for (const field of EMPLOYEE_PROFILE_MASKED_FIELDS) {
     const value = safe[field];
     if (value === null || value === undefined || value === '') continue;
-    safe[field] = field.includes('address') && !field.endsWith('_lat') && !field.endsWith('_lng')
-      ? 'On file'
-      : maskSensitiveValue(value, 4);
+    safe[field] = maskSensitiveValue(value, 4);
   }
   return safe;
 }
@@ -2722,6 +2972,18 @@ async function ensureEmployeeLifecycleManagementSchema(pool) {
   }
 }
 
+let employeeLifecycleManagementSchemaReadyPromise = null;
+function ensureEmployeeLifecycleManagementSchemaOnce(pool) {
+  if (!employeeLifecycleManagementSchemaReadyPromise) {
+    employeeLifecycleManagementSchemaReadyPromise = ensureEmployeeLifecycleManagementSchema(pool)
+      .catch(error => {
+        employeeLifecycleManagementSchemaReadyPromise = null;
+        throw error;
+      });
+  }
+  return employeeLifecycleManagementSchemaReadyPromise;
+}
+
 async function ensureOnboardingLifecycleSchema(pool) {
   await ensureEmployeeLifecycleColumns(pool);
 
@@ -3058,8 +3320,6 @@ app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.s
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
-    await ensureEmployeeLifecycleManagementSchema(pool);
-    await ensurePhilippineAddressColumns(pool);
     const requestedStatus = String(req.query.status || '').trim();
     const includeAllStatuses = /^(all|all status|all statuses)$/i.test(requestedStatus);
     const employeeWhere = [];
@@ -3073,31 +3333,10 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
       }
     }
     const employeeListSql =
-      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix, e.email, e.contact_number, 
-              e.work_email, e.mailing_address, e.mailing_address_lat, e.mailing_address_lng, e.mailing_address_same_as_home,
-              e.mailing_address_region, e.mailing_address_province, e.mailing_address_city_municipality, e.mailing_address_barangay,
-              e.mailing_address_street_address, e.mailing_address_full_address, e.mailing_address_place_id,
-              e.nationality, e.date_of_birth, e.place_of_birth, e.gender, e.marital_status, e.blood_type, e.religion,
-              e.residential_address, e.residential_address_lat, e.residential_address_lng,
-              e.residential_address_region, e.residential_address_province, e.residential_address_city_municipality, e.residential_address_barangay,
-              e.residential_address_street_address, e.residential_address_full_address, e.residential_address_place_id,
-              e.current_address, e.current_address_lat, e.current_address_lng, e.current_address_same_as_home,
-              e.current_address_region, e.current_address_province, e.current_address_city_municipality, e.current_address_barangay,
-              e.current_address_street_address, e.current_address_full_address, e.current_address_place_id,
-              e.emergency_contact_name, e.emergency_contact_num,
-              e.emergency_contact_relationship, e.emergency_contact_secondary_num, e.emergency_contact_email, e.emergency_contact_address,
-              e.education_school, e.education_attainment, e.education_units, e.education_year_graduated,
-              e.education_jhs_school, e.education_jhs_attainment, e.education_jhs_from, e.education_jhs_to, e.education_jhs_year_graduated,
-              e.education_shs_school, e.education_shs_attainment, e.education_shs_from, e.education_shs_to, e.education_shs_year_graduated,
-              e.education_vocational_school, e.education_vocational_attainment, e.education_vocational_units, e.education_vocational_from, e.education_vocational_to, e.education_vocational_year_graduated,
-              e.education_college_school, e.education_college_attainment, e.education_college_units, e.education_college_from, e.education_college_to, e.education_college_year_graduated,
-              e.department_id, e.position, e.employment_type, e.date_hired, e.end_of_contract, e.supervisor, e.work_location,
-              e.shift_schedule, e.employee_level, e.employment_history, e.status, e.status AS employment_status,
-              e.separation_date, e.separation_reason, e.offboarding_remarks, e.offboarding_clearance_result, e.wage_type_id,
-              e.salary_grade, e.allowances, e.payroll_schedule,
-              e.sss_number, e.philhealth_number, e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account,
-              e.hiring_type, e.agency_name, e.agency_contact_person, e.agency_contact_number,
-              e.deployment_status, e.contract_start_date, e.contract_end_date, e.lifecycle_status,
+      `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix,
+              e.email, e.contact_number, e.department_id, e.position, e.employment_type,
+              e.supervisor, e.status, e.status AS employment_status, e.wage_type_id,
+              e.hiring_type, e.deployment_status,
               d.name AS department, wt.name AS wage_type,
               (
                 SELECT COALESCE(r.label, r.name)
@@ -3156,7 +3395,8 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     // for this large directory query. `query(sql, params)` still keeps dynamic
     // values parameterized while avoiding the prepared-statement crash.
     const [rows] = await pool.query(employeeListSql, employeeParams);
-    const employees = rows.map(row => decryptEmployeeStrictPii(row));
+    const directoryDecryptBudget = { failures: 0, limit: 8 };
+    const employees = rows.map(row => decryptEmployeeDirectoryPii(row, directoryDecryptBudget));
     
     if (req.user.role === 'employee') return res.json(employees.filter(r => r.id === req.user.employeeId).map(employee => employeeDirectoryPayload(employee)));
     if (employeeHasRole(req, ROLES.staff_management)) {
@@ -3199,7 +3439,7 @@ app.get('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     if (!rows.length) return res.status(404).json({ error: 'Employee not found.' });
     const employee = decryptEmployeeGps(decryptEmployeeStrictPii(rows[0]));
     for (const field of ['Password_Hash', 'password_hash', 'encrypted_pii', 'email_hash', 'Failed_Login_Attempts', 'Locked_Until']) delete employee[field];
-    res.json(visibleEmployeeDetail(employee));
+    res.json(maskEmployeeDetail(visibleEmployeeDetail(employee)));
   } catch (err) {
     console.error('Error fetching employee detail:', err.message);
     res.status(500).json({ error: 'Failed to fetch employee detail.' });
@@ -3218,7 +3458,7 @@ app.post('/api/employees/:id/reveal-sensitive', requireAuth, requireRole(ROLES.s
     if (!rows.length) return res.status(404).json({ error: 'Employee not found.' });
     const employee = decryptEmployeeGps(decryptEmployeeStrictPii(rows[0]));
     const revealed = {};
-    for (const field of EMPLOYEE_REVEAL_FIELDS) {
+    for (const field of EMPLOYEE_PROFILE_MASKED_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(employee, field)) revealed[field] = employee[field];
     }
     await auditSecurityEvent(req, {
@@ -5601,6 +5841,37 @@ function requireLeavePermission(permission) {
   };
 }
 
+function leaveStepUpPassword(req) {
+  return String(req.body?.currentPassword || req.body?.current_password || req.body?.password_confirmation || '');
+}
+
+async function verifyLeaveStepUpPassword(pool, req) {
+  const userId = Number(req.user?.id || req.user?.userId || req.user?.sub);
+  const currentPassword = leaveStepUpPassword(req);
+  if (!Number.isInteger(userId) || userId <= 0 || !currentPassword.trim()) return false;
+
+  const [rows] = await pool.execute(`
+    SELECT COALESCE(u.password_hash, e.Password_Hash) AS password_hash
+      FROM users u
+      LEFT JOIN employees e ON e.id = u.employee_id
+     WHERE u.id = ?
+     LIMIT 1
+  `, [userId]);
+
+  return verifyPassword(rows[0]?.password_hash, currentPassword);
+}
+
+const LEAVE_PAYROLL_APPROVER_ROLES = new Set(['payroll_officer', 'payroll_manager']);
+const LEAVE_HR_FINAL_APPROVER_ROLES = new Set(ROLES.hr_final_approval);
+
+function isLeavePayrollApprover(user) {
+  return LEAVE_PAYROLL_APPROVER_ROLES.has(user?.role);
+}
+
+function isLeaveHrFinalApprover(user) {
+  return LEAVE_HR_FINAL_APPROVER_ROLES.has(user?.role);
+}
+
 function normalizePayType(wageType) {
   const value = String(wageType || '').toLowerCase();
   if (value.includes('hour')) return 'Per Hour';
@@ -5628,6 +5899,78 @@ function boolValue(value) {
 function decimalValue(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function leaveBalanceIntegrityAmount(value) {
+  return decimalValue(value).toFixed(2);
+}
+
+function leaveBalanceIntegrityPayload(row) {
+  return [
+    'leave_balance:v1',
+    String(row.employee_id ?? ''),
+    row.leave_type_id === null || row.leave_type_id === undefined ? '' : String(row.leave_type_id),
+    String(row.leave_type || ''),
+    String(row.year ?? ''),
+    leaveBalanceIntegrityAmount(row.balance),
+    leaveBalanceIntegrityAmount(row.used),
+    leaveBalanceIntegrityAmount(row.total_days),
+    leaveBalanceIntegrityAmount(row.used_days),
+    leaveBalanceIntegrityAmount(row.remaining_days),
+  ].join('|');
+}
+
+function computeLeaveBalanceIntegrityHash(row) {
+  return nodeCrypto.createHash('sha256').update(leaveBalanceIntegrityPayload(row), 'utf8').digest('hex');
+}
+
+function secureVaultFileExists(relativePath) {
+  if (!relativePath) return false;
+  const resolved = path.resolve(VAULT_ROOT, String(relativePath));
+  if (!resolved.startsWith(path.resolve(VAULT_ROOT) + path.sep)) return false;
+  return fs.existsSync(resolved);
+}
+
+function publicUploadFileExists(relativePath) {
+  if (!relativePath) return false;
+  const uploadRoot = path.resolve(__dirname, 'public', 'uploads');
+  const resolved = path.resolve(__dirname, 'public', String(relativePath).replace(/^\/+/, ''));
+  if (!resolved.startsWith(uploadRoot + path.sep)) return false;
+  return fs.existsSync(resolved);
+}
+
+function leaveAttachmentState(row) {
+  const hasReference = Boolean(row?.attachment_encrypted_path || row?.file_path);
+  if (!hasReference) return { status: 'none', available: false, missing: false };
+  const exists = row.attachment_encrypted_path
+    ? secureVaultFileExists(row.attachment_encrypted_path)
+    : publicUploadFileExists(row.file_path);
+  return {
+    status: exists ? 'available' : 'missing',
+    available: exists,
+    missing: !exists,
+  };
+}
+
+function leaveBalanceIntegrityStatus(row) {
+  const storedHash = String(row.integrity_hash || '').trim().toLowerCase();
+  if (!storedHash) return { status: 'UNSEALED', hash: null };
+  const expectedHash = computeLeaveBalanceIntegrityHash({
+    employee_id: row.employee_id,
+    leave_type_id: row.leave_type_id,
+    leave_type: row.leave_type,
+    year: row.year,
+    balance: row.stored_balance ?? row.balance,
+    used: row.stored_used ?? row.used,
+    total_days: row.stored_total_days ?? row.total_days,
+    used_days: row.stored_used_days ?? row.used_days,
+    remaining_days: row.stored_remaining_days ?? row.remaining_days,
+  });
+  return {
+    status: storedHash === expectedHash ? 'VALID' : 'TAMPERED',
+    hash: storedHash,
+    expected_hash: expectedHash,
+  };
 }
 
 function monthsBetween(startDate, endDate = new Date()) {
@@ -5810,6 +6153,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
                     END AS pay_type,
                     filed.username AS filed_by_name,
                     encoded.username AS encoded_by_name,
+                    payrollReviewer.username AS payroll_approved_by_name,
                     reviewer.username AS reviewed_by_name,
                     COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) AS balance_total_days,
                     COALESCE(NULLIF(lb.used_days, 0), lb.used, 0) AS balance_used_days,
@@ -5825,6 +6169,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
              LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
              LEFT JOIN users filed ON filed.id = lr.filed_by
              LEFT JOIN users encoded ON encoded.id = lr.encoded_by
+             LEFT JOIN users payrollReviewer ON payrollReviewer.id = lr.payroll_approved_by
              LEFT JOIN users reviewer ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
     const p = [];
     if (!hasLeavePermission(req.user, 'leave.request.view_all')) {
@@ -5843,15 +6188,19 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
       const {
         reason, reason_encrypted, remarks, remarks_encrypted,
         rejection_remarks, rejection_remarks_encrypted,
+        payroll_approval_remarks, payroll_approval_remarks_encrypted,
         approval_remarks, approval_remarks_encrypted,
         file_path, attachment_name_encrypted, attachment_encrypted_path,
         ...safeRow
       } = row;
+      const attachment = leaveAttachmentState({ file_path, attachment_encrypted_path });
       return {
         ...safeRow,
         employee_name: employeeName || row.employee_code || `Employee #${row.employee_id}`,
-        sensitive_details_available: !!(reason_encrypted || remarks_encrypted || rejection_remarks_encrypted || approval_remarks_encrypted || reason || remarks || rejection_remarks || approval_remarks),
-        attachment_available: !!(attachment_encrypted_path || file_path),
+        sensitive_details_available: !!(reason_encrypted || remarks_encrypted || rejection_remarks_encrypted || payroll_approval_remarks_encrypted || approval_remarks_encrypted || reason || remarks || rejection_remarks || payroll_approval_remarks || approval_remarks),
+        attachment_available: attachment.available,
+        attachment_missing: attachment.missing,
+        attachment_status: attachment.status,
       };
     }));
   } catch (err) { res.status(500).json({ error: 'Failed to fetch leave.' }); }
@@ -5869,6 +6218,9 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
 
     const [rows] = await pool.execute(
       `SELECT lb.id, lb.employee_id, lb.leave_type_id, lb.leave_type, lt.category,
+              lb.balance AS stored_balance, lb.used AS stored_used,
+              lb.total_days AS stored_total_days, lb.used_days AS stored_used_days,
+              lb.remaining_days AS stored_remaining_days, lb.integrity_hash,
               COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) AS total_days,
               COALESCE(NULLIF(lb.used_days, 0), lb.used, 0) AS used_days,
               COALESCE(lb.remaining_days, COALESCE(NULLIF(lb.total_days, 0), lb.balance, 0) - COALESCE(NULLIF(lb.used_days, 0), lb.used, 0)) AS remaining_days,
@@ -5883,7 +6235,14 @@ app.get('/api/leave/balances', requireAuth, requireRole(ROLES.any), async (req, 
        ORDER BY FIELD(COALESCE(lt.category, 'Company'), 'Company', 'Statutory'), lb.leave_type`,
       [employeeId, year]
     );
-    res.json(rows);
+    res.json(rows.map(row => {
+      const integrity = leaveBalanceIntegrityStatus(row);
+      return {
+        ...row,
+        integrity_status: integrity.status,
+        integrity_hash: integrity.hash,
+      };
+    }));
   } catch (err) {
     console.error('Error fetching leave balances:', err.message);
     res.status(500).json({ error: 'Failed to fetch leave balances.' });
@@ -5908,10 +6267,21 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
     }
 
     const remainingDays = totalDays - usedDays;
+    const integrityHash = computeLeaveBalanceIntegrityHash({
+      employee_id: employeeId,
+      leave_type_id: leaveType.id,
+      leave_type: leaveType.name,
+      year,
+      balance: totalDays,
+      used: usedDays,
+      total_days: totalDays,
+      used_days: usedDays,
+      remaining_days: remainingDays,
+    });
     await pool.execute(
       `INSERT INTO leave_balances
-         (employee_id, leave_type_id, leave_type, balance, used, total_days, used_days, remaining_days, year, last_updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (employee_id, leave_type_id, leave_type, balance, used, total_days, used_days, remaining_days, integrity_hash, year, last_updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          leave_type_id = VALUES(leave_type_id),
          leave_type = VALUES(leave_type),
@@ -5920,8 +6290,9 @@ app.put('/api/leave/balances', requireAuth, requireLeavePermission('leave.balanc
          total_days = VALUES(total_days),
          used_days = VALUES(used_days),
          remaining_days = VALUES(remaining_days),
+         integrity_hash = VALUES(integrity_hash),
          last_updated_by = VALUES(last_updated_by)`,
-      [employeeId, leaveType.id, leaveType.name, totalDays, usedDays, totalDays, usedDays, remainingDays, year, req.user.id]
+      [employeeId, leaveType.id, leaveType.name, totalDays, usedDays, totalDays, usedDays, remainingDays, integrityHash, year, req.user.id]
     );
     await writeLeaveAudit(pool, null, employeeId, req.user.id, 'leave_balance_adjusted', `${leaveType.name}: ${remainingDays}/${totalDays} day(s) remaining`, null, null, {
       leave_type_id: leaveType.id,
@@ -6021,7 +6392,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
     const [overlaps] = await pool.execute(
       `SELECT id FROM leave_requests
        WHERE employee_id = ?
-         AND status IN ('Pending','Approved')
+         AND status IN ('Pending','Payroll Approved','Approved')
          AND date_from <= ? AND date_to >= ?
        LIMIT 1`,
       [empId, date_to, date_from]
@@ -6037,6 +6408,15 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
         discardUploadedFile(req.file);
         return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
       }
+      const integrity = leaveBalanceIntegrityStatus(balance);
+      if (integrity.status === 'TAMPERED') {
+        discardUploadedFile(req.file);
+        await writeLeaveAudit(pool, null, empId, req.user.id, 'leave_balance_integrity_blocked', 'Leave balance integrity check failed before filing.', null, null, {
+          leave_type_id: leaveType.id,
+          year,
+        });
+        return res.status(409).json({ error: 'Leave balance integrity check failed. Ask HR Admin to verify your leave balance before filing.' });
+      }
       const remaining = decimalValue(balance.remaining_days_value);
       if (requestedDays > remaining) {
         discardUploadedFile(req.file);
@@ -6050,7 +6430,7 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
        WHERE employee_id = ?
          AND COALESCE(leave_type_id, 0) = ?
          AND YEAR(date_from) = ?
-         AND status IN ('Pending','Approved')`,
+         AND status IN ('Pending','Payroll Approved','Approved')`,
       [empId, leaveType.id, year]
     );
     const extensionDays = leaveType.allow_unpaid_extension ? decimalValue(leaveType.max_extension_days) : 0;
@@ -6098,9 +6478,11 @@ app.post('/api/leave', requireAuth, requireRole(ROLES.any), uploadSensitiveSingl
 app.post('/api/leave/:id/reveal-sensitive', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_STEP_UP_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const [[leave]] = await pool.execute(
       `SELECT employee_id, reason, reason_encrypted, remarks, remarks_encrypted,
               rejection_remarks, rejection_remarks_encrypted,
+              payroll_approval_remarks, payroll_approval_remarks_encrypted,
               approval_remarks, approval_remarks_encrypted,
               file_path, attachment_encrypted_path
          FROM leave_requests WHERE id = ? LIMIT 1`,
@@ -6110,13 +6492,22 @@ app.post('/api/leave/:id/reveal-sensitive', requireAuth, requireRole(ROLES.any),
     if (!hasLeavePermission(req.user, 'leave.request.view_all') && Number(leave.employee_id) !== Number(req.user.employeeId)) {
       return res.status(403).json({ error: 'You may only reveal your own leave request.' });
     }
+    const passwordVerified = await verifyLeaveStepUpPassword(pool, req);
+    if (!passwordVerified) {
+      await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_sensitive_step_up_failed');
+      return res.status(403).json({ error: 'Current password confirmation is required.' });
+    }
     await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_sensitive_details_revealed');
+    const attachment = leaveAttachmentState(leave);
     return res.json({
       reason: decryptColumnValue(leave.reason_encrypted || leave.reason),
       remarks: decryptColumnValue(leave.remarks_encrypted || leave.remarks),
       rejection_remarks: decryptColumnValue(leave.rejection_remarks_encrypted || leave.rejection_remarks),
+      payroll_approval_remarks: decryptColumnValue(leave.payroll_approval_remarks_encrypted || leave.payroll_approval_remarks),
       approval_remarks: decryptColumnValue(leave.approval_remarks_encrypted || leave.approval_remarks),
-      attachment_available: !!(leave.attachment_encrypted_path || leave.file_path),
+      attachment_available: attachment.available,
+      attachment_missing: attachment.missing,
+      attachment_status: attachment.status,
     });
   } catch (err) {
     console.error('Error revealing leave details:', err.message);
@@ -6124,9 +6515,10 @@ app.post('/api/leave/:id/reveal-sensitive', requireAuth, requireRole(ROLES.any),
   }
 });
 
-app.get('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async (req, res) => {
+app.post('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    if (await rejectUnsupportedRouteFields(req, res, LEAVE_STEP_UP_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     const [[leave]] = await pool.execute(
       `SELECT employee_id, attachment_name_encrypted, attachment_encrypted_path, attachment_mime_type
          FROM leave_requests WHERE id = ? LIMIT 1`,
@@ -6135,6 +6527,15 @@ app.get('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async 
     if (!leave?.attachment_encrypted_path) return res.status(404).json({ error: 'Leave attachment not found.' });
     if (!hasLeavePermission(req.user, 'leave.request.view_all') && Number(leave.employee_id) !== Number(req.user.employeeId)) {
       return res.status(403).json({ error: 'You may only access your own leave attachment.' });
+    }
+    const passwordVerified = await verifyLeaveStepUpPassword(pool, req);
+    if (!passwordVerified) {
+      await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_attachment_step_up_failed');
+      return res.status(403).json({ error: 'Current password confirmation is required.' });
+    }
+    if (!secureVaultFileExists(leave.attachment_encrypted_path)) {
+      await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_attachment_missing');
+      return res.status(404).json({ error: 'Leave attachment file is missing.' });
     }
     const buffer = await readEncryptedBuffer(leave.attachment_encrypted_path);
     const fileName = decryptColumnValue(leave.attachment_name_encrypted) || 'leave-attachment.bin';
@@ -6148,19 +6549,23 @@ app.get('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async 
   }
 });
 
+app.get('/api/leave/:id/attachment', requireAuth, requireRole(ROLES.any), async (req, res) => {
+  return res.status(405).json({ error: 'Current password confirmation is required to download leave attachment.' });
+});
+
 app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.request.approve'), async (req, res) => {
   const pool = require('./config/db');
   const connection = await pool.getConnection();
   try {
     if (await rejectUnsupportedRouteFields(req, res, LEAVE_STATUS_ALLOWED_FIELDS, { module: 'LEAVE_SECURITY' })) return;
     await connection.beginTransaction();
-    const status = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
+    const requestedStatus = req.body.status === 'Denied' ? 'Rejected' : req.body.status;
     const remarks = req.body.remarks || null;
-    if (status === 'Rejected' && !remarks) {
+    if (requestedStatus === 'Rejected' && !remarks) {
       await connection.rollback();
       return res.status(400).json({ error: 'Remarks are required when rejecting leave.' });
     }
-    if (!['Approved', 'Rejected', 'Cancelled', 'Pending'].includes(status)) {
+    if (!['Approved', 'Payroll Approved', 'Rejected', 'Cancelled', 'Pending'].includes(requestedStatus)) {
       await connection.rollback();
       return res.status(400).json({ error: 'Invalid leave status.' });
     }
@@ -6178,6 +6583,51 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
       return res.status(404).json({ error: 'Leave request not found.' });
     }
     const leave = rows[0];
+    const payrollApprover = isLeavePayrollApprover(req.user);
+    const hrFinalApprover = isLeaveHrFinalApprover(req.user);
+    let status = requestedStatus;
+
+    if (Number(req.user.employeeId) === Number(leave.employee_id) && ['Approved', 'Payroll Approved', 'Rejected'].includes(status)) {
+      await connection.rollback();
+      await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_self_approval_blocked', 'Users cannot approve or reject their own leave request.', leave.status, requestedStatus);
+      return res.status(403).json({ error: 'You cannot approve or reject your own leave request.' });
+    }
+
+    if (status === 'Approved' || status === 'Payroll Approved') {
+      if (payrollApprover) {
+        if (leave.status !== 'Pending') {
+          await connection.rollback();
+          return res.status(409).json({ error: 'Payroll can only endorse pending leave requests.' });
+        }
+        status = 'Payroll Approved';
+      } else if (hrFinalApprover) {
+        if (leave.status !== 'Payroll Approved') {
+          await connection.rollback();
+          return res.status(409).json({ error: 'Payroll approval is required before HR final approval.' });
+        }
+        status = 'Approved';
+      } else {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Only Payroll roles can endorse leave and HR Manager can give final approval.' });
+      }
+    }
+
+    if (status === 'Rejected') {
+      if (!payrollApprover && !hrFinalApprover) {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Only Payroll or HR Manager can reject leave requests.' });
+      }
+      if (!['Pending', 'Payroll Approved'].includes(leave.status)) {
+        await connection.rollback();
+        return res.status(409).json({ error: `Cannot reject a ${leave.status} leave request.` });
+      }
+    }
+
+    if (status === 'Cancelled' && !hrFinalApprover) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Only HR Manager can cancel an approved leave request.' });
+    }
+
     const leaveType = await getLeaveType(connection, { id: leave.configured_leave_type_id, name: leave.leave_type_name, includeInactive: true });
     if (!leaveType) {
       await connection.rollback();
@@ -6191,6 +6641,16 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
         await connection.rollback();
         return res.status(400).json({ error: 'No leave balance is configured for this employee, leave type, and year.' });
       }
+      const integrity = leaveBalanceIntegrityStatus(balance);
+      if (integrity.status === 'TAMPERED') {
+        await connection.rollback();
+        await writeLeaveAudit(pool, req.params.id, leave.employee_id, req.user.id, 'leave_balance_integrity_blocked', 'Leave balance integrity check failed before approval.', leave.status, status, {
+          leave_balance_id: balance.id,
+          leave_type_id: leaveType.id,
+          year,
+        });
+        return res.status(409).json({ error: 'Leave balance integrity check failed. Ask System Administrator or HR Admin to verify this balance before approval.' });
+      }
       const requestedDays = decimalValue(leave.days || 1);
       if (decimalValue(balance.remaining_days_value) < requestedDays) {
         await connection.rollback();
@@ -6198,11 +6658,22 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
       }
       const nextUsed = decimalValue(balance.used_days_value) + requestedDays;
       const nextRemaining = decimalValue(balance.total_days_value) - nextUsed;
+      const nextIntegrityHash = computeLeaveBalanceIntegrityHash({
+        employee_id: balance.employee_id,
+        leave_type_id: balance.leave_type_id || leaveType.id,
+        leave_type: balance.leave_type || leaveType.name,
+        year: balance.year,
+        balance: balance.balance ?? balance.total_days_value,
+        used: nextUsed,
+        total_days: balance.total_days ?? balance.total_days_value,
+        used_days: nextUsed,
+        remaining_days: nextRemaining,
+      });
       await connection.execute(
         `UPDATE leave_balances
-            SET used_days = ?, remaining_days = ?, used = ?, last_updated_by = ?
+            SET used_days = ?, remaining_days = ?, used = ?, integrity_hash = ?, last_updated_by = ?
           WHERE id = ?`,
-        [nextUsed, nextRemaining, nextUsed, req.user.id, balance.id]
+        [nextUsed, nextRemaining, nextUsed, nextIntegrityHash, req.user.id, balance.id]
       );
     }
 
@@ -6211,6 +6682,10 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
          status = ?,
          reviewed_by = ?,
          reviewed_at = NOW(),
+         payroll_approved_by = CASE WHEN ? = 'Payroll Approved' THEN ? ELSE payroll_approved_by END,
+         payroll_approved_at = CASE WHEN ? = 'Payroll Approved' THEN NOW() ELSE payroll_approved_at END,
+         payroll_approval_remarks = NULL,
+         payroll_approval_remarks_encrypted = CASE WHEN ? = 'Payroll Approved' THEN ? ELSE payroll_approval_remarks_encrypted END,
          approved_by = CASE WHEN ? = 'Approved' THEN ? ELSE approved_by END,
          approved_at = CASE WHEN ? = 'Approved' THEN NOW() ELSE approved_at END,
          approval_date = CASE WHEN ? = 'Approved' THEN NOW() ELSE approval_date END,
@@ -6227,6 +6702,9 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
         status, req.user.id,
         status, req.user.id,
         status,
+        status, encryptColumnValue(remarks),
+        status, req.user.id,
+        status,
         status,
         status, encryptColumnValue(remarks),
         status, req.user.id,
@@ -6236,10 +6714,15 @@ app.patch('/api/leave/:id/status', requireAuth, requireLeavePermission('leave.re
         req.params.id,
       ]
     );
-    const action = status === 'Approved' ? 'leave_approved' : status === 'Rejected' ? 'leave_rejected' : status === 'Cancelled' ? 'leave_cancelled' : 'leave_updated';
+    const action = status === 'Payroll Approved' ? 'leave_payroll_approved' : status === 'Approved' ? 'leave_approved' : status === 'Rejected' ? 'leave_rejected' : status === 'Cancelled' ? 'leave_cancelled' : 'leave_updated';
     await writeLeaveAudit(connection, req.params.id, leave.employee_id, req.user.id, action, remarks, leave.status, status);
     await connection.commit();
-    res.json({ message: 'Leave status updated.' });
+    res.json({
+      message: status === 'Payroll Approved'
+        ? 'Leave endorsed by Payroll. HR final approval is required.'
+        : 'Leave status updated.',
+      status,
+    });
   } catch (err) {
     await connection.rollback().catch(() => {});
     console.error('Error updating leave:', err.message);

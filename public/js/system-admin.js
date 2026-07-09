@@ -10,6 +10,12 @@ let sysAllEmployees = [];
 let sysAccountStats = null;
 let sysSupportTickets = [];
 let sysBackupLogs = [];
+let sysBackupDashboard = null;
+let sysBackupCoverage = [];
+let sysModuleRecoveryPoints = [];
+let sysRestoreJobs = [];
+let sysRollbackRequests = [];
+let sysBackupActiveTab = 'overview';
 let sysHealthSnapshot = null;
 let sysHealthModules = [];
 let sysHealthHistory = [];
@@ -466,6 +472,8 @@ const SYS_HEALTH_RELATED_NAV = {
 
 function switchSysAdminTab(tabId, el, options = {}) {
   const targetTab = SYS_ADMIN_TAB_TITLES[tabId] ? tabId : 'accounts';
+  const tabs = document.getElementById('sysadmin-tabs');
+  if (tabs) tabs.hidden = false;
   document.querySelectorAll('.sysadmin-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.sysadmin-panel').forEach(p => p.classList.remove('active'));
   const tabButton = el || document.querySelector(`.sysadmin-tab[data-tab="${targetTab}"]`);
@@ -498,6 +506,8 @@ function initSystemAdmin() {
   bindAccountActionButtons();
   bindSystemHealthButtons();
   loadRolesList();
+  const tabs = document.getElementById('sysadmin-tabs');
+  if (tabs) tabs.hidden = false;
 
   const activeTab =
     window.ROUTE_PARAMS?.sysAdminTab ||
@@ -505,18 +515,7 @@ function initSystemAdmin() {
     document.querySelector('.sysadmin-panel.active')?.id?.replace(/^panel-/, '') ||
     'accounts';
 
-  if (activeTab === 'accounts') {
-    loadUsersTable();
-    startAccountRealtime();
-  } else {
-    stopAccountRealtime();
-  }
-
-  if (activeTab === 'roles') loadRolesGrid();
-  if (activeTab === 'audit') loadAuditLog();
-  if (activeTab === 'health') loadSystemHealth();
-  if (activeTab === 'support') loadSupportTickets();
-  if (activeTab === 'backups') loadBackupLogs();
+  switchSysAdminTab(activeTab, null, { skipRouteUpdate: true });
 }
 
 function initSystemAdminIfActive() {
@@ -799,7 +798,7 @@ async function loadAuditLog() {
   const tbody = sysAuditTbody();
   const table = document.getElementById('audit-table');
   if (table) table.dataset.paginationPage = '1';
-  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Loading audit trail...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Loading audit trail...</td></tr>';
 
   // Only the newest filter/refresh request may update the table. Aborting the
   // previous request also prevents overlapping audit downloads from leaving
@@ -821,10 +820,15 @@ async function loadAuditLog() {
   try {
     const module = document.getElementById('audit-module-filter')?.value || '';
     const eventType = document.getElementById('audit-action-filter')?.value || '';
+    const anomalyType = document.getElementById('audit-anomaly-filter')?.value || '';
     const search = document.getElementById('audit-search')?.value?.trim() || '';
     const params = new URLSearchParams({ limit: '50' });
     if (module) params.set('module', module);
     if (eventType) params.set('event_type', eventType);
+    if (anomalyType) {
+      params.set('event_type', 'anomaly');
+      params.set('anomaly_type', anomalyType);
+    }
     if (search) params.set('search', search);
     const url = `/api/admin/audit-log?${params.toString()}`;
 
@@ -836,13 +840,13 @@ async function loadAuditLog() {
     ]);
     if (requestId !== sysAuditRequestId) return;
     if (!res) {
-      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="table-empty">Session expired. Please log in again.</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Session expired. Please log in again.</td></tr>';
       return;
     }
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       console.error('Failed to load audit log:', errData);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Error: ${sysEsc(errData.error || 'Failed to load audit log.')}</td></tr>`;
       return;
     }
 
@@ -863,7 +867,7 @@ async function loadAuditLog() {
     const message = ['AbortError', 'TimeoutError'].includes(err?.name)
       ? 'Audit trail request timed out. Please press Refresh to try again.'
       : 'Failed to load audit trail. Check console for details.';
-    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${sysEsc(message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">${sysEsc(message)}</td></tr>`;
   } finally {
     clearTimeout(timeoutError);
     if (requestId === sysAuditRequestId) sysAuditRequestController = null;
@@ -986,11 +990,191 @@ function auditWriteMetadata(log) {
   };
 }
 
+function auditLeaveActionText(log) {
+  if (String(log?.module || '').trim().toUpperCase() !== 'LEAVE') return '';
+  const action = String(log?.action_performed || '').trim();
+  const normalized = action.toLowerCase().replace(/[\s-]+/g, '_');
+  const leaveLabels = {
+    leave_created: 'Leave filed',
+    leave_manual_encoded: 'Manual leave encoded',
+    leave_payroll_approved: 'Leave payroll approved',
+    leave_approved: 'Leave approved',
+    leave_rejected: 'Leave rejected',
+    leave_cancelled: 'Leave cancelled',
+    leave_updated: 'Leave status updated',
+    leave_balance_adjusted: 'Leave balance adjusted',
+    leave_type_created: 'Leave type created',
+    leave_type_updated: 'Leave type updated',
+    leave_sensitive_details_revealed: 'Leave details revealed',
+    leave_attachment_downloaded: 'Leave attachment downloaded',
+  };
+  if (leaveLabels[normalized]) return leaveLabels[normalized];
+  if (/leave approved/i.test(action)) return 'Leave approved';
+  if (/leave rejected/i.test(action)) return 'Leave rejected';
+  if (/leave filed|leave created/i.test(action)) return 'Leave filed';
+
+  const write = auditWriteMetadata(log);
+  const path = String(write.path || '').toLowerCase();
+  const method = String(write.method || '').toUpperCase();
+  if (method === 'POST' && path === '/api/leave') return 'Leave filed';
+  if (method === 'PATCH' && /^\/api\/leave\/\d+\/status$/.test(path)) return 'Leave status updated';
+  if (method === 'PUT' && path === '/api/leave/balances') return 'Leave balance adjusted';
+  if (method === 'POST' && path === '/api/leave/types') return 'Leave type saved';
+  if (/^\/api\/leave\/\d+\/reveal-sensitive$/.test(path)) return 'Leave details revealed';
+  if (/^\/api\/leave\/\d+\/attachment$/.test(path)) return 'Leave attachment downloaded';
+  return '';
+}
+
+function auditRequestContext(log) {
+  const write = auditWriteMetadata(log);
+  const action = String(log?.action_performed || '');
+  const methodPath = action.match(/\b(GET|POST|PUT|PATCH|DELETE)\s+(\/api\/[^\s|]+)/i);
+  return {
+    method: String(write.method || methodPath?.[1] || '').toUpperCase(),
+    path: String(write.path || methodPath?.[2] || '').split('?')[0].toLowerCase(),
+  };
+}
+
+function auditStatusActionText(log, fallback) {
+  const newValue = auditJsonObject(log?.new_value) || {};
+  const status = String(newValue.status || newValue.approval_status || newValue.final_pay_status || newValue.payroll_clearance_status || '').trim();
+  return status ? `${fallback}: ${status}` : fallback;
+}
+
+function auditSpecificActionText(log) {
+  const { method, path } = auditRequestContext(log);
+  if (!path) return '';
+
+  if (path === '/api/admin/register-role' && method === 'POST') return 'User account created';
+  if (/^\/api\/admin\/update-role\/\d+$/.test(path) && method === 'PUT') return 'User role updated';
+  if (/^\/api\/admin\/users\/\d+\/reset-password$/.test(path)) return 'User password reset';
+  if (/^\/api\/admin\/users\/\d+\/credentials$/.test(path)) return 'User credentials updated';
+  if (/^\/api\/admin\/users\/\d+\/unlock$/.test(path)) return 'User account unlocked';
+  if (/^\/api\/admin\/users\/\d+\/reset-mfa$/.test(path)) return 'User MFA reset';
+  if (/^\/api\/admin\/users\/\d+\/revoke-sessions$/.test(path)) return 'User sessions revoked';
+  if (/^\/api\/admin\/users\/\d+\/deactivate$/.test(path)) return 'User account deactivated';
+  if (/^\/api\/admin\/users\/\d+\/activate$/.test(path)) return 'User account reactivated';
+  if (path.startsWith('/api/admin/system-health/check')) return 'System health check run';
+  if (path === '/api/admin/support-tickets' && method === 'POST') return 'Support ticket created';
+  if (/^\/api\/admin\/support-tickets\/\d+$/.test(path)) return auditStatusActionText(log, 'Support ticket status updated');
+  if (path === '/api/admin/backups/request') return 'Backup request created';
+  if (/^\/api\/admin\/backups\/\d+$/.test(path)) return auditStatusActionText(log, 'Backup request status updated');
+
+  if (path === '/api/form-drafts') return 'Form draft saved';
+  if (path === '/api/form-drafts/status') return 'Form draft status updated';
+  if (path === '/api/employees/id-config') return 'Employee ID format updated';
+  if (path === '/api/employees' && method === 'POST') return 'Employee record created';
+  if (/^\/api\/employees\/\d+$/.test(path) && method === 'PUT') return 'Employee profile updated';
+  if (/^\/api\/employees\/\d+$/.test(path) && method === 'DELETE') return 'Employee record deletion requested';
+  if (/^\/api\/employees\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Employee status updated');
+  if (/^\/api\/employees\/\d+\/reveal-sensitive$/.test(path)) return 'Employee sensitive fields revealed';
+  if (/^\/api\/employees\/\d+\/offboard$/.test(path)) return 'Employee offboarding requested';
+  if (/^\/api\/employees\/\d+\/reonboard$/.test(path)) return 'Employee re-onboarding requested';
+  if (/^\/api\/employees\/offboarding\/\d+$/.test(path)) return auditStatusActionText(log, 'Employee offboarding case updated');
+  if (/^\/api\/employees\/offboarding\/\d+\/documents$/.test(path)) return 'Offboarding document uploaded';
+  if (/^\/api\/employees\/\d+\/documents$/.test(path)) return 'Employee document uploaded';
+  if (/^\/api\/employees\/\d+\/documents\/\d+$/.test(path)) return 'Employee document deleted';
+  if (/^\/api\/employees\/\d+\/photo$/.test(path)) return method === 'DELETE' ? 'Employee profile photo removed' : 'Employee profile photo uploaded';
+  const employeeNested = path.match(/^\/api\/employees\/\d+\/(family|work-experiences|certifications|trainings|skills)(?:\/\d+)?$/);
+  if (employeeNested) {
+    const label = employeeNested[1].replaceAll('-', ' ');
+    return method === 'DELETE' ? `Employee ${label} deleted` : `Employee ${label} added`;
+  }
+  if (path === '/api/employee-setup/departments') return 'Department created';
+  if (/^\/api\/employee-setup\/departments\/\d+$/.test(path)) return method === 'DELETE' ? 'Department deleted' : 'Department updated';
+  if (path === '/api/employee-setup/positions') return 'Position created';
+  if (/^\/api\/employee-setup\/positions\/\d+$/.test(path)) return method === 'DELETE' ? 'Position deleted' : 'Position updated';
+
+  if (path === '/api/attendance/manual') return 'Manual attendance encoded';
+  if (/^\/api\/attendance\/\d+\/override$/.test(path)) return 'Attendance time record corrected';
+  if (/^\/api\/attendance\/\d+\/verify$/.test(path)) return auditStatusActionText(log, 'Attendance verification updated');
+  if (/^\/api\/attendance\/\d+\/overtime$/.test(path)) return 'Attendance overtime encoded';
+  if (/^\/api\/attendance\/\d+\/overtime-review$/.test(path)) return auditStatusActionText(log, 'Overtime review decision recorded');
+  if (path === '/api/attendance/policies') return 'Attendance policy updated';
+  if (path === '/api/attendance/biometric/devices') return 'Biometric device registered';
+  if (/^\/api\/attendance\/biometric\/devices\/\d+$/.test(path)) return 'Biometric device updated';
+  if (path === '/api/attendance/biometric/mappings') return 'Biometric employee mapping created';
+  if (/^\/api\/attendance\/biometric\/mappings\/\d+$/.test(path)) return 'Biometric employee mapping deleted';
+  if (/^\/api\/attendance\/biometric\/sync\/\d+$/.test(path)) return 'Biometric attendance sync started';
+  if (path === '/api/attendance/integrity/anchor-pending') return 'Pending attendance hashes anchored';
+  if (/^\/api\/attendance\/geofence\/\d+$/.test(path)) return 'Attendance geofence updated';
+  if (path === '/api/biometric/attendance') return 'Biometric attendance event recorded';
+  if (path === '/api/biometric/bridge-commands') return 'Biometric bridge command queued';
+
+  if (path === '/api/requests') return 'Employee request submitted';
+  if (/^\/api\/requests\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Employee request status updated');
+  if (path === '/api/payroll/runs') return 'Payroll run created';
+  if (/^\/api\/payroll\/runs\/\d+\/approve$/.test(path)) return 'Payroll run approved';
+  if (path === '/api/payroll/salary-calculation') return 'Draft salary calculation created';
+  if (path === '/api/payroll/generate/preview') return 'Payroll generation previewed';
+  if (path === '/api/payroll/generate') return 'Payroll generated';
+  if (/^\/api\/payroll\/salary-calculations\/\d+\/recalculate$/.test(path)) return 'Salary calculation recalculated';
+  if (/^\/api\/payroll\/salary-calculations\/\d+\/status$/.test(path)) return auditStatusActionText(log, 'Salary calculation status updated');
+  if (path === '/api/payroll/convert-calculations-to-payslips') return 'Payslips generated from salary calculations';
+  if (path.includes('/government-contributions/reveal')) return 'Government contribution details revealed';
+  if (path.includes('/reveal-remarks')) return 'Payroll remarks revealed';
+  if (path === '/api/payroll/transactions/production') return 'Production payroll log encoded';
+  if (path === '/api/payroll/transactions/logistics') return 'Logistics trip payroll log encoded';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/submit$/.test(path)) return 'Piece-rate output submitted for review';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/approve$/.test(path)) return 'Piece-rate output approved';
+  if (/^\/api\/payroll\/piece-rate-outputs\/\d+\/reject$/.test(path)) return 'Piece-rate output rejected';
+  if (/^\/api\/payroll\/piece-rate-outputs(?:\/\d+)?$/.test(path)) return method === 'DELETE' ? 'Piece-rate output deleted' : method === 'PATCH' ? 'Piece-rate output updated' : 'Piece-rate output encoded';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/submit$/.test(path)) return 'Logistics trip log submitted for review';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/approve$/.test(path)) return 'Logistics trip log approved';
+  if (/^\/api\/payroll\/logistics\/trips\/\d+\/reject$/.test(path)) return 'Logistics trip log rejected';
+  if (/^\/api\/payroll\/logistics\/trips(?:\/\d+)?$/.test(path)) return method === 'DELETE' ? 'Logistics trip log deleted' : method === 'PUT' ? 'Logistics trip log updated' : 'Logistics trip log encoded';
+  if (path.includes('/deduction-settings')) return method === 'DELETE' ? 'Deduction setting deleted' : 'Deduction setting saved';
+  if (path.includes('/sss-tables')) return path.endsWith('/preview') ? 'SSS table import previewed' : path.endsWith('/activate') ? 'SSS table activated' : 'SSS table imported';
+  if (path.includes('/employee-cash-advances')) return 'Employee cash advance saved';
+  if (path.includes('/employee-loans')) return 'Employee loan saved';
+  if (path.includes('/employee-deductions')) return auditStatusActionText(log, 'Employee deduction status updated');
+  if (path.includes('/policy-settings')) return 'Payroll policy setting saved';
+  if (path.includes('/attendance-configurations')) return method === 'DELETE' ? 'Payroll attendance configuration deleted' : 'Payroll attendance configuration saved';
+  if (/^\/api\/payroll\/employees\/\d+\/wage-config$/.test(path)) return 'Employee wage configuration saved';
+  if (path.includes('/logistics/') || path.includes('/piece-') || path.includes('/sew-types') || path.includes('/size-ranges') || path.includes('/production-share')) {
+    return method === 'DELETE' ? 'Payroll configuration deleted' : 'Payroll configuration saved';
+  }
+  if (/^\/api\/payroll\/offboarding-clearance\/\d+$/.test(path)) return auditStatusActionText(log, 'Payroll offboarding clearance updated');
+  if (/^\/api\/payroll\/final-pay-approval\/\d+$/.test(path)) return auditStatusActionText(log, 'Final pay approval updated');
+
+  if (path === '/api/onboarding/integrity/anchor-pending') return 'Pending onboarding hashes anchored';
+  if (path === '/api/onboarding/positions') return 'Onboarding position created';
+  if (/^\/api\/onboarding\/positions\/[^/]+$/.test(path)) return method === 'DELETE' ? 'Onboarding position deleted' : 'Onboarding position updated';
+  if (path === '/api/onboarding/applicants') return 'Applicant record created';
+  if (/^\/api\/onboarding\/applicants\/\d+\/progress$/.test(path)) return auditStatusActionText(log, 'Applicant progress updated');
+  if (/^\/api\/onboarding\/applicants\/\d+\/decision$/.test(path)) return auditStatusActionText(log, 'Applicant hiring decision recorded');
+  if (/^\/api\/onboarding\/applicants\/\d+\/transfer$/.test(path)) return 'Applicant transferred to employee directory';
+  if (/^\/api\/onboarding\/applicants\/\d+\/reveal-sensitive$/.test(path)) return 'Applicant sensitive details revealed';
+  if (/^\/api\/onboarding\/applicants\/\d+$/.test(path)) return 'Applicant removed from active onboarding';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents$/.test(path)) return 'Applicant document uploaded';
+  if (/^\/api\/onboarding\/applicants\/\d+\/documents\/\d+\/verify$/.test(path)) return 'Applicant document verification updated';
+
+  if (path === '/api/self-service/profile') return 'Employee self-service profile updated';
+  if (path === '/api/self-service/password') return 'Employee password changed';
+  if (path === '/api/self-service/profile-picture') return 'Employee profile picture changed';
+  if (/^\/api\/self-service\/restricted-fields\/[^/]+\/reveal$/.test(path)) return 'Self-service restricted field revealed';
+  if (path === '/api/self-service/change-requests') return 'Profile change request submitted';
+  if (/^\/api\/self-service\/change-requests\/\d+\/reveal$/.test(path)) return 'Profile change request details revealed';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/approve$/.test(path)) return 'Profile change request approved';
+  if (/^\/api\/hr\/profile-change-requests\/\d+\/reject$/.test(path)) return 'Profile change request rejected';
+  if (path.startsWith('/api/reports')) return 'Report generated or exported';
+  if (/^\/api\/blockchain\/payroll\/finalize\/\d+$/.test(path)) return 'Final payroll recorded on blockchain';
+  if (/^\/api\/blockchain\/payroll\/adjustment\/\d+$/.test(path)) return 'Payroll blockchain adjustment recorded';
+  if (/^\/api\/blockchain\/dtr\/generate\/\d+$/.test(path)) return 'DTR blockchain hash generated';
+  if (/^\/api\/blockchain\/dtr\/anchor\/\d+$/.test(path)) return 'DTR record anchored on blockchain';
+  if (/^\/api\/blockchain\/dtr\/adjustment\/\d+$/.test(path)) return 'DTR blockchain adjustment recorded';
+  return '';
+}
+
 function auditActionText(log) {
   const actionType = String(log?.action_type || '').trim().toUpperCase();
   const action = String(log?.action_performed || '').trim();
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete) return 'Employee record deletion requested';
+  const leaveAction = auditLeaveActionText(log);
+  if (leaveAction) return leaveAction;
+  const specificAction = auditSpecificActionText(log);
+  if (specificAction) return specificAction;
   const authLabels = {
     LOGIN_SUCCESS: 'Successful login recorded',
     LOGIN_FAILED: 'Failed login attempt recorded',
@@ -1007,15 +1191,16 @@ function auditActionText(log) {
   };
   if (authLabels[actionType]) return authLabels[actionType];
   if (!action) return '—';
-  if (/failed_unauthorized_access_attempt/i.test(action)) return 'Unauthorized access attempt blocked';
-  if (/failed_permission_check/i.test(action)) return 'Permission check failed';
-  if (/blocked_client_authority_field_tampering/i.test(action)) return 'Unauthorized request fields blocked';
-  if (/blocked_rate_limit_exceeded/i.test(action)) return 'Rate limit exceeded';
-  if (/invalid_or_tampered_jwt_attempt/i.test(action)) return 'Invalid session token attempt blocked';
-  if (/expired_jwt_attempt/i.test(action)) return 'Expired session token rejected';
-  if (/log_integrity_blocked/i.test(action)) return 'Audit log tampering attempt blocked';
-  if (auditLooksBackendOnly(action)) return `${auditModuleLabel(log?.module)} activity recorded`;
-  return action;
+  const displayAction = action.replace(/^(SUCCESS|FAILED|BLOCKED):\s*/i, '').trim();
+  if (/failed_unauthorized_access_attempt/i.test(displayAction)) return 'Unauthorized access attempt blocked';
+  if (/failed_permission_check/i.test(displayAction)) return 'Permission check failed';
+  if (/blocked_client_authority_field_tampering/i.test(displayAction)) return 'Unauthorized request fields blocked';
+  if (/blocked_rate_limit_exceeded/i.test(displayAction)) return 'Rate limit exceeded';
+  if (/invalid_or_tampered_jwt_attempt/i.test(displayAction)) return 'Invalid session token attempt blocked';
+  if (/expired_jwt_attempt/i.test(displayAction)) return 'Expired session token rejected';
+  if (/log_integrity_blocked/i.test(displayAction)) return 'Audit log tampering attempt blocked';
+  if (auditLooksBackendOnly(displayAction)) return `${auditModuleLabel(log?.module)} activity recorded`;
+  return displayAction;
 }
 
 function auditSourceText(log) {
@@ -1030,7 +1215,8 @@ function auditDetails(log) {
   const parts = [];
   const write = auditWriteMetadata(log);
   if (write.isEmployeeDelete && write.statusCode) parts.push(`Status: ${write.statusCode}`);
-  if (log.action_type && !auditLooksBackendOnly(log.action_type)) parts.push(`Event: ${log.action_type}`);
+  const actionType = String(log.action_type || '').trim().toUpperCase();
+  if (log.action_type && actionType !== 'SYSTEM_EVENT' && !auditLooksBackendOnly(log.action_type)) parts.push(`Event: ${log.action_type}`);
   if (log.field_changed && !auditLooksBackendOnly(log.field_changed)) parts.push(`Field: ${log.field_changed}`);
   if (log.details && !auditLooksBackendOnly(log.details)) parts.push(log.details);
 
@@ -1053,12 +1239,40 @@ function auditTarget(log) {
   return '—';
 }
 
+function auditAnomalyLabel(log) {
+  const label = String(log?.anomaly_label || '').trim();
+  const type = String(log?.anomaly_type || '').trim().toUpperCase();
+  if (label) return label;
+  const labels = {
+    SQL_INJECTION: 'SQLi Pattern',
+    XSS: 'XSS Pattern',
+    BRUTE_FORCE: 'Brute Force',
+    SESSION_MANIPULATION: 'Session Manipulation',
+  };
+  return labels[type] || '';
+}
+
+function auditAnomalyClass(log) {
+  const severity = String(log?.anomaly_severity || '').trim().toLowerCase();
+  if (severity === 'critical') return 'critical';
+  if (severity === 'high') return 'high';
+  if (severity === 'medium') return 'medium';
+  return 'none';
+}
+
+function auditThreatBadge(log) {
+  const label = auditAnomalyLabel(log);
+  if (!label) return '<span class="audit-threat-badge audit-threat-none">None</span>';
+  const severity = String(log?.anomaly_severity || '').trim() || 'Medium';
+  return `<span class="audit-threat-badge audit-threat-${sysEsc(auditAnomalyClass(log))}" title="${sysEsc(log?.anomaly_reason || label)}">${sysEsc(label)} · ${sysEsc(severity)}</span>`;
+}
+
 function renderAuditLog(logs) {
   const tbody = sysAuditTbody();
   if (!tbody) return;
 
   if (logs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No audit entries found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No audit entries found.</td></tr>';
     return;
   }
 
@@ -1078,6 +1292,7 @@ function renderAuditLog(logs) {
         <td><small>${sysEsc(auditTarget(log))}</small></td>
         <td><small>${sysEsc(resultOrIp)}</small></td>
         <td><small>${sysEsc(auditSourceText(log))}</small></td>
+        <td>${auditThreatBadge(log)}</td>
         <td><small style="color:var(--muted)">${sysEsc(auditDetails(log))}</small></td>
       </tr>
     `;
@@ -1526,9 +1741,9 @@ function sysShortHash(value) {
 
 function sysStatusBadge(status) {
   const normalized = String(status || '').trim().toUpperCase();
-  const good = ['ACTIVE', 'COMPLETED', 'VERIFIED', 'RESOLVED', 'CLOSED', 'RECORDED'];
-  const bad = ['FAILED', 'CRITICAL', 'VERIFICATION_FAILED', 'INACTIVE'];
-  const warn = ['HIGH', 'OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'REQUESTED', 'RUNNING', 'PENDING', 'PENDING_ANCHOR'];
+  const good = ['ACTIVE', 'COMPLETED', 'VERIFIED', 'RESOLVED', 'CLOSED', 'RECORDED', 'COVERED', 'YES', 'AVAILABLE', 'ONLINE', 'HEALTHY', 'RESTORED'];
+  const bad = ['FAILED', 'CRITICAL', 'VERIFICATION_FAILED', 'INACTIVE', 'NOT COVERED', 'NO', 'OFFLINE'];
+  const warn = ['HIGH', 'OPEN', 'IN_PROGRESS', 'WAITING_FOR_OWNER', 'REQUESTED', 'RUNNING', 'PENDING', 'PENDING_ANCHOR', 'WARNING', 'MAINTENANCE'];
   const cls = good.includes(normalized)
     ? 'badge-active'
     : bad.includes(normalized)
@@ -2291,15 +2506,173 @@ async function updateSupportTicket(ticketId, status) {
 
 async function loadBackupLogs() {
   try {
-    const res = await apiFetch('/api/admin/backups');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to load backup records.');
-    sysBackupLogs = Array.isArray(data) ? data : [];
-    renderBackupLogs();
+    const [overviewRes, backupsRes, recoveryRes, restoreRes, rollbackRes] = await Promise.all([
+      apiFetch('/api/admin/backups/overview'),
+      apiFetch('/api/admin/backups'),
+      apiFetch('/api/admin/backups/recovery-points'),
+      apiFetch('/api/admin/backups/restore-jobs'),
+      apiFetch('/api/admin/backups/rollback-requests'),
+    ]);
+    const [overview, backups, recovery, restore, rollback] = await Promise.all([
+      overviewRes.json(),
+      backupsRes.json(),
+      recoveryRes.json(),
+      restoreRes.json(),
+      rollbackRes.json(),
+    ]);
+    if (!overviewRes.ok) throw new Error(overview.error || 'Failed to load backup dashboard.');
+    if (!backupsRes.ok) throw new Error(backups.error || 'Failed to load backup records.');
+    if (!recoveryRes.ok) throw new Error(recovery.error || 'Failed to load module recovery points.');
+    if (!restoreRes.ok) throw new Error(restore.error || 'Failed to load restore jobs.');
+    if (!rollbackRes.ok) throw new Error(rollback.error || 'Failed to load rollback requests.');
+
+    sysBackupDashboard = overview || {};
+    sysBackupCoverage = Array.isArray(overview?.coverage) ? overview.coverage : [];
+    sysBackupLogs = Array.isArray(backups) ? backups : [];
+    sysModuleRecoveryPoints = Array.isArray(recovery) ? recovery : [];
+    sysRestoreJobs = Array.isArray(restore) ? restore : [];
+    sysRollbackRequests = Array.isArray(rollback) ? rollback : [];
+    renderBackupRecoveryWorkspace();
   } catch (err) {
-    const tbody = document.getElementById('backup-logs-tbody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${sysEsc(err.message || 'Failed to load backup records.')}</td></tr>`;
+    const colspans = {
+      'backup-coverage-tbody': 9,
+      'backup-logs-tbody': 7,
+      'module-recovery-tbody': 8,
+      'restore-jobs-tbody': 8,
+      'rollback-requests-tbody': 8,
+    };
+    Object.keys(colspans).forEach(id => {
+      const tbody = document.getElementById(id);
+      if (tbody) tbody.innerHTML = `<tr><td colspan="${colspans[id]}" class="table-empty">${sysEsc(err.message || 'Failed to load backup recovery data.')}</td></tr>`;
+    });
+    showSysToast(err.message || 'Failed to load backup recovery data.', 'error');
   }
+}
+
+function switchBackupRecoveryTab(tab) {
+  sysBackupActiveTab = tab || 'overview';
+  document.querySelectorAll('[data-backup-tab]').forEach(button => {
+    button.classList.toggle('active', button.dataset.backupTab === sysBackupActiveTab);
+  });
+  document.querySelectorAll('[data-backup-panel]').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.backupPanel === sysBackupActiveTab);
+  });
+}
+
+function backupTypeLabel(value) {
+  return String(value || '-').replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function isRestorableBackupType(type) {
+  return ['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'FULL_BACKUP'].includes(String(type || '').toUpperCase());
+}
+
+function backupRestoreType(type) {
+  const normalized = String(type || 'DATABASE').toUpperCase();
+  return isRestorableBackupType(normalized) ? normalized : 'DATABASE';
+}
+
+function backupModuleName(moduleKey) {
+  const match = sysBackupCoverage.find(item => item.module_key === moduleKey)
+    || sysModuleRecoveryPoints.find(item => item.module_key === moduleKey);
+  return match?.module_name || backupTypeLabel(moduleKey);
+}
+
+function backupSelectModules() {
+  const select = document.getElementById('backup-modules');
+  if (!select) return [];
+  const selected = Array.from(select.selectedOptions || []).map(option => option.value).filter(Boolean);
+  return selected.length ? selected : sysBackupCoverage.map(module => module.module_key);
+}
+
+function renderBackupModuleOptions() {
+  const select = document.getElementById('backup-modules');
+  if (!select || !sysBackupCoverage.length) return;
+  const selected = new Set(Array.from(select.selectedOptions || []).map(option => option.value));
+  select.innerHTML = sysBackupCoverage.map(module => {
+    const shouldSelect = selected.size ? selected.has(module.module_key) : true;
+    return `<option value="${sysEsc(module.module_key)}" ${shouldSelect ? 'selected' : ''}>${sysEsc(module.module_name)}</option>`;
+  }).join('');
+}
+
+function backupSummaryValue(record, fallback = '-') {
+  if (!record) return fallback;
+  if (typeof record === 'string') return record;
+  return record.backup_reference || record.module_name || record.status || fallback;
+}
+
+function backupSummaryMeta(record) {
+  if (!record || typeof record === 'string') return '';
+  const parts = [
+    record.status,
+    record.storage_provider,
+    record.created_at ? sysFormatDateTime(record.created_at) : record.created_at,
+  ].filter(Boolean);
+  return parts.join(' | ');
+}
+
+function renderBackupSummaryCards() {
+  const target = document.getElementById('backup-summary-grid');
+  if (!target) return;
+  const cards = sysBackupDashboard?.cards || {};
+  const items = [
+    ['Latest Database Backup', backupSummaryValue(cards.latest_database_backup), backupSummaryMeta(cards.latest_database_backup)],
+    ['Latest File Backup', backupSummaryValue(cards.latest_file_backup), backupSummaryMeta(cards.latest_file_backup)],
+    ['Latest Configuration Backup', backupSummaryValue(cards.latest_configuration_backup), backupSummaryMeta(cards.latest_configuration_backup)],
+    ['Latest Module Recovery Point', backupSummaryValue(cards.latest_module_recovery_point), backupSummaryMeta(cards.latest_module_recovery_point)],
+    ['Latest Deployment Version', backupSummaryValue(cards.latest_deployment_version), backupSummaryMeta(cards.latest_deployment_version)],
+    ['Backup Status', cards.backup_status || sysBackupDashboard?.status || 'Warning', 'Recovery readiness'],
+    ['Total Backup Sets', Number(cards.total_backup_sets || 0), 'Recorded backup sets'],
+    ['Failed Backup Jobs', Number(cards.failed_backup_jobs || 0), 'Needs admin review'],
+    ['Last Restore Attempt', backupSummaryValue(cards.last_restore_attempt, 'No restore job'), backupSummaryMeta(cards.last_restore_attempt)],
+  ];
+  target.innerHTML = items.map(([label, value, meta]) => `
+    <article class="backup-summary-card">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value)}</strong>
+      <small>${sysEsc(meta || '-')}</small>
+    </article>
+  `).join('');
+}
+
+function renderBackupCoverage() {
+  const tbody = document.getElementById('backup-coverage-tbody');
+  if (!tbody) return;
+  if (!sysBackupCoverage.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No module coverage loaded.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysBackupCoverage.map(module => {
+    const isDeploymentBackup = String(module.last_backup_type || '').toUpperCase() === 'DEPLOYMENT_VERSION';
+    const restoreDisabled = module.backup_set_id && !isDeploymentBackup ? '' : 'disabled';
+    const rollbackDisabled = module.rollback_available ? '' : 'disabled';
+    const maintenanceNote = module.under_maintenance || String(module.last_health_status || '').toUpperCase() === 'MAINTENANCE'
+      ? '<small class="backup-maintenance-note">Under maintenance for controlled restore</small>'
+      : '';
+    const recoveryAction = isDeploymentBackup
+      ? `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})" ${restoreDisabled}>Restore Data</button>`;
+    return `
+      <tr>
+        <td><strong>${sysEsc(module.module_name)}</strong><br><small>${sysEsc(module.module_key)}</small></td>
+        <td>${sysStatusBadge(module.data_backup_coverage)}</td>
+        <td>${sysStatusBadge(module.file_backup_coverage)}</td>
+        <td>${sysStatusBadge(module.config_backup_coverage)}</td>
+        <td>${module.recovery_point_available ? sysStatusBadge('YES') : sysStatusBadge('NO')}</td>
+        <td><small>Current: ${sysEsc(module.current_version || '-')}<br>Stable: ${sysEsc(module.stable_version || '-')}</small></td>
+        <td><small>${sysEsc(sysFormatDateTime(module.last_backup_timestamp))}</small></td>
+        <td>${sysStatusBadge(module.last_health_status)}${maintenanceNote}</td>
+        <td>
+          <div class="support-row-actions">
+            <button class="btn-sysadmin-sm" onclick="switchBackupRecoveryTab('sets')">View Backups</button>
+            ${recoveryAction}
+            ${isDeploymentBackup ? '' : `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled}>Rollback Version</button>`}
+            <button class="btn-sysadmin-sm" onclick="createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})">Create Incident</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function renderBackupLogs() {
@@ -2310,20 +2683,27 @@ function renderBackupLogs() {
     return;
   }
   tbody.innerHTML = sysBackupLogs.map(record => {
-    const id = Number(record.backup_id);
+    const id = Number(record.backup_set_id || record.backup_id || record.id);
+    const backupType = String(record.backup_type || '').toUpperCase();
+    const backupReady = ['COMPLETED', 'VERIFIED', 'RESTORED'].includes(String(record.status || '').toUpperCase());
+    const recoveryAction = backupType === 'DEPLOYMENT_VERSION'
+      ? `<button class="btn-sysadmin-sm" onclick="requestBackupSetRollback(${id})" ${backupReady ? '' : 'disabled'}>Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${backupReady && isRestorableBackupType(record.backup_type) ? '' : 'disabled'}>Restore</button>`;
     const actions = [
+      `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'RUNNING')">Run</button>`,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'COMPLETED')">Complete</button>`,
-      `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'VERIFIED')">Verify</button>`,
+      `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Verify</button>`,
+      recoveryAction,
       `<button class="btn-sysadmin-sm" onclick="updateBackupStatus(${id}, 'FAILED')">Fail</button>`,
     ];
     return `
       <tr>
         <td><strong>${sysEsc(record.backup_reference)}</strong></td>
-        <td>${sysEsc(record.backup_type)}</td>
-        <td>${sysEsc(record.storage_target)}</td>
+        <td>${sysEsc(backupTypeLabel(record.backup_type))}</td>
+        <td>${sysEsc(record.storage_provider || record.storage_target || '-')}</td>
         <td>${sysStatusBadge(record.status)}</td>
-        <td><small>${sysEsc(sysShortHash(record.manifest_hash))}</small></td>
+        <td><small>${sysEsc(sysShortHash(record.checksum || record.manifest_hash))}</small></td>
         <td><small>${sysEsc(sysFormatDateTime(record.created_at))}</small></td>
         <td><div class="support-row-actions">${actions.join('')}</div></td>
       </tr>
@@ -2331,10 +2711,132 @@ function renderBackupLogs() {
   }).join('');
 }
 
+function renderModuleRecoveryPoints() {
+  const tbody = document.getElementById('module-recovery-tbody');
+  if (!tbody) return;
+  if (!sysModuleRecoveryPoints.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No module recovery points found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysModuleRecoveryPoints.map(point => `
+    <tr>
+      <td><strong>${sysEsc(point.module_name)}</strong><br><small>${sysEsc(point.backup_reference || point.module_key)}</small></td>
+      <td>${sysEsc(point.current_version || '-')}</td>
+      <td>${sysEsc(point.stable_version || '-')}</td>
+      <td>${sysStatusBadge(point.health_status_at_backup)}</td>
+      <td><small>${sysEsc(point.artifact_location || '-')}</small></td>
+      <td>${point.rollback_available ? sysStatusBadge('AVAILABLE') : sysStatusBadge('NOT AVAILABLE')}</td>
+      <td><small>${sysEsc(sysFormatDateTime(point.created_at))}</small></td>
+      <td>
+        <div class="support-row-actions">
+          <button class="btn-sysadmin-sm" onclick="openBackupDetails('recovery', ${Number(point.id)})">View Recovery Point</button>
+          <button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(point.module_key)})" ${point.rollback_available ? '' : 'disabled'}>Request Rollback</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderRestoreJobs() {
+  const tbody = document.getElementById('restore-jobs-tbody');
+  if (!tbody) return;
+  if (!sysRestoreJobs.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No restore jobs found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysRestoreJobs.map(job => {
+    const id = Number(job.restore_job_id || job.id);
+    const status = String(job.status || '').toUpperCase();
+    const actions = [];
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'IN_PROGRESS')">Start</button>`);
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'FAILED')">Fail</button>`);
+    if (['PENDING', 'IN_PROGRESS'].includes(status)) actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'CANCELLED')">Cancel</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'COMPLETED')">Complete</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'FAILED')">Fail</button>`);
+    return `
+      <tr>
+        <td><strong>#${id}</strong><br><small>${sysEsc(sysFormatDateTime(job.created_at))}</small></td>
+        <td>${sysEsc(job.backup_reference || job.backup_set_id || '-')}</td>
+        <td>${sysEsc(backupTypeLabel(job.restore_type))}</td>
+        <td>${sysEsc(job.affected_module ? backupModuleName(job.affected_module) : '-')}</td>
+        <td>${sysStatusBadge(job.status)}</td>
+        <td>${sysEsc(job.requested_by_username || job.requested_by || '-')}</td>
+        <td><small>${sysEsc(job.result_message || '-')}</small></td>
+        <td><div class="support-row-actions">${actions.join('') || '<span class="sysadmin-muted">No actions</span>'}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderRollbackRequests() {
+  const tbody = document.getElementById('rollback-requests-tbody');
+  if (!tbody) return;
+  if (!sysRollbackRequests.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No rollback requests found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sysRollbackRequests.map(request => {
+    const id = Number(request.rollback_request_id || request.id);
+    const status = String(request.status || '').toUpperCase();
+    const actions = [];
+    if (status === 'PENDING') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'APPROVED')">Approve</button>`);
+    if (status === 'APPROVED') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'IN_PROGRESS')">Start</button>`);
+    if (['PENDING', 'APPROVED'].includes(status)) actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'CANCELLED')">Cancel</button>`);
+    if (status === 'IN_PROGRESS') actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'COMPLETED')">Complete</button>`);
+    return `
+      <tr>
+        <td><strong>${sysEsc(backupModuleName(request.affected_module))}</strong></td>
+        <td>${sysEsc(request.current_version || '-')}</td>
+        <td>${sysEsc(request.target_version || '-')}</td>
+        <td>${sysStatusBadge(request.status)}</td>
+        <td>${sysEsc(request.requested_by_username || request.requested_by || '-')}</td>
+        <td>${sysEsc(request.approved_by_username || request.approved_by || '-')}</td>
+        <td><small>${sysEsc(request.result_message || request.reason || '-')}</small></td>
+        <td><div class="support-row-actions">${actions.join('')}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderBackupSettings() {
+  const target = document.getElementById('backup-settings-grid');
+  if (!target) return;
+  const settings = sysBackupDashboard?.settings || {};
+  const items = [
+    ['Database Backups', settings.database_provider || 'Local MySQL dump record'],
+    ['File Backups', settings.file_provider || 'Local file backup metadata'],
+    ['Configuration Backups', settings.config_provider || 'Non-secret configuration only'],
+    ['Deployment Rollback', settings.deployment_provider || 'Manual deployment artifact reference'],
+    ['AWS Region', settings.aws_region_configured ? 'Configured' : 'Missing'],
+    ['S3 Bucket', settings.s3_bucket_configured ? 'Configured' : 'Missing'],
+    ['RDS Snapshot', settings.rds_snapshot_configured ? 'Configured' : 'Missing'],
+  ];
+  target.innerHTML = items.map(([label, value]) => `
+    <article class="backup-setting-card">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value)}</strong>
+    </article>
+  `).join('');
+}
+
+function renderBackupRecoveryWorkspace() {
+  renderBackupModuleOptions();
+  renderBackupSummaryCards();
+  renderBackupCoverage();
+  renderBackupLogs();
+  renderModuleRecoveryPoints();
+  renderRestoreJobs();
+  renderRollbackRequests();
+  renderBackupSettings();
+  switchBackupRecoveryTab(sysBackupActiveTab);
+}
+
 async function requestBackup() {
   const body = {
+    backup_name: document.getElementById('backup-name')?.value || '',
     backup_type: document.getElementById('backup-type')?.value || 'DATABASE',
-    storage_target: document.getElementById('backup-target')?.value || 'EXTERNAL',
+    storage_provider: document.getElementById('backup-target')?.value || 'MANUAL',
+    included_modules: backupSelectModules(),
     notes: document.getElementById('backup-notes')?.value || '',
   };
   try {
@@ -2346,7 +2848,9 @@ async function requestBackup() {
     if (!res.ok) throw new Error(data.error || 'Failed to request backup.');
     showSysToast(data.message || 'Backup request logged.', 'success');
     const notes = document.getElementById('backup-notes');
+    const name = document.getElementById('backup-name');
     if (notes) notes.value = '';
+    if (name) name.value = '';
     loadBackupLogs();
     loadSystemHealth();
   } catch (err) {
@@ -2354,19 +2858,34 @@ async function requestBackup() {
   }
 }
 
-async function updateBackupStatus(backupId, status) {
-  const body = { status };
+async function verifyBackup(backupId) {
+  const manifestHash = prompt('SHA-256 manifest/checksum hash:', '');
+  if (manifestHash === null) return;
+  const location = prompt('Backup location/reference:', '');
+  if (location === null) return;
+  await updateBackupStatus(backupId, 'VERIFIED', {
+    manifest_hash: manifestHash.trim(),
+    storage_location: location.trim(),
+  });
+}
+
+async function updateBackupStatus(backupId, status, extra = {}) {
+  const body = { status, ...extra };
   if (['COMPLETED', 'VERIFIED'].includes(status)) {
-    const manifestHash = typeof showPrompt === 'function'
-      ? await showPrompt('SHA-256 manifest hash:', 'Backup Manifest', '')
-      : prompt('SHA-256 manifest hash:', '');
-    if (manifestHash === null) return;
-    if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
-    const location = typeof showPrompt === 'function'
-      ? await showPrompt('Backup location/reference:', 'Backup Location', '')
-      : prompt('Backup location/reference:', '');
-    if (location === null) return;
-    if (location.trim()) body.backup_location = location.trim();
+    if (!body.manifest_hash && !body.checksum) {
+      const manifestHash = typeof showPrompt === 'function'
+        ? await showPrompt('SHA-256 manifest/checksum hash:', 'Backup Manifest', '')
+        : prompt('SHA-256 manifest/checksum hash:', '');
+      if (manifestHash === null) return;
+      if (manifestHash.trim()) body.manifest_hash = manifestHash.trim();
+    }
+    if (!body.storage_location && !body.backup_location) {
+      const location = typeof showPrompt === 'function'
+        ? await showPrompt('Backup location/reference:', 'Backup Location', '')
+        : prompt('Backup location/reference:', '');
+      if (location === null) return;
+      if (location.trim()) body.storage_location = location.trim();
+    }
   }
   if (status === 'FAILED') {
     const notes = typeof showPrompt === 'function'
@@ -2388,6 +2907,174 @@ async function updateBackupStatus(backupId, status) {
   } catch (err) {
     showSysToast(err.message || 'Network error.', 'error');
   }
+}
+
+async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABASE') {
+  const normalizedBackupId = Number(backupId || 0);
+  if (!normalizedBackupId) {
+    showSysToast('Select a completed backup before requesting restore.', 'error');
+    return;
+  }
+  if (!isRestorableBackupType(restoreType)) {
+    showSysToast('Deployment version backups use rollback requests, not restore jobs.', 'error');
+    return;
+  }
+  const warning = 'This action may affect current system data. Please ensure that a valid backup is selected.\n\nType RESTORE to queue the restore job:';
+  const phrase = prompt(warning, '');
+  if (phrase === null) return;
+  const reason = prompt('Restore reason:', moduleKey ? `Restore ${backupModuleName(moduleKey)} from selected backup.` : '');
+  if (reason === null) return;
+  const maintenance = confirm('Place the affected module under maintenance before restore?');
+  try {
+    const res = await apiFetch(`/api/admin/backups/${normalizedBackupId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({
+        restore_type: restoreType === 'FULL_BACKUP' ? 'FULL_BACKUP' : (restoreType || 'DATABASE'),
+        affected_module: moduleKey || '',
+        reason,
+        confirmation_phrase: phrase,
+        place_under_maintenance: maintenance,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to queue restore request.');
+    showSysToast(data.message || 'Restore request queued.', 'success');
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function updateRestoreJobStatus(jobId, status) {
+  const resultMessage = prompt(`${backupTypeLabel(status)} notes:`, '');
+  if (resultMessage === null) return;
+  try {
+    const res = await apiFetch(`/api/admin/backups/restore-jobs/${Number(jobId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, result_message: resultMessage }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update restore job.');
+    showSysToast(data.message || 'Restore job updated.', 'success');
+    loadBackupLogs();
+    loadSystemHealth();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+function requestBackupSetRollback(backupId) {
+  const record = sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === Number(backupId));
+  if (!record) {
+    showSysToast('Backup set not found.', 'error');
+    return;
+  }
+  const modules = Array.isArray(record.included_modules) ? record.included_modules.filter(Boolean) : [];
+  if (!modules.length) {
+    showSysToast('This deployment backup has no module recovery list.', 'error');
+    return;
+  }
+  let moduleKey = modules[0];
+  if (modules.length > 1) {
+    const selected = prompt(`Module key to roll back:\n${modules.join(', ')}`, moduleKey);
+    if (selected === null) return;
+    moduleKey = selected.trim();
+    if (!modules.includes(moduleKey)) {
+      showSysToast('Selected module is not included in this deployment backup.', 'error');
+      return;
+    }
+  }
+  requestModuleRollback(moduleKey);
+}
+
+async function requestModuleRollback(moduleKey) {
+  const module = sysBackupCoverage.find(item => item.module_key === moduleKey);
+  const point = sysModuleRecoveryPoints.find(item => item.module_key === moduleKey);
+  const reason = prompt('Rollback reason:', `Rollback request for ${backupModuleName(moduleKey)}.`);
+  if (reason === null) return;
+  try {
+    const res = await apiFetch('/api/admin/backups/rollback-requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        affected_module: moduleKey,
+        current_version: point?.current_version || module?.current_version || '',
+        target_version: point?.stable_version || module?.stable_version || '',
+        artifact_location: point?.artifact_location || '',
+        reason,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to request rollback.');
+    showSysToast(data.message || 'Rollback request logged.', 'success');
+    loadBackupLogs();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function updateRollbackRequestStatus(requestId, status) {
+  const resultMessage = prompt(`${backupTypeLabel(status)} notes:`, '');
+  if (resultMessage === null) return;
+  try {
+    const res = await apiFetch(`/api/admin/backups/rollback-requests/${Number(requestId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, result_message: resultMessage }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update rollback request.');
+    showSysToast(data.message || 'Rollback request updated.', 'success');
+    loadBackupLogs();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+async function createBackupIncident(moduleKey, moduleName) {
+  try {
+    const res = await apiFetch('/api/admin/support-tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: `Recovery review: ${moduleName}`,
+        category: 'SYSTEM',
+        priority: 'HIGH',
+        description: `Backup and Recovery review requested for ${moduleName} (${moduleKey}). Check latest backup, recovery point, health status, and rollback readiness.`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to create incident.');
+    showSysToast(data.message || 'Incident created.', 'success');
+    loadSupportTickets();
+  } catch (err) {
+    showSysToast(err.message || 'Network error.', 'error');
+  }
+}
+
+function openBackupDetails(kind, id) {
+  const modal = document.getElementById('backup-detail-modal');
+  const title = document.getElementById('backup-detail-title');
+  const body = document.getElementById('backup-detail-body');
+  if (!modal || !title || !body) return;
+  const source = kind === 'recovery'
+    ? sysModuleRecoveryPoints.find(item => Number(item.id) === Number(id))
+    : sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === Number(id));
+  if (!source) return;
+  title.textContent = kind === 'recovery' ? 'Module Recovery Point' : 'Backup Set Details';
+  const entries = Object.entries(source)
+    .filter(([key]) => !['notes_encrypted', 'remarks_encrypted'].includes(key))
+    .map(([key, value]) => [backupTypeLabel(key), Array.isArray(value) ? value.join(', ') : value]);
+  body.innerHTML = entries.map(([label, value]) => `
+    <div class="support-kv-row">
+      <span>${sysEsc(label)}</span>
+      <strong>${sysEsc(value ?? '-')}</strong>
+    </div>
+  `).join('');
+  modal.style.display = 'flex';
+}
+
+function closeBackupDetails() {
+  const modal = document.getElementById('backup-detail-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 // TOAST NOTIFICATION
@@ -2440,8 +3127,18 @@ window.loadSupportTickets    = loadSupportTickets;
 window.createSupportTicket   = createSupportTicket;
 window.updateSupportTicket   = updateSupportTicket;
 window.loadBackupLogs        = loadBackupLogs;
+window.switchBackupRecoveryTab = switchBackupRecoveryTab;
 window.requestBackup         = requestBackup;
 window.updateBackupStatus    = updateBackupStatus;
+window.verifyBackup          = verifyBackup;
+window.requestRestoreJob     = requestRestoreJob;
+window.updateRestoreJobStatus = updateRestoreJobStatus;
+window.requestBackupSetRollback = requestBackupSetRollback;
+window.requestModuleRollback = requestModuleRollback;
+window.updateRollbackRequestStatus = updateRollbackRequestStatus;
+window.createBackupIncident  = createBackupIncident;
+window.openBackupDetails     = openBackupDetails;
+window.closeBackupDetails    = closeBackupDetails;
 
 document.addEventListener('partialsLoaded', initSystemAdminIfActive);
 document.addEventListener('DOMContentLoaded', () => setTimeout(initSystemAdminIfActive, 0));

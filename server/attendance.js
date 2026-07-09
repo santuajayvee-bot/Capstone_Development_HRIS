@@ -31,6 +31,7 @@ const {
 const { emitAttendanceCreated } = require('./realtime');
 const { auditSecurityEvent } = require('./security-controls');
 const { isStrictDateOnly } = require('./utils/dateValidation');
+const { verifyPassword } = require('../services/passwordService');
 const {
   ensureAttendancePolicySettings,
   computeAttendanceMetrics,
@@ -71,7 +72,7 @@ const ATTENDANCE_POLICY_ALLOWED_FIELDS = new Set([
 ]);
 const MANUAL_ATTENDANCE_ALLOWED_FIELDS = new Set(['employee_id', 'date', 'time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
 const ATTENDANCE_OVERRIDE_ALLOWED_FIELDS = new Set(['time_in', 'time_out', 'am_time_in', 'am_time_out', 'pm_time_in', 'pm_time_out', 'reason']);
-const ATTENDANCE_VERIFY_ALLOWED_FIELDS = new Set(['verification_status', 'reason']);
+const ATTENDANCE_VERIFY_ALLOWED_FIELDS = new Set(['verification_status', 'reason', 'currentPassword', 'current_password', 'password_confirmation']);
 const ATTENDANCE_OVERTIME_ALLOWED_FIELDS = new Set(['overtime_hours', 'reason']);
 const ATTENDANCE_OVERTIME_REVIEW_ALLOWED_FIELDS = new Set(['decision', 'reason']);
 const GEOFENCE_ALLOWED_FIELDS = new Set(['site_name', 'latitude', 'longitude', 'radius_meters', 'is_active']);
@@ -305,6 +306,26 @@ async function writeAuditLog(userId, employeeId, action, oldValue, newValue, req
       cleanText(req.headers['user-agent'], 500),
     ]
   );
+}
+
+function attendanceStepUpPassword(req) {
+  return String(req.body?.currentPassword || req.body?.current_password || req.body?.password_confirmation || '');
+}
+
+async function verifyAttendanceStepUpPassword(req) {
+  const userId = Number(req.user?.id || req.user?.userId || req.user?.sub);
+  const currentPassword = attendanceStepUpPassword(req);
+  if (!Number.isInteger(userId) || userId <= 0 || !currentPassword.trim()) return false;
+
+  const [rows] = await pool.execute(`
+    SELECT COALESCE(u.password_hash, e.Password_Hash) AS password_hash
+      FROM users u
+      LEFT JOIN employees e ON e.id = u.employee_id
+     WHERE u.id = ?
+     LIMIT 1
+  `, [userId]);
+
+  return verifyPassword(rows[0]?.password_hash, currentPassword);
 }
 
 async function emitAttendanceRealtimeById(attendanceId, scanType = 'AUTO') {
@@ -1244,6 +1265,25 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     const reason = verificationStatus === 'PAYROLL_READY'
       ? (cleanText(req.body.reason, 500) || 'Attendance validated by HR.')
       : requireReason(req.body.reason);
+    const requiresStepUp = ['PAYROLL_READY', 'REJECTED'].includes(verificationStatus);
+    if (requiresStepUp) {
+      const passwordVerified = await verifyAttendanceStepUpPassword(req);
+      if (!passwordVerified) {
+        await auditSecurityEvent(req, {
+          action: 'attendance_step_up_authentication_failed',
+          module: 'ATTENDANCE_SECURITY',
+          targetTable: 'attendance_log',
+          targetRecord: attendanceId,
+          newValue: {
+            requested_status: verificationStatus,
+            method: req.method,
+            path: req.originalUrl,
+          },
+          result: 'blocked',
+        });
+        return res.status(401).json({ error: 'Current password is required to validate or reject attendance.' });
+      }
+    }
 
     await conn.beginTransaction();
     const [rows] = await conn.execute('SELECT * FROM attendance_log WHERE attendance_id = ? FOR UPDATE', [attendanceId]);
@@ -1275,6 +1315,16 @@ router.patch('/:id/verify', requireAuth, requireRole(HR_ROLES), async (req, res)
     );
     await appendIntegrityEntry(conn, attendanceId, `HR_VERIFICATION_${verificationStatus}`);
     await conn.commit();
+    if (requiresStepUp) {
+      await auditSecurityEvent(req, {
+        action: 'attendance_step_up_authentication_verified',
+        module: 'ATTENDANCE_SECURITY',
+        targetTable: 'attendance_log',
+        targetRecord: attendanceId,
+        newValue: { requested_status: verificationStatus },
+        result: 'success',
+      });
+    }
     await writeAuditLog(req.user.id, record.employee_id, `ATTENDANCE ${verificationStatus} [ID:${attendanceId}] Reason:${reason}`, record.verification_status, verificationStatus, req);
     await emitAttendanceRealtimeById(attendanceId, verificationStatus);
     res.json({ message: `Attendance marked ${verificationStatus}.` });
