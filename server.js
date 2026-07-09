@@ -1366,6 +1366,120 @@ function employeeHasRole(req, roles) {
   return roles.includes(req.user?.role);
 }
 
+const EMPLOYEE_INTEGRITY_FIELDS = [
+  'employee_code',
+  'first_name',
+  'middle_name',
+  'last_name',
+  'suffix',
+  'email',
+  'contact_number',
+  'department_id',
+  'position',
+  'employment_type',
+  'status',
+  'hiring_type',
+  'deployment_status',
+  'supervisor',
+  'work_location',
+  'shift_schedule',
+  'sss_number',
+  'philhealth_number',
+  'pagibig_number',
+  'tin',
+  'tax_status',
+  'bank_name',
+  'bank_account',
+];
+
+let employeeIntegritySchemaReadyPromise = null;
+
+function employeeIntegrityValue(value) {
+  return value === null || value === undefined ? '' : String(value);
+}
+
+function employeeIntegrityPayload(row) {
+  return [
+    'employee:v2',
+    ...EMPLOYEE_INTEGRITY_FIELDS.map(field => employeeIntegrityValue(row?.[field])),
+  ].join('|');
+}
+
+function computeEmployeeIntegrityHash(row) {
+  return nodeCrypto.createHash('sha256').update(employeeIntegrityPayload(row), 'utf8').digest('hex');
+}
+
+function employeeIntegrityStatus(row) {
+  const storedHash = String(row?.integrity_hash || '').trim().toLowerCase();
+  if (!storedHash) return { status: 'UNSEALED', hash: null };
+  const expectedHash = computeEmployeeIntegrityHash(row);
+  return {
+    status: storedHash === expectedHash ? 'VALID' : 'TAMPERED',
+    hash: storedHash,
+  };
+}
+
+async function ensureEmployeeIntegritySchema(pool) {
+  if (!employeeIntegritySchemaReadyPromise) {
+    employeeIntegritySchemaReadyPromise = (async () => {
+      if (!(await employeeColumnExists(pool, 'integrity_hash'))) {
+        await pool.execute('ALTER TABLE employees ADD COLUMN integrity_hash CHAR(64) NULL');
+      }
+      await pool.execute(
+        `UPDATE employees
+            SET integrity_hash = SHA2(CONCAT_WS('|',
+                'employee:v2',
+                COALESCE(employee_code, ''),
+                COALESCE(first_name, ''),
+                COALESCE(middle_name, ''),
+                COALESCE(last_name, ''),
+                COALESCE(suffix, ''),
+                COALESCE(email, ''),
+                COALESCE(contact_number, ''),
+                COALESCE(CAST(department_id AS CHAR), ''),
+                COALESCE(position, ''),
+                COALESCE(employment_type, ''),
+                COALESCE(status, ''),
+                COALESCE(hiring_type, ''),
+                COALESCE(deployment_status, ''),
+                COALESCE(supervisor, ''),
+                COALESCE(work_location, ''),
+                COALESCE(shift_schedule, ''),
+                COALESCE(sss_number, ''),
+                COALESCE(philhealth_number, ''),
+                COALESCE(pagibig_number, ''),
+                COALESCE(tin, ''),
+                COALESCE(tax_status, ''),
+                COALESCE(bank_name, ''),
+                COALESCE(bank_account, '')
+              ), 256)
+          WHERE integrity_hash IS NULL`
+      );
+    })().catch(error => {
+      employeeIntegritySchemaReadyPromise = null;
+      throw error;
+    });
+  }
+  return employeeIntegritySchemaReadyPromise;
+}
+
+async function sealEmployeeIntegrity(executor, employeeId) {
+  const [rows] = await executor.execute(
+    `SELECT id, integrity_hash, employee_code, first_name, middle_name, last_name, suffix,
+            email, contact_number, department_id, position, employment_type, status,
+            hiring_type, deployment_status, supervisor, work_location, shift_schedule,
+            sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account
+       FROM employees
+      WHERE id = ?
+      LIMIT 1`,
+    [employeeId]
+  );
+  if (!rows.length) return null;
+  const integrityHash = computeEmployeeIntegrityHash(rows[0]);
+  await executor.execute('UPDATE employees SET integrity_hash = ? WHERE id = ?', [integrityHash, employeeId]);
+  return integrityHash;
+}
+
 function employeeReferencePayload(employee, options = {}) {
   const includePayrollFields = Boolean(options.includePayrollFields);
   return {
@@ -1381,6 +1495,8 @@ function employeeReferencePayload(employee, options = {}) {
     department: employee.department || null,
     position: employee.position || null,
     current_system_role: employee.current_system_role || null,
+    integrity_status: employee.integrity_status || null,
+    integrity_hash: employee.integrity_hash || null,
     ...(includePayrollFields ? {
       employment_type: employee.employment_type || null,
       wage_type_id: employee.wage_type_id || null,
@@ -3320,6 +3436,7 @@ app.delete('/api/employee-setup/positions/:id', requireAuth, requireRole(ROLES.s
 app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) => {
   try {
     const pool = require('./config/db');
+    await ensureEmployeeIntegritySchema(pool);
     const requestedStatus = String(req.query.status || '').trim();
     const includeAllStatuses = /^(all|all status|all statuses)$/i.test(requestedStatus);
     const employeeWhere = [];
@@ -3335,8 +3452,9 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     const employeeListSql =
       `SELECT e.id, e.employee_code, e.first_name, e.middle_name, e.last_name, e.suffix,
               e.email, e.contact_number, e.department_id, e.position, e.employment_type,
-              e.supervisor, e.status, e.status AS employment_status, e.wage_type_id,
-              e.hiring_type, e.deployment_status,
+              e.supervisor, e.work_location, e.shift_schedule, e.status, e.status AS employment_status, e.wage_type_id,
+              e.hiring_type, e.deployment_status, e.sss_number, e.philhealth_number,
+              e.pagibig_number, e.tin, e.tax_status, e.bank_name, e.bank_account, e.integrity_hash,
               d.name AS department, wt.name AS wage_type,
               (
                 SELECT COALESCE(r.label, r.name)
@@ -3396,7 +3514,12 @@ app.get('/api/employees', requireAuth, requireRole(ROLES.any), async (req, res) 
     // values parameterized while avoiding the prepared-statement crash.
     const [rows] = await pool.query(employeeListSql, employeeParams);
     const directoryDecryptBudget = { failures: 0, limit: 8 };
-    const employees = rows.map(row => decryptEmployeeDirectoryPii(row, directoryDecryptBudget));
+    const employees = rows.map(row => {
+      const integrity = employeeIntegrityStatus(row);
+      row.integrity_status = integrity.status;
+      row.integrity_hash = integrity.hash;
+      return decryptEmployeeDirectoryPii(row, directoryDecryptBudget);
+    });
     
     if (req.user.role === 'employee') return res.json(employees.filter(r => r.id === req.user.employeeId).map(employee => employeeDirectoryPayload(employee)));
     if (employeeHasRole(req, ROLES.staff_management)) {
@@ -3485,6 +3608,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
     await ensureOnboardingLifecycleSchema(pool);
     await ensurePhilippineAddressColumns(pool);
     await ensureEmployeeAuthColumns(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'create' });
     if (validationResponse) return validationResponse;
     const { employee_id_mode, employee_code, first_name, middle_name, last_name, suffix, email, contact_number, work_email, mailing_address, nationality, marital_status, date_of_birth, place_of_birth, gender, blood_type, religion, residential_address, current_address, emergency_contact_name, emergency_contact_num, emergency_contact_relationship, emergency_contact_secondary_num, emergency_contact_email, emergency_contact_address, education_school, education_attainment, education_units, education_year_graduated, education_jhs_school, education_jhs_attainment, education_jhs_from, education_jhs_to, education_jhs_year_graduated, education_shs_school, education_shs_attainment, education_shs_from, education_shs_to, education_shs_year_graduated, education_vocational_school, education_vocational_attainment, education_vocational_units, education_vocational_from, education_vocational_to, education_vocational_year_graduated, education_college_school, education_college_attainment, education_college_units, education_college_from, education_college_to, education_college_year_graduated, department_id, position, employment_type, date_hired, end_of_contract, supervisor, work_location, shift_schedule, employee_level, employment_history, status, employment_status, separation_date, separation_reason, offboarding_remarks, wage_type, base_rate, wage_effective_date, sewingRates, salary_grade, allowances, payroll_schedule, sss_number, philhealth_number, pagibig_number, tin, tax_status, bank_name, bank_account, hiring_type, agency_name, agency_contact_person, agency_contact_number, deployment_status, contract_start_date, contract_end_date, requires_onboarding, requires_training, lifecycle_action, lifecycle_note } = req.body;
@@ -3798,6 +3922,7 @@ app.post('/api/employees', requireAuth, requireRole(ROLES.staff_management), EMP
       `UPDATE employees SET ${piiUpdateFields.join(', ')} WHERE id = ?`,
       [...piiUpdateValues, employee_id]
     );
+    await sealEmployeeIntegrity(pool, employee_id);
     await writeEmployeeLifecycleAudit(pool, req, `EMPLOYEE_RECORD_CREATED_DIRECT [${finalEmployeeCode}]`, employee_id, null, {
       employee_code: finalEmployeeCode,
       position,
@@ -3907,6 +4032,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
     await ensurePhilippineAddressColumns(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const { id } = req.params; // numeric employee id
     const validationResponse = await validateEmployeeRequestBody(req, res, pool, { mode: 'update' });
     if (validationResponse) return validationResponse;
@@ -4058,6 +4184,7 @@ app.put('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management), 
     }
 
     await deactivateLinkedUserAccounts(pool, existingEmployee?.id || Number(id), normalizedEmployeeStatus, req);
+    await sealEmployeeIntegrity(pool, existingEmployee.id);
     await auditSecurityEvent(req, {
       action: 'employee_update_succeeded',
       module: 'EMPLOYEE_SECURITY',
@@ -4335,6 +4462,7 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
   let connection;
   try {
     await ensureEmployeeLifecycleManagementSchema(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const caseId = Number(req.params.caseId);
     if (!caseId) return res.status(400).json({ error: 'Valid offboarding case id is required.' });
 
@@ -4500,6 +4628,7 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
         [current.employee_id, current.employee_status || null, current.effective_date, req.body.remarks || current.remarks || null, req.user.id || null]
       );
       await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_CANCELLED', current.employee_id, { offboarding_case_id: caseId, status: current.status }, { status: 'Active', remarks: req.body.remarks || null });
+      await sealEmployeeIntegrity(connection, current.employee_id);
     } else if (completing) {
       const finalEmployeeStatus = employeeStatusFromOffboardingFinalStatus(requestedStatus, current.separation_type);
       await connection.execute(
@@ -4548,6 +4677,7 @@ app.patch('/api/employees/offboarding/:caseId', requireAuth, requireRole(ROLES.a
         [current.employee_id, current.employee_status || null, finalEmployeeStatus, current.effective_date, current.separation_reason, req.body.remarks || current.remarks || null, req.user.id || null]
       );
       await writeEmployeeLifecycleAudit(connection, req, 'OFFBOARDING_FINAL_APPROVED', current.employee_id, { offboarding_case_id: caseId, status: current.status }, { offboarding_case_id: caseId, status: finalEmployeeStatus, clearance_status: derivedClearanceStatus });
+      await sealEmployeeIntegrity(connection, current.employee_id);
     } else {
       await writeEmployeeLifecycleAudit(connection, req, clearanceItems.length ? 'OFFBOARDING_CLEARANCE_CHECKLIST_UPDATED' : 'CLEARANCE_UPDATED', current.employee_id, {
         offboarding_case_id: caseId,
@@ -4585,6 +4715,7 @@ app.post('/api/employees/:id/reonboard', requireAuth, requireRole(ROLES.any), EM
   try {
     res.setHeader('Content-Type', 'application/json');
     await ensureEmployeeLifecycleManagementSchema(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const { id } = req.params;
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_REONBOARD_ALLOWED_FIELDS, 'reonboarding')) return;
     if (!canCreateReonboarding(req)) return rejectLifecycleUnauthorized(req, res, 'blocked_employee_reonboarding_unauthorized', id);
@@ -4734,6 +4865,7 @@ app.post('/api/employees/:id/reonboard', requireAuth, requireRole(ROLES.any), EM
     updateValues.push(id);
 
     await connection.execute(`UPDATE employees SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+    await sealEmployeeIntegrity(connection, Number(id));
 
     await connection.execute(
       `INSERT INTO employee_lifecycle_event
@@ -4832,6 +4964,7 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const { id } = req.params; // id = numeric employee id
     if (await rejectEmployeeUnsupportedSubresourceFields(req, res, EMPLOYEE_STATUS_ALLOWED_FIELDS, 'status')) return;
     const { separation_date, separation_reason, offboarding_remarks } = req.body;
@@ -4874,6 +5007,7 @@ app.patch('/api/employees/:id/status', requireAuth, requireRole(ROLES.staff_mana
     }
 
     await deactivateLinkedUserAccounts(pool, Number(id), status, req);
+    await sealEmployeeIntegrity(pool, Number(id));
 
     return res.status(200).json({ message: `Employee status updated to ${status}.` });
   } catch (err) {
@@ -4888,6 +5022,7 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
     res.setHeader('Content-Type', 'application/json');
     const pool = require('./config/db');
     await ensureEmployeeLifecycleColumns(pool);
+    await ensureEmployeeIntegritySchema(pool);
     const { id } = req.params; // id = numeric employee id
 
     console.log('DELETE /api/employees/:id - Employee ID:', id);
@@ -4913,6 +5048,7 @@ app.delete('/api/employees/:id', requireAuth, requireRole(ROLES.staff_management
     }
 
     await deactivateLinkedUserAccounts(pool, Number(id), 'Inactive', req);
+    await sealEmployeeIntegrity(pool, Number(id));
     await writeEmployeeLifecycleAudit(pool, req, 'EMPLOYEE_SOFT_DELETED', Number(id), {
       status: existingRows[0].status,
     }, {

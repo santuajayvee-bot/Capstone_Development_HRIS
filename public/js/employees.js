@@ -562,6 +562,7 @@ async function fetchEmployees() {
         position: e.position || '—',
         supervisor: e.supervisor || '—',
         status: e.status || 'Active',
+        integrityStatus: e.integrity_status || null,
         // Store raw data ref for editing
         _raw: e
       };
@@ -646,14 +647,22 @@ function renderEmployees(list) {
             : '';
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
+    const integrityStatus = String(e.integrityStatus || e._raw?.integrity_status || '').toUpperCase();
+    const integrityBadge = integrityStatus === 'TAMPERED'
+      ? '<span class="employee-integrity-badge employee-integrity-badge-tampered" title="Database integrity mismatch detected">Tampered</span>'
+      : integrityStatus === 'UNSEALED'
+        ? '<span class="employee-integrity-badge employee-integrity-badge-unsealed" title="Integrity hash has not been sealed yet">Unsealed</span>'
+        : '';
+    const rowClass = integrityStatus === 'TAMPERED' ? 'employee-row-tampered' : '';
     
     return `
-    <tr onclick="openEmployeeProfile('${employeeId}', 'personal')" style="cursor:pointer;" data-emp-id="${employeeId}">
+    <tr class="${rowClass}" onclick="openEmployeeProfile('${employeeId}', 'personal')" style="cursor:pointer;" data-emp-id="${employeeId}">
       <td class="emp-id">${escapeHtml(e.empCode)}</td>
       <td class="emp-name">
         <div class="employee-directory-person">
           <span class="employee-directory-avatar" data-employee-photo="${employeeId}" data-initials="${escapeHtml(e.initials)}">${escapeHtml(e.initials)}</span>
           <span>${escapeHtml(e.name)}</span>
+          ${integrityBadge}
         </div>
       </td>
       <td class="emp-email">${escapeHtml(e.email)}</td>
@@ -1886,11 +1895,18 @@ function renderManagementTable(list) {
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     const toggleLabel = e.status === 'Active' ? 'Deactivate' : 'Activate';
+    const integrityStatus = String(e.integrityStatus || e._raw?.integrity_status || '').toUpperCase();
+    const integrityBadge = integrityStatus === 'TAMPERED'
+      ? '<span class="employee-integrity-badge employee-integrity-badge-tampered" title="Database integrity mismatch detected">Tampered</span>'
+      : integrityStatus === 'UNSEALED'
+        ? '<span class="employee-integrity-badge employee-integrity-badge-unsealed" title="Integrity hash has not been sealed yet">Unsealed</span>'
+        : '';
+    const rowClass = integrityStatus === 'TAMPERED' ? 'employee-row-tampered' : '';
     
     return `
-    <tr data-emp-id="${e.id}">
+    <tr class="${rowClass}" data-emp-id="${e.id}">
       <td class="emp-id">${e.id}</td>
-      <td class="emp-name">${e.name}</td>
+      <td class="emp-name">${e.name} ${integrityBadge}</td>
       <td>${e.email}</td>
       <td>${e.dept}</td>
       <td>${e.position}</td>
