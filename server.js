@@ -25,6 +25,7 @@ const blockchainPayrollRoutes                = require('./server/routes/blockcha
 const blockchainDtrRoutes                    = require('./server/routes/blockchain-dtr');
 const onboardingRoutes                       = require('./server/onboarding');
 const adminRbacRoutes                        = require('./server/admin-rbac');
+const backupRecoveryRoutes                   = require('./server/backup-recovery');
 const accountCreationRequestRoutes           = require('./server/account-creation-requests');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
 const { encryptPII }                         = require('./server/crypto');
@@ -1266,6 +1267,8 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/account-requests', accountCreationRequestRoutes);
 
 // Admin RBAC Module — Account Registration & Role Management (Level 4 only)
+// Mount hardened recovery handlers before the legacy admin router.
+app.use('/api/admin/backups', backupRecoveryRoutes);
 app.use('/api/admin', adminRbacRoutes);
 
 // Employee Actor Module — Employee-only dashboard, 201-file, payslips
@@ -6306,7 +6309,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
              LEFT JOIN users filed ON filed.id = lr.filed_by
              LEFT JOIN users encoded ON encoded.id = lr.encoded_by
              LEFT JOIN users payrollReviewer ON payrollReviewer.id = lr.payroll_approved_by
-             LEFT JOIN users reviewer ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
+             LEFT JOIN users reviewecomputeLeaveBalanceIntegrityHashr ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
     const p = [];
     if (!hasLeavePermission(req.user, 'leave.request.view_all')) {
       q += ' WHERE lr.employee_id = ?';

@@ -1485,7 +1485,10 @@ async function maxDateIfColumn(tableName, columnCandidates) {
 }
 
 function checkedTimestamp() {
-  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+  // Pass a real Date to mysql2 so the pool's configured +08:00 timezone is
+  // applied consistently. A UTC-looking string inserted into DATETIME was
+  // treated as Philippine local time and made health checks appear 8h old.
+  return new Date();
 }
 
 function makeSystemHealthRunId() {
@@ -1929,7 +1932,9 @@ async function checkBackupHealth() {
   let latest = null;
   if (backupTable) {
     const query = backupTable === 'backup_sets'
-      ? `SELECT backup_reference, backup_type, storage_provider AS storage_target, status, created_at, restored_at AS completed_at, verified_at
+      ? `SELECT backup_reference, backup_type, storage_provider AS storage_target, status,
+                verification_status, integrity_status, checksum,
+                storage_location_encrypted, created_at, restored_at AS completed_at, verified_at
            FROM backup_sets
           ORDER BY created_at DESC
           LIMIT 1`
@@ -1941,7 +1946,15 @@ async function checkBackupHealth() {
     latest = rows[0] || null;
   }
   const failedStatuses = ['FAILED', 'VERIFICATION_FAILED'];
-  const pendingStatuses = ['REQUESTED', 'PENDING', 'RUNNING'];
+  const pendingStatuses = ['REQUESTED', 'PENDING', 'RUNNING', 'COMPLETED'];
+  const verifiedArtifact = backupTable === 'backup_sets'
+    && latest
+    && ['VERIFIED', 'RESTORED'].includes(latest.status)
+    && latest.verification_status === 'MATCH'
+    && latest.integrity_status === 'PASSED'
+    && latest.checksum
+    && latest.storage_location_encrypted
+    && latest.verified_at;
   const status = !backupTable
     ? 'WARNING'
     : !latest
@@ -1950,7 +1963,9 @@ async function checkBackupHealth() {
         ? 'OFFLINE'
         : pendingStatuses.includes(latest.status)
           ? 'WARNING'
-          : 'ONLINE';
+          : backupTable === 'backup_sets' && !verifiedArtifact
+            ? 'WARNING'
+            : 'ONLINE';
   return healthResult(
     status,
     !backupTable
@@ -1959,7 +1974,9 @@ async function checkBackupHealth() {
         ? 'No backup request has been recorded yet.'
         : failedStatuses.includes(latest.status)
           ? 'Latest backup failed or failed verification.'
-          : 'Latest backup record is available.',
+          : verifiedArtifact || backupTable !== 'backup_sets'
+            ? 'Latest backup artifact is independently verified and available.'
+            : 'Latest backup record is not yet independently verified and restorable.',
     {
       dependencies: {
         backup_log: await tableDependency(backupTable, 'Backup log'),
@@ -3102,18 +3119,27 @@ function systemHealthHistoryRows(moduleResults, {
 
 function mergeSystemHealthHistoryRows(currentRows = [], storedRows = [], limit = 30) {
   const seen = new Set();
-  return [...currentRows, ...storedRows].filter(row => {
+  const rows = [...currentRows, ...storedRows].filter(row => {
     if (!row) return false;
-    const key = [
-      row.run_id || '',
-      row.module_key || '',
-      row.checked_at || '',
-      row.status || '',
-    ].join('|');
+    // A run persists exactly one row per module. Keying on checked_at caused
+    // the in-memory Date and the MySQL-returned ISO value for the same row to
+    // be treated as separate records, consuming the recent-history limit.
+    const key = row.run_id && row.module_key
+      ? `run:${row.run_id}|module:${row.module_key}`
+      : row.history_id
+        ? `history:${row.history_id}`
+        : `fallback:${row.module_key || ''}|${row.checked_at || ''}|${row.status || ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, limit);
+  });
+  rows.sort((a, b) => {
+    const bTime = new Date(b.checked_at || 0).getTime() || 0;
+    const aTime = new Date(a.checked_at || 0).getTime() || 0;
+    if (bTime !== aTime) return bTime - aTime;
+    return Number(b.history_id || 0) - Number(a.history_id || 0);
+  });
+  return rows.slice(0, limit);
 }
 
 async function persistSystemHealthHistory(moduleResult, {
@@ -3175,18 +3201,31 @@ async function recentSystemHealthLogs(moduleKey) {
   const actionExpr = actionColumn || sqlLiteral('SYSTEM_HEALTH_CHECK');
   const moduleExpr = moduleColumn || sqlLiteral('SYSTEM_HEALTH');
   const newValueExpr = newValueColumn || 'NULL';
+  const idColumn = await hasColumn('system_audit_log', 'id')
+    ? 'id'
+    : (await hasColumn('system_audit_log', 'log_id'))
+      ? 'log_id'
+      : (await hasColumn('system_audit_log', 'Log_ID'))
+        ? 'Log_ID'
+        : null;
   const params = [];
   const conditions = [];
-  if (moduleColumn) conditions.push(`${moduleColumn} = 'SYSTEM_HEALTH'`);
+  const moduleMatches = [];
+  if (moduleColumn) {
+    conditions.push(`${moduleColumn} = ?`);
+    params.push('SYSTEM_HEALTH');
+  }
   if (actionColumn) {
-    conditions.push(`${actionColumn} LIKE ?`);
+    moduleMatches.push(`${actionColumn} LIKE ?`);
     params.push(`%${moduleKey}%`);
   }
   if (newValueColumn) {
-    conditions.push(`${newValueColumn} LIKE ?`);
+    moduleMatches.push(`${newValueColumn} LIKE ?`);
     params.push(`%${moduleKey}%`);
   }
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' OR ')}` : '';
+  if (moduleMatches.length) conditions.push(`(${moduleMatches.join(' OR ')})`);
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const secondaryOrder = idColumn ? `, ${idColumn} DESC` : '';
   const [rows] = await pool.execute(
     `SELECT ${actionExpr} AS action_performed,
             ${moduleExpr} AS module,
@@ -3194,7 +3233,7 @@ async function recentSystemHealthLogs(moduleKey) {
             ${timestampColumn} AS timestamp
        FROM system_audit_log
       ${whereClause}
-      ORDER BY ${timestampColumn} DESC
+      ORDER BY ${timestampColumn} DESC${secondaryOrder}
       LIMIT 5`,
     params
   );
@@ -3292,18 +3331,34 @@ async function logSystemHealthCheck(req, moduleResults, requestedModule = 'all')
   const action = requestedModule === 'all'
     ? `RUN_SYSTEM_HEALTH_CHECK: all modules, ${summary.online} online, ${summary.warning} warning, ${summary.offline} offline`
     : `RUN_SYSTEM_HEALTH_CHECK: ${requestedModule} => ${results[0]?.status || 'UNKNOWN'}`;
+  const details = JSON.stringify({
+    module: requestedModule,
+    summary,
+    results: results.map(result => ({
+      module_key: result.module_key,
+      status: result.status,
+      response_time_ms: result.response_time_ms,
+    })),
+  });
   await logAuditEntry(req, {
     action,
     module: 'SYSTEM_HEALTH',
-    newValue: JSON.stringify({
-      module: requestedModule,
-      summary,
-      results: results.map(result => ({
-        module_key: result.module_key,
-        status: result.status,
-        response_time_ms: result.response_time_ms,
-      })),
-    }),
+    newValue: details,
+  });
+  return {
+    action,
+    module: 'SYSTEM_HEALTH',
+    details,
+    timestamp: new Date(),
+  };
+}
+
+function attachSystemHealthAuditLog(moduleResults, auditLog) {
+  if (!auditLog) return;
+  const results = Array.isArray(moduleResults) ? moduleResults : [moduleResults];
+  results.filter(Boolean).forEach(result => {
+    const existingLogs = Array.isArray(result.recent_logs) ? result.recent_logs : [];
+    result.recent_logs = [auditLog, ...existingLogs].slice(0, 5);
   });
 }
 
@@ -3382,9 +3437,11 @@ router.post('/system-health/check', async (req, res) => {
       checkedByUserId,
     });
     const storedHistory = await getSystemHealthHistory({ limit: 30 });
-    await logSystemHealthCheck(req, snapshot.modules, 'all').catch(error => {
+    const auditLog = await logSystemHealthCheck(req, snapshot.modules, 'all').catch(error => {
       console.error('[RBAC] system-health audit log error:', error.message);
+      return null;
     });
+    attachSystemHealthAuditLog(snapshot.modules, auditLog);
     return res.json({
       message: 'System health check completed.',
       checked_at: snapshot.generated_at,
@@ -3420,9 +3477,11 @@ router.post('/system-health/check/:moduleKey', async (req, res) => {
       checkedByUserId,
     });
     const storedHistory = await getSystemHealthHistory({ limit: 30 });
-    await logSystemHealthCheck(req, moduleResult, moduleKey).catch(error => {
+    const auditLog = await logSystemHealthCheck(req, moduleResult, moduleKey).catch(error => {
       console.error('[RBAC] system-health module audit log error:', error.message);
+      return null;
     });
+    attachSystemHealthAuditLog(moduleResult, auditLog);
     return res.json({
       message: 'Module health check completed.',
       checked_at: snapshot.generated_at,

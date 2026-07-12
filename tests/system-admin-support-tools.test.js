@@ -189,6 +189,11 @@ assert(admin.includes('countRbacLevel4Roles'), 'RBAC health must count Level 4 r
 assert(admin.includes('level4'), 'RBAC health must detect varchar access levels such as "Level 4".');
 assert(admin.includes('systemHealthHistoryRows'), 'System Health check responses must include current-run history rows.');
 assert(admin.includes('mergeSystemHealthHistoryRows'), 'System Health check responses must merge current-run and stored history.');
+assert(admin.includes('`run:${row.run_id}|module:${row.module_key}`'), 'System Health history must deduplicate the persisted and current copy of each run/module row.');
+assert(admin.includes("conditions.join(' AND ')"), 'System Health recent logs must keep the audit module scope and module-key match together.');
+assert(admin.includes('attachSystemHealthAuditLog(snapshot.modules, auditLog)'), 'Full health checks must return the audit entry created by the current run.');
+assert(admin.includes('attachSystemHealthAuditLog(moduleResult, auditLog)'), 'Module health checks must return the audit entry created by the current run.');
+assert(admin.includes('function checkedTimestamp()') && admin.includes('return new Date();'), 'System Health timestamps must use mysql2 timezone-aware Date conversion.');
 assert(admin.includes('BACKUP_RECOVERY_MODULES'), 'Backup and Recovery must define module coverage.');
 assert(admin.includes('RESTORE_BACKUP'), 'Restore requests must be audit logged.');
 assert(admin.includes('REQUEST_MODULE_ROLLBACK'), 'Rollback requests must be audit logged.');
@@ -201,6 +206,7 @@ assert(systemAdminScript.includes('health-detail-runbook'), 'System Health UI mu
 assert(systemAdminScript.includes('applySystemHealthHistory'), 'System Health UI must preserve current-run history when stored history is empty.');
 assert(systemAdminScript.includes('healthHistoryRowsFromModules'), 'System Health UI must create fallback history rows from completed module results.');
 assert(systemAdminScript.includes('mergeSystemHealthHistory'), 'System Health UI must merge new and existing history rows.');
+assert(systemAdminScript.includes('`run:${row.run_id}|module:${row.module_key}`'), 'System Health UI must deduplicate each run/module history row independently of timestamp serialization.');
 assert(systemAdminScript.includes('/api/admin/users?include_stats=1'), 'Account Management must use lightweight account stats endpoint.');
 assert(systemAdminScript.includes('ensureSysAdminEmployeesLoaded'), 'Employee directory must be loaded lazily for account registration.');
 assert(systemAdminScript.includes('requestRestoreJob'), 'Backup UI must expose controlled restore requests.');

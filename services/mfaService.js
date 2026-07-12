@@ -223,6 +223,39 @@ async function getEmployeeMfaProfile(employeeId, executor = pool) {
   };
 }
 
+/**
+ * Re-verify an already-enrolled authenticator code for a privileged action.
+ * The caller is responsible for binding this proof to a one-time, expiring
+ * challenge and consuming that challenge in the protected transaction.
+ */
+async function verifyEmployeeTotpStepUp({ employeeId, code, req, purpose = 'privileged action', executor = pool }) {
+  const config = mfaConfig();
+  assertMfaConfiguration(config);
+  const normalizedCode = String(code || '').trim();
+  if (!new RegExp(`^\\d{${config.codeLength}}$`).test(normalizedCode)) {
+    await auditMfa(employeeId, 'MFA_STEP_UP_VERIFICATION_FAILED', `Invalid authenticator code format for ${String(purpose).slice(0, 80)}.`, req);
+    throw new MfaServiceError('Invalid verification code.', 'MFA_CODE_INVALID', 400);
+  }
+
+  const profile = await getEmployeeMfaProfile(employeeId, executor);
+  if (!profile?.secret || !profile.enrolledAt) {
+    await auditMfa(employeeId, 'MFA_STEP_UP_NOT_ENROLLED', `Step-up MFA was unavailable for ${String(purpose).slice(0, 80)}.`, req);
+    throw new MfaServiceError('An enrolled authenticator is required for this action.', 'MFA_TOTP_NOT_ENROLLED', 403);
+  }
+
+  if (!verifyTotpCode(profile.secret, normalizedCode, {
+    digits: config.codeLength,
+    windowSteps: config.totpWindow,
+  })) {
+    await auditMfa(employeeId, 'MFA_STEP_UP_VERIFICATION_FAILED', `Step-up MFA failed for ${String(purpose).slice(0, 80)}.`, req);
+    throw new MfaServiceError('Invalid verification code.', 'MFA_CODE_INVALID', 401);
+  }
+
+  const verifiedAt = new Date();
+  await auditMfa(employeeId, 'MFA_STEP_UP_VERIFICATION_SUCCESS', `Step-up MFA verified for ${String(purpose).slice(0, 80)}.`, req);
+  return { employeeId: profile.employeeId, verifiedAt };
+}
+
 async function ensureEmployeeTotpSecret(employeeId, req) {
   const profile = await getEmployeeMfaProfile(employeeId);
   if (!profile) {
@@ -430,6 +463,7 @@ module.exports = {
   isMfaEnabled,
   isMfaRequiredForRole,
   resendMfaChallenge,
+  verifyEmployeeTotpStepUp,
   verifyMfaChallenge,
   _base32DecodeForTest: base32Decode,
   _base32EncodeForTest: base32Encode,

@@ -446,7 +446,7 @@
   </div>
 
   <div class="backup-recovery-note">
-    Backup and Recovery records support controlled recovery planning. The system does not automatically overwrite source code or destructively restore data. Database recovery uses SQL dump or RDS snapshot procedures, file recovery uses local/S3 backup references, and module recovery uses rollback requests tied to version control or deployment artifacts. These technical recovery actions do not bypass HR or Payroll business approval workflows.
+    A backup request does not automatically overwrite source code or production data. Only artifacts reported by the backend as available and verified count as recovery coverage. Restore and rollback requests require maker-checker approval by a different authorized administrator plus fresh MFA step-up verification. Restore execution is blocked until its isolated dry-run and integrity checks pass. These technical recovery actions do not bypass HR or Payroll business approval workflows.
   </div>
 
   <section class="backup-recovery-section active" data-backup-panel="overview">
@@ -495,8 +495,7 @@
         <div>
           <label class="sysadmin-label">Storage Provider</label>
           <select id="backup-target" class="sysadmin-input">
-            <option value="MANUAL">Manual</option>
-            <option value="LOCAL">Local</option>
+            <option value="LOCAL">Local (safe development adapter)</option>
             <option value="RDS_SNAPSHOT">RDS Snapshot</option>
             <option value="S3">S3</option>
           </select>
@@ -508,7 +507,7 @@
       <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000"></textarea>
       <div class="modal-footer" style="padding:16px 0 0;">
         <div style="flex:1"></div>
-        <button class="btn-sysadmin-primary" onclick="requestBackup()">Request Backup</button>
+        <button class="btn-sysadmin-primary" onclick="requestBackup()">Create Backup Request</button>
       </div>
     </div>
 
@@ -519,14 +518,16 @@
             <th>Reference</th>
             <th>Type</th>
             <th>Provider</th>
-            <th>Status</th>
+            <th>Lifecycle</th>
+            <th>Verification and Integrity</th>
             <th>Checksum</th>
+            <th>Approval / MFA</th>
             <th>Created</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="backup-logs-tbody">
-          <tr><td colspan="7" class="table-empty">No backup records loaded.</td></tr>
+          <tr><td colspan="9" class="table-empty">No backup records loaded.</td></tr>
         </tbody>
       </table>
     </div>
@@ -542,19 +543,24 @@
             <th>Stable</th>
             <th>Health</th>
             <th>Artifact</th>
+            <th>Integrity</th>
             <th>Rollback</th>
+            <th>Approval / MFA</th>
             <th>Created</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="module-recovery-tbody">
-          <tr><td colspan="8" class="table-empty">No module recovery points loaded.</td></tr>
+          <tr><td colspan="10" class="table-empty">No module recovery points loaded.</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="restore">
+    <div class="backup-recovery-note">
+      Lifecycle: awaiting approval &rarr; approved &rarr; isolated dry-run &rarr; execute &rarr; integrity verification &rarr; completed. Approval, dry-run, and execution each require a fresh MFA step-up challenge.
+    </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
         <thead>
@@ -563,20 +569,26 @@
             <th>Backup</th>
             <th>Type</th>
             <th>Module</th>
-            <th>Status</th>
+            <th>Lifecycle</th>
+            <th>Dry-run</th>
+            <th>Integrity</th>
+            <th>Approval / MFA</th>
             <th>Requested By</th>
             <th>Result</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="restore-jobs-tbody">
-          <tr><td colspan="8" class="table-empty">No restore jobs loaded.</td></tr>
+          <tr><td colspan="11" class="table-empty">No restore jobs loaded.</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="rollback">
+    <div class="backup-recovery-note">
+      Rollback requests are available only from verified module recovery artifacts. A different authorized administrator must approve the request before MFA-protected execution and final integrity verification.
+    </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
         <thead>
@@ -584,15 +596,16 @@
             <th>Module</th>
             <th>Current</th>
             <th>Target</th>
-            <th>Status</th>
+            <th>Lifecycle</th>
+            <th>Artifact / Integrity</th>
+            <th>Approval / MFA</th>
             <th>Requested By</th>
-            <th>Approved By</th>
             <th>Result</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="rollback-requests-tbody">
-          <tr><td colspan="8" class="table-empty">No rollback requests loaded.</td></tr>
+          <tr><td colspan="9" class="table-empty">No rollback requests loaded.</td></tr>
         </tbody>
       </table>
     </div>
@@ -601,6 +614,35 @@
   <section class="backup-recovery-section" data-backup-panel="settings">
     <div class="backup-settings-grid" id="backup-settings-grid"></div>
   </section>
+</div>
+
+<div class="sysadmin-modal-overlay" id="backup-step-up-modal" style="display:none;">
+  <div class="sysadmin-modal backup-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="backup-step-up-title">
+    <div class="modal-header">
+      <h3 id="backup-step-up-title">Confirm Recovery Action</h3>
+      <button class="modal-close" type="button" onclick="closeBackupStepUp()" aria-label="Cancel MFA verification">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="backup-step-up-description">Enter the code from your authenticator app.</p>
+      <label class="sysadmin-label" for="backup-step-up-code">Authenticator code</label>
+      <input
+        id="backup-step-up-code"
+        class="sysadmin-input"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength="8"
+        pattern="[0-9]*"
+        aria-describedby="backup-step-up-expiry"
+      />
+      <small id="backup-step-up-expiry" class="sysadmin-muted">This challenge expires shortly.</small>
+      <div class="modal-footer" style="padding:16px 0 0;">
+        <div style="flex:1"></div>
+        <button class="btn-sysadmin-outline" type="button" onclick="closeBackupStepUp()">Cancel</button>
+        <button class="btn-sysadmin-primary" type="button" onclick="completeBackupStepUp()">Verify and Continue</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="sysadmin-modal-overlay" id="backup-detail-modal" style="display:none;">
