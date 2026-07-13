@@ -40,7 +40,9 @@
     "seed:biometric-survey": "node scripts/seed-biometric-survey-employees.js",
     "seed:attendance-0813": "node scripts/seed-attendance-0813-sample.js",
     "test:biometric-survey-scans": "node scripts/simulate-biometric-survey-scans.js --reset",
-    "test:payroll-june-trueup": "node scripts/payroll-june-5week-trueup-test.js"
+    "test:payroll-june-trueup": "node scripts/payroll-june-5week-trueup-test.js",
+    "test:backup-runtime": "node tests/backup-runtime.test.js",
+    "test:backup-recovery": "node tests/backup-recovery-schema-hardening.test.js && node tests/backup-recovery-operational-completeness.test.js && node tests/backup-recovery-security.test.js && node tests/backup-runtime.test.js && node tests/backup-recovery-ui-workflow.test.js && node tests/system-admin-support-tools.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-rds": "^3.1085.0",

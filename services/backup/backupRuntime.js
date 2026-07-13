@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { describeArtifact, sha256Text } = require('./artifactIntegrity');
+const { describeArtifact } = require('./artifactIntegrity');
 const { BackupBundleBuilder } = require('./backupBundleBuilder');
 const { backupError } = require('./backupErrors');
 const { copyRegularTree, isInside, removeTemporaryTree, resolveInside, secureRemoveTemporaryTree, assertSafeBackupReference } = require('./fileTree');
@@ -11,6 +11,7 @@ const { LocalStorageAdapter } = require('./localStorageAdapter');
 const { MySqlBackupService } = require('./mysqlBackupService');
 const { RdsSnapshotAdapter } = require('./rdsSnapshotAdapter');
 const { S3StorageAdapter } = require('./s3StorageAdapter');
+const { compareIntegrityReports } = require('./databaseIntegrity');
 
 const BACKUP_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP']);
 const STORAGE_PROVIDERS = new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT']);
@@ -56,7 +57,11 @@ async function readJsonFile(filePath, maxBytes = 5 * 1024 * 1024) {
 }
 
 function connectionFromEnvironment(environment, prefix, fallbackPrefix = null) {
-  const get = key => environment[`${prefix}_${key}`] ?? (fallbackPrefix ? environment[`${fallbackPrefix}_${key}`] : undefined);
+  const get = key => {
+    const primaryValue = environment[`${prefix}_${key}`];
+    if (primaryValue !== undefined && primaryValue !== null && String(primaryValue).trim() !== '') return primaryValue;
+    return fallbackPrefix ? environment[`${fallbackPrefix}_${key}`] : undefined;
+  };
   return {
     host: get('HOST'),
     port: get('PORT') || 3306,
@@ -94,6 +99,8 @@ class BackupRuntime {
     this.appVersion = String(options.appVersion || '1.0.0').slice(0, 80);
     this.deploymentCommit = String(options.deploymentCommit || 'local-dev').slice(0, 80);
     this.rdsRestoreOptions = options.rdsRestoreOptions || {};
+    this.rdsVerificationConnection = options.rdsVerificationConnection || null;
+    this.captureRowCounts = Boolean(options.captureRowCounts);
   }
 
   async initialize() {
@@ -126,11 +133,15 @@ class BackupRuntime {
       const stored = await adapter.createDatabaseSnapshot({ backupReference: reference });
       const verification = await adapter.verifyStoredArtifact(stored.location, stored.descriptor.checksum);
       if (!verification.valid) throw backupError('RDS snapshot failed integrity verification.', 'BACKUP_INTEGRITY_MISMATCH');
+      const databaseIntegrity = await this.mysqlBackupService.captureDatabaseIntegrity({
+        connection: this.primaryConnection,
+        includeRowCounts: this.captureRowCounts,
+      });
       return {
         backupReference: reference,
         backupType: type,
         storageProvider: provider,
-        status: 'VERIFIED',
+        status: 'COMPLETED',
         storageLocation: stored.location,
         checksum: stored.descriptor.checksum,
         fileSize: null,
@@ -138,8 +149,33 @@ class BackupRuntime {
         verified: true,
         idempotent: stored.idempotent,
         verification,
-        integrityReport: stored.descriptor.snapshot,
+        integrityReport: { snapshot: stored.descriptor.snapshot, database: databaseIntegrity },
       };
+    }
+
+    if (typeof adapter.findStoredArtifact === 'function') {
+      const existing = await adapter.findStoredArtifact(reference);
+      if (existing) {
+        const existingType = String(existing.metadata?.backupType || '').toUpperCase();
+        const existingModules = parseModuleList(existing.metadata?.includedModules).sort();
+        if (existingType !== type || JSON.stringify(existingModules) !== JSON.stringify([...modules].sort())) {
+          throw backupError('Backup reference already belongs to a different backup request.', 'BACKUP_IDEMPOTENCY_CONFLICT');
+        }
+        return {
+          backupReference: reference,
+          backupType: type,
+          storageProvider: provider,
+          status: 'COMPLETED',
+          storageLocation: existing.location,
+          checksum: existing.descriptor.checksum,
+          fileSize: existing.descriptor.sizeBytes,
+          fileCount: existing.descriptor.fileCount,
+          verified: true,
+          idempotent: true,
+          verification: existing.verification,
+          integrityReport: null,
+        };
+      }
     }
 
     const jobDirectory = await fs.promises.mkdtemp(path.join(this.workRoot, '.backup-'));
@@ -164,7 +200,7 @@ class BackupRuntime {
         backupReference: reference,
         backupType: type,
         storageProvider: provider,
-        status: 'VERIFIED',
+        status: 'COMPLETED',
         storageLocation: stored.location,
         checksum: stored.descriptor.checksum,
         fileSize: stored.descriptor.sizeBytes,
@@ -295,9 +331,6 @@ class BackupRuntime {
     const rootStat = await fs.promises.lstat(this.restoreOutputRoot);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw backupError('Restore output root is unsafe.', 'UNSAFE_RESTORE_WORKSPACE');
     const finalDirectory = resolveInside(this.restoreOutputRoot, backupReference);
-    if (await fs.promises.lstat(finalDirectory).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error))) {
-      throw backupError('Restore output already exists for this backup reference.', 'RESTORE_OUTPUT_EXISTS');
-    }
     const staging = await fs.promises.mkdtemp(path.join(this.restoreOutputRoot, '.restore-'));
     try {
       const components = [];
@@ -317,16 +350,29 @@ class BackupRuntime {
       }
       await copyRegularTree(path.join(artifactPath, 'lgsv-backup.json'), path.join(staging, 'lgsv-backup.json'));
       const sourceDescriptor = await describeArtifact(staging);
-      await fs.promises.rename(staging, finalDirectory);
+      const existing = await fs.promises.lstat(finalDirectory).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+      if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) {
+        throw backupError('Existing restore output is unsafe.', 'UNSAFE_RESTORE_WORKSPACE');
+      }
+      if (!existing) {
+        try {
+          await fs.promises.rename(staging, finalDirectory);
+        } catch (error) {
+          if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error.code)) throw error;
+        }
+      }
       const destinationDescriptor = await describeArtifact(finalDirectory);
       const integrityPassed = sourceDescriptor.checksum === destinationDescriptor.checksum;
-      if (!integrityPassed) throw backupError('Recovered file components failed integrity verification.', 'RESTORE_INTEGRITY_MISMATCH');
+      if (!integrityPassed) {
+        throw backupError('Existing restore output differs from the verified recovery artifact.', 'RESTORE_IDEMPOTENCY_CONFLICT');
+      }
       return {
         recoveryOutputLocation: finalDirectory,
         components,
         requiresCutover: true,
         integrityPassed,
         descriptor: destinationDescriptor,
+        idempotent: Boolean(existing),
       };
     } finally {
       if (isInside(this.restoreOutputRoot, staging)) await removeTemporaryTree(this.restoreOutputRoot, staging).catch(() => {});
@@ -344,6 +390,7 @@ class BackupRuntime {
     if (!this.liveRestoreEnabled) {
       throw backupError('Live restore execution is disabled by server configuration.', 'LIVE_RESTORE_DISABLED');
     }
+    await this.initialize();
     const reference = assertSafeBackupReference(backupReference);
     const type = normalizeEnum(backupType, BACKUP_TYPES, 'Backup type');
     const provider = normalizeEnum(storageProvider, STORAGE_PROVIDERS, 'Storage provider');
@@ -411,13 +458,17 @@ class BackupRuntime {
         (databaseRestore ? databaseRestore.comparison?.valid : true) &&
         (recoveredComponents ? recoveredComponents.integrityPassed : true)
       );
-      const integrityReport = databaseRestore?.actualIntegrity || recoveredComponents?.descriptor || null;
-      const restoredChecksum = databaseRestore && recoveredComponents
-        ? sha256Text(JSON.stringify({
-            databaseSchemaHash: databaseRestore.actualIntegrity?.schemaHash || null,
-            componentChecksum: recoveredComponents.descriptor?.checksum || null,
-          }))
-        : databaseRestore?.actualIntegrity?.schemaHash || recoveredComponents?.descriptor?.checksum || null;
+      const targetIntegrity = databaseRestore && recoveredComponents
+        ? {
+            database: databaseRestore.actualIntegrity || null,
+            recoveredComponents: recoveredComponents.descriptor || null,
+          }
+        : databaseRestore?.actualIntegrity || recoveredComponents?.descriptor || null;
+      const integrityReport = {
+        artifactChecksum: expectedChecksum,
+        artifactVerified: Boolean(materialized.verification?.valid),
+        targetIntegrity,
+      };
       return {
         restored: Boolean(databaseRestore?.restored || recoveredComponents) && integrityPassed,
         backupReference: reference,
@@ -427,7 +478,9 @@ class BackupRuntime {
         recoveredComponents,
         integrityPassed,
         integrityReport,
-        restoredChecksum,
+        // Completion evidence records the exact verified source artifact that
+        // was applied. Target-specific hashes remain in integrityReport.
+        restoredChecksum: integrityPassed ? expectedChecksum : null,
         verified: Boolean(materialized.verification?.valid),
         pendingVerification: false,
       };
@@ -435,14 +488,75 @@ class BackupRuntime {
       if (isInside(this.workRoot, jobDirectory)) await secureRemoveTemporaryTree(this.workRoot, jobDirectory).catch(() => {});
     }
   }
+
+  async verifyPendingRestore({
+    backupType,
+    storageProvider,
+    storageLocation,
+    expectedChecksum,
+    restoreTarget,
+    expectedIntegrity,
+  }) {
+    const type = normalizeEnum(backupType, BACKUP_TYPES, 'Backup type');
+    const provider = normalizeEnum(storageProvider, STORAGE_PROVIDERS, 'Storage provider');
+    if (provider !== 'RDS_SNAPSHOT' || type !== 'DATABASE') {
+      throw backupError('Only pending RDS database restores use target verification.', 'RESTORE_TARGET_VERIFICATION_UNSUPPORTED');
+    }
+    const adapter = this.adapterFor(provider);
+    const infrastructure = await adapter.verifyRestoredInstance({
+      location: storageLocation,
+      expectedChecksum,
+      newDbInstanceIdentifier: restoreTarget,
+    });
+    if (infrastructure.pending) {
+      return { pendingVerification: true, integrityPassed: false, infrastructure };
+    }
+    if (!infrastructure.valid) {
+      return { pendingVerification: false, integrityPassed: false, infrastructure };
+    }
+    const expectedDatabaseIntegrity = expectedIntegrity?.database || null;
+    if (!expectedDatabaseIntegrity || !this.rdsVerificationConnection) {
+      throw backupError('RDS post-restore database verification credentials are not configured.', 'RDS_RESTORE_VERIFY_CONFIG_MISSING');
+    }
+    const connection = {
+      ...this.rdsVerificationConnection,
+      host: infrastructure.endpoint,
+      port: infrastructure.port,
+      database: this.rdsVerificationConnection.database || expectedDatabaseIntegrity.databaseName,
+    };
+    const actualDatabaseIntegrity = await this.mysqlBackupService.captureDatabaseIntegrity({
+      connection,
+      includeRowCounts: Boolean(expectedDatabaseIntegrity.rowCounts),
+    });
+    const comparison = compareIntegrityReports(expectedDatabaseIntegrity, actualDatabaseIntegrity);
+    return {
+      pendingVerification: false,
+      integrityPassed: Boolean(comparison.valid),
+      restoredChecksum: comparison.valid ? expectedChecksum : null,
+      infrastructure,
+      integrityReport: {
+        artifactChecksum: expectedChecksum,
+        infrastructure,
+        expectedDatabaseIntegrity,
+        actualDatabaseIntegrity,
+        comparison,
+      },
+    };
+  }
 }
 
 function createBackupRuntimeFromEnv(options = {}) {
   const environment = options.environment || process.env;
   const nodeEnv = String(environment.NODE_ENV || 'development').toLowerCase();
-  const primaryConnection = options.primaryConnection || connectionFromEnvironment(environment, 'DB');
+  const primaryConnection = options.primaryConnection || connectionFromEnvironment(environment, 'BACKUP_SOURCE_DB', 'DB');
   const dryRunConnection = options.dryRunConnection || optionalConnectionFromEnvironment(environment, 'BACKUP_DRY_RUN_DB');
   const liveRestoreConnection = options.liveRestoreConnection || optionalConnectionFromEnvironment(environment, 'BACKUP_RESTORE_DB');
+  const rdsVerificationCandidate = connectionFromEnvironment(environment, 'BACKUP_RDS_VERIFY_DB');
+  const rdsVerificationConnection = options.rdsVerificationConnection || (
+    rdsVerificationCandidate.user && rdsVerificationCandidate.password
+      ? rdsVerificationCandidate
+      : null
+  );
   const workRoot = environment.BACKUP_WORK_ROOT || path.join(os.tmpdir(), 'lgsv-hr-backup-runtime');
   const mysqlBackupService = options.mysqlBackupService || new MySqlBackupService({
     mysqldumpPath: environment.MYSQLDUMP_PATH || 'mysqldump',
@@ -453,6 +567,9 @@ function createBackupRuntimeFromEnv(options = {}) {
     nodeEnv,
     primaryConnection,
     allowSameServerDryRun: parseBoolean(environment.BACKUP_ALLOW_SAME_SERVER_DRY_RUN),
+    includeRoutines: parseBoolean(environment.BACKUP_INCLUDE_ROUTINES),
+    includeEvents: parseBoolean(environment.BACKUP_INCLUDE_EVENTS),
+    captureSourceIntegrity: parseBoolean(environment.BACKUP_CAPTURE_INTEGRITY, true),
   });
   const fileSources = options.fileSources || parseSourcePaths(environment.BACKUP_FILE_SOURCE_PATHS);
   if (!fileSources.length) {
@@ -526,6 +643,8 @@ function createBackupRuntimeFromEnv(options = {}) {
       publiclyAccessible: false,
       waitForAvailable: parseBoolean(environment.AWS_RDS_RESTORE_WAIT_FOR_AVAILABLE),
     },
+    rdsVerificationConnection,
+    captureRowCounts: parseBoolean(environment.BACKUP_CAPTURE_ROW_COUNTS),
   });
 }
 

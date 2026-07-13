@@ -287,6 +287,23 @@ class S3StorageAdapter {
     };
   }
 
+  async findStoredArtifact(backupReference) {
+    const reference = assertSafeBackupReference(backupReference);
+    const manifest = await this.findExistingManifest(reference);
+    if (!manifest) return null;
+    const location = s3Location(this.bucket, this.keys(reference).manifest);
+    const verification = await this.verifyStoredArtifact(location, manifest.artifact.checksum);
+    if (!verification.valid) throw backupError('Existing AWS S3 backup failed integrity verification.', 'BACKUP_INTEGRITY_MISMATCH');
+    return {
+      provider: this.provider,
+      location,
+      descriptor: manifest.artifact,
+      metadata: manifest.metadata || {},
+      verification,
+      idempotent: true,
+    };
+  }
+
   async verifyStoredArtifact(location, expectedChecksum) {
     const expected = validateExpectedChecksum(expectedChecksum);
     const { reference, manifestKey } = this.parseLocation(location);
@@ -299,6 +316,9 @@ class S3StorageAdapter {
         descriptor: manifest.artifact,
         manifest,
       };
+    }
+    if (manifest.objectRoot !== this.keys(reference, expected).objectRoot) {
+      throw backupError('AWS S3 backup manifest points outside its immutable object prefix.', 'INVALID_BACKUP_MANIFEST');
     }
 
     const entries = manifest.artifact.kind === 'FILE'

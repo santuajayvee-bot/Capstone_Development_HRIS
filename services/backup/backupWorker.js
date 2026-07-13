@@ -68,8 +68,9 @@ class BackupWorker {
         await this.transition(backupSetId, 'COMPLETED', 'FAILED', { failureCode: 'BACKUP_INTEGRITY_MISMATCH' });
         throw backupError('Completed backup failed checksum verification.', 'BACKUP_INTEGRITY_MISMATCH');
       }
-      await this.transition(backupSetId, 'COMPLETED', 'VERIFIED', { verifiedAt: new Date() });
-      return { status: 'VERIFIED', verified: true, idempotent: true, verification };
+      // Artifact-byte verification is not maker-checker approval. The API's
+      // independently authenticated checker performs COMPLETED -> VERIFIED.
+      return { status: 'COMPLETED', artifactVerified: true, idempotent: true, verification };
     }
     if (initialStatus !== 'PENDING') {
       throw backupError('Only pending backup sets can be executed.', 'BACKUP_JOB_NOT_EXECUTABLE');
@@ -91,9 +92,11 @@ class BackupWorker {
         completedAt: new Date(),
       });
       currentStatus = 'COMPLETED';
-      await this.transition(backupSetId, 'COMPLETED', 'VERIFIED', { verifiedAt: new Date() });
-      currentStatus = 'VERIFIED';
-      return result;
+      return {
+        ...result,
+        status: 'COMPLETED',
+        independentVerificationRequired: true,
+      };
     } catch (error) {
       if (['RUNNING', 'COMPLETED'].includes(currentStatus)) {
         await this.transition(backupSetId, currentStatus, 'FAILED', {

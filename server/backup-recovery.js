@@ -103,6 +103,54 @@ function protectedText(value) {
   return text ? encryptColumnValue(text) : null;
 }
 
+function workerLease() {
+  const configuredMinutes = Number.parseInt(process.env.BACKUP_WORKER_LEASE_MINUTES || '120', 10);
+  const minutes = Number.isFinite(configuredMinutes) ? Math.min(Math.max(configuredMinutes, 15), 1440) : 120;
+  const token = crypto.randomBytes(32).toString('base64url');
+  return {
+    hash: crypto.createHash('sha256').update(token, 'utf8').digest('hex'),
+    minutes,
+  };
+}
+
+async function recoverExpiredOperations(executor = pool) {
+  const failureMessage = protectedText('Worker lease expired before the operation completed. Review logs and retry safely.');
+  const results = [];
+  results.push(await executor.execute(
+    `UPDATE backup_sets
+        SET status='FAILED', failed_at=NOW(), failure_message_encrypted=?,
+            worker_lease_token_hash=NULL, worker_lease_expires_at=NULL
+      WHERE status='RUNNING' AND worker_lease_expires_at IS NOT NULL AND worker_lease_expires_at < NOW()`,
+    [failureMessage]
+  ));
+  results.push(await executor.execute(
+    `UPDATE restore_jobs
+        SET dry_run_status=CASE WHEN status='DRY_RUN_IN_PROGRESS' THEN 'FAILED' ELSE dry_run_status END,
+            status='FAILED', integrity_status='ERROR', failed_at=NOW(), failure_message_encrypted=?,
+            worker_lease_token_hash=NULL, worker_lease_expires_at=NULL
+      WHERE status IN ('DRY_RUN_IN_PROGRESS','IN_PROGRESS')
+        AND worker_lease_expires_at IS NOT NULL AND worker_lease_expires_at < NOW()`,
+    [failureMessage]
+  ));
+  results.push(await executor.execute(
+    `UPDATE module_rollback_requests
+        SET status='FAILED', integrity_status='ERROR', failed_at=NOW(), failure_message_encrypted=?,
+            worker_lease_token_hash=NULL, worker_lease_expires_at=NULL
+      WHERE status='IN_PROGRESS' AND worker_lease_expires_at IS NOT NULL AND worker_lease_expires_at < NOW()`,
+    [failureMessage]
+  ));
+  const recovered = results.reduce((total, entry) => total + Number(entry?.[0]?.affectedRows || 0), 0);
+  if (recovered > 0) {
+    await executor.execute(
+      `INSERT INTO system_audit_log
+         (user_id, employee_id, action_performed, module, new_value, ip_address, user_agent, timestamp)
+       VALUES (NULL, NULL, 'RECOVER_EXPIRED_BACKUP_WORKERS', 'BACKUP_RESTORE', ?, 'system', 'backup-reaper', NOW())`,
+      [JSON.stringify({ recovered_operations: recovered })]
+    ).catch(() => {});
+  }
+  return recovered;
+}
+
 function revealText(value) {
   if (!value) return null;
   try { return decryptColumnValue(value); } catch (_) { return null; }
@@ -125,6 +173,22 @@ function idempotencyKey(req) {
     throw new RecoveryError('A valid Idempotency-Key is required.', 400, 'IDEMPOTENCY_KEY_REQUIRED');
   }
   return value;
+}
+
+function requestFingerprint(kind, payload) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify({ kind, ...payload }), 'utf8')
+    .digest('hex');
+}
+
+function assertIdempotentReplay(existing, fingerprint) {
+  if (!existing || existing.request_fingerprint !== fingerprint) {
+    throw new RecoveryError(
+      'This Idempotency-Key was already used for a different request.',
+      409,
+      'IDEMPOTENCY_CONFLICT'
+    );
+  }
 }
 
 function sameActor(left, right) {
@@ -159,6 +223,44 @@ async function audit(executor, req, action, details = {}) {
        (user_id, employee_id, action_performed, module, new_value, ip_address, user_agent, timestamp)
      VALUES (?, ?, ?, 'BACKUP_RESTORE', ?, ?, ?, NOW())`,
     [req.user.id, req.user.employeeId || null, action, JSON.stringify(details), ip, req.headers['user-agent'] || 'unknown']
+  );
+}
+
+async function recordRecoveryHealth(executor, {
+  moduleKey,
+  status,
+  remarks,
+  actorId,
+  operationReference,
+}) {
+  if (!moduleKey || !MODULE_MAP.has(moduleKey)) return;
+  const normalizedStatus = String(status || '').toUpperCase();
+  if (!['ONLINE', 'WARNING', 'OFFLINE', 'MAINTENANCE'].includes(normalizedStatus)) {
+    throw new RecoveryError('Recovery health status is invalid.', 500, 'RECOVERY_HEALTH_STATUS_INVALID');
+  }
+  const moduleName = MODULE_MAP.get(moduleKey).name;
+  const safeRemarks = cleanText(remarks, 500);
+  await executor.execute(
+    `INSERT INTO system_health_checks
+       (module_key, module_name, status, remarks, endpoint_checked, checked_by,
+        last_checked_at, last_success_at, last_failure_at)
+     VALUES (?, ?, ?, ?, '/api/admin/backups', ?, NOW(),
+             CASE WHEN ?='ONLINE' THEN NOW() ELSE NULL END,
+             CASE WHEN ?='OFFLINE' THEN NOW() ELSE NULL END)
+     ON DUPLICATE KEY UPDATE
+       module_name=VALUES(module_name), status=VALUES(status), remarks=VALUES(remarks),
+       endpoint_checked=VALUES(endpoint_checked), checked_by=VALUES(checked_by),
+       last_checked_at=NOW(),
+       last_success_at=CASE WHEN VALUES(status)='ONLINE' THEN NOW() ELSE last_success_at END,
+       last_failure_at=CASE WHEN VALUES(status)='OFFLINE' THEN NOW() ELSE last_failure_at END`,
+    [moduleKey, moduleName, normalizedStatus, safeRemarks, actorId, normalizedStatus, normalizedStatus]
+  );
+  await executor.execute(
+    `INSERT INTO system_health_check_history
+       (run_id, module_key, module_name, status, remarks, endpoint_checked,
+        trigger_type, checked_by, checked_at)
+     VALUES (?, ?, ?, ?, ?, '/api/admin/backups', 'MANUAL', ?, NOW())`,
+    [cleanText(`recovery-${operationReference}-${Date.now()}`, 64), moduleKey, moduleName, normalizedStatus, safeRemarks, actorId]
   );
 }
 
@@ -236,6 +338,7 @@ function restoreResponse(row, actorId = null) {
   if (row.status === 'AWAITING_APPROVAL' && !sameActor(row.requested_by, actorId)) allowedActions.push('approve', 'reject');
   if (row.status === 'APPROVED') allowedActions.push('dry_run');
   if (row.status === 'DRY_RUN_PASSED' && row.approval_status === 'APPROVED' && row.integrity_status === 'PASSED') allowedActions.push('execute');
+  if (row.status === 'VERIFYING') allowedActions.push('verify_target');
   if (['AWAITING_APPROVAL', 'APPROVED', 'DRY_RUN_PASSED'].includes(row.status)) allowedActions.push('cancel');
   return {
     id: row.id,
@@ -486,10 +589,18 @@ async function buildOverview(actorId) {
       aws_region_configured: Boolean(process.env.AWS_REGION),
       s3_bucket_configured: Boolean(process.env.AWS_S3_BUCKET),
       rds_snapshot_configured: Boolean(process.env.AWS_RDS_DB_INSTANCE_IDENTIFIER),
+      rds_restore_verification_configured: Boolean(
+        process.env.BACKUP_RDS_VERIFY_DB_USER
+        && process.env.BACKUP_RDS_VERIFY_DB_PASSWORD
+      ),
       live_restore_enabled: String(process.env.BACKUP_LIVE_RESTORE_ENABLED || '').toLowerCase() === 'true',
       backup_worker_enabled: true,
       local_adapter_configured: true,
-      isolated_restore_configured: Boolean(process.env.BACKUP_RESTORE_DB_NAME || process.env.DB_NAME),
+      isolated_restore_configured: Boolean(
+        process.env.BACKUP_DRY_RUN_DB_HOST
+        && process.env.BACKUP_DRY_RUN_DB_USER
+        && process.env.BACKUP_DRY_RUN_DB_PASSWORD
+      ),
       maker_checker_required: true,
       step_up_mfa_required: true,
     },
@@ -562,11 +673,20 @@ router.post('/request', async (req, res) => {
     }
     const includedModules = normalizeModules(req.body?.included_modules);
     const reference = makeReference('BKP');
-    const backupName = cleanText(req.body?.backup_name, 160) || `${backupType.replace(/_/g, ' ')} ${reference}`;
+    const requestedBackupName = cleanText(req.body?.backup_name, 160);
+    const backupName = requestedBackupName || `${backupType.replace(/_/g, ' ')} ${reference}`;
     const notes = cleanText(req.body?.notes, 2000);
+    const fingerprint = requestFingerprint('BACKUP_REQUEST', {
+      backupName: requestedBackupName,
+      backupType,
+      includedModules: [...includedModules].sort(),
+      notes,
+      storageProvider,
+    });
     await connection.beginTransaction();
     const [existing] = await connection.execute('SELECT * FROM backup_sets WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
+      assertIdempotentReplay(existing[0], fingerprint);
       await connection.commit();
       return res.status(200).json({
         message: 'Existing backup request returned for this idempotency key.',
@@ -578,12 +698,12 @@ router.post('/request', async (req, res) => {
     }
     const [result] = await connection.execute(
       `INSERT INTO backup_sets
-         (idempotency_key, backup_reference, backup_name, backup_type, storage_provider,
+         (idempotency_key, request_fingerprint, backup_reference, backup_name, backup_type, storage_provider,
           status, approval_status, included_modules, checksum_algorithm, verification_status,
           integrity_status, created_by, updated_by, remarks_encrypted)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', 'NOT_REQUIRED', ?, 'SHA-256',
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 'NOT_REQUIRED', ?, 'SHA-256',
                'NOT_VERIFIED', 'NOT_CHECKED', ?, ?, ?)`,
-      [key, reference, backupName, backupType, storageProvider, JSON.stringify(includedModules), req.user.id, req.user.id, protectedText(notes)]
+      [key, fingerprint, reference, backupName, backupType, storageProvider, JSON.stringify(includedModules), req.user.id, req.user.id, protectedText(notes)]
     );
     await audit(connection, req, `CREATE_BACKUP: ${reference}`, {
       backup_set_id: result.insertId,
@@ -609,8 +729,8 @@ router.post('/request', async (req, res) => {
 });
 
 async function executeBackupSet(req, backupId) {
-  const leaseToken = crypto.randomBytes(32).toString('base64url');
-  const leaseHash = crypto.createHash('sha256').update(leaseToken).digest('hex');
+  const lease = workerLease();
+  const leaseHash = lease.hash;
   const connection = await pool.getConnection();
   let backup;
   try {
@@ -623,7 +743,7 @@ async function executeBackupSet(req, backupId) {
       `UPDATE backup_sets
           SET status = 'RUNNING', started_at = NOW(), failed_at = NULL,
               failure_message_encrypted = NULL, attempt_count = attempt_count + 1,
-              worker_lease_token_hash = ?, worker_lease_expires_at = DATE_ADD(NOW(), INTERVAL 30 MINUTE),
+              worker_lease_token_hash = ?, worker_lease_expires_at = DATE_ADD(NOW(), INTERVAL ${lease.minutes} MINUTE),
               updated_by = ?
         WHERE id = ?`,
       [leaseHash, req.user.id, backupId]
@@ -859,10 +979,17 @@ router.post('/:backupId/restore', async (req, res) => {
     const reason = cleanText(req.body?.reason, 2000);
     if (reason.length < 5) throw new RecoveryError('A restore reason is required.', 400, 'RESTORE_REASON_REQUIRED');
     if (affectedModule && !MODULE_MAP.has(affectedModule)) throw new RecoveryError('Affected module is invalid.', 400, 'INVALID_BACKUP_MODULE');
+    const fingerprint = requestFingerprint('RESTORE_REQUEST', {
+      affectedModule,
+      backupId,
+      reason,
+      restoreType,
+    });
 
     await connection.beginTransaction();
-    const [existing] = await connection.execute('SELECT id FROM restore_jobs WHERE idempotency_key = ? FOR UPDATE', [key]);
+    const [existing] = await connection.execute('SELECT id, request_fingerprint FROM restore_jobs WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
+      assertIdempotentReplay(existing[0], fingerprint);
       const jobs = await listRestoreJobs(req.user.id, 200, connection);
       const job = jobs.find(item => Number(item.id) === Number(existing[0].id));
       await connection.commit();
@@ -893,13 +1020,14 @@ router.post('/:backupId/restore', async (req, res) => {
 
     const [result] = await connection.execute(
       `INSERT INTO restore_jobs
-         (idempotency_key, backup_set_id, restore_type, affected_module, status,
+         (idempotency_key, request_fingerprint, backup_set_id, restore_type, affected_module, status,
           approval_status, requested_by, reason_encrypted, result_message_encrypted,
           dry_run_status, integrity_status, expected_checksum, updated_by)
-       VALUES (?, ?, ?, ?, 'AWAITING_APPROVAL', 'PENDING', ?, ?, ?,
+       VALUES (?, ?, ?, ?, ?, 'AWAITING_APPROVAL', 'PENDING', ?, ?, ?,
                'NOT_STARTED', 'NOT_CHECKED', ?, ?)`,
       [
         key,
+        fingerprint,
         backupId,
         restoreType,
         affectedModule,
@@ -971,6 +1099,7 @@ router.post('/restore-jobs/:jobId/approve', async (req, res) => {
 
 router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
   const jobId = positiveId(req.params.jobId, 'restore_job_id');
+  const lease = workerLease();
   const connection = await pool.getConnection();
   let job;
   let backup;
@@ -999,9 +1128,11 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
       `UPDATE restore_jobs
           SET status = 'DRY_RUN_IN_PROGRESS', dry_run_status = 'RUNNING',
               dry_run_started_at = NOW(), integrity_status = 'CHECKING',
-              step_up_challenge_id = ?, step_up_verified_at = ?, updated_by = ?
+              step_up_challenge_id = ?, step_up_verified_at = ?,
+              worker_lease_token_hash=?, worker_lease_expires_at=DATE_ADD(NOW(), INTERVAL ${lease.minutes} MINUTE),
+              updated_by = ?
         WHERE id = ?`,
-      [proof.challengeId, proof.verifiedAt, req.user.id, jobId]
+      [proof.challengeId, proof.verifiedAt, lease.hash, req.user.id, jobId]
     );
     await connection.commit();
   } catch (error) {
@@ -1026,8 +1157,9 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
           SET status = ?, dry_run_status = ?, dry_run_completed_at = NOW(),
               dry_run_target_encrypted = ?, dry_run_result_encrypted = ?,
               integrity_status = ?, integrity_checked_at = NOW(), integrity_report_encrypted = ?,
-              result_message_encrypted = ?, updated_by = ?
-        WHERE id = ? AND status = 'DRY_RUN_IN_PROGRESS'`,
+              result_message_encrypted = ?, worker_lease_token_hash=NULL,
+              worker_lease_expires_at=NULL, updated_by = ?
+        WHERE id = ? AND status = 'DRY_RUN_IN_PROGRESS' AND worker_lease_token_hash=?`,
       [
         passed ? 'DRY_RUN_PASSED' : 'FAILED',
         passed ? 'PASSED' : 'FAILED',
@@ -1038,6 +1170,7 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
         protectedText(passed ? 'Isolated restore dry-run passed.' : 'Isolated restore dry-run failed.'),
         req.user.id,
         jobId,
+        lease.hash,
       ]
     );
     if (!passed) return res.status(409).json({ error: 'Restore dry-run failed integrity checks.', code: 'RESTORE_DRY_RUN_FAILED', report });
@@ -1045,8 +1178,10 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
   } catch (error) {
     await pool.execute(
       `UPDATE restore_jobs SET status = 'FAILED', dry_run_status = 'FAILED', integrity_status = 'ERROR',
-              failed_at = NOW(), failure_message_encrypted = ?, updated_by = ? WHERE id = ?`,
-      [protectedText(error.message || 'Restore dry-run failed.'), req.user.id, jobId]
+              failed_at = NOW(), failure_message_encrypted = ?, worker_lease_token_hash=NULL,
+              worker_lease_expires_at=NULL, updated_by = ?
+        WHERE id = ? AND (worker_lease_token_hash=? OR worker_lease_token_hash IS NULL)`,
+      [protectedText(error.message || 'Restore dry-run failed.'), req.user.id, jobId, lease.hash]
     ).catch(() => {});
     return errorResponse(res, error, 'Restore dry-run failed.');
   }
@@ -1054,6 +1189,7 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
 
 router.post('/restore-jobs/:jobId/execute', async (req, res) => {
   const jobId = positiveId(req.params.jobId, 'restore_job_id');
+  const lease = workerLease();
   if (String(req.body?.confirmation_phrase || '').trim() !== 'EXECUTE RESTORE') {
     return res.status(400).json({ error: 'Type EXECUTE RESTORE to apply the approved recovery.', code: 'RESTORE_EXECUTION_CONFIRMATION_REQUIRED' });
   }
@@ -1083,20 +1219,19 @@ router.post('/restore-jobs/:jobId/execute', async (req, res) => {
     });
     await connection.execute(
       `UPDATE restore_jobs SET status = 'IN_PROGRESS', started_at = NOW(), attempt_count = attempt_count + 1,
-              restore_target_encrypted = ?, step_up_challenge_id = ?, step_up_verified_at = ?, updated_by = ?
+              restore_target_encrypted = ?, step_up_challenge_id = ?, step_up_verified_at = ?,
+              worker_lease_token_hash=?, worker_lease_expires_at=DATE_ADD(NOW(), INTERVAL ${lease.minutes} MINUTE),
+              updated_by = ?
         WHERE id = ?`,
-      [protectedText(process.env.BACKUP_RESTORE_DB_NAME || 'configured-recovery-target'), proof.challengeId, proof.verifiedAt, req.user.id, jobId]
+      [protectedText(process.env.BACKUP_RESTORE_DB_NAME || 'configured-recovery-target'), proof.challengeId, proof.verifiedAt, lease.hash, req.user.id, jobId]
     );
-    if (record.affected_module) {
-      const module = MODULE_MAP.get(record.affected_module);
-      await connection.execute(
-        `INSERT INTO system_health_checks
-           (module_key, module_name, status, remarks, endpoint_checked, checked_by, last_checked_at)
-         VALUES (?, ?, 'MAINTENANCE', ?, '/api/admin/backups', ?, NOW())
-         ON DUPLICATE KEY UPDATE status='MAINTENANCE', remarks=VALUES(remarks), checked_by=VALUES(checked_by), last_checked_at=NOW()`,
-        [record.affected_module, module?.name || record.affected_module, `Controlled restore job ${jobId} is executing.`, req.user.id]
-      );
-    }
+    await recordRecoveryHealth(connection, {
+      moduleKey: record.affected_module,
+      status: 'MAINTENANCE',
+      remarks: `Controlled restore job ${jobId} is executing.`,
+      actorId: req.user.id,
+      operationReference: `restore-${jobId}-start`,
+    });
     await audit(connection, req, `EXECUTE_RESTORE_JOB: ${jobId}`, { restore_job_id: jobId, status: 'IN_PROGRESS' });
     await connection.commit();
   } catch (error) {
@@ -1121,8 +1256,16 @@ router.post('/restore-jobs/:jobId/execute', async (req, res) => {
     if (result.pendingVerification || (result.initiated && !result.integrityPassed)) {
       await pool.execute(
         `UPDATE restore_jobs SET status='VERIFYING', integrity_status='CHECKING',
-                result_message_encrypted=?, updated_by=? WHERE id=? AND status='IN_PROGRESS'`,
-        [protectedText('Restore target was created and is awaiting post-restore integrity verification.'), req.user.id, jobId]
+                restore_target_encrypted=?, result_message_encrypted=?, worker_lease_token_hash=NULL,
+                worker_lease_expires_at=NULL, updated_by=?
+          WHERE id=? AND status='IN_PROGRESS' AND worker_lease_token_hash=?`,
+        [
+          protectedText(result.newDbInstanceIdentifier || 'isolated-rds-recovery-target'),
+          protectedText('Restore target was created and is awaiting post-restore integrity verification.'),
+          req.user.id,
+          jobId,
+          lease.hash,
+        ]
       );
       return res.status(202).json({
         message: 'Restore target created. Post-restore integrity verification is pending.',
@@ -1131,7 +1274,6 @@ router.post('/restore-jobs/:jobId/execute', async (req, res) => {
         result,
       });
     }
-    const restoredChecksum = result.restoredChecksum || result.checksum || record.checksum;
     const integrityPassed = result.integrityPassed === true || Boolean(
       result.restored
       && result.artifactVerification?.valid
@@ -1141,27 +1283,39 @@ router.post('/restore-jobs/:jobId/execute', async (req, res) => {
     try {
       await finalize.beginTransaction();
       await finalize.execute(
-        `UPDATE restore_jobs SET status='VERIFYING', integrity_status='CHECKING', updated_by=? WHERE id=? AND status='IN_PROGRESS'`,
-        [req.user.id, jobId]
+        `UPDATE restore_jobs SET status='VERIFYING', integrity_status='CHECKING', updated_by=?
+          WHERE id=? AND status='IN_PROGRESS' AND worker_lease_token_hash=?`,
+        [req.user.id, jobId, lease.hash]
       );
       await finalize.execute(
         `UPDATE restore_jobs
             SET status = ?, integrity_status = ?, integrity_checked_at = NOW(), integrity_report_encrypted = ?,
-                restored_checksum = ?, result_message_encrypted = ?, completed_at = NOW(), updated_by = ?
-          WHERE id = ? AND status = 'VERIFYING'`,
+                restored_checksum = ?, result_message_encrypted = ?, completed_at = NOW(),
+                worker_lease_token_hash=NULL, worker_lease_expires_at=NULL, updated_by = ?
+          WHERE id = ? AND status = 'VERIFYING' AND worker_lease_token_hash=?`,
         [
           integrityPassed ? 'COMPLETED' : 'FAILED',
           integrityPassed ? 'PASSED' : 'FAILED',
           protectedText(JSON.stringify(result.integrityReport || result.databaseIntegrity || result)),
-          restoredChecksum,
+          integrityPassed ? record.checksum : null,
           protectedText(integrityPassed ? 'Restore completed and post-restore integrity checks passed.' : 'Restore completed but integrity validation failed.'),
           req.user.id,
           jobId,
+          lease.hash,
         ]
       );
       if (integrityPassed) {
         await finalize.execute('UPDATE backup_sets SET status = \'RESTORED\', restored_at = NOW(), updated_by = ? WHERE id = ?', [req.user.id, record.backup_set_id]);
       }
+      await recordRecoveryHealth(finalize, {
+        moduleKey: record.affected_module,
+        status: integrityPassed ? 'WARNING' : 'OFFLINE',
+        remarks: integrityPassed
+          ? `Restore job ${jobId} passed integrity checks. Run a fresh module health check before returning it to normal service.`
+          : `Restore job ${jobId} failed post-restore integrity checks.`,
+        actorId: req.user.id,
+        operationReference: `restore-${jobId}-complete`,
+      });
       await audit(finalize, req, `${integrityPassed ? 'COMPLETE_RESTORE_JOB' : 'FAIL_RESTORE_INTEGRITY'}: ${jobId}`, {
         restore_job_id: jobId,
         integrity_status: integrityPassed ? 'PASSED' : 'FAILED',
@@ -1176,10 +1330,144 @@ router.post('/restore-jobs/:jobId/execute', async (req, res) => {
   } catch (error) {
     await pool.execute(
       `UPDATE restore_jobs SET status='FAILED', integrity_status='ERROR', failed_at=NOW(),
-              failure_message_encrypted=?, updated_by=? WHERE id=?`,
-      [protectedText(error.message || 'Restore execution failed.'), req.user.id, jobId]
+              failure_message_encrypted=?, worker_lease_token_hash=NULL, worker_lease_expires_at=NULL,
+              updated_by=? WHERE id=? AND (worker_lease_token_hash=? OR worker_lease_token_hash IS NULL)`,
+      [protectedText(error.message || 'Restore execution failed.'), req.user.id, jobId, lease.hash]
     ).catch(() => {});
+    await recordRecoveryHealth(pool, {
+      moduleKey: record?.affected_module,
+      status: 'OFFLINE',
+      remarks: `Restore job ${jobId} failed and requires administrator review.`,
+      actorId: req.user.id,
+      operationReference: `restore-${jobId}-failed`,
+    }).catch(() => {});
     return errorResponse(res, error, 'Restore execution failed.');
+  }
+});
+
+router.post('/restore-jobs/:jobId/verify-target', async (req, res) => {
+  const jobId = positiveId(req.params.jobId, 'restore_job_id');
+  const connection = await pool.getConnection();
+  let record;
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT rj.*, bs.backup_reference, bs.backup_type, bs.storage_provider,
+              bs.storage_location_encrypted, bs.adapter_metadata_encrypted, bs.checksum
+         FROM restore_jobs rj JOIN backup_sets bs ON bs.id=rj.backup_set_id
+        WHERE rj.id=? FOR UPDATE`,
+      [jobId]
+    );
+    record = rows[0];
+    if (!record) throw new RecoveryError('Restore job not found.', 404, 'RESTORE_NOT_FOUND');
+    if (record.status !== 'VERIFYING' || record.storage_provider !== 'RDS_SNAPSHOT') {
+      throw new RecoveryError('Only a pending RDS restore target can be verified.', 409, 'RESTORE_TARGET_NOT_PENDING');
+    }
+    const proof = await consumeBackupStepUpChallenge(connection, req, {
+      challengeId: req.body?.step_up_challenge_id,
+      challengeToken: req.body?.step_up_token,
+      purpose: 'RESTORE_VERIFY',
+      resourceType: 'RESTORE_JOB',
+      resourceId: jobId,
+    });
+    await connection.execute(
+      `UPDATE restore_jobs
+          SET integrity_status='CHECKING', step_up_challenge_id=?, step_up_verified_at=?, updated_by=?
+        WHERE id=? AND status='VERIFYING'`,
+      [proof.challengeId, proof.verifiedAt, req.user.id, jobId]
+    );
+    await audit(connection, req, `VERIFY_RDS_RESTORE_TARGET: ${jobId}`, { restore_job_id: jobId, status: 'VERIFYING' });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    connection.release();
+    return errorResponse(res, error, 'Failed to start RDS restore verification.');
+  }
+  connection.release();
+
+  try {
+    const adapterMetadata = parseJson(revealText(record.adapter_metadata_encrypted), {});
+    const result = await runtime.verifyPendingRestore({
+      backupType: record.backup_type,
+      storageProvider: record.storage_provider,
+      storageLocation: revealText(record.storage_location_encrypted),
+      expectedChecksum: record.checksum,
+      restoreTarget: revealText(record.restore_target_encrypted),
+      expectedIntegrity: adapterMetadata.integrityReport || null,
+    });
+    if (result.pendingVerification) {
+      await pool.execute(
+        `UPDATE restore_jobs SET integrity_status='CHECKING', result_message_encrypted=?, updated_by=?
+          WHERE id=? AND status='VERIFYING'`,
+        [protectedText('The isolated RDS recovery instance is not available yet. Verification remains pending.'), req.user.id, jobId]
+      );
+      return res.status(202).json({
+        message: 'RDS recovery instance is still becoming available.',
+        restore_job_id: jobId,
+        status: 'VERIFYING',
+        result,
+      });
+    }
+
+    const passed = result.integrityPassed === true;
+    const finalize = await pool.getConnection();
+    try {
+      await finalize.beginTransaction();
+      await finalize.execute(
+        `UPDATE restore_jobs
+            SET status=?, integrity_status=?, integrity_checked_at=NOW(), integrity_report_encrypted=?,
+                restored_checksum=?, result_message_encrypted=?, completed_at=CASE WHEN ? THEN NOW() ELSE completed_at END,
+                failed_at=CASE WHEN ? THEN failed_at ELSE NOW() END, updated_by=?
+          WHERE id=? AND status='VERIFYING'`,
+        [
+          passed ? 'COMPLETED' : 'FAILED',
+          passed ? 'PASSED' : 'FAILED',
+          protectedText(JSON.stringify(result.integrityReport || result)),
+          passed ? record.checksum : null,
+          protectedText(passed
+            ? 'RDS restore completed and database integrity verification passed.'
+            : 'RDS restore target failed post-restore integrity verification.'),
+          passed ? 1 : 0,
+          passed ? 1 : 0,
+          req.user.id,
+          jobId,
+        ]
+      );
+      if (passed) {
+        await finalize.execute(
+          "UPDATE backup_sets SET status='RESTORED', restored_at=NOW(), updated_by=? WHERE id=?",
+          [req.user.id, record.backup_set_id]
+        );
+      }
+      await recordRecoveryHealth(finalize, {
+        moduleKey: record.affected_module,
+        status: passed ? 'WARNING' : 'OFFLINE',
+        remarks: passed
+          ? `RDS restore job ${jobId} passed database integrity checks. Run a fresh module health check before cutover.`
+          : `RDS restore job ${jobId} failed database integrity checks.`,
+        actorId: req.user.id,
+        operationReference: `rds-restore-${jobId}-verified`,
+      });
+      await audit(finalize, req, `${passed ? 'COMPLETE_RDS_RESTORE' : 'FAIL_RDS_RESTORE_INTEGRITY'}: ${jobId}`, {
+        restore_job_id: jobId,
+        integrity_status: passed ? 'PASSED' : 'FAILED',
+      });
+      await finalize.commit();
+    } catch (error) {
+      await finalize.rollback().catch(() => {});
+      throw error;
+    } finally {
+      finalize.release();
+    }
+    if (!passed) return res.status(409).json({ error: 'RDS post-restore integrity verification failed.', code: 'RESTORE_INTEGRITY_FAILED' });
+    return res.json({ message: 'RDS restore completed and integrity verified.', restore_job_id: jobId, status: 'COMPLETED', result });
+  } catch (error) {
+    await pool.execute(
+      `UPDATE restore_jobs SET integrity_status='ERROR', failure_message_encrypted=?, updated_by=?
+        WHERE id=? AND status='VERIFYING'`,
+      [protectedText(error.message || 'RDS restore verification failed.'), req.user.id, jobId]
+    ).catch(() => {});
+    return errorResponse(res, error, 'RDS restore verification failed.');
   }
 });
 
@@ -1190,22 +1478,29 @@ router.post('/rollback-requests', async (req, res) => {
     const affectedModule = cleanText(req.body?.affected_module, 80);
     const module = MODULE_MAP.get(affectedModule);
     if (!module || !module.rollback) throw new RecoveryError('Affected module does not support rollback.', 400, 'ROLLBACK_MODULE_INVALID');
+    const recoveryPointId = positiveId(req.body?.recovery_point_id, 'recovery_point_id');
     const reason = cleanText(req.body?.reason, 2000);
     if (reason.length < 5) throw new RecoveryError('A rollback reason is required.', 400, 'ROLLBACK_REASON_REQUIRED');
+    const fingerprint = requestFingerprint('ROLLBACK_REQUEST', {
+      affectedModule,
+      reason,
+      recoveryPointId,
+    });
     await connection.beginTransaction();
-    const [existing] = await connection.execute('SELECT id FROM module_rollback_requests WHERE idempotency_key = ? FOR UPDATE', [key]);
+    const [existing] = await connection.execute('SELECT id, request_fingerprint FROM module_rollback_requests WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
+      assertIdempotentReplay(existing[0], fingerprint);
       await connection.commit();
       return res.json({ message: 'Existing rollback request returned for this idempotency key.', rollback_request_id: existing[0].id, idempotent_replay: true });
     }
     const [points] = await connection.execute(
       `SELECT mrp.*, bs.backup_reference, bs.backup_type
          FROM module_recovery_points mrp JOIN backup_sets bs ON bs.id=mrp.backup_set_id
-        WHERE mrp.module_key=? AND mrp.status='AVAILABLE' AND mrp.rollback_available=1
+        WHERE mrp.id=? AND mrp.module_key=? AND mrp.status='AVAILABLE' AND mrp.rollback_available=1
           AND mrp.verification_status='MATCH' AND mrp.integrity_status='PASSED'
           AND mrp.verified_at IS NOT NULL AND bs.status IN ('VERIFIED','RESTORED')
-        ORDER BY mrp.verified_at DESC, mrp.id DESC LIMIT 1 FOR UPDATE`,
-      [affectedModule]
+        LIMIT 1 FOR UPDATE`,
+      [recoveryPointId, affectedModule]
     );
     const point = points[0];
     if (!point) throw new RecoveryError('No verified recovery point is available for this module.', 409, 'RECOVERY_POINT_NOT_VERIFIED');
@@ -1217,12 +1512,13 @@ router.post('/rollback-requests', async (req, res) => {
     if (active.length) throw new RecoveryError('An active rollback request already exists for this module.', 409, 'ROLLBACK_ALREADY_ACTIVE');
     const [result] = await connection.execute(
       `INSERT INTO module_rollback_requests
-         (idempotency_key, recovery_point_id, affected_module, current_version, target_version,
+         (idempotency_key, request_fingerprint, recovery_point_id, affected_module, current_version, target_version,
           artifact_location_encrypted, artifact_checksum, checksum_algorithm, reason_encrypted,
           status, approval_status, requested_by, verification_status, integrity_status, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'SHA-256', ?, 'AWAITING_APPROVAL', 'PENDING', ?, 'MATCH', 'PASSED', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SHA-256', ?, 'AWAITING_APPROVAL', 'PENDING', ?, 'MATCH', 'PASSED', ?)`,
       [
         key,
+        fingerprint,
         point.id,
         affectedModule,
         point.current_version,
@@ -1289,6 +1585,7 @@ router.post('/rollback-requests/:requestId/approve', async (req, res) => {
 
 router.post('/rollback-requests/:requestId/execute', async (req, res) => {
   const requestId = positiveId(req.params.requestId, 'rollback_request_id');
+  const lease = workerLease();
   if (String(req.body?.confirmation_phrase || '').trim() !== 'EXECUTE ROLLBACK') {
     return res.status(400).json({ error: 'Type EXECUTE ROLLBACK to apply the approved recovery point.', code: 'ROLLBACK_CONFIRMATION_REQUIRED' });
   }
@@ -1320,16 +1617,17 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
     await connection.execute(
       `UPDATE module_rollback_requests
           SET status='IN_PROGRESS', started_at=NOW(), attempt_count=attempt_count+1,
-              step_up_challenge_id=?, step_up_verified_at=?, updated_by=? WHERE id=?`,
-      [proof.challengeId, proof.verifiedAt, req.user.id, requestId]
+              step_up_challenge_id=?, step_up_verified_at=?, worker_lease_token_hash=?,
+              worker_lease_expires_at=DATE_ADD(NOW(), INTERVAL ${lease.minutes} MINUTE), updated_by=? WHERE id=?`,
+      [proof.challengeId, proof.verifiedAt, lease.hash, req.user.id, requestId]
     );
-    await connection.execute(
-      `INSERT INTO system_health_checks
-         (module_key,module_name,status,remarks,endpoint_checked,checked_by,last_checked_at)
-       VALUES (?,?,'MAINTENANCE',?,'/api/admin/backups',?,NOW())
-       ON DUPLICATE KEY UPDATE status='MAINTENANCE',remarks=VALUES(remarks),checked_by=VALUES(checked_by),last_checked_at=NOW()`,
-      [record.affected_module, MODULE_MAP.get(record.affected_module)?.name || record.affected_module, `Controlled rollback request ${requestId} is executing.`, req.user.id]
-    );
+    await recordRecoveryHealth(connection, {
+      moduleKey: record.affected_module,
+      status: 'MAINTENANCE',
+      remarks: `Controlled rollback request ${requestId} is executing.`,
+      actorId: req.user.id,
+      operationReference: `rollback-${requestId}-start`,
+    });
     await audit(connection, req, `EXECUTE_MODULE_ROLLBACK: ${record.affected_module}`, { rollback_request_id: requestId, status: 'IN_PROGRESS' });
     await connection.commit();
   } catch (error) {
@@ -1353,11 +1651,15 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
     const finalize = await pool.getConnection();
     try {
       await finalize.beginTransaction();
-      await finalize.execute("UPDATE module_rollback_requests SET status='VERIFYING', integrity_status='CHECKING', updated_by=? WHERE id=? AND status='IN_PROGRESS'", [req.user.id, requestId]);
+      await finalize.execute(
+        "UPDATE module_rollback_requests SET status='VERIFYING', integrity_status='CHECKING', updated_by=? WHERE id=? AND status='IN_PROGRESS' AND worker_lease_token_hash=?",
+        [req.user.id, requestId, lease.hash]
+      );
       await finalize.execute(
         `UPDATE module_rollback_requests SET status=?, integrity_status=?, integrity_checked_at=NOW(),
-                integrity_report_encrypted=?, result_message_encrypted=?, completed_at=NOW(), updated_by=?
-          WHERE id=? AND status='VERIFYING'`,
+                integrity_report_encrypted=?, result_message_encrypted=?, completed_at=NOW(),
+                worker_lease_token_hash=NULL, worker_lease_expires_at=NULL, updated_by=?
+          WHERE id=? AND status='VERIFYING' AND worker_lease_token_hash=?`,
         [
           passed ? 'COMPLETED' : 'FAILED',
           passed ? 'PASSED' : 'FAILED',
@@ -1365,11 +1667,21 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
           protectedText(passed ? 'Rollback completed and integrity checks passed.' : 'Rollback integrity verification failed.'),
           req.user.id,
           requestId,
+          lease.hash,
         ]
       );
       await audit(finalize, req, `${passed ? 'COMPLETE_MODULE_ROLLBACK' : 'FAIL_MODULE_ROLLBACK'}: ${record.affected_module}`, {
         rollback_request_id: requestId,
         integrity_status: passed ? 'PASSED' : 'FAILED',
+      });
+      await recordRecoveryHealth(finalize, {
+        moduleKey: record.affected_module,
+        status: passed ? 'WARNING' : 'OFFLINE',
+        remarks: passed
+          ? `Rollback request ${requestId} passed integrity checks. Run a fresh module health check before returning it to normal service.`
+          : `Rollback request ${requestId} failed integrity checks.`,
+        actorId: req.user.id,
+        operationReference: `rollback-${requestId}-complete`,
       });
       await finalize.commit();
     } catch (error) {
@@ -1381,9 +1693,17 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
   } catch (error) {
     await pool.execute(
       `UPDATE module_rollback_requests SET status='FAILED', integrity_status='ERROR', failed_at=NOW(),
-              failure_message_encrypted=?, updated_by=? WHERE id=?`,
-      [protectedText(error.message || 'Rollback execution failed.'), req.user.id, requestId]
+              failure_message_encrypted=?, worker_lease_token_hash=NULL, worker_lease_expires_at=NULL,
+              updated_by=? WHERE id=? AND (worker_lease_token_hash=? OR worker_lease_token_hash IS NULL)`,
+      [protectedText(error.message || 'Rollback execution failed.'), req.user.id, requestId, lease.hash]
     ).catch(() => {});
+    await recordRecoveryHealth(pool, {
+      moduleKey: record?.affected_module,
+      status: 'OFFLINE',
+      remarks: `Rollback request ${requestId} failed and requires administrator review.`,
+      actorId: req.user.id,
+      operationReference: `rollback-${requestId}-failed`,
+    }).catch(() => {});
     return errorResponse(res, error, 'Rollback execution failed.');
   }
 });
@@ -1521,6 +1841,18 @@ router.patch('/:backupId', async (req, res) => {
   } finally { connection.release(); }
 });
 
+if (process.env.NODE_ENV !== 'test' && String(process.env.BACKUP_RECOVERY_REAPER_ENABLED || 'true').toLowerCase() !== 'false') {
+  const configuredInterval = Number.parseInt(process.env.BACKUP_RECOVERY_REAPER_INTERVAL_MS || '300000', 10);
+  const intervalMs = Number.isFinite(configuredInterval) ? Math.min(Math.max(configuredInterval, 60000), 3600000) : 300000;
+  const runReaper = () => recoverExpiredOperations().catch(error => {
+    console.error('[backup-recovery-reaper]', error.message);
+  });
+  const initialTimer = setTimeout(runReaper, 10000);
+  initialTimer.unref?.();
+  const reaperTimer = setInterval(runReaper, intervalMs);
+  reaperTimer.unref?.();
+}
+
 module.exports = router;
 module.exports._test = {
   BACKUP_TRANSITIONS,
@@ -1529,6 +1861,10 @@ module.exports._test = {
   backupArtifactAvailable,
   backupArtifactVerified,
   backupResponse,
+  recoverExpiredOperations,
+  assertIdempotentReplay,
   assertMakerChecker,
   assertTransition,
+  requestFingerprint,
+  workerLease,
 };

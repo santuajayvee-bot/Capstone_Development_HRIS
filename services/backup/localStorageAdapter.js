@@ -172,6 +172,9 @@ class LocalStorageAdapter {
         const objectName = `objects/${String(index + 1).padStart(8, '0')}.bin`;
         const destination = path.join(stagingDirectory, ...objectName.split('/'));
         const encrypted = await encryptFile(entry.absolutePath, destination, this.requireEncryptionKey(), objectAad(reference, objectName));
+        if (encrypted.plaintextSha256 !== entry.sha256 || encrypted.plaintextSize !== Number(entry.size)) {
+          throw backupError('Backup source changed during local encryption.', 'BACKUP_SOURCE_CHANGED');
+        }
         encryptedObjects.push({
           object: objectName,
           path: entry.path,
@@ -212,6 +215,29 @@ class LocalStorageAdapter {
     }
   }
 
+  async findStoredArtifact(backupReference) {
+    await this.initialize();
+    const reference = assertSafeBackupReference(backupReference);
+    const directory = resolveInside(this.rootPath, reference);
+    const stat = await fs.promises.lstat(directory).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+    if (!stat) return null;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw backupError('Existing local backup target is unsafe.', 'UNSAFE_LOCAL_BACKUP_TARGET');
+    }
+    const manifest = await this.readManifest(reference);
+    const location = locationForReference(reference);
+    const verification = await this.verifyStoredArtifact(location, manifest.artifact.checksum);
+    if (!verification.valid) throw backupError('Existing local backup failed integrity verification.', 'BACKUP_INTEGRITY_MISMATCH');
+    return {
+      provider: this.provider,
+      location,
+      descriptor: manifest.artifact,
+      metadata: manifest.metadata || {},
+      verification,
+      idempotent: true,
+    };
+  }
+
   async verifyStoredArtifact(location, expectedChecksum) {
     await this.initialize();
     const reference = referenceFromLocation(location);
@@ -242,8 +268,9 @@ class LocalStorageAdapter {
       crypto.timingSafeEqual(Buffer.from(actualChecksum, 'hex'), Buffer.from(expected, 'hex')) &&
       manifest.artifact.checksum === expected &&
       actualSize === Number(manifest.artifact.sizeBytes);
+    const expectedFileCount = Number(manifest.artifact.fileCount);
     return {
-      valid,
+      valid: valid && actualEntries.length === expectedFileCount,
       expectedChecksum: expected,
       actualChecksum,
       encryptedAtRest: true,

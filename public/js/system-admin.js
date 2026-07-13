@@ -2559,9 +2559,23 @@ function switchBackupRecoveryTab(tab) {
   sysBackupActiveTab = tab || 'overview';
   document.querySelectorAll('[data-backup-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.backupTab === sysBackupActiveTab);
+    button.setAttribute('aria-selected', button.dataset.backupTab === sysBackupActiveTab ? 'true' : 'false');
   });
   document.querySelectorAll('[data-backup-panel]').forEach(panel => {
     panel.classList.toggle('active', panel.dataset.backupPanel === sysBackupActiveTab);
+  });
+}
+
+function focusBackupArea(tab, targetId = '') {
+  switchBackupRecoveryTab(tab);
+  requestAnimationFrame(() => {
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) return;
+    target.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    const focusTarget = target.matches?.('button, input, select, textarea')
+      ? target
+      : target.querySelector?.('button, input, select, textarea');
+    focusTarget?.focus?.({ preventScroll: true });
   });
 }
 
@@ -2678,6 +2692,58 @@ function backupStatusStack(entries) {
   `).join('');
 }
 
+function backupLifecycleGuide(status, workflow = 'backup') {
+  const normalized = String(status || 'UNKNOWN').trim().toUpperCase();
+  const guides = {
+    backup: {
+      PENDING: ['Request queued', 'Run the backup worker.', false],
+      RUNNING: ['Creating encrypted artifact', 'Wait for the worker to finish.', false],
+      COMPLETED: ['Artifact created', 'Verify checksum and integrity.', false],
+      VERIFICATION_FAILED: ['Verification failed', 'Review the result and verify again.', false],
+      VERIFIED: ['Verified and usable', 'Request a restore when recovery is needed.', true],
+      FAILED: ['Backup failed', 'Review the error, then retry the worker.', false],
+      CANCELLED: ['Request cancelled', 'Create a new request if a backup is still needed.', true],
+    },
+    restore: {
+      PENDING: ['Restore requested', 'Wait for the protected workflow to start.', false],
+      AWAITING_APPROVAL: ['Waiting for checker approval', 'A different authorized admin must approve with MFA.', false],
+      APPROVED: ['Approved by checker', 'Run the isolated dry-run with fresh MFA.', false],
+      DRY_RUN_RUNNING: ['Dry-run in progress', 'Wait for isolated validation to finish.', false],
+      DRY_RUN_PASSED: ['Dry-run passed', 'Execute the restore with fresh MFA.', false],
+      DRY_RUN_FAILED: ['Dry-run blocked restore', 'Resolve the validation failure before a new attempt.', false],
+      EXECUTING: ['Restore in progress', 'Wait; do not start a competing recovery action.', false],
+      VERIFYING: ['Validating restored target', 'Run or wait for post-restore integrity checks.', false],
+      COMPLETED: ['Restore completed', 'Review the integrity result and system health.', true],
+      FAILED: ['Restore failed safely', 'Review the result; production changes remain controlled.', false],
+      REJECTED: ['Request rejected', 'Create a new request only after resolving the concern.', true],
+      CANCELLED: ['Request cancelled', 'No further restore action is required.', true],
+    },
+    rollback: {
+      PENDING: ['Rollback requested', 'Wait for the protected workflow to start.', false],
+      AWAITING_APPROVAL: ['Waiting for checker approval', 'A different authorized admin must approve with MFA.', false],
+      APPROVED: ['Approved by checker', 'Execute rollback with fresh MFA.', false],
+      EXECUTING: ['Rollback in progress', 'Wait for integrity validation to finish.', false],
+      VERIFYING: ['Validating module version', 'Wait for integrity and health checks.', false],
+      COMPLETED: ['Rollback completed', 'Review the integrity result and module health.', true],
+      FAILED: ['Rollback failed safely', 'Review the result before requesting another rollback.', false],
+      REJECTED: ['Request rejected', 'Resolve the checker concern before a new request.', true],
+      CANCELLED: ['Request cancelled', 'No further rollback action is required.', true],
+    },
+  };
+  const [stage, next, complete] = guides[workflow]?.[normalized]
+    || [backupTypeLabel(normalized), 'Open the record and review its latest result.', false];
+  return { status: normalized, stage, next, complete };
+}
+
+function backupLifecycleCell(status, workflow = 'backup') {
+  const guide = backupLifecycleGuide(status, workflow);
+  return `<div class="backup-lifecycle-cell">
+    ${sysStatusBadge(guide.status)}
+    <span class="backup-lifecycle-stage">${sysEsc(guide.stage)}</span>
+    <small class="backup-lifecycle-next${guide.complete ? ' is-complete' : ''}">${sysEsc(guide.next)}</small>
+  </div>`;
+}
+
 function backupApprovalMfaStatus(record) {
   const approval = backupStatusValue(record, ['approval_status', 'checker_status'], 'NOT REQUESTED');
   const mfa = record?.step_up_verified_at
@@ -2690,9 +2756,23 @@ function backupApprovalMfaStatus(record) {
 }
 
 function backupIdempotencyKey(prefix, id = '') {
+  const storageKey = `lgsv:backup-idempotency:${String(prefix || 'backup').toLowerCase()}:${id || 'new'}`;
+  try {
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+  } catch (_) {
+    // Session storage can be unavailable in hardened/private browser modes.
+  }
   const uuid = globalThis.crypto?.randomUUID?.();
   const suffix = uuid || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${String(prefix || 'backup').toLowerCase()}-${id || 'new'}-${suffix}`;
+  const value = `${String(prefix || 'backup').toLowerCase()}-${id || 'new'}-${suffix}`;
+  try { sessionStorage.setItem(storageKey, value); } catch (_) {}
+  return value;
+}
+
+function clearBackupIdempotencyKey(prefix, id = '') {
+  const storageKey = `lgsv:backup-idempotency:${String(prefix || 'backup').toLowerCase()}:${id || 'new'}`;
+  try { sessionStorage.removeItem(storageKey); } catch (_) {}
 }
 
 async function runBackupMutation(key, operation) {
@@ -2800,6 +2880,236 @@ function renderBackupSummaryCards() {
   `).join('');
 }
 
+function backupModuleHasVerifiedCoverage(module) {
+  return ['data', 'file', 'config'].some(area => backupCoverageStatus(module, area) === 'COVERED')
+    || isVerifiedRollbackPoint(module);
+}
+
+function renderBackupReadiness() {
+  const target = document.getElementById('backup-readiness-card');
+  if (!target) return;
+  const settings = sysBackupDashboard?.settings || {};
+  const usableArtifacts = sysBackupLogs.filter(record => (
+    isRestorableBackupArtifact(record) || backupVerifiedSummary(record, { rollback: true })
+  )).length;
+  const coveredModules = sysBackupCoverage.filter(backupModuleHasVerifiedCoverage).length;
+  const totalModules = sysBackupCoverage.length;
+  const activeRestoreWork = sysRestoreJobs.filter(job => ![
+    'COMPLETED', 'FAILED', 'REJECTED', 'CANCELLED',
+  ].includes(backupStatusValue(job, ['lifecycle_status', 'status'], 'UNKNOWN'))).length;
+  const workerReady = backupExplicitBoolean(settings, ['backup_worker_enabled']) !== false;
+  const isolatedTargetReady = backupExplicitBoolean(settings, ['isolated_restore_configured']) !== false;
+
+  let tone = 'is-ready';
+  let title = 'Ready for controlled recovery';
+  let detail = `${usableArtifacts} verified artifact(s); ${coveredModules} of ${totalModules} module(s) have verified coverage.`;
+  if (!workerReady) {
+    tone = 'is-blocked';
+    title = 'Backup worker needs configuration';
+    detail = 'New requests cannot produce usable artifacts until the backup worker is enabled.';
+  } else if (!usableArtifacts) {
+    tone = 'is-blocked';
+    title = 'No verified recovery artifact';
+    detail = 'Create a backup, run its worker, then verify the server-generated checksum.';
+  } else if ((totalModules && coveredModules < totalModules) || !isolatedTargetReady) {
+    tone = 'is-warning';
+    title = 'Recovery readiness needs attention';
+    detail = `${coveredModules} of ${totalModules} module(s) have verified coverage${isolatedTargetReady ? '.' : '; isolated restore validation is not configured.'}`;
+  } else if (activeRestoreWork) {
+    tone = 'is-warning';
+    title = `${activeRestoreWork} protected restore step(s) active`;
+    detail = 'Continue only the next permitted step shown in the action center.';
+  }
+
+  target.classList.remove('is-ready', 'is-warning', 'is-blocked');
+  target.classList.add(tone);
+  target.innerHTML = `
+    <span class="backup-readiness-label">Recovery readiness</span>
+    <strong>${sysEsc(title)}</strong>
+    <small>${sysEsc(detail)}</small>
+  `;
+}
+
+function collectBackupNextActions() {
+  const actions = [];
+  const add = action => actions.push(action);
+  const usableArtifacts = sysBackupLogs.filter(record => (
+    isRestorableBackupArtifact(record) || backupVerifiedSummary(record, { rollback: true })
+  )).length;
+
+  if (!usableArtifacts) {
+    add({
+      priority: 1,
+      tone: 'is-critical',
+      label: 'Recovery gap',
+      title: 'Create the first verified recovery artifact',
+      detail: 'Recovery coverage remains not ready until a backup worker finishes and the artifact passes verification.',
+      button: 'Create Backup',
+      onclick: "focusBackupArea('sets', 'backup-request-panel')",
+    });
+  }
+
+  sysRestoreJobs.forEach(job => {
+    const id = Number(job.restore_job_id || job.id);
+    const status = backupStatusValue(job, ['lifecycle_status', 'status'], 'UNKNOWN');
+    const reference = job.backup_reference || job.backup_set_id || `Job #${id}`;
+    if (status === 'AWAITING_APPROVAL') {
+      const canApprove = backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false);
+      add({
+        priority: 5,
+        label: 'Restore step B2',
+        title: canApprove ? `Approve restore ${reference}` : `Restore ${reference} needs a different checker`,
+        detail: canApprove ? 'Review the request and approve or reject it with fresh MFA.' : 'Maker-checker separation prevents the requester from approving their own restore.',
+        button: canApprove ? 'Review and Approve' : 'Open Restore Jobs',
+        onclick: canApprove ? `approveRestoreJob(${id})` : "focusBackupArea('restore', 'restore-jobs-table')",
+      });
+    } else if (status === 'APPROVED') {
+      const canDryRun = backupActionAllowedAny(job, ['RESTORE_DRY_RUN', 'DRY_RUN'], true);
+      add({
+        priority: 6,
+        label: 'Restore step B3',
+        title: `Run isolated dry-run for ${reference}`,
+        detail: 'The production restore stays blocked until isolated validation passes.',
+        button: canDryRun ? 'Run Dry-run' : 'Open Restore Jobs',
+        onclick: canDryRun ? `runRestoreDryRun(${id})` : "focusBackupArea('restore', 'restore-jobs-table')",
+      });
+    } else if (status === 'DRY_RUN_PASSED') {
+      const canExecute = backupActionAllowedAny(job, ['RESTORE_EXECUTE', 'EXECUTE'], true);
+      add({
+        priority: 7,
+        label: 'Restore step B4',
+        title: `Dry-run passed for ${reference}`,
+        detail: 'Execute only after reviewing the dry-run result; fresh MFA and confirmation are required.',
+        button: canExecute ? 'Execute Restore' : 'Open Restore Jobs',
+        onclick: canExecute ? `executeRestoreJob(${id})` : "focusBackupArea('restore', 'restore-jobs-table')",
+      });
+    } else if (status === 'VERIFYING') {
+      const canVerify = backupActionAllowedAny(job, ['VERIFY_TARGET', 'RESTORE_VERIFY'], true);
+      add({
+        priority: 4,
+        label: 'Restore step B5',
+        title: `Validate restored target for ${reference}`,
+        detail: 'Confirm the restored target checksum, schema, integrity, and health before completion.',
+        button: canVerify ? 'Verify Restored Target' : 'Open Restore Jobs',
+        onclick: canVerify ? `verifyRestoreTarget(${id})` : "focusBackupArea('restore', 'restore-jobs-table')",
+      });
+    } else if (['FAILED', 'DRY_RUN_FAILED'].includes(status)) {
+      add({
+        priority: 2,
+        tone: 'is-critical',
+        label: 'Restore stopped safely',
+        title: `Review failed restore ${reference}`,
+        detail: job.result_message || 'A validation or execution check failed. Review the protected workflow before starting another attempt.',
+        button: 'Review Restore',
+        onclick: "focusBackupArea('restore', 'restore-jobs-table')",
+      });
+    }
+  });
+
+  sysRollbackRequests.forEach(request => {
+    const id = Number(request.rollback_request_id || request.id);
+    const status = backupStatusValue(request, ['lifecycle_status', 'status'], 'UNKNOWN');
+    const moduleName = backupModuleName(request.affected_module) || `Request #${id}`;
+    if (status === 'AWAITING_APPROVAL') {
+      const canApprove = isVerifiedRollbackRequestArtifact(request)
+        && backupActionAllowedAny(request, ['ROLLBACK_APPROVE', 'APPROVE'], false);
+      add({
+        priority: 8,
+        label: 'Rollback approval',
+        title: canApprove ? `Review ${moduleName} rollback` : `${moduleName} rollback needs a different checker`,
+        detail: 'The target artifact must stay verified and approval requires fresh MFA.',
+        button: canApprove ? 'Review and Approve' : 'Open Rollback',
+        onclick: canApprove ? `approveRollbackRequest(${id})` : "focusBackupArea('rollback')",
+      });
+    } else if (status === 'APPROVED') {
+      const canExecute = isVerifiedRollbackRequestArtifact(request)
+        && backupActionAllowedAny(request, ['ROLLBACK_EXECUTE', 'EXECUTE'], true);
+      add({
+        priority: 9,
+        label: 'Rollback execution',
+        title: `Approved rollback for ${moduleName}`,
+        detail: 'Execute with fresh MFA, then verify module integrity and health.',
+        button: canExecute ? 'Execute Rollback' : 'Open Rollback',
+        onclick: canExecute ? `executeRollbackRequest(${id})` : "focusBackupArea('rollback')",
+      });
+    } else if (status === 'FAILED') {
+      add({
+        priority: 3,
+        tone: 'is-critical',
+        label: 'Rollback stopped safely',
+        title: `Review failed ${moduleName} rollback`,
+        detail: request.result_message || 'Review the integrity result before another protected rollback request.',
+        button: 'Review Rollback',
+        onclick: "focusBackupArea('rollback')",
+      });
+    }
+  });
+
+  sysBackupLogs.forEach(record => {
+    const id = Number(record.backup_set_id || record.backup_id || record.id);
+    const status = backupStatusValue(record, ['lifecycle_status', 'status'], 'UNKNOWN');
+    const reference = record.backup_reference || `Backup #${id}`;
+    if (['PENDING', 'FAILED'].includes(status)) {
+      const canRun = backupActionAllowedAny(record, ['BACKUP_RUN', 'RUN'], true);
+      add({
+        priority: status === 'FAILED' ? 3 : 12,
+        tone: status === 'FAILED' ? 'is-critical' : '',
+        label: status === 'FAILED' ? 'Backup needs review' : 'Backup step A2',
+        title: `${status === 'FAILED' ? 'Retry' : 'Run'} worker for ${reference}`,
+        detail: status === 'FAILED' ? (record.error_message || record.result_message || 'Review the failure before retrying the backup worker.') : 'The request is queued but no usable artifact exists yet.',
+        button: canRun ? 'Run Backup Worker' : 'Open Backups',
+        onclick: canRun ? `runBackup(${id})` : "focusBackupArea('sets')",
+      });
+    } else if (['COMPLETED', 'VERIFICATION_FAILED'].includes(status)) {
+      const canVerify = backupActionAllowedAny(record, ['BACKUP_VERIFY', 'VERIFY'], true);
+      add({
+        priority: status === 'VERIFICATION_FAILED' ? 2 : 11,
+        tone: status === 'VERIFICATION_FAILED' ? 'is-critical' : '',
+        label: 'Backup step A3',
+        title: `${status === 'VERIFICATION_FAILED' ? 'Re-check' : 'Verify'} ${reference}`,
+        detail: 'The backend must verify artifact availability, server-generated checksum, and integrity before recovery use.',
+        button: canVerify ? 'Verify Artifact' : 'Open Backups',
+        onclick: canVerify ? `verifyBackup(${id})` : "focusBackupArea('sets')",
+      });
+    }
+  });
+
+  if (!actions.length) {
+    add({
+      priority: 100,
+      tone: 'is-success',
+      label: 'No pending workflow',
+      title: 'Current protected actions are complete',
+      detail: 'Verified artifacts remain available. Create a new backup when the next recovery point is due.',
+      button: 'View Coverage',
+      onclick: "focusBackupArea('overview', 'backup-coverage-table')",
+    });
+  }
+  return actions.sort((left, right) => left.priority - right.priority);
+}
+
+function renderBackupNextActions() {
+  const target = document.getElementById('backup-next-actions');
+  if (!target) return;
+  const actions = collectBackupNextActions();
+  const visible = actions.slice(0, 6);
+  target.innerHTML = visible.map(action => `
+    <article class="backup-next-action ${sysEsc(action.tone || '')}">
+      <span class="backup-next-action-label">${sysEsc(action.label)}</span>
+      <strong>${sysEsc(action.title)}</strong>
+      <small>${sysEsc(action.detail)}</small>
+      <button type="button" class="btn-sysadmin-sm" onclick="${action.onclick}">${sysEsc(action.button)}</button>
+    </article>
+  `).join('') + (actions.length > visible.length ? `
+    <article class="backup-next-action backup-next-action-neutral">
+      <span class="backup-next-action-label">More work</span>
+      <strong>${actions.length - visible.length} additional action(s)</strong>
+      <small>Open the workflow tables to review all pending records.</small>
+      <button type="button" class="btn-sysadmin-sm" onclick="focusBackupArea('sets')">Open Backups</button>
+    </article>
+  ` : '');
+}
+
 function renderBackupCoverage() {
   const tbody = document.getElementById('backup-coverage-tbody');
   if (!tbody) return;
@@ -2871,8 +3181,8 @@ function renderBackupLogs() {
       : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${restorable && isRestorableBackupType(record.backup_type) ? '' : 'disabled'} title="Requires a verified usable artifact">Request Restore</button>`;
     const actions = [
       `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View</button>`,
-      canRun ? `<button class="btn-sysadmin-sm" onclick="runBackup(${id})">Run Worker</button>` : '',
-      canVerify ? `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Verify Artifact</button>` : '',
+      canRun ? `<button class="btn-sysadmin-sm" onclick="runBackup(${id})">Step A2: Run Worker</button>` : '',
+      canVerify ? `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Step A3: Verify</button>` : '',
       recoveryAction,
     ].filter(Boolean);
     const verification = backupStatusValue(record, ['verification_status'], backupExplicitBoolean(record, ['artifact_verified']) === true ? 'VERIFIED' : 'NOT VERIFIED');
@@ -2883,7 +3193,7 @@ function renderBackupLogs() {
         <td><strong>${sysEsc(record.backup_reference)}</strong></td>
         <td>${sysEsc(backupTypeLabel(record.backup_type))}</td>
         <td>${sysEsc(record.storage_provider || record.storage_target || '-')}</td>
-        <td>${sysStatusBadge(status)}<br><small>${sysEsc(record.completed_at ? `Completed ${sysFormatDateTime(record.completed_at)}` : '-')}</small></td>
+        <td>${backupLifecycleCell(status, 'backup')}<small>${sysEsc(record.completed_at ? `Updated ${sysFormatDateTime(record.completed_at)}` : '')}</small></td>
         <td>${backupStatusStack([
           ['Artifact', backupArtifactReadiness(record), record.storage_location || record.backup_location || ''],
           ['Verification', verification, record.verified_at ? sysFormatDateTime(record.verified_at) : ''],
@@ -2952,18 +3262,22 @@ function renderRestoreJobs() {
     if (status === 'AWAITING_APPROVAL') {
       const canApprove = backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false);
       const canReject = backupActionAllowedAny(job, ['RESTORE_REJECT', 'REJECT'], canApprove);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="approveRestoreJob(${id})" ${canApprove ? '' : 'disabled'} title="A different authorized System Administrator must approve">Approve</button>`);
+      actions.push(`<button class="btn-sysadmin-sm" onclick="approveRestoreJob(${id})" ${canApprove ? '' : 'disabled'} title="A different authorized System Administrator must approve">Step B2: Approve</button>`);
       actions.push(`<button class="btn-sysadmin-sm" onclick="rejectRestoreJob(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
     }
     if (status === 'APPROVED' && !dryRunPassed) {
       const canDryRun = backupActionAllowedAny(job, ['RESTORE_DRY_RUN', 'DRY_RUN'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="runRestoreDryRun(${id})" ${canDryRun ? '' : 'disabled'}>Run Dry-run</button>`);
+      actions.push(`<button class="btn-sysadmin-sm" onclick="runRestoreDryRun(${id})" ${canDryRun ? '' : 'disabled'}>Step B3: Dry-run</button>`);
     }
     if (dryRunPassed) {
       const canExecute = backupActionAllowedAny(job, ['RESTORE_EXECUTE', 'EXECUTE'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="executeRestoreJob(${id})" ${canExecute ? '' : 'disabled'}>Execute Restore</button>`);
+      actions.push(`<button class="btn-sysadmin-sm" onclick="executeRestoreJob(${id})" ${canExecute ? '' : 'disabled'}>Step B4: Restore</button>`);
     }
-    if (['AWAITING_APPROVAL', 'APPROVED', 'PENDING'].includes(status)) {
+    if (status === 'VERIFYING') {
+      const canVerifyTarget = backupActionAllowedAny(job, ['VERIFY_TARGET', 'RESTORE_VERIFY'], true);
+      actions.push(`<button class="btn-sysadmin-sm" onclick="verifyRestoreTarget(${id})" ${canVerifyTarget ? '' : 'disabled'}>Step B5: Validate</button>`);
+    }
+    if (['AWAITING_APPROVAL', 'APPROVED', 'DRY_RUN_PASSED', 'PENDING'].includes(status)) {
       const canCancel = backupActionAllowedAny(job, ['RESTORE_CANCEL', 'CANCEL'], true);
       actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'CANCELLED')" ${canCancel ? '' : 'disabled'}>Cancel</button>`);
     }
@@ -2973,7 +3287,7 @@ function renderRestoreJobs() {
         <td>${sysEsc(job.backup_reference || job.backup_set_id || '-')}</td>
         <td>${sysEsc(backupTypeLabel(job.restore_type))}</td>
         <td>${sysEsc(job.affected_module ? backupModuleName(job.affected_module) : '-')}</td>
-        <td>${sysStatusBadge(status)}</td>
+        <td>${backupLifecycleCell(status, 'restore')}</td>
         <td>${sysStatusBadge(dryRunStatus)}<br><small>${sysEsc(job.dry_run_completed_at ? sysFormatDateTime(job.dry_run_completed_at) : '-')}</small></td>
         <td>${sysStatusBadge(integrityStatus)}<br><small>${sysEsc(job.integrity_verified_at ? sysFormatDateTime(job.integrity_verified_at) : '-')}</small></td>
         <td>${backupApprovalMfaStatus(job)}</td>
@@ -3016,7 +3330,7 @@ function renderRollbackRequests() {
         <td><strong>${sysEsc(backupModuleName(request.affected_module))}</strong></td>
         <td>${sysEsc(request.current_version || '-')}</td>
         <td>${sysEsc(request.target_version || '-')}</td>
-        <td>${sysStatusBadge(status)}</td>
+        <td>${backupLifecycleCell(status, 'rollback')}</td>
         <td>${backupStatusStack([
           ['Artifact', artifactReady ? 'VERIFIED' : 'NOT VERIFIED', request.artifact_location || ''],
           ['Integrity', backupStatusValue(request, ['integrity_status'], 'NOT CHECKED'), request.integrity_verified_at ? sysFormatDateTime(request.integrity_verified_at) : ''],
@@ -3054,6 +3368,7 @@ function renderBackupSettings() {
     ['AWS Region', settings.aws_region_configured ? 'Configured' : 'Missing'],
     ['S3 Bucket', settings.s3_bucket_configured ? 'Configured' : 'Missing'],
     ['RDS Snapshot', settings.rds_snapshot_configured ? 'Configured' : 'Missing'],
+    ['RDS Post-restore Verification', settings.rds_restore_verification_configured ? 'Configured' : 'Missing'],
   ];
   target.innerHTML = items.map(([label, value]) => `
     <article class="backup-setting-card">
@@ -3065,6 +3380,8 @@ function renderBackupSettings() {
 
 function renderBackupRecoveryWorkspace() {
   renderBackupModuleOptions();
+  renderBackupReadiness();
+  renderBackupNextActions();
   renderBackupSummaryCards();
   renderBackupCoverage();
   renderBackupLogs();
@@ -3079,7 +3396,7 @@ async function requestBackup() {
   const body = {
     backup_name: document.getElementById('backup-name')?.value || '',
     backup_type: document.getElementById('backup-type')?.value || 'DATABASE',
-    storage_provider: document.getElementById('backup-target')?.value || 'MANUAL',
+    storage_provider: document.getElementById('backup-target')?.value || 'LOCAL',
     included_modules: backupSelectModules(),
     notes: document.getElementById('backup-notes')?.value || '',
   };
@@ -3092,7 +3409,11 @@ async function requestBackup() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to request backup.');
+      if (!res.ok) {
+        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('backup-request');
+        throw new Error(data.error || 'Failed to request backup.');
+      }
+      clearBackupIdempotencyKey('backup-request');
       showSysToast(data.message || 'Backup request queued for the backup worker.', 'success');
       const notes = document.getElementById('backup-notes');
       const name = document.getElementById('backup-name');
@@ -3125,6 +3446,7 @@ async function runBackup(backupId) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to start the backup worker.');
+      clearBackupIdempotencyKey('backup-run', id);
       showSysToast(data.message || 'Backup worker started.', 'success');
       loadBackupLogs();
       loadSystemHealth();
@@ -3142,6 +3464,7 @@ function backupStepUpLabel(purpose) {
     RESTORE_APPROVE: 'approve this restore request',
     RESTORE_DRY_RUN: 'run isolated restore validation',
     RESTORE_EXECUTE: 'execute this approved restore',
+    RESTORE_VERIFY: 'verify this isolated RDS restore target',
     ROLLBACK_APPROVE: 'approve this rollback request',
     ROLLBACK_EXECUTE: 'execute this approved rollback',
   })[purpose] || 'continue this recovery action';
@@ -3265,6 +3588,7 @@ async function backupProtectedMutation({ lockKey, purpose, resourceType, resourc
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Recovery action failed.');
+      clearBackupIdempotencyKey(purpose, resourceId);
       showSysToast(data.message || 'Recovery action accepted.', 'success');
       loadBackupLogs();
       loadSystemHealth();
@@ -3342,7 +3666,11 @@ async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABA
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to queue restore request.');
+      if (!res.ok) {
+        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('restore-request', normalizedBackupId);
+        throw new Error(data.error || 'Failed to queue restore request.');
+      }
+      clearBackupIdempotencyKey('restore-request', normalizedBackupId);
       showSysToast(data.message || 'Restore request queued for checker approval.', 'success');
       loadBackupLogs();
       loadSystemHealth();
@@ -3448,6 +3776,22 @@ async function executeRestoreJob(jobId) {
   });
 }
 
+async function verifyRestoreTarget(jobId) {
+  const id = Number(jobId || 0);
+  const job = findRestoreJob(id);
+  if (!job || backupStatusValue(job, ['lifecycle_status', 'status']) !== 'VERIFYING') {
+    showSysToast('Only a pending isolated RDS restore target can be verified.', 'error');
+    return null;
+  }
+  return backupProtectedMutation({
+    lockKey: `restore-verify-target:${id}`,
+    purpose: 'RESTORE_VERIFY',
+    resourceType: 'RESTORE_JOB',
+    resourceId: id,
+    endpoint: `/api/admin/backups/restore-jobs/${id}/verify-target`,
+  });
+}
+
 async function updateRestoreJobStatus(jobId, status) {
   const normalized = String(status || '').toUpperCase();
   if (normalized !== 'CANCELLED') {
@@ -3528,7 +3872,11 @@ async function requestModuleRollback(moduleKey, backupSetId = null) {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to request rollback.');
+      if (!res.ok) {
+        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('rollback-request', point.id || moduleKey);
+        throw new Error(data.error || 'Failed to request rollback.');
+      }
+      clearBackupIdempotencyKey('rollback-request', point.id || moduleKey);
       showSysToast(data.message || 'Rollback request logged for checker approval.', 'success');
       loadBackupLogs();
       return data;
@@ -3741,6 +4089,7 @@ window.createSupportTicket   = createSupportTicket;
 window.updateSupportTicket   = updateSupportTicket;
 window.loadBackupLogs        = loadBackupLogs;
 window.switchBackupRecoveryTab = switchBackupRecoveryTab;
+window.focusBackupArea       = focusBackupArea;
 window.requestBackup         = requestBackup;
 window.runBackup             = runBackup;
 window.updateBackupStatus    = updateBackupStatus;
@@ -3750,6 +4099,7 @@ window.approveRestoreJob     = approveRestoreJob;
 window.rejectRestoreJob      = rejectRestoreJob;
 window.runRestoreDryRun      = runRestoreDryRun;
 window.executeRestoreJob     = executeRestoreJob;
+window.verifyRestoreTarget   = verifyRestoreTarget;
 window.updateRestoreJobStatus = updateRestoreJobStatus;
 window.requestBackupSetRollback = requestBackupSetRollback;
 window.requestModuleRollback = requestModuleRollback;
@@ -3772,6 +4122,7 @@ window.__backupRecoveryUiTestHooks = Object.freeze({
   backupCoverageStatus,
   backupActionAllowed,
   backupActionAllowedAny,
+  backupLifecycleGuide,
 });
 
 document.addEventListener('partialsLoaded', initSystemAdminIfActive);

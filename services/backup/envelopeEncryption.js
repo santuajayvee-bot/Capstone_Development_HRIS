@@ -47,11 +47,15 @@ async function encryptFile(sourcePath, destinationPath, keyValue, aad) {
   await fs.promises.mkdir(require('path').dirname(destinationPath), { recursive: true, mode: 0o700 });
   const output = await fs.promises.open(destinationPath, 'wx', 0o600);
   let position = 0;
+  let plaintextSize = 0;
+  const plaintextHash = crypto.createHash('sha256');
   try {
     const header = Buffer.concat([MAGIC, iv]);
     await output.write(header, 0, header.length, position);
     position += header.length;
     for await (const chunk of fs.createReadStream(sourcePath)) {
+      plaintextSize += chunk.length;
+      plaintextHash.update(chunk);
       const encrypted = cipher.update(chunk);
       if (encrypted.length) {
         await output.write(encrypted, 0, encrypted.length, position);
@@ -77,6 +81,8 @@ async function encryptFile(sourcePath, destinationPath, keyValue, aad) {
     algorithm: 'AES-256-GCM',
     encryptedSize: encryptedStat.size,
     encryptedSha256: await sha256File(destinationPath),
+    plaintextSize,
+    plaintextSha256: plaintextHash.digest('hex'),
   };
 }
 
@@ -111,11 +117,13 @@ async function decryptFile(sourcePath, destinationPath, keyValue, aad) {
   let position = 0;
   try {
     const end = stat.size - TAG_BYTES - 1;
-    for await (const chunk of fs.createReadStream(sourcePath, { start: HEADER_BYTES, end })) {
-      const decrypted = decipher.update(chunk);
-      if (decrypted.length) {
-        await output.write(decrypted, 0, decrypted.length, position);
-        position += decrypted.length;
+    if (end >= HEADER_BYTES) {
+      for await (const chunk of fs.createReadStream(sourcePath, { start: HEADER_BYTES, end })) {
+        const decrypted = decipher.update(chunk);
+        if (decrypted.length) {
+          await output.write(decrypted, 0, decrypted.length, position);
+          position += decrypted.length;
+        }
       }
     }
     const final = decipher.final();
@@ -143,10 +151,12 @@ async function hashDecryptedFile(filePath, keyValue, aad) {
   let size = 0;
   try {
     const end = stat.size - TAG_BYTES - 1;
-    for await (const chunk of fs.createReadStream(filePath, { start: HEADER_BYTES, end })) {
-      const decrypted = decipher.update(chunk);
-      size += decrypted.length;
-      hash.update(decrypted);
+    if (end >= HEADER_BYTES) {
+      for await (const chunk of fs.createReadStream(filePath, { start: HEADER_BYTES, end })) {
+        const decrypted = decipher.update(chunk);
+        size += decrypted.length;
+        hash.update(decrypted);
+      }
     }
     const final = decipher.final();
     size += final.length;

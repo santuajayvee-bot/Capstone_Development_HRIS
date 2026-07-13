@@ -9,6 +9,7 @@ const {
   waitUntilDBInstanceAvailable,
   waitUntilDBSnapshotAvailable,
 } = require('@aws-sdk/client-rds');
+const crypto = require('crypto');
 const { sha256Text, validateExpectedChecksum } = require('./artifactIntegrity');
 const { backupError } = require('./backupErrors');
 const { assertSafeBackupReference } = require('./fileTree');
@@ -29,7 +30,8 @@ function snapshotIdentifierFromReference(reference) {
   const safeReference = assertSafeBackupReference(reference);
   const normalized = safeReference.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const base = /^[a-z]/.test(normalized) ? normalized : `b-${normalized}`;
-  return validateRdsIdentifier(`lgsv-${base}`.slice(0, 63).replace(/-+$/g, ''), 'RDS snapshot identifier');
+  const suffix = crypto.createHash('sha256').update(safeReference, 'utf8').digest('hex').slice(0, 8);
+  return validateRdsIdentifier(`lgsv-${base.slice(0, 48).replace(/-+$/g, '')}-${suffix}`, 'RDS snapshot identifier');
 }
 
 function isoDate(value) {
@@ -134,6 +136,21 @@ class RdsSnapshotAdapter {
       return await this.describeSnapshot(snapshotIdentifier);
     } catch (error) {
       if (error?.code === 'BACKUP_ARTIFACT_MISSING') return null;
+      throw error;
+    }
+  }
+
+  async describeInstance(instanceIdentifier) {
+    const identifier = validateRdsIdentifier(instanceIdentifier, 'RDS restore target identifier');
+    try {
+      const response = await this.client.send(new DescribeDBInstancesCommand({ DBInstanceIdentifier: identifier }));
+      const instance = response?.DBInstances?.[0];
+      if (!instance) throw backupError('Restored RDS instance was not found.', 'RDS_RESTORE_TARGET_MISSING', { retryable: true });
+      return instance;
+    } catch (error) {
+      if (['DBInstanceNotFound', 'DBInstanceNotFoundFault'].includes(error?.name) || Number(error?.$metadata?.httpStatusCode) === 404) {
+        throw backupError('Restored RDS instance was not found.', 'RDS_RESTORE_TARGET_MISSING', { retryable: true });
+      }
       throw error;
     }
   }
@@ -282,6 +299,40 @@ class RdsSnapshotAdapter {
       status: response?.DBInstance?.DBInstanceStatus || 'creating',
       endpoint: response?.DBInstance?.Endpoint?.Address || null,
       inPlace: false,
+    };
+  }
+
+  async verifyRestoredInstance({ location, expectedChecksum, newDbInstanceIdentifier }) {
+    const verification = await this.verifyStoredArtifact(location, expectedChecksum);
+    if (!verification.valid) {
+      throw backupError('RDS snapshot failed integrity verification.', 'BACKUP_INTEGRITY_MISMATCH');
+    }
+    const target = validateRdsIdentifier(newDbInstanceIdentifier, 'RDS restore target identifier');
+    if (target === this.dbInstanceIdentifier || !target.startsWith('lgsv-restore-')) {
+      throw backupError('RDS restore target is not an isolated recovery instance.', 'RDS_IN_PLACE_RESTORE_BLOCKED');
+    }
+    const instance = await this.describeInstance(target);
+    const status = String(instance.DBInstanceStatus || '').toLowerCase();
+    const pending = status !== 'available';
+    const encrypted = instance.StorageEncrypted === true;
+    const privateNetwork = instance.PubliclyAccessible !== true;
+    const endpoint = instance.Endpoint?.Address || null;
+    const port = Number(instance.Endpoint?.Port || instance.Port || 3306);
+    const snapshotIdentifier = this.parseLocation(location).snapshotIdentifier;
+    const snapshotMatches = !instance.DBSnapshotIdentifier || instance.DBSnapshotIdentifier === snapshotIdentifier;
+    const engineMatches = !instance.Engine || instance.Engine === verification.descriptor.snapshot.engine;
+    return {
+      valid: !pending && encrypted && privateNetwork && Boolean(endpoint) && snapshotMatches && engineMatches,
+      pending,
+      status: status || 'unknown',
+      targetInstanceIdentifier: target,
+      endpoint,
+      port,
+      encrypted,
+      privateNetwork,
+      snapshotMatches,
+      engineMatches,
+      artifactVerification: verification,
     };
   }
 }

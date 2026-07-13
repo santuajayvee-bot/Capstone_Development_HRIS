@@ -29,6 +29,11 @@ function defaultExecFileRunner(file, args, options) {
   });
 }
 
+function isUnsupportedGtidOption(error) {
+  const diagnostic = `${error?.stderr || ''}\n${error?.message || ''}`;
+  return /(?:unknown|unrecognized)\s+(?:variable|option)[^\r\n]*set-gtid-purged/i.test(diagnostic);
+}
+
 function cleanProcessEnvironment() {
   const environment = { ...process.env };
   delete environment.MYSQL_PWD;
@@ -175,6 +180,9 @@ class MySqlBackupService {
     this.nodeEnv = String(options.nodeEnv || process.env.NODE_ENV || 'development').toLowerCase();
     this.primaryConnection = options.primaryConnection || null;
     this.allowSameServerDryRun = Boolean(options.allowSameServerDryRun);
+    this.includeRoutines = Boolean(options.includeRoutines);
+    this.includeEvents = Boolean(options.includeEvents);
+    this.captureSourceIntegrity = options.captureSourceIntegrity !== false;
   }
 
   async initialize() {
@@ -212,6 +220,20 @@ class MySqlBackupService {
     };
   }
 
+  async captureDatabaseIntegrity({ connection, executor = null, includeRowCounts = false }) {
+    const normalized = validateConnectionConfig(connection);
+    const ownedExecutor = executor ? null : await this.connectionFactory(mysql2ConnectionOptions(normalized));
+    try {
+      return await createDatabaseIntegrityReport(executor || ownedExecutor, {
+        databaseName: normalized.database,
+        includeRowCounts,
+        checkTables: true,
+      });
+    } finally {
+      await ownedExecutor?.end?.().catch(() => {});
+    }
+  }
+
   async createDatabaseDump({ outputPath, connection, integrityExecutor = null, includeRowCounts = false }) {
     const normalized = validateConnectionConfig(connection);
     const resolvedOutput = path.resolve(outputPath);
@@ -223,22 +245,26 @@ class MySqlBackupService {
     if (await fs.promises.lstat(resolvedOutput).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error))) {
       throw backupError('MySQL dump destination already exists.', 'BACKUP_OUTPUT_EXISTS');
     }
-    const expectedIntegrity = integrityExecutor
-      ? await createDatabaseIntegrityReport(integrityExecutor, {
-          databaseName: normalized.database,
-          includeRowCounts,
-          checkTables: true,
-        })
-      : null;
-    const defaults = await this.createDefaultsFile(normalized, null);
+    let ownedIntegrityExecutor = null;
+    const sourceIntegrityExecutor = integrityExecutor || (this.captureSourceIntegrity
+      ? await this.connectionFactory(mysql2ConnectionOptions(normalized))
+      : null);
+    if (!integrityExecutor) ownedIntegrityExecutor = sourceIntegrityExecutor;
+    let defaults = null;
     try {
+      const expectedIntegrity = sourceIntegrityExecutor
+        ? await createDatabaseIntegrityReport(sourceIntegrityExecutor, {
+            databaseName: normalized.database,
+            includeRowCounts,
+            checkTables: true,
+          })
+        : null;
+      defaults = await this.createDefaultsFile(normalized, null);
       const args = [
         `--defaults-extra-file=${defaults.filePath}`,
         '--single-transaction',
         '--quick',
-        '--routines',
         '--triggers',
-        '--events',
         '--hex-blob',
         '--set-gtid-purged=OFF',
         '--default-character-set=utf8mb4',
@@ -249,11 +275,25 @@ class MySqlBackupService {
         `--result-file=${resolvedOutput}`,
         normalized.database,
       ];
+      if (this.includeRoutines) args.splice(3, 0, '--routines');
+      if (this.includeEvents) args.splice(3, 0, '--events');
       try {
         await this.execFileRunner(this.mysqldumpPath, args, this.processOptions(path.dirname(resolvedOutput)));
       } catch (error) {
-        await fs.promises.rm(resolvedOutput, { force: true }).catch(() => {});
-        throw safeProcessError(error, 'MySQL backup');
+        await secureRemoveTemporaryTree(path.dirname(resolvedOutput), resolvedOutput).catch(() => {});
+        if (!isUnsupportedGtidOption(error)) {
+          throw safeProcessError(error, 'MySQL backup');
+        }
+        // XAMPP commonly ships MariaDB's compatible client, which does not
+        // implement MySQL's GTID flag. Retry only for that exact capability
+        // error; AWS RDS MySQL continues to receive --set-gtid-purged=OFF.
+        const compatibleArgs = args.filter(argument => argument !== '--set-gtid-purged=OFF');
+        try {
+          await this.execFileRunner(this.mysqldumpPath, compatibleArgs, this.processOptions(path.dirname(resolvedOutput)));
+        } catch (retryError) {
+          await secureRemoveTemporaryTree(path.dirname(resolvedOutput), resolvedOutput).catch(() => {});
+          throw safeProcessError(retryError, 'MySQL backup');
+        }
       }
       const safety = await validateDumpSafety(resolvedOutput, { maxBytes: this.maxDumpBytes });
       return {
@@ -263,7 +303,8 @@ class MySqlBackupService {
         expectedIntegrity,
       };
     } finally {
-      await defaults.cleanup().catch(() => {});
+      await defaults?.cleanup?.().catch(() => {});
+      await ownedIntegrityExecutor?.end?.().catch(() => {});
     }
   }
 
@@ -413,6 +454,7 @@ module.exports = {
   MySqlBackupService,
   cleanProcessEnvironment,
   defaultExecFileRunner,
+  isUnsupportedGtidOption,
   mysql2ConnectionOptions,
   mysqlOptionFile,
   quoteOptionFileValue,

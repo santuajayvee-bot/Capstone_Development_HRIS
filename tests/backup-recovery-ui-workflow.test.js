@@ -83,6 +83,32 @@ assert.strictEqual(hooks.backupActionAllowed({ allowed_actions: ['RESTORE_APPROV
 assert.strictEqual(hooks.backupActionAllowedAny({ can_approve: true }, ['RESTORE_APPROVE', 'APPROVE']), true);
 assert.strictEqual(hooks.backupActionAllowedAny({}, ['RESTORE_APPROVE', 'APPROVE']), false);
 
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(hooks.backupLifecycleGuide('COMPLETED', 'backup'))),
+  {
+    status: 'COMPLETED',
+    stage: 'Artifact created',
+    next: 'Verify checksum and integrity.',
+    complete: false,
+  },
+  'A completed worker job must guide the admin to independent artifact verification.'
+);
+assert.strictEqual(
+  hooks.backupLifecycleGuide('AWAITING_APPROVAL', 'restore').next,
+  'A different authorized admin must approve with MFA.',
+  'Restore guidance must preserve maker-checker and MFA requirements.'
+);
+assert.strictEqual(
+  hooks.backupLifecycleGuide('DRY_RUN_PASSED', 'restore').next,
+  'Execute the restore with fresh MFA.',
+  'A passed dry-run must clearly identify protected restore execution as the next step.'
+);
+assert.strictEqual(
+  hooks.backupLifecycleGuide('COMPLETED', 'restore').complete,
+  true,
+  'Completed restore jobs must render as terminal workflow results.'
+);
+
 for (const endpoint of [
   '/api/admin/backups/step-up/challenges',
   '/run`',
@@ -90,6 +116,7 @@ for (const endpoint of [
   '/approve`',
   '/dry-run`',
   '/execute`',
+  '/verify-target`',
 ]) {
   assert(script.includes(endpoint), `Backup UI must call the lifecycle endpoint containing ${endpoint}.`);
 }
@@ -98,6 +125,7 @@ for (const purpose of [
   'RESTORE_APPROVE',
   'RESTORE_DRY_RUN',
   'RESTORE_EXECUTE',
+  'RESTORE_VERIFY',
   'ROLLBACK_APPROVE',
   'ROLLBACK_EXECUTE',
 ]) {
@@ -106,12 +134,21 @@ for (const purpose of [
 
 assert(!script.includes('SHA-256 manifest/checksum hash:'), 'The UI must never accept a user-supplied verification checksum.');
 assert(script.includes("headers: { 'Idempotency-Key': idempotencyKey }"), 'Mutating recovery requests must carry an idempotency key.');
+assert(script.includes('sessionStorage.setItem(storageKey, value)'), 'Request idempotency keys must survive an ambiguous network retry.');
+assert(script.includes('clearBackupIdempotencyKey'), 'Successful operations must rotate their persisted idempotency key.');
+assert(script.includes('verifyRestoreTarget'), 'Pending RDS restores must expose a post-restore verification action.');
 assert(script.includes("if (normalized !== 'CANCELLED')"), 'Manual restore/rollback completion and unprotected rejection must be blocked in the UI.');
 assert(script.includes("payload: { approval_notes: notes }"), 'Checker approval notes must use the backend approval_notes contract.');
 assert(script.includes("confirmation_phrase: confirmationPhrase.trim()"), 'Restore and rollback execution must carry the typed confirmation phrase.');
 assert(script.includes("method: 'PATCH'") && script.includes("purpose: 'RESTORE_APPROVE'") && script.includes("purpose: 'ROLLBACK_APPROVE'"), 'Restore and rollback rejection must use checker MFA step-up before PATCH.');
 
 assert(page.includes('id="backup-step-up-modal"'), 'Backup UI must include an MFA step-up dialog.');
+assert(page.includes('id="backup-process-title"'), 'Backup UI must include a visible backup and restore process map.');
+assert(page.includes('id="backup-next-actions"'), 'Backup UI must include a live next-actions center.');
+assert(page.includes('id="backup-readiness-card"'), 'Backup UI must summarize verified recovery readiness.');
+assert(page.includes("focusBackupArea('sets', 'backup-request-panel')"), 'Backup UI must provide a direct Create Backup path.');
+assert(page.includes('Only verified artifacts can be restored.'), 'The process map must state when an artifact becomes usable.');
+assert(page.includes('A different admin checks it with MFA.'), 'The process map must show maker-checker approval and MFA.');
 assert(page.includes('autocomplete="one-time-code"'), 'MFA code input must use one-time-code autocomplete.');
 assert(page.includes('isolated dry-run'), 'Restore lifecycle guidance must disclose isolated dry-run validation.');
 assert(page.includes('maker-checker approval'), 'Recovery guidance must disclose maker-checker approval.');

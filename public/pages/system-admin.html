@@ -429,30 +429,92 @@
 </div>
 
 <div class="sysadmin-panel" id="panel-backups">
-  <div class="sysadmin-action-bar">
-    <div>
-      <h3 style="margin:0 0 4px;">Backup and Recovery</h3>
+  <div class="backup-command-hero">
+    <div class="backup-command-copy">
+      <span class="backup-command-eyebrow">Business continuity</span>
+      <h3>Backup and Restore Command Center</h3>
+      <p>Create verified recovery artifacts, monitor every protected step, and restore safely without guessing what comes next.</p>
+      <div class="backup-command-actions" aria-label="Backup and restore quick actions">
+        <button type="button" class="btn-sysadmin-primary" onclick="focusBackupArea('sets', 'backup-request-panel')">Create a Backup</button>
+        <button type="button" class="btn-sysadmin-outline" onclick="focusBackupArea('restore', 'restore-jobs-table')">Continue a Restore</button>
+        <button type="button" class="btn-sysadmin-outline" onclick="focusBackupArea('overview', 'backup-coverage-table')">Check Readiness</button>
+      </div>
     </div>
-    <button class="btn-sysadmin-outline" onclick="loadBackupLogs()">Refresh</button>
+    <aside class="backup-readiness-card" id="backup-readiness-card" aria-live="polite">
+      <span class="backup-readiness-label">Recovery readiness</span>
+      <strong>Loading status...</strong>
+      <small>Checking verified artifacts and protected workflows.</small>
+    </aside>
+  </div>
+
+  <div class="backup-process-board" aria-labelledby="backup-process-title">
+    <div class="backup-process-header">
+      <div>
+        <span class="backup-command-eyebrow">How the process works</span>
+        <h4 id="backup-process-title">A usable backup is created, verified, then restored through protected checks.</h4>
+      </div>
+      <button type="button" class="btn-sysadmin-outline backup-refresh-button" onclick="loadBackupLogs()">Refresh Status</button>
+    </div>
+
+    <div class="backup-process-lanes">
+      <section class="backup-process-lane" aria-label="Backup process">
+        <div class="backup-process-lane-title">
+          <span class="backup-process-lane-number">A</span>
+          <div><strong>Backup process</strong><small>Prepare a recovery artifact</small></div>
+        </div>
+        <ol class="backup-process-steps">
+          <li><span>1</span><div><strong>Request</strong><small>Choose type, modules, and storage.</small></div></li>
+          <li><span>2</span><div><strong>Run worker</strong><small>Create the encrypted artifact.</small></div></li>
+          <li><span>3</span><div><strong>Verify</strong><small>Check server checksum and integrity.</small></div></li>
+          <li><span>4</span><div><strong>Ready</strong><small>Only verified artifacts can be restored.</small></div></li>
+        </ol>
+      </section>
+
+      <section class="backup-process-lane backup-process-lane-restore" aria-label="Restore process">
+        <div class="backup-process-lane-title">
+          <span class="backup-process-lane-number">B</span>
+          <div><strong>Restore process</strong><small>Recover through controlled validation</small></div>
+        </div>
+        <ol class="backup-process-steps backup-process-steps-five">
+          <li><span>1</span><div><strong>Request</strong><small>Select a verified backup.</small></div></li>
+          <li><span>2</span><div><strong>Approve</strong><small>A different admin checks it with MFA.</small></div></li>
+          <li><span>3</span><div><strong>Dry-run</strong><small>Validate in an isolated target.</small></div></li>
+          <li><span>4</span><div><strong>Restore</strong><small>Execute with a fresh MFA check.</small></div></li>
+          <li><span>5</span><div><strong>Validate</strong><small>Confirm integrity and system health.</small></div></li>
+        </ol>
+      </section>
+    </div>
   </div>
 
   <div class="backup-recovery-tabs" role="tablist" aria-label="Backup and Recovery sections">
-    <button type="button" class="backup-recovery-tab active" data-backup-tab="overview" onclick="switchBackupRecoveryTab('overview')">Overview</button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="sets" onclick="switchBackupRecoveryTab('sets')">Backup Sets</button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="recovery" onclick="switchBackupRecoveryTab('recovery')">Module Recovery</button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')">Restore Jobs</button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')">Rollback Requests</button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')">Backup Settings</button>
+    <button type="button" class="backup-recovery-tab active" data-backup-tab="overview" onclick="switchBackupRecoveryTab('overview')"><strong>Overview</strong><small>Readiness and next actions</small></button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="sets" onclick="switchBackupRecoveryTab('sets')"><strong>Backups</strong><small>Create and verify</small></button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="recovery" onclick="switchBackupRecoveryTab('recovery')"><strong>Recovery Points</strong><small>Verified module versions</small></button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')"><strong>Restore</strong><small>Approval to validation</small></button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')"><strong>Rollback</strong><small>Controlled version recovery</small></button>
+    <button type="button" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')"><strong>Configuration</strong><small>Providers and safeguards</small></button>
   </div>
 
-  <div class="backup-recovery-note">
-    A backup request does not automatically overwrite source code or production data. Only artifacts reported by the backend as available and verified count as recovery coverage. Restore and rollback requests require maker-checker approval by a different authorized administrator plus fresh MFA step-up verification. Restore execution is blocked until its isolated dry-run and integrity checks pass. These technical recovery actions do not bypass HR or Payroll business approval workflows.
+  <div class="backup-recovery-note backup-safety-note">
+    <strong>Safety rule:</strong> A backup request does not automatically overwrite source code or production data. Only artifacts reported by the backend as available and verified count as recovery coverage. Restore and rollback require maker-checker approval by a different authorized administrator, fresh MFA, an isolated dry-run, and final integrity checks. These technical recovery actions do not bypass HR or Payroll business approval workflows.
   </div>
 
   <section class="backup-recovery-section active" data-backup-panel="overview">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Action center</span><h4>What needs attention now</h4></div>
+      <small>Actions are ordered by the safest next step allowed for your account.</small>
+    </div>
+    <div class="backup-next-actions" id="backup-next-actions" aria-live="polite">
+      <div class="backup-next-action backup-next-action-neutral"><strong>Loading recovery workflow...</strong><small>Checking queued backup and restore work.</small></div>
+    </div>
+
+    <div class="backup-section-heading backup-summary-heading">
+      <div><span class="backup-command-eyebrow">Recovery inventory</span><h4>Verified coverage summary</h4></div>
+      <small>Unverified or missing artifacts are never counted as ready.</small>
+    </div>
     <div class="backup-summary-grid" id="backup-summary-grid"></div>
 
-    <div class="sysadmin-table-wrapper backup-table-wrapper">
+    <div class="sysadmin-table-wrapper backup-table-wrapper" id="backup-coverage-table">
       <table class="sysadmin-table">
         <thead>
           <tr>
@@ -475,7 +537,11 @@
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="sets">
-    <div class="sysadmin-settings-card backup-request-panel">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Step A1</span><h4>Create a backup request</h4></div>
+      <small>After submitting, run the worker and independently verify the artifact in the table below.</small>
+    </div>
+    <div class="sysadmin-settings-card backup-request-panel" id="backup-request-panel">
       <div class="sysadmin-form-grid">
         <div>
           <label class="sysadmin-label">Backup Name</label>
@@ -503,14 +569,19 @@
       </div>
       <label class="sysadmin-label" style="margin-top:14px;">Covered Modules</label>
       <select id="backup-modules" class="sysadmin-input backup-module-select" multiple></select>
+      <small class="backup-field-help">All modules are selected by default. Use Ctrl/Command to select specific modules.</small>
       <label class="sysadmin-label" style="margin-top:14px;">Notes</label>
-      <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000"></textarea>
+      <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000" placeholder="Reason, change ticket, or recovery context"></textarea>
       <div class="modal-footer" style="padding:16px 0 0;">
-        <div style="flex:1"></div>
+        <small class="backup-submit-help">Submitting queues the request. It is not restorable until the worker and verification steps succeed.</small>
         <button class="btn-sysadmin-primary" onclick="requestBackup()">Create Backup Request</button>
       </div>
     </div>
 
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Steps A2-A4</span><h4>Run, verify, and use backup artifacts</h4></div>
+      <small>Use the Next step shown in each row.</small>
+    </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
         <thead>
@@ -534,6 +605,10 @@
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="recovery">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Recovery inventory</span><h4>Verified module recovery points</h4></div>
+      <small>A rollback request is enabled only when its recovery artifact is verified.</small>
+    </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
         <thead>
@@ -558,10 +633,14 @@
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="restore">
-    <div class="backup-recovery-note">
-      Lifecycle: awaiting approval &rarr; approved &rarr; isolated dry-run &rarr; execute &rarr; integrity verification &rarr; completed. Approval, dry-run, and execution each require a fresh MFA step-up challenge.
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Protected workflow</span><h4>Restore jobs</h4></div>
+      <small>Follow the Next step in each row; protected actions always request fresh MFA.</small>
     </div>
-    <div class="sysadmin-table-wrapper backup-table-wrapper">
+    <div class="backup-recovery-note">
+      <strong>Restore sequence:</strong> request &rarr; approval by a different admin &rarr; isolated dry-run &rarr; MFA-protected execution &rarr; integrity and health validation. A failed check stops the workflow.
+    </div>
+    <div class="sysadmin-table-wrapper backup-table-wrapper" id="restore-jobs-table">
       <table class="sysadmin-table">
         <thead>
           <tr>
@@ -586,6 +665,10 @@
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="rollback">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Protected workflow</span><h4>Rollback requests</h4></div>
+      <small>Rollback changes a deployed module version; it does not bypass business approvals.</small>
+    </div>
     <div class="backup-recovery-note">
       Rollback requests are available only from verified module recovery artifacts. A different authorized administrator must approve the request before MFA-protected execution and final integrity verification.
     </div>
@@ -612,6 +695,10 @@
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="settings">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Operational safeguards</span><h4>Backup and restore configuration</h4></div>
+      <small>Missing providers or validation targets can block the corresponding workflow step.</small>
+    </div>
     <div class="backup-settings-grid" id="backup-settings-grid"></div>
   </section>
 </div>
