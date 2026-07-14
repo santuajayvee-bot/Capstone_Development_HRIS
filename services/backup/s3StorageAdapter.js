@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const {
+  DeleteObjectsCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -356,6 +357,59 @@ class S3StorageAdapter {
       },
       manifest,
     };
+  }
+
+  async deleteArtifact({ location, expectedChecksum }) {
+    const expected = validateExpectedChecksum(expectedChecksum);
+    const { reference, manifestKey } = this.parseLocation(location);
+    let manifest;
+    try {
+      manifest = await this.getManifestByKey(manifestKey);
+    } catch (error) {
+      if (error?.code === 'BACKUP_ARTIFACT_MISSING') {
+        return { deleted: true, idempotent: true, provider: this.provider, location };
+      }
+      throw error;
+    }
+    if (
+      manifest.backupReference !== reference ||
+      manifest.artifact?.checksum !== expected ||
+      manifest.objectRoot !== this.keys(reference, expected).objectRoot
+    ) {
+      throw backupError('Retention checksum does not identify this S3 artifact.', 'BACKUP_RETENTION_IDENTITY_MISMATCH');
+    }
+    const entries = manifest.artifact.kind === 'FILE'
+      ? [{ path: 'payload' }]
+      : manifest.artifact.entries;
+    if (!Array.isArray(entries)) {
+      throw backupError('AWS S3 backup manifest has no artifact entries.', 'INVALID_BACKUP_MANIFEST');
+    }
+    const objectKeys = entries.map(entry => {
+      const relativePath = normalizeRelativePath(entry.path);
+      return manifest.artifact.kind === 'FILE'
+        ? `${manifest.objectRoot}/payload`
+        : `${manifest.objectRoot}/payload/${relativePath}`;
+    });
+    for (let offset = 0; offset < objectKeys.length; offset += 1000) {
+      const response = await this.client.send(new DeleteObjectsCommand({
+        Bucket: this.bucket,
+        Delete: {
+          Objects: objectKeys.slice(offset, offset + 1000).map(Key => ({ Key })),
+          Quiet: true,
+        },
+      }));
+      if (Array.isArray(response?.Errors) && response.Errors.length) {
+        throw backupError('AWS S3 could not delete all retained artifact objects.', 'BACKUP_RETENTION_DELETE_FAILED', { retryable: true });
+      }
+    }
+    const manifestDelete = await this.client.send(new DeleteObjectsCommand({
+      Bucket: this.bucket,
+      Delete: { Objects: [{ Key: manifestKey }], Quiet: true },
+    }));
+    if (Array.isArray(manifestDelete?.Errors) && manifestDelete.Errors.length) {
+      throw backupError('AWS S3 could not delete the retained artifact manifest.', 'BACKUP_RETENTION_DELETE_FAILED', { retryable: true });
+    }
+    return { deleted: true, idempotent: false, provider: this.provider, location };
   }
 
   async materializeArtifact({ location, expectedChecksum, destinationRoot }) {

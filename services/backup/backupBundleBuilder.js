@@ -81,6 +81,7 @@ class BackupBundleBuilder {
     this.maxFiles = options.maxFiles;
     this.maxBytes = options.maxBytes;
     this.environment = options.environment || process.env;
+    this.moduleCodeService = options.moduleCodeService || null;
   }
 
   async copySources(sources, destinationRoot, budget) {
@@ -132,6 +133,18 @@ class BackupBundleBuilder {
     await writePrivateJson(path.join(bundlePath, 'module-state', 'state.json'), state);
   }
 
+  async addSourceCode(bundlePath, context) {
+    if (!this.moduleCodeService) {
+      throw backupError('Module source-code backup service is not configured.', 'MODULE_CODE_BACKUP_NOT_CONFIGURED');
+    }
+    return this.moduleCodeService.capture({
+      destinationRoot: path.join(bundlePath, 'source-code'),
+      includedModules: context.includedModules,
+      appVersion: context.appVersion,
+      deploymentCommit: context.deploymentCommit,
+    });
+  }
+
   async build({ bundlePath, backupReference, backupType, includedModules, appVersion, deploymentCommit }) {
     await fs.promises.mkdir(bundlePath, { recursive: true, mode: 0o700 });
     const context = { backupReference, backupType, includedModules, appVersion, deploymentCommit };
@@ -140,10 +153,12 @@ class BackupBundleBuilder {
     const includesFiles = ['FILES', 'FULL_BACKUP'].includes(backupType);
     const includesConfiguration = ['CONFIGURATION', 'FULL_BACKUP'].includes(backupType);
     const includesModuleState = ['MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(backupType);
+    const includesSourceCode = ['DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(backupType);
     const database = includesDatabase ? await this.addDatabase(bundlePath) : null;
     if (includesFiles) await this.addFiles(bundlePath, budget);
     if (includesConfiguration) await this.addConfiguration(bundlePath, budget);
     if (includesModuleState) await this.addModuleState(bundlePath, context);
+    const sourceCode = includesSourceCode ? await this.addSourceCode(bundlePath, context) : null;
     await writePrivateJson(path.join(bundlePath, 'lgsv-backup.json'), {
       formatVersion: 1,
       backupReference,
@@ -157,10 +172,21 @@ class BackupBundleBuilder {
         files: includesFiles,
         configuration: includesConfiguration,
         moduleState: includesModuleState,
+        sourceCode: includesSourceCode,
       },
       databaseIntegrityCaptured: Boolean(database?.expectedIntegrity),
     });
-    return { database, components: { database: includesDatabase, files: includesFiles, configuration: includesConfiguration, moduleState: includesModuleState } };
+    return {
+      database,
+      sourceCode,
+      components: {
+        database: includesDatabase,
+        files: includesFiles,
+        configuration: includesConfiguration,
+        moduleState: includesModuleState,
+        sourceCode: includesSourceCode,
+      },
+    };
   }
 }
 

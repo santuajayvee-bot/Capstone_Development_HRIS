@@ -2,11 +2,15 @@
 
 const {
   CreateDBSnapshotCommand,
+  DeleteDBInstanceCommand,
+  DeleteDBSnapshotCommand,
   DescribeDBInstancesCommand,
   DescribeDBSnapshotsCommand,
+  ListTagsForResourceCommand,
   RDSClient,
   RestoreDBInstanceFromDBSnapshotCommand,
   waitUntilDBInstanceAvailable,
+  waitUntilDBInstanceDeleted,
   waitUntilDBSnapshotAvailable,
 } = require('@aws-sdk/client-rds');
 const crypto = require('crypto');
@@ -92,8 +96,10 @@ class RdsSnapshotAdapter {
     this.client = options.client || new RDSClient({ region: this.region });
     this.snapshotWaiter = options.snapshotWaiter || waitUntilDBSnapshotAvailable;
     this.instanceWaiter = options.instanceWaiter || waitUntilDBInstanceAvailable;
+    this.instanceDeleteWaiter = options.instanceDeleteWaiter || waitUntilDBInstanceDeleted;
     this.maxWaitSeconds = Math.max(60, Number(options.maxWaitSeconds || 1800));
     this.requireEncrypted = options.requireEncrypted !== false;
+    this.allowDeleteSnapshots = options.allowDeleteSnapshots === true;
   }
 
   parseLocation(location) {
@@ -151,6 +157,15 @@ class RdsSnapshotAdapter {
       if (['DBInstanceNotFound', 'DBInstanceNotFoundFault'].includes(error?.name) || Number(error?.$metadata?.httpStatusCode) === 404) {
         throw backupError('Restored RDS instance was not found.', 'RDS_RESTORE_TARGET_MISSING', { retryable: true });
       }
+      throw error;
+    }
+  }
+
+  async findInstance(instanceIdentifier) {
+    try {
+      return await this.describeInstance(instanceIdentifier);
+    } catch (error) {
+      if (error?.code === 'RDS_RESTORE_TARGET_MISSING') return null;
       throw error;
     }
   }
@@ -221,6 +236,60 @@ class RdsSnapshotAdapter {
     };
   }
 
+  async deleteArtifact({ location, expectedChecksum }) {
+    if (!this.allowDeleteSnapshots) {
+      throw backupError(
+        'RDS snapshot retention deletion is disabled. Explicit production opt-in is required.',
+        'RDS_RETENTION_DELETE_DISABLED'
+      );
+    }
+    const expected = validateExpectedChecksum(expectedChecksum);
+    const { snapshotIdentifier } = this.parseLocation(location);
+    if (!snapshotIdentifier.startsWith('lgsv-')) {
+      throw backupError('Only LGSV-managed RDS snapshots may be deleted.', 'UNSAFE_RDS_SNAPSHOT_DELETE');
+    }
+    const snapshot = await this.findSnapshot(snapshotIdentifier);
+    if (!snapshot) {
+      return { deleted: true, idempotent: true, provider: this.provider, location };
+    }
+    if (String(snapshot.Status || '').toLowerCase() === 'deleting') {
+      if (snapshot.DBInstanceIdentifier !== this.dbInstanceIdentifier || (this.requireEncrypted && !snapshot.Encrypted)) {
+        throw backupError('RDS deletion candidate failed source validation.', 'UNSAFE_RDS_SNAPSHOT_DELETE');
+      }
+      if (describeSnapshotArtifact(snapshot).checksum !== expected) {
+        throw backupError('Retention checksum does not identify this RDS snapshot.', 'BACKUP_RETENTION_IDENTITY_MISMATCH');
+      }
+      return {
+        deleted: false,
+        deletionPending: true,
+        idempotent: true,
+        provider: this.provider,
+        location,
+        snapshotIdentifier,
+      };
+    }
+    this.validateSnapshot(snapshot);
+    if (describeSnapshotArtifact(snapshot).checksum !== expected) {
+      throw backupError('Retention checksum does not identify this RDS snapshot.', 'BACKUP_RETENTION_IDENTITY_MISMATCH');
+    }
+    try {
+      await this.client.send(new DeleteDBSnapshotCommand({ DBSnapshotIdentifier: snapshotIdentifier }));
+    } catch (error) {
+      if (['DBSnapshotNotFound', 'DBSnapshotNotFoundFault'].includes(error?.name) || Number(error?.$metadata?.httpStatusCode) === 404) {
+        return { deleted: true, idempotent: true, provider: this.provider, location };
+      }
+      throw error;
+    }
+    return {
+      deleted: true,
+      deletionPending: true,
+      idempotent: false,
+      provider: this.provider,
+      location,
+      snapshotIdentifier,
+    };
+  }
+
   async validateRestoreCandidate({ location, expectedChecksum }) {
     const verification = await this.verifyStoredArtifact(location, expectedChecksum);
     return {
@@ -242,6 +311,8 @@ class RdsSnapshotAdapter {
     publiclyAccessible = false,
     tags = [],
     waitForAvailable = false,
+    recoveryPurpose = 'ControlledRestore',
+    drillReference = null,
   }) {
     const verification = await this.verifyStoredArtifact(location, expectedChecksum);
     if (!verification.valid) {
@@ -279,8 +350,12 @@ class RdsSnapshotAdapter {
       CopyTagsToSnapshot: true,
       Tags: [
         { Key: 'ManagedBy', Value: 'LGSV-HR' },
-        { Key: 'RecoveryPurpose', Value: 'ControlledRestore' },
-        ...tags.filter(tag => tag?.Key && tag?.Value).map(tag => ({ Key: String(tag.Key), Value: String(tag.Value) })),
+        { Key: 'RecoveryPurpose', Value: String(recoveryPurpose || 'ControlledRestore').slice(0, 120) },
+        { Key: 'SourceSnapshotIdentifier', Value: snapshotIdentifier },
+        ...(drillReference ? [{ Key: 'DrillReference', Value: String(drillReference).slice(0, 120) }] : []),
+        ...tags
+          .filter(tag => tag?.Key && tag?.Value && !['ManagedBy', 'RecoveryPurpose', 'SourceSnapshotIdentifier', 'DrillReference'].includes(String(tag.Key)))
+          .map(tag => ({ Key: String(tag.Key).slice(0, 120), Value: String(tag.Value).slice(0, 240) })),
       ],
     }));
     if (waitForAvailable) {
@@ -315,7 +390,7 @@ class RdsSnapshotAdapter {
     const status = String(instance.DBInstanceStatus || '').toLowerCase();
     const pending = status !== 'available';
     const encrypted = instance.StorageEncrypted === true;
-    const privateNetwork = instance.PubliclyAccessible !== true;
+    const privateNetwork = instance.PubliclyAccessible === false;
     const endpoint = instance.Endpoint?.Address || null;
     const port = Number(instance.Endpoint?.Port || instance.Port || 3306);
     const snapshotIdentifier = this.parseLocation(location).snapshotIdentifier;
@@ -334,6 +409,58 @@ class RdsSnapshotAdapter {
       engineMatches,
       artifactVerification: verification,
     };
+  }
+
+  async deleteRestoreDrillInstance({
+    location,
+    newDbInstanceIdentifier,
+    drillReference,
+    waitForDeleted = true,
+  }) {
+    const target = validateRdsIdentifier(newDbInstanceIdentifier, 'RDS restore drill target identifier');
+    if (target === this.dbInstanceIdentifier || !target.startsWith('lgsv-restore-drill-')) {
+      throw backupError('Only isolated LGSV restore-drill instances may be deleted.', 'UNSAFE_RDS_DRILL_DELETE');
+    }
+    const instance = await this.findInstance(target);
+    if (!instance) {
+      return { deleted: true, idempotent: true, targetInstanceIdentifier: target };
+    }
+    const expectedSnapshot = this.parseLocation(location).snapshotIdentifier;
+    if (
+      (instance.DBSnapshotIdentifier && instance.DBSnapshotIdentifier !== expectedSnapshot) ||
+      instance.StorageEncrypted !== true ||
+      instance.PubliclyAccessible !== false ||
+      !instance.DBInstanceArn
+    ) {
+      throw backupError('RDS restore-drill target failed deletion safety checks.', 'UNSAFE_RDS_DRILL_DELETE');
+    }
+    const tagResponse = await this.client.send(new ListTagsForResourceCommand({ ResourceName: instance.DBInstanceArn }));
+    const tags = new Map((tagResponse?.TagList || []).map(tag => [String(tag.Key || ''), String(tag.Value || '')]));
+    if (
+      tags.get('ManagedBy') !== 'LGSV-HR' ||
+      tags.get('RecoveryPurpose') !== 'ScheduledRestoreDrill' ||
+      tags.get('SourceSnapshotIdentifier') !== expectedSnapshot ||
+      tags.get('DrillReference') !== String(drillReference || '').slice(0, 120)
+    ) {
+      throw backupError('RDS restore-drill ownership tags do not match.', 'UNSAFE_RDS_DRILL_DELETE');
+    }
+    if (String(instance.DBInstanceStatus || '').toLowerCase() !== 'deleting') {
+      await this.client.send(new DeleteDBInstanceCommand({
+        DBInstanceIdentifier: target,
+        SkipFinalSnapshot: true,
+        DeleteAutomatedBackups: true,
+      }));
+    }
+    if (waitForDeleted) {
+      const waiterResult = await this.instanceDeleteWaiter(
+        { client: this.client, maxWaitTime: this.maxWaitSeconds, minDelay: 20, maxDelay: 60 },
+        { DBInstanceIdentifier: target }
+      );
+      if (waiterResult?.state && waiterResult.state !== 'SUCCESS') {
+        throw backupError('Disposable RDS restore-drill instance was not deleted in time.', 'RDS_DRILL_CLEANUP_FAILED', { retryable: true });
+      }
+    }
+    return { deleted: true, idempotent: false, targetInstanceIdentifier: target, finalSnapshotCreated: false };
   }
 }
 

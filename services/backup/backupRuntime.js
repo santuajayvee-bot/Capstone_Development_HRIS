@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -9,6 +10,7 @@ const { backupError } = require('./backupErrors');
 const { copyRegularTree, isInside, removeTemporaryTree, resolveInside, secureRemoveTemporaryTree, assertSafeBackupReference } = require('./fileTree');
 const { LocalStorageAdapter } = require('./localStorageAdapter');
 const { MySqlBackupService } = require('./mysqlBackupService');
+const { ModuleCodeService } = require('./moduleCodeService');
 const { RdsSnapshotAdapter } = require('./rdsSnapshotAdapter');
 const { S3StorageAdapter } = require('./s3StorageAdapter');
 const { compareIntegrityReports } = require('./databaseIntegrity');
@@ -82,6 +84,12 @@ function optionalConnectionFromEnvironment(environment, prefix) {
   return connection.host && connection.user && connection.password ? connection : null;
 }
 
+function rdsDrillInstanceIdentifier(drillReference) {
+  const reference = assertSafeBackupReference(drillReference);
+  const suffix = crypto.createHash('sha256').update(reference, 'utf8').digest('hex').slice(0, 20);
+  return `lgsv-restore-drill-${suffix}`;
+}
+
 class BackupRuntime {
   constructor(options = {}) {
     this.adapters = new Map();
@@ -101,6 +109,7 @@ class BackupRuntime {
     this.rdsRestoreOptions = options.rdsRestoreOptions || {};
     this.rdsVerificationConnection = options.rdsVerificationConnection || null;
     this.captureRowCounts = Boolean(options.captureRowCounts);
+    this.moduleCodeService = options.moduleCodeService || null;
   }
 
   async initialize() {
@@ -221,6 +230,14 @@ class BackupRuntime {
     return this.adapterFor(storageProvider).verifyStoredArtifact(storageLocation, expectedChecksum);
   }
 
+  async deleteArtifact({ storageProvider, storageLocation, expectedChecksum }) {
+    const adapter = this.adapterFor(storageProvider);
+    if (typeof adapter.deleteArtifact !== 'function') {
+      throw backupError(`${adapter.provider} backup deletion is not configured.`, 'BACKUP_RETENTION_DELETE_UNSUPPORTED');
+    }
+    return adapter.deleteArtifact({ location: storageLocation, expectedChecksum });
+  }
+
   async validateBundle(artifactPath, expected = {}) {
     const stat = await fs.promises.lstat(artifactPath);
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
@@ -292,6 +309,7 @@ class BackupRuntime {
       ];
       let databaseIntegrity = null;
       let safeToRestore = true;
+      let sourceCodeValidation = null;
       if (DATABASE_BACKUP_TYPES.has(type)) {
         if (!restoreConnection) {
           safeToRestore = false;
@@ -309,10 +327,31 @@ class BackupRuntime {
           });
         }
       }
+      if (metadata?.components?.sourceCode) {
+        if (!this.moduleCodeService) {
+          safeToRestore = false;
+          checks.push({ name: 'Module source validation', status: 'BLOCKED', message: 'Module source-code validation is not configured.' });
+        } else {
+          sourceCodeValidation = await this.moduleCodeService.validateComponent(path.join(materialized.artifactPath, 'source-code'));
+          checks.push({
+            name: 'Module source validation',
+            status: sourceCodeValidation.valid ? 'PASS' : 'FAIL',
+            message: sourceCodeValidation.valid
+              ? `${sourceCodeValidation.fileCount} allowlisted source file(s) passed checksum and syntax validation.`
+              : 'Recovered module source did not pass validation.',
+          });
+          safeToRestore = safeToRestore && sourceCodeValidation.valid;
+        }
+      }
       return {
         safeToRestore,
         artifactVerification: materialized.verification,
         databaseIntegrity,
+        sourceCodeValidation: sourceCodeValidation ? {
+          valid: sourceCodeValidation.valid,
+          fileCount: sourceCodeValidation.fileCount,
+          sizeBytes: sourceCodeValidation.sizeBytes,
+        } : null,
         inventory: {
           kind: materialized.descriptor.kind,
           fileCount: materialized.descriptor.fileCount,
@@ -335,12 +374,14 @@ class BackupRuntime {
     try {
       const components = [];
       const componentNames = backupType === 'FULL_BACKUP'
-        ? ['files', 'configuration', 'module-state']
+        ? ['files', 'configuration', 'module-state', 'source-code']
         : backupType === 'FILES'
           ? ['files']
           : backupType === 'CONFIGURATION'
             ? ['configuration']
-            : ['module-state'];
+            : backupType === 'DEPLOYMENT_VERSION'
+              ? ['module-state', 'source-code']
+              : ['module-state'];
       for (const component of componentNames) {
         const source = path.join(artifactPath, component);
         const exists = await fs.promises.lstat(source).then(stat => stat.isDirectory() && !stat.isSymbolicLink()).catch(() => false);
@@ -386,14 +427,20 @@ class BackupRuntime {
     storageLocation,
     expectedChecksum,
     newRdsInstanceIdentifier,
+    affectedModule,
+    rollback = false,
   }) {
-    if (!this.liveRestoreEnabled) {
-      throw backupError('Live restore execution is disabled by server configuration.', 'LIVE_RESTORE_DISABLED');
-    }
     await this.initialize();
     const reference = assertSafeBackupReference(backupReference);
     const type = normalizeEnum(backupType, BACKUP_TYPES, 'Backup type');
     const provider = normalizeEnum(storageProvider, STORAGE_PROVIDERS, 'Storage provider');
+    const codeRollback = Boolean(rollback && ['DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(type));
+    if (rollback && !codeRollback) {
+      throw backupError('Module rollback requires a deployment-version or full backup artifact.', 'MODULE_CODE_ARTIFACT_REQUIRED');
+    }
+    if (!codeRollback && !this.liveRestoreEnabled) {
+      throw backupError('Live restore execution is disabled by server configuration.', 'LIVE_RESTORE_DISABLED');
+    }
     const adapter = this.adapterFor(provider);
     if (provider === 'RDS_SNAPSHOT') {
       if (!newRdsInstanceIdentifier) throw backupError('A new RDS instance identifier is required.', 'RDS_RESTORE_CONFIG_MISSING');
@@ -422,7 +469,36 @@ class BackupRuntime {
         expectedChecksum,
         workspace: path.join(jobDirectory, 'materialized'),
       });
-      await this.validateBundle(materialized.artifactPath, { backupReference: reference, backupType: type });
+      const metadata = await this.validateBundle(materialized.artifactPath, { backupReference: reference, backupType: type });
+      if (codeRollback) {
+        if (provider === 'RDS_SNAPSHOT') throw backupError('RDS snapshots cannot contain module source code.', 'MODULE_CODE_ARTIFACT_REQUIRED');
+        if (!metadata?.components?.sourceCode || !this.moduleCodeService) {
+          throw backupError('Verified module source code is missing from this recovery artifact.', 'MODULE_CODE_ARTIFACT_REQUIRED');
+        }
+        const codeCutover = await this.moduleCodeService.applyModuleRollback({
+          componentPath: path.join(materialized.artifactPath, 'source-code'),
+          affectedModule,
+          backupReference: reference,
+        });
+        return {
+          restored: Boolean(codeCutover.cutoverApplied && codeCutover.integrityPassed),
+          backupReference: reference,
+          backupType: type,
+          artifactVerification: materialized.verification,
+          databaseRestore: null,
+          recoveredComponents: { sourceCode: codeCutover, requiresCutover: false },
+          integrityPassed: Boolean(codeCutover.integrityPassed),
+          integrityReport: {
+            artifactChecksum: expectedChecksum,
+            artifactVerified: Boolean(materialized.verification?.valid),
+            sourceCode: codeCutover,
+          },
+          restoredChecksum: codeCutover.integrityPassed ? expectedChecksum : null,
+          verified: Boolean(materialized.verification?.valid && codeCutover.verified),
+          pendingVerification: false,
+          restartRequired: Boolean(codeCutover.restartRequired),
+        };
+      }
       let databaseRestore = null;
       if (DATABASE_BACKUP_TYPES.has(type)) {
         if (!this.dryRunConnection || !this.liveRestoreConnection || !this.liveRestoreDatabaseName) {
@@ -543,6 +619,125 @@ class BackupRuntime {
       },
     };
   }
+
+  async runRdsRestoreDrill({
+    backupReference,
+    storageLocation,
+    expectedChecksum,
+    expectedIntegrity,
+    drillReference,
+  }) {
+    const reference = assertSafeBackupReference(backupReference);
+    const safeDrillReference = assertSafeBackupReference(drillReference);
+    const adapter = this.adapterFor('RDS_SNAPSHOT');
+    const expectedDatabaseIntegrity = expectedIntegrity?.database || expectedIntegrity?.integrityReport?.database || null;
+    if (!expectedDatabaseIntegrity) {
+      throw backupError('RDS backup has no source database integrity evidence.', 'RDS_DRILL_INTEGRITY_METADATA_MISSING');
+    }
+    if (
+      !this.rdsVerificationConnection?.user ||
+      !this.rdsVerificationConnection?.password ||
+      !this.rdsVerificationConnection?.database ||
+      this.rdsVerificationConnection?.sslEnabled !== true
+    ) {
+      throw backupError('RDS restore-drill verification credentials are incomplete.', 'RDS_RESTORE_VERIFY_CONFIG_MISSING');
+    }
+    if (
+      expectedDatabaseIntegrity.databaseName &&
+      this.rdsVerificationConnection.database !== expectedDatabaseIntegrity.databaseName
+    ) {
+      throw backupError('RDS restore-drill verification database does not match the backup evidence.', 'RDS_VERIFY_DATABASE_MISMATCH');
+    }
+    if (
+      !this.rdsRestoreOptions.dbInstanceClass ||
+      !this.rdsRestoreOptions.dbSubnetGroupName ||
+      !Array.isArray(this.rdsRestoreOptions.vpcSecurityGroupIds) ||
+      !this.rdsRestoreOptions.vpcSecurityGroupIds.length ||
+      this.rdsRestoreOptions.waitForAvailable !== true
+    ) {
+      throw backupError('Isolated RDS restore-drill infrastructure is not fully configured.', 'RDS_DRILL_CONFIG_MISSING');
+    }
+
+    const target = rdsDrillInstanceIdentifier(safeDrillReference);
+    let primaryError = null;
+    let report = null;
+    let cleanup = null;
+    let restoreAttempted = false;
+    try {
+      // A deterministic target makes a crashed drill recoverable. Any orphan
+      // must pass snapshot and ownership-tag checks before it can be removed.
+      await adapter.deleteRestoreDrillInstance({
+        location: storageLocation,
+        newDbInstanceIdentifier: target,
+        drillReference: safeDrillReference,
+        waitForDeleted: true,
+      });
+      restoreAttempted = true;
+      const initiated = await adapter.restoreToNewInstance({
+        location: storageLocation,
+        expectedChecksum,
+        newDbInstanceIdentifier: target,
+        ...this.rdsRestoreOptions,
+        publiclyAccessible: false,
+        waitForAvailable: true,
+        recoveryPurpose: 'ScheduledRestoreDrill',
+        drillReference: safeDrillReference,
+      });
+      const verification = await this.verifyPendingRestore({
+        backupType: 'DATABASE',
+        storageProvider: 'RDS_SNAPSHOT',
+        storageLocation,
+        expectedChecksum,
+        restoreTarget: target,
+        expectedIntegrity: { database: expectedDatabaseIntegrity },
+      });
+      if (verification.pendingVerification || !verification.integrityPassed) {
+        throw backupError('Disposable RDS restore did not pass post-restore integrity checks.', 'RDS_DRILL_INTEGRITY_FAILED');
+      }
+      report = {
+        safeToRestore: true,
+        backupReference: reference,
+        targetInstanceIdentifier: target,
+        initiated,
+        infrastructure: verification.infrastructure,
+        integrityReport: verification.integrityReport,
+        liveRestoreApplied: false,
+        disposableRestore: true,
+      };
+    } catch (error) {
+      primaryError = error;
+    }
+
+    if (restoreAttempted) {
+      try {
+        cleanup = await adapter.deleteRestoreDrillInstance({
+          location: storageLocation,
+          newDbInstanceIdentifier: target,
+          drillReference: safeDrillReference,
+          waitForDeleted: true,
+        });
+      } catch (error) {
+        throw backupError(
+          'Disposable RDS restore-drill cleanup failed. Immediate administrator review is required.',
+          'RDS_DRILL_CLEANUP_FAILED',
+          { cause: error, retryable: true, details: { priorErrorCode: primaryError?.code || null } }
+        );
+      }
+    }
+    if (restoreAttempted && cleanup?.deleted !== true) {
+      throw backupError(
+        'Disposable RDS restore-drill cleanup did not confirm deletion.',
+        'RDS_DRILL_CLEANUP_FAILED',
+        { retryable: true, details: { priorErrorCode: primaryError?.code || null } }
+      );
+    }
+    if (primaryError) throw primaryError;
+    return {
+      ...report,
+      cleanup,
+      disposableInstanceDeleted: cleanup?.deleted === true,
+    };
+  }
 }
 
 function createBackupRuntimeFromEnv(options = {}) {
@@ -553,11 +748,22 @@ function createBackupRuntimeFromEnv(options = {}) {
   const liveRestoreConnection = options.liveRestoreConnection || optionalConnectionFromEnvironment(environment, 'BACKUP_RESTORE_DB');
   const rdsVerificationCandidate = connectionFromEnvironment(environment, 'BACKUP_RDS_VERIFY_DB');
   const rdsVerificationConnection = options.rdsVerificationConnection || (
-    rdsVerificationCandidate.user && rdsVerificationCandidate.password
+    rdsVerificationCandidate.user && rdsVerificationCandidate.password && rdsVerificationCandidate.database
       ? rdsVerificationCandidate
       : null
   );
   const workRoot = environment.BACKUP_WORK_ROOT || path.join(os.tmpdir(), 'lgsv-hr-backup-runtime');
+  const moduleCodeService = options.moduleCodeService || new ModuleCodeService({
+    sourceRoot: environment.BACKUP_CODE_SOURCE_ROOT || process.cwd(),
+    activeRoot: environment.BACKUP_CODE_ACTIVE_ROOT || environment.BACKUP_CODE_SOURCE_ROOT || process.cwd(),
+    transactionRoot: environment.BACKUP_CODE_TRANSACTION_ROOT,
+    moduleSourceMap: options.moduleSourceMap,
+    maxFiles: environment.BACKUP_CODE_MAX_FILES || environment.BACKUP_MAX_FILES,
+    maxBytes: environment.BACKUP_CODE_MAX_BYTES || environment.BACKUP_MAX_BYTES,
+    // Local development is immediately usable; production must opt in after
+    // pointing BACKUP_CODE_ACTIVE_ROOT at its managed release source tree.
+    cutoverEnabled: parseBoolean(environment.BACKUP_CODE_CUTOVER_ENABLED, nodeEnv !== 'production'),
+  });
   const mysqlBackupService = options.mysqlBackupService || new MySqlBackupService({
     mysqldumpPath: environment.MYSQLDUMP_PATH || 'mysqldump',
     mysqlPath: environment.MYSQL_PATH || 'mysql',
@@ -593,6 +799,7 @@ function createBackupRuntimeFromEnv(options = {}) {
     maxFiles: environment.BACKUP_MAX_FILES,
     maxBytes: environment.BACKUP_MAX_BYTES,
     environment,
+    moduleCodeService,
   });
 
   const adapters = [...(options.adapters || [])];
@@ -619,6 +826,7 @@ function createBackupRuntimeFromEnv(options = {}) {
       dbInstanceIdentifier: environment.AWS_RDS_DB_INSTANCE_IDENTIFIER,
       maxWaitSeconds: environment.AWS_RDS_SNAPSHOT_WAIT_SECONDS,
       requireEncrypted: true,
+      allowDeleteSnapshots: parseBoolean(environment.AWS_RDS_ALLOW_RETENTION_DELETE),
     }));
   }
 
@@ -645,6 +853,7 @@ function createBackupRuntimeFromEnv(options = {}) {
     },
     rdsVerificationConnection,
     captureRowCounts: parseBoolean(environment.BACKUP_CAPTURE_ROW_COUNTS),
+    moduleCodeService,
   });
 }
 
@@ -657,4 +866,5 @@ module.exports = {
   optionalConnectionFromEnvironment,
   parseBoolean,
   parseModuleList,
+  rdsDrillInstanceIdentifier,
 };

@@ -435,9 +435,10 @@
       <h3>Backup and Restore Command Center</h3>
       <p>Create verified recovery artifacts, monitor every protected step, and restore safely without guessing what comes next.</p>
       <div class="backup-command-actions" aria-label="Backup and restore quick actions">
-        <button type="button" class="btn-sysadmin-primary" onclick="focusBackupArea('sets', 'backup-request-panel')">Create a Backup</button>
-        <button type="button" class="btn-sysadmin-outline" onclick="focusBackupArea('restore', 'restore-jobs-table')">Continue a Restore</button>
-        <button type="button" class="btn-sysadmin-outline" onclick="focusBackupArea('overview', 'backup-coverage-table')">Check Readiness</button>
+        <button type="button" class="btn-sysadmin-primary backup-quick-action" onclick="focusBackupArea('sets', 'backup-request-panel')"><span aria-hidden="true">+</span>Create a Backup</button>
+        <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('restore', 'restore-jobs-table')"><span aria-hidden="true">&#8634;</span>Continue a Restore</button>
+        <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('inbox', 'backup-notification-inbox')"><span aria-hidden="true">&#128276;</span>Review Approvals</button>
+        <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('overview', 'backup-coverage-table')"><span aria-hidden="true">&#10003;</span>Check Readiness</button>
       </div>
     </div>
     <aside class="backup-readiness-card" id="backup-readiness-card" aria-live="polite">
@@ -453,7 +454,10 @@
         <span class="backup-command-eyebrow">How the process works</span>
         <h4 id="backup-process-title">A usable backup is created, verified, then restored through protected checks.</h4>
       </div>
-      <button type="button" class="btn-sysadmin-outline backup-refresh-button" onclick="loadBackupLogs()">Refresh Status</button>
+      <div class="backup-refresh-group">
+        <small id="backup-last-updated" class="sysadmin-muted" aria-live="polite">Not refreshed yet</small>
+        <button type="button" id="backup-refresh-button" class="btn-sysadmin-outline backup-refresh-button" onclick="loadBackupLogs()"><span aria-hidden="true">&#8635;</span> Refresh Status</button>
+      </div>
     </div>
 
     <div class="backup-process-lanes">
@@ -487,12 +491,15 @@
   </div>
 
   <div class="backup-recovery-tabs" role="tablist" aria-label="Backup and Recovery sections">
-    <button type="button" class="backup-recovery-tab active" data-backup-tab="overview" onclick="switchBackupRecoveryTab('overview')"><strong>Overview</strong><small>Readiness and next actions</small></button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="sets" onclick="switchBackupRecoveryTab('sets')"><strong>Backups</strong><small>Create and verify</small></button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="recovery" onclick="switchBackupRecoveryTab('recovery')"><strong>Recovery Points</strong><small>Verified module versions</small></button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')"><strong>Restore</strong><small>Approval to validation</small></button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')"><strong>Rollback</strong><small>Controlled version recovery</small></button>
-    <button type="button" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')"><strong>Configuration</strong><small>Providers and safeguards</small></button>
+    <button type="button" role="tab" aria-selected="true" class="backup-recovery-tab active" data-backup-tab="overview" onclick="switchBackupRecoveryTab('overview')"><strong>Overview</strong><small>Readiness and next actions</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="sets" onclick="switchBackupRecoveryTab('sets')"><strong>Backups</strong><small>Create and verify</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="recovery" onclick="switchBackupRecoveryTab('recovery')"><strong>Recovery Points</strong><small>Verified module versions</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')"><strong>Restore</strong><small>Approval to validation</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')"><strong>Rollback</strong><small>Controlled version recovery</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="automation" onclick="switchBackupRecoveryTab('automation')"><strong>Automation</strong><small>Schedules and retention</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="inbox" onclick="switchBackupRecoveryTab('inbox')"><strong>Checker Inbox <span id="backup-notification-count" class="backup-tab-count" hidden>0</span></strong><small>Approvals and alerts</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="drills" onclick="switchBackupRecoveryTab('drills')"><strong>Restore Drills</strong><small>Scheduled dry-runs</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')"><strong>Configuration</strong><small>Providers and safeguards</small></button>
   </div>
 
   <div class="backup-recovery-note backup-safety-note">
@@ -514,6 +521,20 @@
     </div>
     <div class="backup-summary-grid" id="backup-summary-grid"></div>
 
+    <div class="backup-filter-toolbar" role="search" aria-label="Search protected modules">
+      <label class="backup-search-field" for="backup-coverage-search">
+        <span class="backup-search-icon" aria-hidden="true">&#128269;</span>
+        <input id="backup-coverage-search" class="sysadmin-input" type="search" placeholder="Search module name or key..." autocomplete="off" oninput="filterBackupCoverage()" />
+      </label>
+      <select id="backup-coverage-readiness-filter" class="sysadmin-input backup-filter-select" aria-label="Filter modules by recovery readiness" onchange="filterBackupCoverage()">
+        <option value="ALL">All readiness</option>
+        <option value="READY">Recovery ready</option>
+        <option value="NEEDS_BACKUP">Needs verified backup</option>
+        <option value="MAINTENANCE">Under maintenance</option>
+      </select>
+      <span id="backup-coverage-results" class="backup-filter-results" aria-live="polite">0 modules</span>
+      <button type="button" class="btn-sysadmin-outline backup-filter-clear" onclick="clearBackupCoverageFilters()">Clear filters</button>
+    </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper" id="backup-coverage-table">
       <table class="sysadmin-table">
         <thead>
@@ -553,9 +574,9 @@
             <option value="DATABASE">Database</option>
             <option value="FILES">Files</option>
             <option value="CONFIGURATION">Configuration</option>
-            <option value="MODULE_STATE">Module State</option>
-            <option value="DEPLOYMENT_VERSION">Deployment Version</option>
-            <option value="FULL_BACKUP">Full Backup</option>
+            <option value="MODULE_STATE">Module State (metadata only)</option>
+            <option value="DEPLOYMENT_VERSION">Deployment Version (module source code)</option>
+            <option value="FULL_BACKUP">Full Backup (data, files, config, and source code)</option>
           </select>
         </div>
         <div>
@@ -567,20 +588,63 @@
           </select>
         </div>
       </div>
-      <label class="sysadmin-label" style="margin-top:14px;">Covered Modules</label>
-      <select id="backup-modules" class="sysadmin-input backup-module-select" multiple></select>
-      <small class="backup-field-help">All modules are selected by default. Use Ctrl/Command to select specific modules.</small>
+      <fieldset class="backup-module-picker-fieldset">
+        <legend class="sysadmin-label">Covered Modules</legend>
+        <div class="backup-module-picker-toolbar">
+          <label class="backup-search-field" for="backup-module-picker-search">
+            <span class="backup-search-icon" aria-hidden="true">&#128269;</span>
+            <input id="backup-module-picker-search" class="sysadmin-input" type="search" placeholder="Search modules to include..." autocomplete="off" oninput="filterBackupModulePicker(this.value)" />
+          </label>
+          <div class="backup-module-picker-actions">
+            <button type="button" class="btn-sysadmin-outline" onclick="selectAllBackupModules(true)">Select all</button>
+            <button type="button" class="btn-sysadmin-outline" onclick="selectAllBackupModules(false)">Clear</button>
+          </div>
+        </div>
+        <div class="backup-module-picker-meta">
+          <strong id="backup-module-selection-count">0 modules selected</strong>
+          <small>Choose at least one module. Selection is preserved while you search.</small>
+        </div>
+        <div id="backup-module-picker" class="backup-module-picker" aria-live="polite"></div>
+        <select id="backup-modules" class="backup-module-select backup-native-module-select" multiple tabindex="-1" aria-hidden="true"></select>
+      </fieldset>
+      <small class="backup-field-help"><strong>For code rollback:</strong> choose Deployment Version. It captures actual allowlisted module files; Module State stores metadata only.</small>
       <label class="sysadmin-label" style="margin-top:14px;">Notes</label>
       <textarea id="backup-notes" class="sysadmin-textarea" maxlength="2000" placeholder="Reason, change ticket, or recovery context"></textarea>
       <div class="modal-footer" style="padding:16px 0 0;">
         <small class="backup-submit-help">Submitting queues the request. It is not restorable until the worker and verification steps succeed.</small>
-        <button class="btn-sysadmin-primary" onclick="requestBackup()">Create Backup Request</button>
+        <button type="button" id="backup-create-button" class="btn-sysadmin-primary backup-submit-button" onclick="requestBackup()"><span aria-hidden="true">+</span> Create Backup Request</button>
       </div>
     </div>
 
     <div class="backup-section-heading">
       <div><span class="backup-command-eyebrow">Steps A2-A4</span><h4>Run, verify, and use backup artifacts</h4></div>
       <small>Use the Next step shown in each row.</small>
+    </div>
+    <div class="backup-filter-toolbar backup-filter-toolbar-wide" role="search" aria-label="Search backup history">
+      <label class="backup-search-field" for="backup-history-search">
+        <span class="backup-search-icon" aria-hidden="true">&#128269;</span>
+        <input id="backup-history-search" class="sysadmin-input" type="search" placeholder="Search reference, name, module, or provider..." autocomplete="off" oninput="filterBackupHistory()" />
+      </label>
+      <select id="backup-history-type-filter" class="sysadmin-input backup-filter-select" aria-label="Filter backups by type" onchange="filterBackupHistory()">
+        <option value="ALL">All backup types</option>
+        <option value="DATABASE">Database</option>
+        <option value="FILES">Files</option>
+        <option value="CONFIGURATION">Configuration</option>
+        <option value="MODULE_STATE">Module state</option>
+        <option value="DEPLOYMENT_VERSION">Deployment version</option>
+        <option value="FULL_BACKUP">Full backup</option>
+      </select>
+      <select id="backup-history-status-filter" class="sysadmin-input backup-filter-select" aria-label="Filter backups by lifecycle status" onchange="filterBackupHistory()">
+        <option value="ALL">All statuses</option>
+        <option value="PENDING">Pending</option>
+        <option value="RUNNING">Running</option>
+        <option value="COMPLETED">Needs verification</option>
+        <option value="VERIFIED">Verified</option>
+        <option value="FAILED">Failed</option>
+        <option value="CANCELLED">Cancelled</option>
+      </select>
+      <span id="backup-history-results" class="backup-filter-results" aria-live="polite">0 backups</span>
+      <button type="button" class="btn-sysadmin-outline backup-filter-clear" onclick="clearBackupHistoryFilters()">Clear filters</button>
     </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
@@ -602,12 +666,35 @@
         </tbody>
       </table>
     </div>
+    <nav class="backup-pagination" id="backup-history-pagination" aria-label="Backup history pages">
+      <span id="backup-history-page-summary" aria-live="polite">Page 1</span>
+      <label>Rows
+        <select class="sysadmin-input" aria-label="Backup history rows per page" onchange="changeBackupPageSize('backups', this.value)">
+          <option value="10">10</option><option value="25" selected>25</option><option value="50">50</option>
+        </select>
+      </label>
+      <button type="button" id="backup-history-prev" class="btn-sysadmin-outline" onclick="changeBackupPage('backups', -1)">Previous</button>
+      <button type="button" id="backup-history-next" class="btn-sysadmin-outline" onclick="changeBackupPage('backups', 1)">Next</button>
+    </nav>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="recovery">
     <div class="backup-section-heading">
       <div><span class="backup-command-eyebrow">Recovery inventory</span><h4>Verified module recovery points</h4></div>
       <small>A rollback request is enabled only when its recovery artifact is verified.</small>
+    </div>
+    <div class="backup-filter-toolbar" role="search" aria-label="Search module recovery points">
+      <label class="backup-search-field" for="backup-recovery-search">
+        <span class="backup-search-icon" aria-hidden="true">&#128269;</span>
+        <input id="backup-recovery-search" class="sysadmin-input" type="search" placeholder="Search module or backup reference..." autocomplete="off" oninput="filterModuleRecoveryPoints()" />
+      </label>
+      <select id="backup-recovery-readiness-filter" class="sysadmin-input backup-filter-select" aria-label="Filter recovery point readiness" onchange="filterModuleRecoveryPoints()">
+        <option value="ALL">All recovery points</option>
+        <option value="READY">Rollback ready</option>
+        <option value="NOT_READY">Not ready</option>
+      </select>
+      <span id="backup-recovery-results" class="backup-filter-results" aria-live="polite">0 recovery points</span>
+      <button type="button" class="btn-sysadmin-outline backup-filter-clear" onclick="clearModuleRecoveryFilters()">Clear filters</button>
     </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
@@ -630,6 +717,16 @@
         </tbody>
       </table>
     </div>
+    <nav class="backup-pagination" id="backup-recovery-pagination" aria-label="Recovery point pages">
+      <span id="backup-recovery-page-summary" aria-live="polite">Page 1</span>
+      <label>Rows
+        <select class="sysadmin-input" aria-label="Recovery point rows per page" onchange="changeBackupPageSize('recovery', this.value)">
+          <option value="10">10</option><option value="25" selected>25</option><option value="50">50</option>
+        </select>
+      </label>
+      <button type="button" id="backup-recovery-prev" class="btn-sysadmin-outline" onclick="changeBackupPage('recovery', -1)">Previous</button>
+      <button type="button" id="backup-recovery-next" class="btn-sysadmin-outline" onclick="changeBackupPage('recovery', 1)">Next</button>
+    </nav>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="restore">
@@ -662,6 +759,16 @@
         </tbody>
       </table>
     </div>
+    <nav class="backup-pagination" id="backup-restore-pagination" aria-label="Restore job pages">
+      <span id="backup-restore-page-summary" aria-live="polite">Page 1</span>
+      <label>Rows
+        <select class="sysadmin-input" aria-label="Restore job rows per page" onchange="changeBackupPageSize('restore', this.value)">
+          <option value="10">10</option><option value="25" selected>25</option><option value="50">50</option>
+        </select>
+      </label>
+      <button type="button" id="backup-restore-prev" class="btn-sysadmin-outline" onclick="changeBackupPage('restore', -1)">Previous</button>
+      <button type="button" id="backup-restore-next" class="btn-sysadmin-outline" onclick="changeBackupPage('restore', 1)">Next</button>
+    </nav>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="rollback">
@@ -691,6 +798,106 @@
           <tr><td colspan="9" class="table-empty">No rollback requests loaded.</td></tr>
         </tbody>
       </table>
+    </div>
+    <nav class="backup-pagination" id="backup-rollback-pagination" aria-label="Rollback request pages">
+      <span id="backup-rollback-page-summary" aria-live="polite">Page 1</span>
+      <label>Rows
+        <select class="sysadmin-input" aria-label="Rollback request rows per page" onchange="changeBackupPageSize('rollback', this.value)">
+          <option value="10">10</option><option value="25" selected>25</option><option value="50">50</option>
+        </select>
+      </label>
+      <button type="button" id="backup-rollback-prev" class="btn-sysadmin-outline" onclick="changeBackupPage('rollback', -1)">Previous</button>
+      <button type="button" id="backup-rollback-next" class="btn-sysadmin-outline" onclick="changeBackupPage('rollback', 1)">Next</button>
+    </nav>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="automation">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Automatic protection</span><h4>Backup schedules</h4></div>
+      <small>Schedules create backup requests automatically. Artifacts still require worker completion and independent verification before recovery use.</small>
+    </div>
+    <div class="backup-operations-grid">
+      <form class="sysadmin-settings-card backup-operation-form" id="backup-schedule-form" onsubmit="event.preventDefault(); saveBackupSchedule();">
+        <input type="hidden" id="backup-schedule-id" />
+        <div class="backup-form-title"><div><strong id="backup-schedule-form-title">Create backup schedule</strong><small>Times are saved in Asia/Manila unless changed.</small></div><span class="backup-form-icon" aria-hidden="true">&#128197;</span></div>
+        <div class="sysadmin-form-grid backup-form-grid-compact">
+          <div><label class="sysadmin-label" for="backup-schedule-name">Schedule name</label><input id="backup-schedule-name" class="sysadmin-input" maxlength="160" placeholder="Nightly verified database backup" required /></div>
+          <div><label class="sysadmin-label" for="backup-schedule-type">Backup type</label><select id="backup-schedule-type" class="sysadmin-input"><option value="DATABASE">Database</option><option value="FILES">Files</option><option value="CONFIGURATION">Configuration</option><option value="MODULE_STATE">Module state</option><option value="DEPLOYMENT_VERSION">Deployment version</option><option value="FULL_BACKUP">Full backup</option></select></div>
+          <div><label class="sysadmin-label" for="backup-schedule-provider">Storage provider</label><select id="backup-schedule-provider" class="sysadmin-input"><option value="LOCAL">Local development</option><option value="S3">Amazon S3</option><option value="RDS_SNAPSHOT">Amazon RDS snapshot</option></select></div>
+          <div><label class="sysadmin-label" for="backup-schedule-frequency">Frequency</label><select id="backup-schedule-frequency" class="sysadmin-input" onchange="updateScheduleFrequencyFields('backup-schedule')"><option value="HOURLY">Hourly</option><option value="DAILY" selected>Daily</option><option value="WEEKLY">Weekly</option><option value="MONTHLY">Monthly</option></select></div>
+          <div id="backup-schedule-time-field"><label class="sysadmin-label" for="backup-schedule-time">Run time</label><input id="backup-schedule-time" class="sysadmin-input" type="time" value="02:00" /></div>
+          <div id="backup-schedule-weekday-field" hidden><label class="sysadmin-label" for="backup-schedule-weekday">Day of week</label><select id="backup-schedule-weekday" class="sysadmin-input"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option></select></div>
+          <div id="backup-schedule-monthday-field" hidden><label class="sysadmin-label" for="backup-schedule-monthday">Day of month</label><input id="backup-schedule-monthday" class="sysadmin-input" type="number" min="1" max="31" value="1" /></div>
+          <div><label class="sysadmin-label" for="backup-schedule-timezone">Timezone</label><input id="backup-schedule-timezone" class="sysadmin-input" value="Asia/Manila" readonly /></div>
+          <div class="backup-schedule-module-field"><label class="sysadmin-label" for="backup-schedule-module-search">Covered modules</label><div class="backup-operation-module-controls"><input id="backup-schedule-module-search" class="sysadmin-input" type="search" placeholder="Search modules..." autocomplete="off" oninput="renderBackupScheduleModulePicker(this.value)" /><button type="button" class="btn-sysadmin-outline" onclick="selectAllBackupScheduleModules(true)">All</button><button type="button" class="btn-sysadmin-outline" onclick="selectAllBackupScheduleModules(false)">Clear</button></div><div id="backup-schedule-module-picker" class="backup-operation-module-picker" aria-live="polite"></div><small id="backup-schedule-modules-help" class="sysadmin-muted">Click modules to include; your selection stays while searching.</small><select id="backup-schedule-modules" class="backup-native-module-select" multiple tabindex="-1" aria-hidden="true"></select></div>
+        </div>
+        <label class="backup-toggle-row"><input id="backup-schedule-enabled" type="checkbox" checked /><span><strong>Enable after saving</strong><small>The scheduler may create requests at the next due time.</small></span></label>
+        <div class="backup-form-actions"><button type="button" class="btn-sysadmin-outline" onclick="resetBackupScheduleForm()">Clear</button><button type="submit" id="backup-schedule-save" class="btn-sysadmin-primary">Save Schedule</button></div>
+      </form>
+
+      <form class="sysadmin-settings-card backup-operation-form" id="backup-retention-form" onsubmit="event.preventDefault(); saveBackupRetentionPolicy();">
+        <div class="backup-form-title"><div><strong>Retention and cleanup policy</strong><small>Verified recovery coverage is preserved by keeping the newest copies.</small></div><span class="backup-form-icon" aria-hidden="true">&#128465;</span></div>
+        <div class="sysadmin-form-grid backup-form-grid-compact">
+          <div><label class="sysadmin-label" for="backup-retention-name">Policy name</label><input id="backup-retention-name" class="sysadmin-input" maxlength="160" value="Default backup retention" required /></div>
+          <div><label class="sysadmin-label" for="backup-retention-type">Backup type</label><select id="backup-retention-type" class="sysadmin-input"><option value="ALL">All types</option><option value="DATABASE">Database</option><option value="FILES">Files</option><option value="CONFIGURATION">Configuration</option><option value="MODULE_STATE">Module state</option><option value="DEPLOYMENT_VERSION">Deployment version</option><option value="FULL_BACKUP">Full backup</option></select></div>
+          <div><label class="sysadmin-label" for="backup-retention-provider">Storage provider</label><select id="backup-retention-provider" class="sysadmin-input"><option value="ALL">All providers</option><option value="LOCAL">Local</option><option value="S3">Amazon S3</option><option value="RDS_SNAPSHOT">Amazon RDS snapshot</option></select></div>
+          <div><label class="sysadmin-label" for="backup-retention-keep-last">Always keep newest verified copies</label><input id="backup-retention-keep-last" class="sysadmin-input" type="number" min="1" max="1000" value="7" required /></div>
+          <div><label class="sysadmin-label" for="backup-retention-age">Delete artifacts older than</label><div class="backup-input-suffix"><input id="backup-retention-age" class="sysadmin-input" type="number" min="1" max="3650" value="90" required /><span>days</span></div></div>
+        </div>
+        <label class="backup-toggle-row"><input id="backup-retention-delete-artifacts" type="checkbox" /><span><strong>Delete expired stored artifacts</strong><small>When off, only expired records are marked; physical artifacts remain untouched.</small></span></label>
+        <label class="backup-toggle-row"><input id="backup-retention-enabled" type="checkbox" checked /><span><strong>Enable this policy</strong><small>Cleanup remains audit-logged and never treats an unverified artifact as coverage.</small></span></label>
+        <div class="backup-form-actions backup-form-actions-split"><button type="button" id="backup-retention-run" class="btn-sysadmin-outline backup-action-danger" onclick="runBackupRetentionCleanup()">Clean Expired Artifacts</button><button type="submit" class="btn-sysadmin-primary">Save Policy</button></div>
+        <div id="backup-retention-result" class="backup-operation-result" aria-live="polite">No cleanup has been run in this session.</div>
+      </form>
+    </div>
+
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Schedule queue</span><h4>Automatic backup jobs</h4></div>
+      <small>Run now is idempotent and creates a normal auditable backup transaction.</small>
+    </div>
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table"><thead><tr><th>Schedule</th><th>Backup</th><th>Frequency</th><th>Next run</th><th>Last run</th><th>Status</th><th>Actions</th></tr></thead><tbody id="backup-schedules-tbody"><tr><td colspan="7" class="table-empty">Loading backup schedules...</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="inbox">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Maker-checker actions</span><h4>Checker notification inbox</h4></div>
+      <small>Opening a notification does not approve anything. A different authorized administrator and fresh MFA are still required for protected actions.</small>
+    </div>
+    <div class="backup-filter-toolbar" role="search" aria-label="Filter backup notifications">
+      <label class="backup-search-field" for="backup-notification-search"><span class="backup-search-icon" aria-hidden="true">&#128269;</span><input id="backup-notification-search" class="sysadmin-input" type="search" placeholder="Search approvals, backups, restores, or modules..." autocomplete="off" oninput="renderBackupNotifications()" /></label>
+      <select id="backup-notification-filter" class="sysadmin-input backup-filter-select" onchange="renderBackupNotifications()" aria-label="Filter notification read status"><option value="ALL">All notifications</option><option value="UNREAD">Unread only</option><option value="READ">Read only</option></select>
+      <span id="backup-notification-results" class="backup-filter-results" aria-live="polite">0 notifications</span>
+      <button type="button" class="btn-sysadmin-outline backup-filter-clear" onclick="clearBackupNotificationFilters()">Clear filters</button>
+    </div>
+    <div id="backup-notification-inbox" class="backup-notification-list" aria-live="polite"><div class="backup-notification-empty">Loading checker notifications...</div></div>
+  </section>
+
+  <section class="backup-recovery-section" data-backup-panel="drills">
+    <div class="backup-section-heading">
+      <div><span class="backup-command-eyebrow">Recovery assurance</span><h4>Scheduled restore drills</h4></div>
+      <small>Every drill selects the latest eligible VERIFIED artifact and runs only against the isolated dry-run target. It never cuts over production.</small>
+    </div>
+    <form class="sysadmin-settings-card backup-operation-form backup-drill-form" id="backup-drill-form" onsubmit="event.preventDefault(); saveBackupRestoreDrill();">
+      <input type="hidden" id="backup-drill-id" />
+      <div class="backup-form-title"><div><strong id="backup-drill-form-title">Create restore drill</strong><small>Schedule regular proof that an artifact can be decrypted, read, and validated.</small></div><span class="backup-form-icon" aria-hidden="true">&#129514;</span></div>
+      <div class="sysadmin-form-grid backup-form-grid-compact">
+        <div><label class="sysadmin-label" for="backup-drill-name">Drill name</label><input id="backup-drill-name" class="sysadmin-input" maxlength="160" placeholder="Weekly database recovery drill" required /></div>
+        <div><label class="sysadmin-label" for="backup-drill-type">Backup type</label><select id="backup-drill-type" class="sysadmin-input"><option value="DATABASE">Database</option><option value="FILES">Files</option><option value="CONFIGURATION">Configuration</option><option value="MODULE_STATE">Module state</option><option value="FULL_BACKUP">Full backup</option></select></div>
+        <div><label class="sysadmin-label" for="backup-drill-provider">Artifact provider</label><select id="backup-drill-provider" class="sysadmin-input"><option value="ALL">Any eligible provider</option><option value="LOCAL">Local development</option><option value="S3">Amazon S3</option><option value="RDS_SNAPSHOT">Amazon RDS snapshot</option></select></div>
+        <div><label class="sysadmin-label" for="backup-drill-module">Affected module (optional)</label><select id="backup-drill-module" class="sysadmin-input"><option value="">All covered modules</option></select></div>
+        <div><label class="sysadmin-label" for="backup-drill-frequency">Frequency</label><select id="backup-drill-frequency" class="sysadmin-input" onchange="updateScheduleFrequencyFields('backup-drill')"><option value="DAILY">Daily</option><option value="WEEKLY" selected>Weekly</option><option value="MONTHLY">Monthly</option></select></div>
+        <div id="backup-drill-time-field"><label class="sysadmin-label" for="backup-drill-time">Run time</label><input id="backup-drill-time" class="sysadmin-input" type="time" value="03:00" /></div>
+        <div id="backup-drill-weekday-field"><label class="sysadmin-label" for="backup-drill-weekday">Day of week</label><select id="backup-drill-weekday" class="sysadmin-input"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7" selected>Sunday</option></select></div>
+        <div id="backup-drill-monthday-field" hidden><label class="sysadmin-label" for="backup-drill-monthday">Day of month</label><input id="backup-drill-monthday" class="sysadmin-input" type="number" min="1" max="31" value="1" /></div>
+        <div><label class="sysadmin-label" for="backup-drill-timezone">Timezone</label><input id="backup-drill-timezone" class="sysadmin-input" value="Asia/Manila" readonly /></div>
+      </div>
+      <label class="backup-toggle-row"><input id="backup-drill-enabled" type="checkbox" checked /><span><strong>Enable after saving</strong><small>The isolated drill may start at the next due time.</small></span></label>
+      <div class="backup-form-actions"><button type="button" class="btn-sysadmin-outline" onclick="resetBackupRestoreDrillForm()">Clear</button><button type="submit" class="btn-sysadmin-primary">Save Restore Drill</button></div>
+    </form>
+    <div class="sysadmin-table-wrapper backup-table-wrapper">
+      <table class="sysadmin-table"><thead><tr><th>Drill</th><th>Artifact selection</th><th>Frequency</th><th>Next run</th><th>Latest result</th><th>Integrity checks</th><th>Actions</th></tr></thead><tbody id="backup-drills-tbody"><tr><td colspan="7" class="table-empty">Loading restore drills...</td></tr></tbody></table>
     </div>
   </section>
 

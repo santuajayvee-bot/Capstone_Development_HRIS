@@ -13,6 +13,7 @@ const {
   normalizeRelativePath,
   removeTemporaryTree,
   resolveInside,
+  secureRemoveTemporaryTree,
   walkRegularFiles,
 } = require('./fileTree');
 
@@ -284,6 +285,29 @@ class LocalStorageAdapter {
       },
       manifest,
     };
+  }
+
+  async deleteArtifact({ location, expectedChecksum }) {
+    await this.initialize();
+    const reference = referenceFromLocation(location);
+    const expected = validateExpectedChecksum(expectedChecksum);
+    const artifactDirectory = resolveInside(this.rootPath, reference);
+    const stat = await fs.promises.lstat(artifactDirectory).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!stat) {
+      return { deleted: true, idempotent: true, provider: this.provider, location };
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw backupError('Local backup target is unsafe to delete.', 'UNSAFE_LOCAL_BACKUP_TARGET');
+    }
+    const manifest = await this.readManifest(reference);
+    if (manifest.artifact.checksum !== expected) {
+      throw backupError('Retention checksum does not identify this local artifact.', 'BACKUP_RETENTION_IDENTITY_MISMATCH');
+    }
+    await secureRemoveTemporaryTree(this.rootPath, artifactDirectory);
+    return { deleted: true, idempotent: false, provider: this.provider, location };
   }
 
   async materializeArtifact({ location, expectedChecksum, destinationRoot }) {

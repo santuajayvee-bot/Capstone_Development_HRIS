@@ -107,6 +107,8 @@ async function run() {
     { ...verifiedRow, integrity_status: 'FAILED' },
     { ...verifiedRow, verified_at: null },
     { ...verifiedRow, verified_by: null },
+    { ...verifiedRow, retention_status: 'EXPIRED' },
+    { ...verifiedRow, retention_status: 'DELETED', artifact_deleted_at: new Date() },
   ]) {
     assert.strictEqual(backupArtifactVerified(missingEvidence), false);
     assert.strictEqual(backupResponse(missingEvidence, 43).is_restorable, false);

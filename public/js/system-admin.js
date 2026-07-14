@@ -15,8 +15,24 @@ let sysBackupCoverage = [];
 let sysModuleRecoveryPoints = [];
 let sysRestoreJobs = [];
 let sysRollbackRequests = [];
+let sysBackupSchedules = [];
+let sysBackupRetentionPolicy = null;
+let sysBackupNotifications = [];
+let sysBackupRestoreDrills = [];
+let sysBackupOperationalErrors = {};
+const sysBackupPagination = {
+  backups: { page: 1, pageSize: 25, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
+  recovery: { page: 1, pageSize: 25, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
+  restore: { page: 1, pageSize: 25, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
+  rollback: { page: 1, pageSize: 25, total: 0, totalPages: 1, hasPrevious: false, hasNext: false },
+};
+const sysBackupFilterTimers = {};
 let sysBackupActiveTab = 'overview';
 let sysBackupStepUpContext = null;
+let sysBackupModuleSelectionInitialized = false;
+let sysBackupModulePickerQuery = '';
+let sysBackupScheduleModuleQuery = '';
+let sysBackupWorkspaceLoading = false;
 const sysBackupPendingMutations = new Set();
 let sysHealthSnapshot = null;
 let sysHealthModules = [];
@@ -2510,14 +2526,108 @@ async function updateSupportTicket(ticketId, status) {
   }
 }
 
+function backupPaginatedUrl(path, key) {
+  const state = sysBackupPagination[key];
+  if (!state) return path;
+  const params = new URLSearchParams({ page: String(state.page), page_size: String(state.pageSize) });
+  if (key === 'backups') {
+    const search = document.getElementById('backup-history-search')?.value.trim();
+    const type = document.getElementById('backup-history-type-filter')?.value || 'ALL';
+    const status = document.getElementById('backup-history-status-filter')?.value || 'ALL';
+    if (search) params.set('search', search);
+    if (type !== 'ALL') params.set('type', type);
+    if (status !== 'ALL') params.set('status', status);
+  }
+  if (key === 'recovery') {
+    const search = document.getElementById('backup-recovery-search')?.value.trim();
+    const status = document.getElementById('backup-recovery-readiness-filter')?.value || 'ALL';
+    if (search) params.set('search', search);
+    if (status !== 'ALL') params.set('status', status);
+  }
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}${params.toString()}`;
+}
+
+function normalizeBackupPagedResponse(payload, key) {
+  const state = sysBackupPagination[key];
+  const items = Array.isArray(payload)
+    ? payload
+    : (Array.isArray(payload?.items) ? payload.items
+      : (Array.isArray(payload?.data) ? payload.data : []));
+  if (!state) return items;
+  const meta = (!Array.isArray(payload) && (payload?.pagination || payload?.meta)) || {};
+  const page = Math.max(1, Number(meta.page || meta.current_page || state.page) || 1);
+  const pageSize = Math.max(1, Number(meta.page_size || meta.pageSize || meta.per_page || state.pageSize) || 25);
+  const total = Math.max(0, Number(meta.total || meta.total_items || meta.totalItems || items.length) || 0);
+  const totalPages = Math.max(1, Number(meta.total_pages || meta.totalPages || Math.ceil(total / pageSize)) || 1);
+  state.page = Math.min(page, totalPages);
+  state.pageSize = pageSize;
+  state.total = total;
+  state.totalPages = totalPages;
+  state.hasPrevious = meta.has_previous !== undefined ? Boolean(meta.has_previous)
+    : (meta.hasPrevious !== undefined ? Boolean(meta.hasPrevious) : state.page > 1);
+  state.hasNext = meta.has_next !== undefined ? Boolean(meta.has_next)
+    : (meta.hasNext !== undefined ? Boolean(meta.hasNext) : state.page < totalPages);
+  return items;
+}
+
+function normalizeBackupCollection(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.schedules)) return payload.schedules;
+  if (Array.isArray(payload?.notifications)) return payload.notifications;
+  if (Array.isArray(payload?.drills)) return payload.drills;
+  return [];
+}
+
+async function fetchBackupOperationalResource(path, key) {
+  try {
+    const response = await apiFetch(path);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || payload.message || `Failed to load ${key}.`);
+    delete sysBackupOperationalErrors[key];
+    return payload;
+  } catch (error) {
+    sysBackupOperationalErrors[key] = error.message || `Failed to load ${key}.`;
+    return null;
+  }
+}
+
+function setBackupTableLoadingState() {
+  const loadingRows = {
+    'backup-logs-tbody': [9, 'Loading backup history...'],
+    'module-recovery-tbody': [10, 'Loading recovery points...'],
+    'restore-jobs-tbody': [11, 'Loading restore jobs...'],
+    'rollback-requests-tbody': [9, 'Loading rollback requests...'],
+    'backup-schedules-tbody': [7, 'Loading backup schedules...'],
+    'backup-drills-tbody': [7, 'Loading restore drills...'],
+  };
+  Object.entries(loadingRows).forEach(([id, [colspan, message]]) => {
+    const tbody = document.getElementById(id);
+    if (tbody) tbody.innerHTML = `<tr><td colspan="${colspan}" class="table-empty">${sysEsc(message)}</td></tr>`;
+  });
+}
+
 async function loadBackupLogs() {
+  if (sysBackupWorkspaceLoading) return;
+  sysBackupWorkspaceLoading = true;
+  setBackupTableLoadingState();
+  const refreshButton = document.getElementById('backup-refresh-button');
+  const updatedLabel = document.getElementById('backup-last-updated');
+  if (refreshButton) {
+    refreshButton.disabled = true;
+    refreshButton.classList.add('is-loading');
+    refreshButton.innerHTML = '<span aria-hidden="true">&#8635;</span> Refreshing...';
+  }
+  if (updatedLabel) updatedLabel.textContent = 'Refreshing recovery data...';
   try {
     const [overviewRes, backupsRes, recoveryRes, restoreRes, rollbackRes] = await Promise.all([
       apiFetch('/api/admin/backups/overview'),
-      apiFetch('/api/admin/backups'),
-      apiFetch('/api/admin/backups/recovery-points'),
-      apiFetch('/api/admin/backups/restore-jobs'),
-      apiFetch('/api/admin/backups/rollback-requests'),
+      apiFetch(backupPaginatedUrl('/api/admin/backups', 'backups')),
+      apiFetch(backupPaginatedUrl('/api/admin/backups/recovery-points', 'recovery')),
+      apiFetch(backupPaginatedUrl('/api/admin/backups/restore-jobs', 'restore')),
+      apiFetch(backupPaginatedUrl('/api/admin/backups/rollback-requests', 'rollback')),
     ]);
     const [overview, backups, recovery, restore, rollback] = await Promise.all([
       overviewRes.json(),
@@ -2534,11 +2644,23 @@ async function loadBackupLogs() {
 
     sysBackupDashboard = overview || {};
     sysBackupCoverage = Array.isArray(overview?.coverage) ? overview.coverage : [];
-    sysBackupLogs = Array.isArray(backups) ? backups : [];
-    sysModuleRecoveryPoints = Array.isArray(recovery) ? recovery : [];
-    sysRestoreJobs = Array.isArray(restore) ? restore : [];
-    sysRollbackRequests = Array.isArray(rollback) ? rollback : [];
+    sysBackupLogs = normalizeBackupPagedResponse(backups, 'backups');
+    sysModuleRecoveryPoints = normalizeBackupPagedResponse(recovery, 'recovery');
+    sysRestoreJobs = normalizeBackupPagedResponse(restore, 'restore');
+    sysRollbackRequests = normalizeBackupPagedResponse(rollback, 'rollback');
+
+    const [schedulePayload, retentionPayload, notificationPayload, drillPayload] = await Promise.all([
+      fetchBackupOperationalResource('/api/admin/backups/schedules', 'backup schedules'),
+      fetchBackupOperationalResource('/api/admin/backups/retention-policy', 'retention policy'),
+      fetchBackupOperationalResource('/api/admin/backups/notifications', 'checker notifications'),
+      fetchBackupOperationalResource('/api/admin/backups/restore-drills', 'restore drills'),
+    ]);
+    sysBackupSchedules = schedulePayload === null ? [] : normalizeBackupCollection(schedulePayload);
+    sysBackupRetentionPolicy = retentionPayload?.policy || retentionPayload?.item || retentionPayload || null;
+    sysBackupNotifications = notificationPayload === null ? [] : normalizeBackupCollection(notificationPayload);
+    sysBackupRestoreDrills = drillPayload === null ? [] : normalizeBackupCollection(drillPayload);
     renderBackupRecoveryWorkspace();
+    if (updatedLabel) updatedLabel.textContent = `Updated ${sysFormatDateTime(new Date())}`;
   } catch (err) {
     const colspans = {
       'backup-coverage-tbody': 9,
@@ -2546,20 +2668,35 @@ async function loadBackupLogs() {
       'module-recovery-tbody': 10,
       'restore-jobs-tbody': 11,
       'rollback-requests-tbody': 9,
+      'backup-schedules-tbody': 7,
+      'backup-drills-tbody': 7,
     };
     Object.keys(colspans).forEach(id => {
       const tbody = document.getElementById(id);
       if (tbody) tbody.innerHTML = `<tr><td colspan="${colspans[id]}" class="table-empty">${sysEsc(err.message || 'Failed to load backup recovery data.')}</td></tr>`;
     });
+    const inbox = document.getElementById('backup-notification-inbox');
+    if (inbox) inbox.innerHTML = `<div class="backup-notification-empty"><strong>Backup workspace could not be loaded.</strong><small>${sysEsc(err.message || 'Try refreshing the page.')}</small></div>`;
+    if (updatedLabel) updatedLabel.textContent = 'Refresh failed — try again';
     showSysToast(err.message || 'Failed to load backup recovery data.', 'error');
+  } finally {
+    sysBackupWorkspaceLoading = false;
+    Object.keys(sysBackupPagination).forEach(renderBackupPagination);
+    if (refreshButton) {
+      refreshButton.disabled = false;
+      refreshButton.classList.remove('is-loading');
+      refreshButton.innerHTML = '<span aria-hidden="true">&#8635;</span> Refresh Status';
+    }
   }
 }
 
 function switchBackupRecoveryTab(tab) {
   sysBackupActiveTab = tab || 'overview';
   document.querySelectorAll('[data-backup-tab]').forEach(button => {
-    button.classList.toggle('active', button.dataset.backupTab === sysBackupActiveTab);
-    button.setAttribute('aria-selected', button.dataset.backupTab === sysBackupActiveTab ? 'true' : 'false');
+    const selected = button.dataset.backupTab === sysBackupActiveTab;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+    button.tabIndex = selected ? 0 : -1;
   });
   document.querySelectorAll('[data-backup-panel]').forEach(panel => {
     panel.classList.toggle('active', panel.dataset.backupPanel === sysBackupActiveTab);
@@ -2803,11 +2940,89 @@ function backupModuleName(moduleKey) {
   return match?.module_name || backupTypeLabel(moduleKey);
 }
 
+function backupSearchText(...values) {
+  return values
+    .flatMap(value => Array.isArray(value) ? value : [value])
+    .filter(value => value !== undefined && value !== null)
+    .map(value => String(value).toLowerCase())
+    .join(' ');
+}
+
+function backupMatchesQuery(query, ...values) {
+  const normalized = String(query || '').trim().toLowerCase();
+  return !normalized || backupSearchText(...values).includes(normalized);
+}
+
+function setBackupResultCount(targetId, visible, total, label) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const noun = Number(visible) === 1 ? label : `${label}s`;
+  target.textContent = visible === total
+    ? `${visible} ${noun}`
+    : `${visible} of ${total} ${label}s`;
+}
+
+function renderBackupPagination(key) {
+  const state = sysBackupPagination[key];
+  const ids = {
+    backups: ['backup-history-page-summary', 'backup-history-prev', 'backup-history-next'],
+    recovery: ['backup-recovery-page-summary', 'backup-recovery-prev', 'backup-recovery-next'],
+    restore: ['backup-restore-page-summary', 'backup-restore-prev', 'backup-restore-next'],
+    rollback: ['backup-rollback-page-summary', 'backup-rollback-prev', 'backup-rollback-next'],
+  }[key];
+  if (!state || !ids) return;
+  const [summaryId, previousId, nextId] = ids;
+  const summary = document.getElementById(summaryId);
+  const previous = document.getElementById(previousId);
+  const next = document.getElementById(nextId);
+  if (summary) {
+    const start = state.total ? ((state.page - 1) * state.pageSize) + 1 : 0;
+    const end = state.total ? Math.min(start + state.pageSize - 1, state.total) : 0;
+    summary.textContent = `${start}-${end} of ${state.total} records (Page ${state.page} of ${state.totalPages})`;
+  }
+  if (previous) previous.disabled = !state.hasPrevious || sysBackupWorkspaceLoading;
+  if (next) next.disabled = !state.hasNext || sysBackupWorkspaceLoading;
+}
+
+async function changeBackupPage(key, direction) {
+  const state = sysBackupPagination[key];
+  if (!state || sysBackupWorkspaceLoading) return;
+  const targetPage = Math.max(1, Math.min(state.totalPages, state.page + Number(direction || 0)));
+  if (targetPage === state.page) return;
+  state.page = targetPage;
+  await loadBackupLogs();
+}
+
+async function changeBackupPageSize(key, value) {
+  const state = sysBackupPagination[key];
+  if (!state || sysBackupWorkspaceLoading) return;
+  state.pageSize = [10, 25, 50].includes(Number(value)) ? Number(value) : 25;
+  state.page = 1;
+  await loadBackupLogs();
+}
+
+function reloadBackupFilteredPage(key, delay = 280) {
+  const state = sysBackupPagination[key];
+  if (!state) return;
+  state.page = 1;
+  if (sysBackupFilterTimers[key]) clearTimeout(sysBackupFilterTimers[key]);
+  sysBackupFilterTimers[key] = setTimeout(() => {
+    sysBackupFilterTimers[key] = null;
+    if (sysBackupWorkspaceLoading) reloadBackupFilteredPage(key, 180);
+    else loadBackupLogs();
+  }, delay);
+}
+
+function backupEmptyFilterRow(colspan, title, detail) {
+  return `<tr><td colspan="${Number(colspan)}" class="table-empty">
+    <div class="backup-table-empty-state"><strong>${sysEsc(title)}</strong><small>${sysEsc(detail)}</small></div>
+  </td></tr>`;
+}
+
 function backupSelectModules() {
   const select = document.getElementById('backup-modules');
   if (!select) return [];
-  const selected = Array.from(select.selectedOptions || []).map(option => option.value).filter(Boolean);
-  return selected.length ? selected : sysBackupCoverage.map(module => module.module_key);
+  return Array.from(select.selectedOptions || []).map(option => option.value).filter(Boolean);
 }
 
 function renderBackupModuleOptions() {
@@ -2815,9 +3030,64 @@ function renderBackupModuleOptions() {
   if (!select || !sysBackupCoverage.length) return;
   const selected = new Set(Array.from(select.selectedOptions || []).map(option => option.value));
   select.innerHTML = sysBackupCoverage.map(module => {
-    const shouldSelect = selected.size ? selected.has(module.module_key) : true;
+    const shouldSelect = sysBackupModuleSelectionInitialized ? selected.has(module.module_key) : true;
     return `<option value="${sysEsc(module.module_key)}" ${shouldSelect ? 'selected' : ''}>${sysEsc(module.module_name)}</option>`;
   }).join('');
+  sysBackupModuleSelectionInitialized = true;
+  renderBackupModulePicker();
+}
+
+function renderBackupModulePicker() {
+  const picker = document.getElementById('backup-module-picker');
+  const select = document.getElementById('backup-modules');
+  const count = document.getElementById('backup-module-selection-count');
+  if (!picker || !select) return;
+  const selected = new Set(Array.from(select.selectedOptions || []).map(option => option.value));
+  const visibleModules = sysBackupCoverage.filter(module => backupMatchesQuery(
+    sysBackupModulePickerQuery,
+    module.module_name,
+    module.module_key
+  ));
+  if (count) {
+    const selectedCount = selected.size;
+    count.textContent = `${selectedCount} module${selectedCount === 1 ? '' : 's'} selected`;
+  }
+  if (!visibleModules.length) {
+    picker.innerHTML = '<div class="backup-module-picker-empty"><strong>No modules found.</strong><br>Try a different search term.</div>';
+    return;
+  }
+  picker.innerHTML = visibleModules.map(module => {
+    const checked = selected.has(module.module_key);
+    return `
+      <label class="backup-module-option${checked ? ' is-selected' : ''}">
+        <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleBackupModule(${sysJsString(module.module_key)}, this.checked)" />
+        <span class="backup-module-option-copy">
+          <strong>${sysEsc(module.module_name)}</strong>
+          <small>${sysEsc(module.module_key)}</small>
+        </span>
+      </label>
+    `;
+  }).join('');
+}
+
+function toggleBackupModule(moduleKey, selected) {
+  const select = document.getElementById('backup-modules');
+  if (!select) return;
+  const option = Array.from(select.options || []).find(item => item.value === moduleKey);
+  if (option) option.selected = Boolean(selected);
+  renderBackupModulePicker();
+}
+
+function selectAllBackupModules(selected = true) {
+  const select = document.getElementById('backup-modules');
+  if (!select) return;
+  Array.from(select.options || []).forEach(option => { option.selected = Boolean(selected); });
+  renderBackupModulePicker();
+}
+
+function filterBackupModulePicker(query = '') {
+  sysBackupModulePickerQuery = String(query || '');
+  renderBackupModulePicker();
 }
 
 function backupSummaryValue(record, fallback = '-') {
@@ -3110,14 +3380,53 @@ function renderBackupNextActions() {
   ` : '');
 }
 
+function backupCoverageRecoveryReady(module) {
+  const deploymentBackup = String(module?.last_backup_type || '').toUpperCase() === 'DEPLOYMENT_VERSION';
+  return (!deploymentBackup && isRestorableBackupArtifact(module)) || isVerifiedRollbackPoint(module);
+}
+
+function filteredBackupCoverage() {
+  const query = document.getElementById('backup-coverage-search')?.value || '';
+  const readiness = document.getElementById('backup-coverage-readiness-filter')?.value || 'ALL';
+  return sysBackupCoverage.filter(module => {
+    if (!backupMatchesQuery(query, module.module_name, module.module_key, module.last_backup_type, module.last_health_status)) return false;
+    const ready = backupCoverageRecoveryReady(module);
+    const maintenance = module.under_maintenance || String(module.last_health_status || '').toUpperCase() === 'MAINTENANCE';
+    if (readiness === 'READY') return ready;
+    if (readiness === 'NEEDS_BACKUP') return !ready;
+    if (readiness === 'MAINTENANCE') return maintenance;
+    return true;
+  });
+}
+
+function filterBackupCoverage() {
+  renderBackupCoverage();
+}
+
+function clearBackupCoverageFilters() {
+  const search = document.getElementById('backup-coverage-search');
+  const readiness = document.getElementById('backup-coverage-readiness-filter');
+  if (search) search.value = '';
+  if (readiness) readiness.value = 'ALL';
+  renderBackupCoverage();
+  search?.focus?.();
+}
+
 function renderBackupCoverage() {
   const tbody = document.getElementById('backup-coverage-tbody');
   if (!tbody) return;
   if (!sysBackupCoverage.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No module coverage loaded.</td></tr>';
+    setBackupResultCount('backup-coverage-results', 0, 0, 'module');
     return;
   }
-  tbody.innerHTML = sysBackupCoverage.map(module => {
+  const visibleModules = filteredBackupCoverage();
+  setBackupResultCount('backup-coverage-results', visibleModules.length, sysBackupCoverage.length, 'module');
+  if (!visibleModules.length) {
+    tbody.innerHTML = backupEmptyFilterRow(9, 'No modules match these filters.', 'Clear the filters or search using a module name or key.');
+    return;
+  }
+  tbody.innerHTML = visibleModules.map(module => {
     const isDeploymentBackup = String(module.last_backup_type || '').toUpperCase() === 'DEPLOYMENT_VERSION';
     const restorable = !isDeploymentBackup && isRestorableBackupArtifact(module);
     const rollbackReady = isVerifiedRollbackPoint(module);
@@ -3132,8 +3441,8 @@ function renderBackupCoverage() {
         ? '<small class="sysadmin-muted">Verified recovery point ready for rollback</small>'
         : '<small class="sysadmin-muted">No verified usable artifact</small>';
     const recoveryAction = isDeploymentBackup
-      ? `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Request Rollback</button>`
-      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})" ${restoreDisabled}>Restore Data</button>`;
+      ? `<button class="btn-sysadmin-sm backup-action-primary" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm backup-action-primary" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})" ${restoreDisabled}>Restore Data</button>`;
     return `
       <tr>
         <td><strong>${sysEsc(module.module_name)}</strong><br><small>${sysEsc(module.module_key)}</small><br>${readinessNote}</td>
@@ -3148,7 +3457,7 @@ function renderBackupCoverage() {
           <div class="support-row-actions">
             <button class="btn-sysadmin-sm" onclick="switchBackupRecoveryTab('sets')">View Backups</button>
             ${recoveryAction}
-            ${isDeploymentBackup ? '' : `<button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Rollback Version</button>`}
+            ${isDeploymentBackup ? '' : `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Rollback Version</button>`}
             <button class="btn-sysadmin-sm" onclick="createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})">Create Incident</button>
           </div>
         </td>
@@ -3157,32 +3466,82 @@ function renderBackupCoverage() {
   }).join('');
 }
 
+function filteredBackupLogs() {
+  const query = document.getElementById('backup-history-search')?.value || '';
+  const type = document.getElementById('backup-history-type-filter')?.value || 'ALL';
+  const status = document.getElementById('backup-history-status-filter')?.value || 'ALL';
+  return sysBackupLogs.filter(record => {
+    const recordType = String(record.backup_type || '').toUpperCase();
+    const recordStatus = backupStatusValue(record, ['lifecycle_status', 'status'], 'UNKNOWN');
+    if (type !== 'ALL' && recordType !== type) return false;
+    if (status !== 'ALL' && recordStatus !== status) return false;
+    return backupMatchesQuery(
+      query,
+      record.backup_reference,
+      record.backup_name,
+      record.backup_type,
+      record.storage_provider,
+      record.storage_target,
+      record.included_modules,
+      record.created_by_username,
+      record.status
+    );
+  });
+}
+
+function filterBackupHistory() {
+  renderBackupLogs();
+  reloadBackupFilteredPage('backups');
+}
+
+function clearBackupHistoryFilters() {
+  const search = document.getElementById('backup-history-search');
+  const type = document.getElementById('backup-history-type-filter');
+  const status = document.getElementById('backup-history-status-filter');
+  if (search) search.value = '';
+  if (type) type.value = 'ALL';
+  if (status) status.value = 'ALL';
+  renderBackupLogs();
+  reloadBackupFilteredPage('backups', 0);
+  search?.focus?.();
+}
+
 function renderBackupLogs() {
   const tbody = document.getElementById('backup-logs-tbody');
   if (!tbody) return;
   if (!sysBackupLogs.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No backup records found.</td></tr>';
+    setBackupResultCount('backup-history-results', 0, 0, 'backup');
     return;
   }
-  tbody.innerHTML = sysBackupLogs.map(record => {
+  const visibleBackups = filteredBackupLogs();
+  setBackupResultCount('backup-history-results', visibleBackups.length, sysBackupLogs.length, 'backup');
+  if (!visibleBackups.length) {
+    tbody.innerHTML = backupEmptyFilterRow(9, 'No backups match these filters.', 'Try another reference, module, status, or backup type.');
+    return;
+  }
+  tbody.innerHTML = visibleBackups.map(record => {
     const id = Number(record.backup_set_id || record.backup_id || record.id);
     const backupType = String(record.backup_type || '').toUpperCase();
     const status = backupStatusValue(record, ['lifecycle_status', 'status'], 'UNKNOWN');
     const artifactVerified = isVerifiedBackupArtifact(record);
     const restorable = isRestorableBackupArtifact(record);
-    const rollbackReady = artifactVerified && sysModuleRecoveryPoints.some(point => (
-      Number(point.backup_set_id) === id && isVerifiedRollbackPoint(point)
-    ));
+    const rollbackReady = artifactVerified && (
+      backupExplicitBoolean(record, ['rollback_available']) === true
+      || sysModuleRecoveryPoints.some(point => (
+        Number(point.backup_set_id) === id && isVerifiedRollbackPoint(point)
+      ))
+    );
     const canRun = ['PENDING', 'FAILED'].includes(status) && backupActionAllowedAny(record, ['BACKUP_RUN', 'RUN'], true);
     const canVerify = ['COMPLETED', 'VERIFICATION_FAILED'].includes(status)
       && backupActionAllowedAny(record, ['BACKUP_VERIFY', 'VERIFY'], true);
     const recoveryAction = backupType === 'DEPLOYMENT_VERSION'
-      ? `<button class="btn-sysadmin-sm" onclick="requestBackupSetRollback(${id})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified module recovery point">Request Rollback</button>`
-      : `<button class="btn-sysadmin-sm" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${restorable && isRestorableBackupType(record.backup_type) ? '' : 'disabled'} title="Requires a verified usable artifact">Request Restore</button>`;
+      ? `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestBackupSetRollback(${id})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified module recovery point">Request Rollback</button>`
+      : `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${restorable && isRestorableBackupType(record.backup_type) ? '' : 'disabled'} title="Requires a verified usable artifact">Request Restore</button>`;
     const actions = [
-      `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View</button>`,
-      canRun ? `<button class="btn-sysadmin-sm" onclick="runBackup(${id})">Step A2: Run Worker</button>` : '',
-      canVerify ? `<button class="btn-sysadmin-sm" onclick="verifyBackup(${id})">Step A3: Verify</button>` : '',
+      `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View details</button>`,
+      canRun ? `<button class="btn-sysadmin-sm backup-action-primary" onclick="runBackup(${id})">Run backup</button>` : '',
+      canVerify ? `<button class="btn-sysadmin-sm backup-action-primary" onclick="verifyBackup(${id})">Verify artifact</button>` : '',
       recoveryAction,
     ].filter(Boolean);
     const verification = backupStatusValue(record, ['verification_status'], backupExplicitBoolean(record, ['artifact_verified']) === true ? 'VERIFIED' : 'NOT VERIFIED');
@@ -3190,7 +3549,7 @@ function renderBackupLogs() {
     const stepUpMfa = record.step_up_verified_at ? 'VERIFIED' : backupStatusValue(record, ['step_up_mfa_status', 'mfa_status'], 'REQUIRED');
     return `
       <tr>
-        <td><strong>${sysEsc(record.backup_reference)}</strong></td>
+        <td><strong>${sysEsc(record.backup_reference)}</strong>${record.backup_name ? `<br><small>${sysEsc(record.backup_name)}</small>` : ''}</td>
         <td>${sysEsc(backupTypeLabel(record.backup_type))}</td>
         <td>${sysEsc(record.storage_provider || record.storage_target || '-')}</td>
         <td>${backupLifecycleCell(status, 'backup')}<small>${sysEsc(record.completed_at ? `Updated ${sysFormatDateTime(record.completed_at)}` : '')}</small></td>
@@ -3211,14 +3570,55 @@ function renderBackupLogs() {
   }).join('');
 }
 
+function filteredModuleRecoveryPoints() {
+  const query = document.getElementById('backup-recovery-search')?.value || '';
+  const readiness = document.getElementById('backup-recovery-readiness-filter')?.value || 'ALL';
+  return sysModuleRecoveryPoints.filter(point => {
+    const ready = isVerifiedRollbackPoint(point);
+    if (readiness === 'READY' && !ready) return false;
+    if (readiness === 'NOT_READY' && ready) return false;
+    return backupMatchesQuery(
+      query,
+      point.module_name,
+      point.module_key,
+      point.backup_reference,
+      point.current_version,
+      point.stable_version,
+      point.health_status_at_backup
+    );
+  });
+}
+
+function filterModuleRecoveryPoints() {
+  renderModuleRecoveryPoints();
+  reloadBackupFilteredPage('recovery');
+}
+
+function clearModuleRecoveryFilters() {
+  const search = document.getElementById('backup-recovery-search');
+  const readiness = document.getElementById('backup-recovery-readiness-filter');
+  if (search) search.value = '';
+  if (readiness) readiness.value = 'ALL';
+  renderModuleRecoveryPoints();
+  reloadBackupFilteredPage('recovery', 0);
+  search?.focus?.();
+}
+
 function renderModuleRecoveryPoints() {
   const tbody = document.getElementById('module-recovery-tbody');
   if (!tbody) return;
   if (!sysModuleRecoveryPoints.length) {
     tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No module recovery points found.</td></tr>';
+    setBackupResultCount('backup-recovery-results', 0, 0, 'recovery point');
     return;
   }
-  tbody.innerHTML = sysModuleRecoveryPoints.map(point => {
+  const visiblePoints = filteredModuleRecoveryPoints();
+  setBackupResultCount('backup-recovery-results', visiblePoints.length, sysModuleRecoveryPoints.length, 'recovery point');
+  if (!visiblePoints.length) {
+    tbody.innerHTML = backupEmptyFilterRow(10, 'No recovery points match these filters.', 'Clear the filter or search using a module or backup reference.');
+    return;
+  }
+  tbody.innerHTML = visiblePoints.map(point => {
     const rollbackReady = isVerifiedRollbackPoint(point);
     return `
       <tr>
@@ -3236,8 +3636,8 @@ function renderModuleRecoveryPoints() {
         <td><small>${sysEsc(sysFormatDateTime(point.created_at))}</small></td>
         <td>
           <div class="support-row-actions">
-            <button class="btn-sysadmin-sm" onclick="openBackupDetails('recovery', ${Number(point.id)})">View Recovery Point</button>
-            <button class="btn-sysadmin-sm" onclick="requestModuleRollback(${sysJsString(point.module_key)})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified recovery artifact">Request Rollback</button>
+            <button class="btn-sysadmin-sm" onclick="openBackupDetails('recovery', ${Number(point.id)})">View details</button>
+            <button class="btn-sysadmin-sm backup-action-primary" onclick="requestModuleRollback(${sysJsString(point.module_key)})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified recovery artifact">Request Rollback</button>
           </div>
         </td>
       </tr>
@@ -3262,24 +3662,24 @@ function renderRestoreJobs() {
     if (status === 'AWAITING_APPROVAL') {
       const canApprove = backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false);
       const canReject = backupActionAllowedAny(job, ['RESTORE_REJECT', 'REJECT'], canApprove);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="approveRestoreJob(${id})" ${canApprove ? '' : 'disabled'} title="A different authorized System Administrator must approve">Step B2: Approve</button>`);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="rejectRestoreJob(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRestoreJob(${id})" ${canApprove ? '' : 'disabled'} title="A different authorized System Administrator must approve">Approve with MFA</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRestoreJob(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
     }
     if (status === 'APPROVED' && !dryRunPassed) {
       const canDryRun = backupActionAllowedAny(job, ['RESTORE_DRY_RUN', 'DRY_RUN'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="runRestoreDryRun(${id})" ${canDryRun ? '' : 'disabled'}>Step B3: Dry-run</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="runRestoreDryRun(${id})" ${canDryRun ? '' : 'disabled'}>Run isolated dry-run</button>`);
     }
     if (dryRunPassed) {
       const canExecute = backupActionAllowedAny(job, ['RESTORE_EXECUTE', 'EXECUTE'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="executeRestoreJob(${id})" ${canExecute ? '' : 'disabled'}>Step B4: Restore</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="executeRestoreJob(${id})" ${canExecute ? '' : 'disabled'}>Execute restore</button>`);
     }
     if (status === 'VERIFYING') {
       const canVerifyTarget = backupActionAllowedAny(job, ['VERIFY_TARGET', 'RESTORE_VERIFY'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="verifyRestoreTarget(${id})" ${canVerifyTarget ? '' : 'disabled'}>Step B5: Validate</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-safe" onclick="verifyRestoreTarget(${id})" ${canVerifyTarget ? '' : 'disabled'}>Validate restored target</button>`);
     }
     if (['AWAITING_APPROVAL', 'APPROVED', 'DRY_RUN_PASSED', 'PENDING'].includes(status)) {
       const canCancel = backupActionAllowedAny(job, ['RESTORE_CANCEL', 'CANCEL'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="updateRestoreJobStatus(${id}, 'CANCELLED')" ${canCancel ? '' : 'disabled'}>Cancel</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="updateRestoreJobStatus(${id}, 'CANCELLED')" ${canCancel ? '' : 'disabled'}>Cancel</button>`);
     }
     return `
       <tr>
@@ -3314,16 +3714,16 @@ function renderRollbackRequests() {
     if (status === 'AWAITING_APPROVAL') {
       const canApprove = artifactReady && backupActionAllowedAny(request, ['ROLLBACK_APPROVE', 'APPROVE'], false);
       const canReject = backupActionAllowedAny(request, ['ROLLBACK_REJECT', 'REJECT'], canApprove);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="approveRollbackRequest(${id})" ${canApprove ? '' : 'disabled'} title="Requires a verified artifact and a different authorized checker">Approve</button>`);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="rejectRollbackRequest(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRollbackRequest(${id})" ${canApprove ? '' : 'disabled'} title="Requires a verified artifact and a different authorized checker">Approve with MFA</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRollbackRequest(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
     }
     if (status === 'APPROVED') {
       const canExecute = artifactReady && backupActionAllowedAny(request, ['ROLLBACK_EXECUTE', 'EXECUTE'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="executeRollbackRequest(${id})" ${canExecute ? '' : 'disabled'}>Execute Rollback</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="executeRollbackRequest(${id})" ${canExecute ? '' : 'disabled'}>Execute rollback</button>`);
     }
     if (['AWAITING_APPROVAL', 'APPROVED', 'PENDING'].includes(status)) {
       const canCancel = backupActionAllowedAny(request, ['ROLLBACK_CANCEL', 'CANCEL'], true);
-      actions.push(`<button class="btn-sysadmin-sm" onclick="updateRollbackRequestStatus(${id}, 'CANCELLED')" ${canCancel ? '' : 'disabled'}>Cancel</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="updateRollbackRequestStatus(${id}, 'CANCELLED')" ${canCancel ? '' : 'disabled'}>Cancel</button>`);
     }
     return `
       <tr>
@@ -3344,19 +3744,648 @@ function renderRollbackRequests() {
   }).join('');
 }
 
+function backupArrayValue(value) {
+  if (Array.isArray(value)) return value.map(item => String(item)).filter(Boolean);
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(item => String(item)).filter(Boolean);
+    } catch (_) {
+      return value.split(',').map(item => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function backupEnabled(record, fallback = true) {
+  const value = backupExplicitBoolean(record, ['enabled', 'is_enabled']);
+  return value === null ? fallback : value;
+}
+
+function backupRecordId(record, candidates = []) {
+  for (const key of [...candidates, 'id']) {
+    const value = Number(record?.[key] || 0);
+    if (value > 0) return value;
+  }
+  return 0;
+}
+
+function backupFrequencyLabel(record) {
+  const frequency = String(record?.frequency || 'DAILY').toUpperCase();
+  const time = String(record?.run_time || '').slice(0, 5);
+  const weekDays = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  if (frequency === 'HOURLY') return 'Every hour';
+  if (frequency === 'WEEKLY') return `${weekDays[Number(record?.day_of_week)] || 'Weekly'}${time ? ` at ${time}` : ''}`;
+  if (frequency === 'MONTHLY') return `Day ${Number(record?.day_of_month || 1)}${time ? ` at ${time}` : ''}`;
+  return `Daily${time ? ` at ${time}` : ''}`;
+}
+
+function renderBackupOperationalModuleOptions() {
+  const scheduleSelect = document.getElementById('backup-schedule-modules');
+  const drillSelect = document.getElementById('backup-drill-module');
+  if (scheduleSelect && sysBackupCoverage.length) {
+    const existing = new Set(Array.from(scheduleSelect.selectedOptions || []).map(option => option.value));
+    const initialized = scheduleSelect.dataset.initialized === 'true';
+    scheduleSelect.innerHTML = sysBackupCoverage.map(module => `
+      <option value="${sysEsc(module.module_key)}" ${initialized ? (existing.has(module.module_key) ? 'selected' : '') : 'selected'}>${sysEsc(module.module_name)}</option>
+    `).join('');
+    scheduleSelect.dataset.initialized = 'true';
+    renderBackupScheduleModulePicker(sysBackupScheduleModuleQuery);
+  }
+  if (drillSelect && sysBackupCoverage.length) {
+    const selected = drillSelect.value;
+    drillSelect.innerHTML = '<option value="">All covered modules</option>' + sysBackupCoverage.map(module => `
+      <option value="${sysEsc(module.module_key)}">${sysEsc(module.module_name)}</option>
+    `).join('');
+    drillSelect.value = selected;
+  }
+}
+
+function renderBackupScheduleModulePicker(query = sysBackupScheduleModuleQuery) {
+  sysBackupScheduleModuleQuery = String(query || '');
+  const picker = document.getElementById('backup-schedule-module-picker');
+  const select = document.getElementById('backup-schedule-modules');
+  const help = document.getElementById('backup-schedule-modules-help');
+  if (!picker || !select) return;
+  const selected = new Set(Array.from(select.selectedOptions || []).map(option => option.value));
+  const visible = sysBackupCoverage.filter(module => backupMatchesQuery(
+    sysBackupScheduleModuleQuery,
+    module.module_name,
+    module.module_key
+  ));
+  if (help) help.textContent = `${selected.size} module${selected.size === 1 ? '' : 's'} selected. Selection stays while searching.`;
+  if (!visible.length) {
+    picker.innerHTML = '<div class="backup-operation-module-empty">No matching modules.</div>';
+    return;
+  }
+  picker.innerHTML = visible.map(module => {
+    const checked = selected.has(module.module_key);
+    return `<label class="backup-operation-module-chip${checked ? ' is-selected' : ''}"><input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleBackupScheduleModule(${sysJsString(module.module_key)}, this.checked)" /><span>${sysEsc(module.module_name)}</span></label>`;
+  }).join('');
+}
+
+function toggleBackupScheduleModule(moduleKey, selected) {
+  const select = document.getElementById('backup-schedule-modules');
+  if (!select) return;
+  const option = Array.from(select.options || []).find(item => item.value === moduleKey);
+  if (option) option.selected = Boolean(selected);
+  renderBackupScheduleModulePicker();
+}
+
+function selectAllBackupScheduleModules(selected = true) {
+  const select = document.getElementById('backup-schedule-modules');
+  if (!select) return;
+  Array.from(select.options || []).forEach(option => { option.selected = Boolean(selected); });
+  renderBackupScheduleModulePicker();
+}
+
+function updateScheduleFrequencyFields(prefix) {
+  const frequency = String(document.getElementById(`${prefix}-frequency`)?.value || 'DAILY').toUpperCase();
+  const timeField = document.getElementById(`${prefix}-time-field`);
+  const weekdayField = document.getElementById(`${prefix}-weekday-field`);
+  const monthdayField = document.getElementById(`${prefix}-monthday-field`);
+  if (timeField) timeField.hidden = frequency === 'HOURLY';
+  if (weekdayField) weekdayField.hidden = frequency !== 'WEEKLY';
+  if (monthdayField) monthdayField.hidden = frequency !== 'MONTHLY';
+}
+
+function backupSchedulePayload(prefix, options = {}) {
+  const frequency = String(document.getElementById(`${prefix}-frequency`)?.value || 'DAILY').toUpperCase();
+  const payload = {
+    frequency,
+    run_time: document.getElementById(`${prefix}-time`)?.value || '02:00',
+    timezone: document.getElementById(`${prefix}-timezone`)?.value || 'Asia/Manila',
+    enabled: Boolean(document.getElementById(`${prefix}-enabled`)?.checked),
+  };
+  if (frequency === 'WEEKLY') payload.day_of_week = Number(document.getElementById(`${prefix}-weekday`)?.value || 1);
+  if (frequency === 'MONTHLY') payload.day_of_month = Number(document.getElementById(`${prefix}-monthday`)?.value || 1);
+  return { ...payload, ...options };
+}
+
+function resetBackupScheduleForm() {
+  const form = document.getElementById('backup-schedule-form');
+  form?.reset?.();
+  const id = document.getElementById('backup-schedule-id');
+  const title = document.getElementById('backup-schedule-form-title');
+  const modules = document.getElementById('backup-schedule-modules');
+  if (id) id.value = '';
+  if (title) title.textContent = 'Create backup schedule';
+  if (modules) Array.from(modules.options || []).forEach(option => { option.selected = true; });
+  const moduleSearch = document.getElementById('backup-schedule-module-search');
+  if (moduleSearch) moduleSearch.value = '';
+  sysBackupScheduleModuleQuery = '';
+  const time = document.getElementById('backup-schedule-time');
+  const timezone = document.getElementById('backup-schedule-timezone');
+  const enabled = document.getElementById('backup-schedule-enabled');
+  if (time) time.value = '02:00';
+  if (timezone) timezone.value = 'Asia/Manila';
+  if (enabled) enabled.checked = true;
+  updateScheduleFrequencyFields('backup-schedule');
+  renderBackupScheduleModulePicker();
+}
+
+function editBackupSchedule(scheduleId) {
+  const schedule = sysBackupSchedules.find(item => backupRecordId(item, ['schedule_id']) === Number(scheduleId));
+  if (!schedule) return;
+  const set = (id, value) => { const element = document.getElementById(id); if (element) element.value = value ?? ''; };
+  set('backup-schedule-id', backupRecordId(schedule, ['schedule_id']));
+  set('backup-schedule-name', schedule.schedule_name || schedule.name || '');
+  set('backup-schedule-type', schedule.backup_type || 'DATABASE');
+  set('backup-schedule-provider', schedule.storage_provider || 'LOCAL');
+  set('backup-schedule-frequency', schedule.frequency || 'DAILY');
+  set('backup-schedule-time', String(schedule.run_time || '02:00').slice(0, 5));
+  set('backup-schedule-weekday', schedule.day_of_week || 1);
+  set('backup-schedule-monthday', schedule.day_of_month || 1);
+  set('backup-schedule-timezone', schedule.timezone || 'Asia/Manila');
+  const enabled = document.getElementById('backup-schedule-enabled');
+  if (enabled) enabled.checked = backupEnabled(schedule);
+  const selectedModules = new Set(backupArrayValue(schedule.included_modules));
+  const modules = document.getElementById('backup-schedule-modules');
+  if (modules) Array.from(modules.options || []).forEach(option => { option.selected = selectedModules.has(option.value); });
+  const title = document.getElementById('backup-schedule-form-title');
+  if (title) title.textContent = 'Edit backup schedule';
+  updateScheduleFrequencyFields('backup-schedule');
+  renderBackupScheduleModulePicker();
+  focusBackupArea('automation', 'backup-schedule-form');
+}
+
+async function saveBackupSchedule() {
+  const id = Number(document.getElementById('backup-schedule-id')?.value || 0);
+  const name = document.getElementById('backup-schedule-name')?.value.trim();
+  const moduleSelect = document.getElementById('backup-schedule-modules');
+  const includedModules = Array.from(moduleSelect?.selectedOptions || []).map(option => option.value).filter(Boolean);
+  if (!name) return showSysToast('Enter a schedule name.', 'error');
+  if (!includedModules.length) return showSysToast('Select at least one module for the backup schedule.', 'error');
+  const body = backupSchedulePayload('backup-schedule', {
+    schedule_name: name,
+    backup_type: document.getElementById('backup-schedule-type')?.value || 'DATABASE',
+    storage_provider: document.getElementById('backup-schedule-provider')?.value || 'LOCAL',
+    included_modules: includedModules,
+  });
+  const idempotencyKey = backupIdempotencyKey(id ? 'schedule-update' : 'schedule-create', id || 'new');
+  return runBackupMutation(`schedule-save:${id || 'new'}`, async () => {
+    try {
+      const response = await apiFetch(id ? `/api/admin/backups/schedules/${id}` : '/api/admin/backups/schedules', {
+        method: id ? 'PATCH' : 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save backup schedule.');
+      clearBackupIdempotencyKey(id ? 'schedule-update' : 'schedule-create', id || 'new');
+      showSysToast(data.message || 'Backup schedule saved.', 'success');
+      resetBackupScheduleForm();
+      await loadBackupLogs();
+      return data;
+    } catch (error) {
+      showSysToast(error.message || 'Failed to save backup schedule.', 'error');
+      return null;
+    }
+  });
+}
+
+async function toggleBackupSchedule(scheduleId, enabled) {
+  const id = Number(scheduleId);
+  const idempotencyKey = backupIdempotencyKey('schedule-toggle', id);
+  return runBackupMutation(`schedule-toggle:${id}`, async () => {
+    try {
+      const response = await apiFetch(`/api/admin/backups/schedules/${id}`, {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ enabled: Boolean(enabled) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to update backup schedule.');
+      clearBackupIdempotencyKey('schedule-toggle', id);
+      showSysToast(data.message || `Backup schedule ${enabled ? 'enabled' : 'disabled'}.`, 'success');
+      await loadBackupLogs();
+      return data;
+    } catch (error) {
+      showSysToast(error.message || 'Failed to update backup schedule.', 'error');
+      return null;
+    }
+  });
+}
+
+function runBackupScheduleNow(scheduleId) {
+  const id = Number(scheduleId);
+  return backupProtectedMutation({
+    lockKey: `schedule-run:${id}`,
+    purpose: 'SCHEDULE_RUN',
+    resourceType: 'BACKUP_SCHEDULE',
+    resourceId: id,
+    endpoint: `/api/admin/backups/schedules/${id}/run-now`,
+  });
+}
+
+function renderBackupSchedules() {
+  const tbody = document.getElementById('backup-schedules-tbody');
+  if (!tbody) return;
+  const error = sysBackupOperationalErrors['backup schedules'];
+  if (error) {
+    tbody.innerHTML = backupEmptyFilterRow(7, 'Backup schedules could not be loaded.', error);
+    return;
+  }
+  if (!sysBackupSchedules.length) {
+    tbody.innerHTML = backupEmptyFilterRow(7, 'No automated backup schedules yet.', 'Create a schedule above to keep recovery points current.');
+    return;
+  }
+  tbody.innerHTML = sysBackupSchedules.map(schedule => {
+    const id = backupRecordId(schedule, ['schedule_id']);
+    const enabled = backupEnabled(schedule);
+    const status = backupStatusValue(schedule, ['last_status', 'status'], 'NOT RUN');
+    return `<tr>
+      <td><strong>${sysEsc(schedule.schedule_name || schedule.name || `Schedule #${id}`)}</strong><br><small>${sysEsc(schedule.schedule_reference || '')}</small></td>
+      <td>${sysEsc(backupTypeLabel(schedule.backup_type))}<br><small>${sysEsc(schedule.storage_provider || '-')} &middot; ${backupArrayValue(schedule.included_modules).length} module(s)</small></td>
+      <td>${sysEsc(backupFrequencyLabel(schedule))}<br><small>${sysEsc(schedule.timezone || 'Asia/Manila')}</small></td>
+      <td><small>${sysEsc(schedule.next_run_at ? sysFormatDateTime(schedule.next_run_at) : (enabled ? 'Pending scheduler calculation' : 'Disabled'))}</small></td>
+      <td><small>${sysEsc(schedule.last_run_at ? sysFormatDateTime(schedule.last_run_at) : 'Never')}</small></td>
+      <td>${sysStatusBadge(enabled ? 'ENABLED' : 'DISABLED')}<br>${sysStatusBadge(status)}</td>
+      <td><div class="support-row-actions"><button class="btn-sysadmin-sm" onclick="editBackupSchedule(${id})">Edit</button><button class="btn-sysadmin-sm" onclick="toggleBackupSchedule(${id}, ${enabled ? 'false' : 'true'})">${enabled ? 'Disable' : 'Enable'}</button><button class="btn-sysadmin-sm backup-action-primary" onclick="runBackupScheduleNow(${id})">Run now with MFA</button></div></td>
+    </tr>`;
+  }).join('');
+}
+
+function populateBackupRetentionForm() {
+  const form = document.getElementById('backup-retention-form');
+  if (!form) return;
+  const policy = sysBackupRetentionPolicy;
+  if (!policy || Array.isArray(policy)) {
+    form.dataset.policyId = '';
+    const error = sysBackupOperationalErrors['retention policy'];
+    const result = document.getElementById('backup-retention-result');
+    if (error && result) result.textContent = error;
+    return;
+  }
+  form.dataset.policyId = String(backupRecordId(policy, ['policy_id']));
+  const set = (id, value) => { const element = document.getElementById(id); if (element) element.value = value ?? ''; };
+  set('backup-retention-name', policy.policy_name || 'Default backup retention');
+  set('backup-retention-type', policy.backup_type || 'ALL');
+  set('backup-retention-provider', policy.storage_provider || 'ALL');
+  set('backup-retention-keep-last', policy.keep_last ?? 7);
+  set('backup-retention-age', policy.max_age_days ?? 90);
+  const deleteArtifacts = document.getElementById('backup-retention-delete-artifacts');
+  const enabled = document.getElementById('backup-retention-enabled');
+  if (deleteArtifacts) deleteArtifacts.checked = backupExplicitBoolean(policy, ['delete_expired_artifacts']) === true;
+  if (enabled) enabled.checked = backupEnabled(policy);
+}
+
+function backupRetentionPayload(forceEnabled) {
+  return {
+    policy_name: document.getElementById('backup-retention-name')?.value.trim() || 'Default backup retention',
+    backup_type: document.getElementById('backup-retention-type')?.value || 'ALL',
+    storage_provider: document.getElementById('backup-retention-provider')?.value || 'ALL',
+    keep_last: Number(document.getElementById('backup-retention-keep-last')?.value || 7),
+    max_age_days: Number(document.getElementById('backup-retention-age')?.value || 90),
+    delete_expired_artifacts: Boolean(document.getElementById('backup-retention-delete-artifacts')?.checked),
+    enabled: forceEnabled === undefined ? Boolean(document.getElementById('backup-retention-enabled')?.checked) : Boolean(forceEnabled),
+  };
+}
+
+async function saveBackupRetentionPolicy() {
+  const form = document.getElementById('backup-retention-form');
+  let policyId = Number(form?.dataset.policyId || 0);
+  const body = backupRetentionPayload();
+  if (body.keep_last < 1 || body.max_age_days < 1) return showSysToast('Retention values must be at least 1.', 'error');
+
+  if (!policyId) {
+    try {
+      const draftResponse = await apiFetch('/api/admin/backups/retention-policy', {
+        method: 'PUT',
+        headers: { 'Idempotency-Key': backupIdempotencyKey('retention-draft') },
+        body: JSON.stringify({ ...body, enabled: false }),
+      });
+      const draft = await draftResponse.json();
+      if (!draftResponse.ok) throw new Error(draft.error || 'Failed to create a disabled retention-policy draft.');
+      clearBackupIdempotencyKey('retention-draft');
+      policyId = backupRecordId(draft.policy || draft.item || draft, ['policy_id']);
+      if (!policyId) throw new Error('The retention policy response did not include its identifier.');
+      if (form) form.dataset.policyId = String(policyId);
+      if (!body.enabled) {
+        showSysToast(draft.message || 'Disabled retention policy saved.', 'success');
+        await loadBackupLogs();
+        return draft;
+      }
+    } catch (error) {
+      showSysToast(error.message || 'Failed to save retention policy.', 'error');
+      return null;
+    }
+  }
+
+  return backupProtectedMutation({
+    lockKey: `retention-save:${policyId}`,
+    purpose: 'RETENTION_EXECUTE',
+    resourceType: 'RETENTION_POLICY',
+    resourceId: policyId,
+    endpoint: '/api/admin/backups/retention-policy',
+    method: 'PUT',
+    payload: { ...body, policy_id: policyId },
+  });
+}
+
+async function runBackupRetentionCleanup() {
+  const policyId = Number(document.getElementById('backup-retention-form')?.dataset.policyId || backupRecordId(sysBackupRetentionPolicy, ['policy_id']));
+  if (!policyId) return showSysToast('Save the retention policy before running cleanup.', 'error');
+  const confirmed = typeof showConfirm === 'function'
+    ? await showConfirm('Run retention cleanup now? The newest verified copies are preserved, and every expired artifact action is audit-logged.', 'Backup Retention Cleanup', 'Run Cleanup', 'Cancel')
+    : confirm('Run retention cleanup now? Expired artifacts may be permanently deleted according to the saved policy.');
+  if (!confirmed) return null;
+  const data = await backupProtectedMutation({
+    lockKey: `retention-run:${policyId}`,
+    purpose: 'RETENTION_EXECUTE',
+    resourceType: 'RETENTION_POLICY',
+    resourceId: policyId,
+    endpoint: '/api/admin/backups/retention/run',
+    payload: { policy_id: policyId },
+  });
+  const result = document.getElementById('backup-retention-result');
+  if (data && result) {
+    const rows = Array.isArray(data) ? data
+      : (Array.isArray(data.results) ? data.results
+        : (Array.isArray(data.result) ? data.result : []));
+    if (rows.length) {
+      const count = status => rows.filter(item => String(item.status || '').toUpperCase() === status).length;
+      result.textContent = `Cleanup complete: ${rows.length} artifact(s) evaluated; ${count('EXPIRED')} expired, ${count('DELETED')} deleted, ${count('DELETE_PENDING')} pending provider deletion, ${count('ERROR')} error(s).`;
+    } else {
+      const summary = data.result || data.summary || data;
+    result.textContent = `Cleanup complete: ${Number(summary.expired_count || summary.expired || 0)} expired, ${Number(summary.deleted_artifacts || summary.deleted || 0)} artifact(s) deleted, ${Number(summary.deletion_pending || 0)} pending provider deletion, ${Number(summary.preserved_verified || summary.preserved || 0)} verified copy/copies preserved.`;
+    }
+  }
+  return data;
+}
+
+function backupNotificationRead(notification) {
+  const explicit = backupExplicitBoolean(notification, ['is_read']);
+  if (explicit !== null) return explicit;
+  return Boolean(notification?.read_at) || ['READ', 'RESOLVED'].includes(String(notification?.status || '').toUpperCase());
+}
+
+function backupNotificationTarget(resourceType) {
+  const type = String(resourceType || '').toUpperCase();
+  if (type.includes('DRILL')) return ['drills', 'backup-drills-tbody'];
+  if (type.includes('RESTORE')) return ['restore', 'restore-jobs-table'];
+  if (type.includes('ROLLBACK')) return ['rollback', 'rollback-requests-tbody'];
+  if (type.includes('SCHEDULE')) return ['automation', 'backup-schedules-tbody'];
+  return ['sets', 'backup-logs-tbody'];
+}
+
+async function markBackupNotificationRead(notificationId, options = {}) {
+  const id = Number(notificationId);
+  const notification = sysBackupNotifications.find(item => backupRecordId(item, ['notification_id']) === id);
+  if (!notification || backupNotificationRead(notification)) return notification;
+  try {
+    const response = await apiFetch(`/api/admin/backups/notifications/${id}/read`, {
+      method: 'PATCH',
+      headers: { 'Idempotency-Key': backupIdempotencyKey('notification-read', id) },
+      body: JSON.stringify({}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to mark notification as read.');
+    clearBackupIdempotencyKey('notification-read', id);
+    notification.status = 'READ';
+    notification.read_at = data.read_at || new Date().toISOString();
+    renderBackupNotifications();
+    if (!options.silent) showSysToast(data.message || 'Notification marked as read.', 'success');
+    return notification;
+  } catch (error) {
+    showSysToast(error.message || 'Failed to mark notification as read.', 'error');
+    return null;
+  }
+}
+
+async function openBackupNotification(notificationId) {
+  const id = Number(notificationId);
+  const notification = sysBackupNotifications.find(item => backupRecordId(item, ['notification_id']) === id);
+  if (!notification) return;
+  await markBackupNotificationRead(id, { silent: true });
+  const [tab, target] = backupNotificationTarget(notification.resource_type || notification.entity_type || notification.category);
+  focusBackupArea(tab, target);
+}
+
+function clearBackupNotificationFilters() {
+  const search = document.getElementById('backup-notification-search');
+  const filter = document.getElementById('backup-notification-filter');
+  if (search) search.value = '';
+  if (filter) filter.value = 'ALL';
+  renderBackupNotifications();
+  search?.focus?.();
+}
+
+function renderBackupNotifications() {
+  const target = document.getElementById('backup-notification-inbox');
+  const badge = document.getElementById('backup-notification-count');
+  if (!target) return;
+  const unreadCount = sysBackupNotifications.filter(item => !backupNotificationRead(item)).length;
+  if (badge) {
+    badge.textContent = String(unreadCount > 99 ? '99+' : unreadCount);
+    badge.hidden = unreadCount === 0;
+  }
+  const error = sysBackupOperationalErrors['checker notifications'];
+  if (error) {
+    target.innerHTML = `<div class="backup-notification-empty"><strong>Checker inbox could not be loaded.</strong><small>${sysEsc(error)}</small></div>`;
+    setBackupResultCount('backup-notification-results', 0, 0, 'notification');
+    return;
+  }
+  const query = document.getElementById('backup-notification-search')?.value || '';
+  const filter = document.getElementById('backup-notification-filter')?.value || 'ALL';
+  const visible = sysBackupNotifications.filter(notification => {
+    const read = backupNotificationRead(notification);
+    if (filter === 'UNREAD' && read) return false;
+    if (filter === 'READ' && !read) return false;
+    return backupMatchesQuery(query, notification.title, notification.message, notification.category, notification.resource_type, notification.resource_id);
+  });
+  setBackupResultCount('backup-notification-results', visible.length, sysBackupNotifications.length, 'notification');
+  if (!visible.length) {
+    target.innerHTML = '<div class="backup-notification-empty"><strong>No notifications match this view.</strong><small>Pending checker actions will appear here without bypassing maker-checker separation.</small></div>';
+    return;
+  }
+  target.innerHTML = visible.map(notification => {
+    const id = backupRecordId(notification, ['notification_id']);
+    const read = backupNotificationRead(notification);
+    const actionRequired = backupExplicitBoolean(notification, ['action_required']) === true;
+    return `<article class="backup-notification-item${read ? ' is-read' : ' is-unread'}">
+      <span class="backup-notification-dot" aria-hidden="true"></span>
+      <div class="backup-notification-copy"><div class="backup-notification-heading"><strong>${sysEsc(notification.title || 'Backup and restore notification')}</strong>${actionRequired ? '<span class="backup-notification-action-label">Action required</span>' : ''}</div><p>${sysEsc(notification.message || 'Open the related protected workflow for details.')}</p><small>${sysEsc(backupTypeLabel(notification.category || notification.resource_type || 'SYSTEM'))} &middot; ${sysEsc(sysFormatDateTime(notification.created_at))}</small></div>
+      <div class="backup-notification-actions"><button type="button" class="btn-sysadmin-sm backup-action-primary" onclick="openBackupNotification(${id})">Open workflow</button>${read ? '' : `<button type="button" class="btn-sysadmin-sm" onclick="markBackupNotificationRead(${id})">Mark read</button>`}</div>
+    </article>`;
+  }).join('');
+}
+
+function resetBackupRestoreDrillForm() {
+  const form = document.getElementById('backup-drill-form');
+  form?.reset?.();
+  const id = document.getElementById('backup-drill-id');
+  const title = document.getElementById('backup-drill-form-title');
+  if (id) id.value = '';
+  if (title) title.textContent = 'Create restore drill';
+  const time = document.getElementById('backup-drill-time');
+  const timezone = document.getElementById('backup-drill-timezone');
+  const enabled = document.getElementById('backup-drill-enabled');
+  if (time) time.value = '03:00';
+  if (timezone) timezone.value = 'Asia/Manila';
+  if (enabled) enabled.checked = true;
+  updateScheduleFrequencyFields('backup-drill');
+}
+
+function editBackupRestoreDrill(drillId) {
+  const drill = sysBackupRestoreDrills.find(item => backupRecordId(item, ['drill_id', 'schedule_id']) === Number(drillId));
+  if (!drill) return;
+  const set = (id, value) => { const element = document.getElementById(id); if (element) element.value = value ?? ''; };
+  set('backup-drill-id', backupRecordId(drill, ['drill_id', 'schedule_id']));
+  set('backup-drill-name', drill.drill_name || drill.name || '');
+  set('backup-drill-type', drill.backup_type || drill.backup_type_filter || 'DATABASE');
+  set('backup-drill-provider', drill.storage_provider || drill.storage_provider_filter || 'ALL');
+  set('backup-drill-module', drill.affected_module || drill.module_key_filter || '');
+  set('backup-drill-frequency', drill.frequency || 'WEEKLY');
+  set('backup-drill-time', String(drill.run_time || '03:00').slice(0, 5));
+  set('backup-drill-weekday', drill.day_of_week || 7);
+  set('backup-drill-monthday', drill.day_of_month || 1);
+  set('backup-drill-timezone', drill.timezone || 'Asia/Manila');
+  const enabled = document.getElementById('backup-drill-enabled');
+  if (enabled) enabled.checked = backupEnabled(drill);
+  const title = document.getElementById('backup-drill-form-title');
+  if (title) title.textContent = 'Edit restore drill';
+  updateScheduleFrequencyFields('backup-drill');
+  focusBackupArea('drills', 'backup-drill-form');
+}
+
+async function saveBackupRestoreDrill() {
+  const id = Number(document.getElementById('backup-drill-id')?.value || 0);
+  const drillName = document.getElementById('backup-drill-name')?.value.trim();
+  if (!drillName) return showSysToast('Enter a restore drill name.', 'error');
+  const body = backupSchedulePayload('backup-drill', {
+    drill_name: drillName,
+    backup_type: document.getElementById('backup-drill-type')?.value || 'DATABASE',
+    storage_provider: document.getElementById('backup-drill-provider')?.value || 'ALL',
+    affected_module: document.getElementById('backup-drill-module')?.value || null,
+  });
+  const prefix = id ? 'drill-update' : 'drill-create';
+  const idempotencyKey = backupIdempotencyKey(prefix, id || 'new');
+  return runBackupMutation(`drill-save:${id || 'new'}`, async () => {
+    try {
+      const response = await apiFetch(id ? `/api/admin/backups/restore-drills/${id}` : '/api/admin/backups/restore-drills', {
+        method: id ? 'PATCH' : 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save restore drill.');
+      clearBackupIdempotencyKey(prefix, id || 'new');
+      showSysToast(data.message || 'Restore drill saved.', 'success');
+      resetBackupRestoreDrillForm();
+      await loadBackupLogs();
+      return data;
+    } catch (error) {
+      showSysToast(error.message || 'Failed to save restore drill.', 'error');
+      return null;
+    }
+  });
+}
+
+async function toggleBackupRestoreDrill(drillId, enabled) {
+  const id = Number(drillId);
+  const idempotencyKey = backupIdempotencyKey('drill-toggle', id);
+  return runBackupMutation(`drill-toggle:${id}`, async () => {
+    try {
+      const response = await apiFetch(`/api/admin/backups/restore-drills/${id}`, {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ enabled: Boolean(enabled) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to update restore drill.');
+      clearBackupIdempotencyKey('drill-toggle', id);
+      showSysToast(data.message || `Restore drill ${enabled ? 'enabled' : 'disabled'}.`, 'success');
+      await loadBackupLogs();
+      return data;
+    } catch (error) {
+      showSysToast(error.message || 'Failed to update restore drill.', 'error');
+      return null;
+    }
+  });
+}
+
+function runBackupRestoreDrillNow(drillId) {
+  const id = Number(drillId);
+  return backupProtectedMutation({
+    lockKey: `drill-run:${id}`,
+    purpose: 'DRILL_RUN',
+    resourceType: 'RESTORE_DRILL',
+    resourceId: id,
+    endpoint: `/api/admin/backups/restore-drills/${id}/run-now`,
+  });
+}
+
+function renderBackupRestoreDrills() {
+  const tbody = document.getElementById('backup-drills-tbody');
+  if (!tbody) return;
+  const error = sysBackupOperationalErrors['restore drills'];
+  if (error) {
+    tbody.innerHTML = backupEmptyFilterRow(7, 'Restore drills could not be loaded.', error);
+    return;
+  }
+  if (!sysBackupRestoreDrills.length) {
+    tbody.innerHTML = backupEmptyFilterRow(7, 'No scheduled restore drills yet.', 'Create a drill above to test verified artifacts in isolation.');
+    return;
+  }
+  tbody.innerHTML = sysBackupRestoreDrills.map(drill => {
+    const id = backupRecordId(drill, ['drill_id', 'schedule_id']);
+    const enabled = backupEnabled(drill);
+    const latest = drill.latest_run || drill.last_run || drill;
+    const status = backupStatusValue(latest, ['status', 'latest_status', 'last_status'], 'NOT RUN');
+    const integrity = backupStatusValue(latest, ['integrity_status', 'latest_integrity_status'], 'NOT CHECKED');
+    const backupType = drill.backup_type || drill.backup_type_filter;
+    const provider = drill.storage_provider || drill.storage_provider_filter || 'Any provider';
+    const moduleKey = drill.affected_module || drill.module_key_filter;
+    const rawResult = latest.result_message || latest.latest_result_message || latest.failure_message || latest.result;
+    const resultText = rawResult && typeof rawResult === 'object'
+      ? (rawResult.safeToRestore === true
+        ? (rawResult.disposableRestore ? 'Disposable restore and integrity checks passed; target cleaned up.' : 'Isolated restore and integrity checks passed.')
+        : (rawResult.reason || 'Review the isolated drill result.'))
+      : (rawResult || 'Isolated target only');
+    return `<tr>
+      <td><strong>${sysEsc(drill.drill_name || drill.name || `Drill #${id}`)}</strong><br>${sysStatusBadge(enabled ? 'ENABLED' : 'DISABLED')}</td>
+      <td>${sysEsc(backupTypeLabel(backupType))}<br><small>${sysEsc(provider)} &middot; ${sysEsc(moduleKey ? backupModuleName(moduleKey) : 'Latest verified eligible artifact')}</small></td>
+      <td>${sysEsc(backupFrequencyLabel(drill))}<br><small>${sysEsc(drill.timezone || 'Asia/Manila')}</small></td>
+      <td><small>${sysEsc(drill.next_run_at ? sysFormatDateTime(drill.next_run_at) : (enabled ? 'Pending scheduler calculation' : 'Disabled'))}</small></td>
+      <td>${sysStatusBadge(status)}<br><small>${sysEsc(latest.completed_at || drill.latest_completed_at || drill.last_run_at ? sysFormatDateTime(latest.completed_at || drill.latest_completed_at || drill.last_run_at) : 'Never')}</small></td>
+      <td>${sysStatusBadge(integrity)}<br><small>${sysEsc(resultText)}</small></td>
+      <td><div class="support-row-actions"><button class="btn-sysadmin-sm" onclick="editBackupRestoreDrill(${id})">Edit</button><button class="btn-sysadmin-sm" onclick="toggleBackupRestoreDrill(${id}, ${enabled ? 'false' : 'true'})">${enabled ? 'Disable' : 'Enable'}</button><button class="btn-sysadmin-sm backup-action-primary" onclick="runBackupRestoreDrillNow(${id})">Run drill with MFA</button></div></td>
+    </tr>`;
+  }).join('');
+}
+
 function renderBackupSettings() {
   const target = document.getElementById('backup-settings-grid');
   if (!target) return;
   const settings = sysBackupDashboard?.settings || {};
+  const providerReadiness = settings.provider_readiness || settings.providerReadiness || sysBackupDashboard?.provider_readiness || {};
+  const s3Readiness = providerReadiness.s3 || {};
+  const rdsSnapshotReadiness = providerReadiness.rdsSnapshot || providerReadiness.rds_snapshot || {};
+  const rdsRestoreReadiness = providerReadiness.rdsIsolatedRestore || providerReadiness.rds_isolated_restore || {};
+  const databaseDryRunReadiness = providerReadiness.databaseDryRun || providerReadiness.database_dry_run || {};
   const workerStatus = backupExplicitBoolean(settings, ['backup_worker_enabled']);
   const localAdapterStatus = backupExplicitBoolean(settings, ['local_adapter_configured']);
   const isolatedRestoreStatus = backupExplicitBoolean(settings, ['isolated_restore_configured']);
   const makerCheckerStatus = backupExplicitBoolean(settings, ['maker_checker_required']);
   const stepUpStatus = backupExplicitBoolean(settings, ['step_up_mfa_required']);
+  const sourceCodeStatus = backupExplicitBoolean(settings, ['source_code_backup_configured']);
+  const codeCutoverStatus = backupExplicitBoolean(settings, ['module_code_cutover_enabled']);
+  const schedulerStatus = backupExplicitBoolean(settings, ['backup_scheduler_enabled', 'automation_scheduler_enabled']);
+  const retentionWorkerStatus = backupExplicitBoolean(settings, ['retention_cleanup_enabled', 'retention_worker_enabled']);
+  const drillWorkerStatus = backupExplicitBoolean(settings, ['restore_drill_worker_enabled', 'scheduled_restore_drills_enabled']);
+  const s3EncryptionStatus = backupExplicitBoolean(settings, ['s3_encryption_configured', 's3_kms_configured'])
+    ?? (s3Readiness.encryption ? true : null);
+  const rdsEncryptionStatus = backupExplicitBoolean(settings, ['rds_encrypted_snapshots_required', 'rds_encryption_configured'])
+    ?? backupExplicitBoolean(rdsSnapshotReadiness, ['encryptedSnapshotsRequired']);
   const configurationLabel = value => value === true ? 'Configured' : value === false ? 'Missing' : 'Status unavailable';
   const enforcementLabel = value => value === true ? 'Enforced' : value === false ? 'Not enforced' : 'Status unavailable';
   const items = [
     ['Backup Worker', workerStatus === true ? 'Enabled' : workerStatus === false ? 'Not ready' : 'Status unavailable'],
+    ['Automated Schedule Worker', schedulerStatus === true ? 'Enabled' : schedulerStatus === false ? 'Disabled' : 'Status unavailable'],
+    ['Retention Cleanup Worker', retentionWorkerStatus === true ? 'Enabled' : retentionWorkerStatus === false ? 'Disabled' : 'Status unavailable'],
+    ['Scheduled Restore Drills', drillWorkerStatus === true ? 'Enabled' : drillWorkerStatus === false ? 'Disabled' : 'Status unavailable'],
     ['Database Backups', settings.database_provider || 'Not configured'],
     ['File Backups', settings.file_provider || 'Not configured'],
     ['Configuration Backups', settings.config_provider || 'Not configured'],
@@ -3365,9 +4394,15 @@ function renderBackupSettings() {
     ['Maker-checker Approval', enforcementLabel(makerCheckerStatus)],
     ['Step-up MFA', enforcementLabel(stepUpStatus)],
     ['Deployment Rollback', settings.deployment_provider || 'Not configured'],
+    ['Module Source-code Capture', configurationLabel(sourceCodeStatus)],
+    ['Transactional Code Cutover', codeCutoverStatus === true ? 'Enabled' : codeCutoverStatus === false ? 'Disabled (fail-closed)' : 'Status unavailable'],
     ['AWS Region', settings.aws_region_configured ? 'Configured' : 'Missing'],
-    ['S3 Bucket', settings.s3_bucket_configured ? 'Configured' : 'Missing'],
-    ['RDS Snapshot', settings.rds_snapshot_configured ? 'Configured' : 'Missing'],
+    ['S3 Bucket', settings.s3_bucket_configured || s3Readiness.configured ? (s3Readiness.ready === false ? 'Configured; needs attention' : 'Configured') : 'Missing'],
+    ['S3 Artifact Encryption', s3Readiness.encryption || configurationLabel(s3EncryptionStatus)],
+    ['RDS Snapshot', settings.rds_snapshot_configured || rdsSnapshotReadiness.configured ? (rdsSnapshotReadiness.ready === false ? 'Configured; needs attention' : 'Configured') : 'Missing'],
+    ['RDS Encrypted Snapshots', configurationLabel(rdsEncryptionStatus)],
+    ['RDS Isolated Restore', rdsRestoreReadiness.ready === true ? 'Ready; in-place restore blocked' : rdsRestoreReadiness.ready === false ? 'Missing configuration' : 'Status unavailable'],
+    ['Database Dry-run Target', databaseDryRunReadiness.ready === true ? 'Ready; isolated database required' : databaseDryRunReadiness.ready === false ? 'Missing configuration' : 'Status unavailable'],
     ['RDS Post-restore Verification', settings.rds_restore_verification_configured ? 'Configured' : 'Missing'],
   ];
   target.innerHTML = items.map(([label, value]) => `
@@ -3380,6 +4415,7 @@ function renderBackupSettings() {
 
 function renderBackupRecoveryWorkspace() {
   renderBackupModuleOptions();
+  renderBackupOperationalModuleOptions();
   renderBackupReadiness();
   renderBackupNextActions();
   renderBackupSummaryCards();
@@ -3388,16 +4424,27 @@ function renderBackupRecoveryWorkspace() {
   renderModuleRecoveryPoints();
   renderRestoreJobs();
   renderRollbackRequests();
+  renderBackupSchedules();
+  populateBackupRetentionForm();
+  renderBackupNotifications();
+  renderBackupRestoreDrills();
+  Object.keys(sysBackupPagination).forEach(renderBackupPagination);
   renderBackupSettings();
   switchBackupRecoveryTab(sysBackupActiveTab);
 }
 
 async function requestBackup() {
+  const includedModules = backupSelectModules();
+  if (!includedModules.length) {
+    showSysToast('Select at least one module to include in the backup.', 'error');
+    document.getElementById('backup-module-picker-search')?.focus?.();
+    return null;
+  }
   const body = {
     backup_name: document.getElementById('backup-name')?.value || '',
     backup_type: document.getElementById('backup-type')?.value || 'DATABASE',
     storage_provider: document.getElementById('backup-target')?.value || 'LOCAL',
-    included_modules: backupSelectModules(),
+    included_modules: includedModules,
     notes: document.getElementById('backup-notes')?.value || '',
   };
   const idempotencyKey = backupIdempotencyKey('backup-request');
@@ -3467,6 +4514,9 @@ function backupStepUpLabel(purpose) {
     RESTORE_VERIFY: 'verify this isolated RDS restore target',
     ROLLBACK_APPROVE: 'approve this rollback request',
     ROLLBACK_EXECUTE: 'execute this approved rollback',
+    SCHEDULE_RUN: 'run this backup schedule now',
+    RETENTION_EXECUTE: 'change retention or clean expired artifacts',
+    DRILL_RUN: 'run this isolated restore drill now',
   })[purpose] || 'continue this recovery action';
 }
 
@@ -4090,6 +5140,37 @@ window.updateSupportTicket   = updateSupportTicket;
 window.loadBackupLogs        = loadBackupLogs;
 window.switchBackupRecoveryTab = switchBackupRecoveryTab;
 window.focusBackupArea       = focusBackupArea;
+window.filterBackupCoverage  = filterBackupCoverage;
+window.clearBackupCoverageFilters = clearBackupCoverageFilters;
+window.filterBackupHistory   = filterBackupHistory;
+window.clearBackupHistoryFilters = clearBackupHistoryFilters;
+window.filterModuleRecoveryPoints = filterModuleRecoveryPoints;
+window.clearModuleRecoveryFilters = clearModuleRecoveryFilters;
+window.changeBackupPage     = changeBackupPage;
+window.changeBackupPageSize = changeBackupPageSize;
+window.filterBackupModulePicker = filterBackupModulePicker;
+window.toggleBackupModule    = toggleBackupModule;
+window.selectAllBackupModules = selectAllBackupModules;
+window.updateScheduleFrequencyFields = updateScheduleFrequencyFields;
+window.renderBackupScheduleModulePicker = renderBackupScheduleModulePicker;
+window.toggleBackupScheduleModule = toggleBackupScheduleModule;
+window.selectAllBackupScheduleModules = selectAllBackupScheduleModules;
+window.saveBackupSchedule   = saveBackupSchedule;
+window.editBackupSchedule   = editBackupSchedule;
+window.resetBackupScheduleForm = resetBackupScheduleForm;
+window.toggleBackupSchedule = toggleBackupSchedule;
+window.runBackupScheduleNow = runBackupScheduleNow;
+window.saveBackupRetentionPolicy = saveBackupRetentionPolicy;
+window.runBackupRetentionCleanup = runBackupRetentionCleanup;
+window.renderBackupNotifications = renderBackupNotifications;
+window.clearBackupNotificationFilters = clearBackupNotificationFilters;
+window.markBackupNotificationRead = markBackupNotificationRead;
+window.openBackupNotification = openBackupNotification;
+window.saveBackupRestoreDrill = saveBackupRestoreDrill;
+window.editBackupRestoreDrill = editBackupRestoreDrill;
+window.resetBackupRestoreDrillForm = resetBackupRestoreDrillForm;
+window.toggleBackupRestoreDrill = toggleBackupRestoreDrill;
+window.runBackupRestoreDrillNow = runBackupRestoreDrillNow;
 window.requestBackup         = requestBackup;
 window.runBackup             = runBackup;
 window.updateBackupStatus    = updateBackupStatus;
@@ -4123,6 +5204,12 @@ window.__backupRecoveryUiTestHooks = Object.freeze({
   backupActionAllowed,
   backupActionAllowedAny,
   backupLifecycleGuide,
+  backupMatchesQuery,
+  backupCoverageRecoveryReady,
+  normalizeBackupPagedResponse,
+  backupFrequencyLabel,
+  backupNotificationRead,
+  backupNotificationTarget,
 });
 
 document.addEventListener('partialsLoaded', initSystemAdminIfActive);

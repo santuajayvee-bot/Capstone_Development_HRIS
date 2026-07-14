@@ -9,10 +9,22 @@ const {
   verifyBackupStepUpChallenge,
   consumeBackupStepUpChallenge,
 } = require('../services/backupStepUpService');
-const { createBackupRuntimeFromEnv } = require('../services/backup');
+const {
+  computeNextRunAt,
+  createBackupAutomationService,
+  createBackupRuntimeFromEnv,
+} = require('../services/backup');
 
 const router = express.Router();
 const runtime = createBackupRuntimeFromEnv();
+const backupAutomation = createBackupAutomationService({
+  pool,
+  runtime,
+  environment: process.env,
+  protectText: encryptColumnValue,
+  revealText: decryptColumnValue,
+  logger: console,
+});
 
 const BACKUP_TYPES = new Set(['DATABASE', 'FILES', 'CONFIGURATION', 'MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP']);
 const STORAGE_PROVIDERS = new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT', 'MANUAL']);
@@ -265,7 +277,14 @@ async function recordRecoveryHealth(executor, {
 }
 
 function backupArtifactAvailable(row) {
-  return Boolean(row.storage_location_encrypted && row.checksum && ['COMPLETED', 'VERIFIED', 'RESTORED'].includes(row.status));
+  const retentionActive = !row.retention_status || row.retention_status === 'ACTIVE';
+  return Boolean(
+    row.storage_location_encrypted
+    && row.checksum
+    && retentionActive
+    && !row.artifact_deleted_at
+    && ['COMPLETED', 'VERIFIED', 'RESTORED'].includes(row.status)
+  );
 }
 
 function backupArtifactVerified(row) {
@@ -323,6 +342,9 @@ function backupResponse(row, actorId = null) {
     completed_at: row.completed_at,
     verified_at: row.verified_at,
     restored_at: row.restored_at,
+    expires_at: row.expires_at || null,
+    retention_status: row.retention_status || 'ACTIVE',
+    artifact_deleted_at: row.artifact_deleted_at || null,
     failed_at: row.failed_at,
     failure_message: revealText(row.failure_message_encrypted),
     remarks: revealText(row.remarks_encrypted),
@@ -501,6 +523,642 @@ async function listRollbackRequests(actorId, limit = 100, executor = pool) {
   return rows.map(row => rollbackResponse(row, actorId));
 }
 
+function requestedPagination(query = {}) {
+  return ['page', 'page_size', 'search', 'status', 'type', 'module'].some(key => query[key] !== undefined);
+}
+
+function paginationOptions(query = {}) {
+  const pageValue = Number.parseInt(query.page || '1', 10);
+  const sizeValue = Number.parseInt(query.page_size || '20', 10);
+  const page = Number.isFinite(pageValue) ? Math.min(Math.max(pageValue, 1), 1000000) : 1;
+  const pageSize = Number.isFinite(sizeValue) ? Math.min(Math.max(sizeValue, 5), 100) : 20;
+  return {
+    page,
+    pageSize,
+    offset: (page - 1) * pageSize,
+    search: cleanText(query.search, 120),
+    status: cleanText(query.status || 'ALL', 40).toUpperCase(),
+    type: cleanText(query.type || 'ALL', 40).toUpperCase(),
+    module: cleanText(query.module, 80),
+  };
+}
+
+function paginatedResult(items, total, options) {
+  const totalItems = Number(total || 0);
+  const totalPages = Math.max(Math.ceil(totalItems / options.pageSize), 1);
+  return {
+    items,
+    pagination: {
+      page: options.page,
+      page_size: options.pageSize,
+      total_items: totalItems,
+      total_pages: totalPages,
+      has_previous: options.page > 1,
+      has_next: options.page < totalPages,
+    },
+  };
+}
+
+function clampPaginationToTotal(options, total) {
+  const totalPages = Math.max(Math.ceil(Number(total || 0) / options.pageSize), 1);
+  if (options.page > totalPages) options.page = totalPages;
+  options.offset = (options.page - 1) * options.pageSize;
+  return options;
+}
+
+function addSearchClause(where, params, search, columns) {
+  if (!search) return;
+  const pattern = `%${search}%`;
+  where.push(`(${columns.map(column => `${column} LIKE ?`).join(' OR ')})`);
+  columns.forEach(() => params.push(pattern));
+}
+
+async function listBackupsPaginated(actorId, query = {}, executor = pool) {
+  const options = paginationOptions(query);
+  const where = [];
+  const params = [];
+  addSearchClause(where, params, options.search, [
+    'bs.backup_reference', 'bs.backup_name', 'bs.backup_type', 'bs.storage_provider',
+    'bs.included_modules', 'creator.username',
+  ]);
+  if (options.status !== 'ALL') {
+    if (!Object.prototype.hasOwnProperty.call(BACKUP_TRANSITIONS, options.status) && !['RESTORED', 'CANCELLED'].includes(options.status)) {
+      throw new RecoveryError('Backup status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    where.push('bs.status = ?');
+    params.push(options.status);
+  }
+  if (options.type !== 'ALL') {
+    if (!BACKUP_TYPES.has(options.type)) throw new RecoveryError('Backup type filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    where.push('bs.backup_type = ?');
+    params.push(options.type);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [[countRow]] = await executor.execute(
+    `SELECT COUNT(*) AS total
+       FROM backup_sets bs
+       LEFT JOIN users creator ON creator.id = bs.created_by
+       ${whereSql}`,
+    params
+  );
+  clampPaginationToTotal(options, countRow.total);
+  const [rows] = await executor.execute(
+    `SELECT bs.*, creator.username AS created_by_username, verifier.username AS verified_by_username
+       FROM backup_sets bs
+       LEFT JOIN users creator ON creator.id = bs.created_by
+       LEFT JOIN users verifier ON verifier.id = bs.verified_by
+       ${whereSql}
+      ORDER BY bs.created_at DESC, bs.id DESC
+      LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+    params
+  );
+  return paginatedResult(rows.map(row => backupResponse(row, actorId)), countRow.total, options);
+}
+
+async function listRecoveryPointsPaginated(query = {}, executor = pool) {
+  const options = paginationOptions(query);
+  const where = [];
+  const params = [];
+  addSearchClause(where, params, options.search, [
+    'mrp.recovery_reference', 'mrp.module_key', 'mrp.module_name', 'bs.backup_reference',
+  ]);
+  if (options.module) {
+    where.push('mrp.module_key = ?');
+    params.push(options.module);
+  }
+  if (options.status !== 'ALL') {
+    const statusMap = { READY: 1, NOT_READY: 0 };
+    if (!Object.prototype.hasOwnProperty.call(statusMap, options.status)) {
+      throw new RecoveryError('Recovery readiness filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    where.push(statusMap[options.status]
+      ? "(mrp.status='AVAILABLE' AND mrp.rollback_available=1 AND mrp.verification_status='MATCH' AND mrp.integrity_status='PASSED' AND mrp.verified_at IS NOT NULL)"
+      : "(mrp.status<>'AVAILABLE' OR mrp.rollback_available<>1 OR mrp.verification_status<>'MATCH' OR mrp.integrity_status<>'PASSED' OR mrp.verified_at IS NULL)");
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [[countRow]] = await executor.execute(
+    `SELECT COUNT(*) AS total
+       FROM module_recovery_points mrp
+       LEFT JOIN backup_sets bs ON bs.id = mrp.backup_set_id
+       ${whereSql}`,
+    params
+  );
+  clampPaginationToTotal(options, countRow.total);
+  const [rows] = await executor.execute(
+    `SELECT mrp.*, bs.backup_reference, creator.username AS created_by_username
+       FROM module_recovery_points mrp
+       LEFT JOIN backup_sets bs ON bs.id = mrp.backup_set_id
+       LEFT JOIN users creator ON creator.id = mrp.created_by
+       ${whereSql}
+      ORDER BY mrp.created_at DESC, mrp.id DESC
+      LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+    params
+  );
+  return paginatedResult(rows.map(recoveryPointResponse), countRow.total, options);
+}
+
+async function listRestoreJobsPaginated(actorId, query = {}, executor = pool) {
+  const options = paginationOptions(query);
+  const where = [];
+  const params = [];
+  addSearchClause(where, params, options.search, [
+    'bs.backup_reference', 'rj.restore_type', 'rj.affected_module', 'requester.username',
+  ]);
+  if (options.status !== 'ALL') {
+    if (!Object.prototype.hasOwnProperty.call(RESTORE_TRANSITIONS, options.status) && !['COMPLETED', 'FAILED', 'REJECTED', 'CANCELLED'].includes(options.status)) {
+      throw new RecoveryError('Restore status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    where.push('rj.status = ?');
+    params.push(options.status);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const joins = `FROM restore_jobs rj
+       JOIN backup_sets bs ON bs.id = rj.backup_set_id
+       LEFT JOIN users requester ON requester.id = rj.requested_by
+       LEFT JOIN users approver ON approver.id = rj.approved_by`;
+  const [[countRow]] = await executor.execute(`SELECT COUNT(*) AS total ${joins} ${whereSql}`, params);
+  clampPaginationToTotal(options, countRow.total);
+  const [rows] = await executor.execute(
+    `SELECT rj.*, bs.backup_reference,
+            requester.username AS requested_by_username,
+            approver.username AS approved_by_username
+       ${joins} ${whereSql}
+      ORDER BY rj.created_at DESC, rj.id DESC
+      LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+    params
+  );
+  return paginatedResult(rows.map(row => restoreResponse(row, actorId)), countRow.total, options);
+}
+
+async function listRollbackRequestsPaginated(actorId, query = {}, executor = pool) {
+  const options = paginationOptions(query);
+  const where = [];
+  const params = [];
+  addSearchClause(where, params, options.search, [
+    'mrr.affected_module', 'mrr.current_version', 'mrr.target_version', 'requester.username',
+  ]);
+  if (options.status !== 'ALL') {
+    if (!Object.prototype.hasOwnProperty.call(ROLLBACK_TRANSITIONS, options.status) && !['COMPLETED', 'FAILED', 'REJECTED', 'CANCELLED'].includes(options.status)) {
+      throw new RecoveryError('Rollback status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    where.push('mrr.status = ?');
+    params.push(options.status);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const joins = `FROM module_rollback_requests mrr
+       LEFT JOIN users requester ON requester.id = mrr.requested_by
+       LEFT JOIN users approver ON approver.id = mrr.approved_by`;
+  const [[countRow]] = await executor.execute(`SELECT COUNT(*) AS total ${joins} ${whereSql}`, params);
+  clampPaginationToTotal(options, countRow.total);
+  const [rows] = await executor.execute(
+    `SELECT mrr.*, requester.username AS requested_by_username,
+            approver.username AS approved_by_username
+       ${joins} ${whereSql}
+      ORDER BY mrr.created_at DESC, mrr.id DESC
+      LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+    params
+  );
+  return paginatedResult(rows.map(row => rollbackResponse(row, actorId)), countRow.total, options);
+}
+
+const AUTOMATION_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
+
+function booleanInput(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return Boolean(fallback);
+  if (value === true || value === 1 || ['true', '1', 'yes', 'on'].includes(String(value).toLowerCase())) return true;
+  if (value === false || value === 0 || ['false', '0', 'no', 'off'].includes(String(value).toLowerCase())) return false;
+  throw new RecoveryError('Boolean setting is invalid.', 400, 'INVALID_AUTOMATION_INPUT');
+}
+
+function nullablePositiveId(value, fieldName) {
+  if (value === undefined || value === null || value === '') return null;
+  return positiveId(value, fieldName);
+}
+
+function normalizeRunTime(value, required) {
+  const raw = String(value || '').trim();
+  if (!raw && !required) return null;
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(raw)) {
+    throw new RecoveryError('run_time must use 24-hour HH:mm format.', 400, 'INVALID_AUTOMATION_TIME');
+  }
+  return raw.length === 5 ? `${raw}:00` : raw;
+}
+
+function normalizeAutomationTiming(input = {}) {
+  const frequency = normalizeEnum(input.frequency || 'DAILY', AUTOMATION_FREQUENCIES, 'frequency');
+  const runTime = normalizeRunTime(input.run_time, frequency !== 'HOURLY');
+  const dayOfWeek = frequency === 'WEEKLY' ? Number(input.day_of_week) : null;
+  const dayOfMonth = frequency === 'MONTHLY' ? Number(input.day_of_month) : null;
+  if (frequency === 'WEEKLY' && (!Number.isInteger(dayOfWeek) || dayOfWeek < 1 || dayOfWeek > 7)) {
+    throw new RecoveryError('day_of_week must be 1 (Monday) through 7 (Sunday).', 400, 'INVALID_AUTOMATION_DAY');
+  }
+  if (frequency === 'MONTHLY' && (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31)) {
+    throw new RecoveryError('day_of_month must be between 1 and 31.', 400, 'INVALID_AUTOMATION_DAY');
+  }
+  const timezone = cleanText(input.timezone || 'Asia/Manila', 64);
+  try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date()); }
+  catch (_) { throw new RecoveryError('Timezone is invalid.', 400, 'INVALID_AUTOMATION_TIMEZONE'); }
+  return {
+    frequency,
+    run_time: runTime,
+    day_of_week: dayOfWeek,
+    day_of_month: dayOfMonth,
+    timezone,
+  };
+}
+
+function automationNextRun(timing, enabled) {
+  if (!enabled) return null;
+  const next = computeNextRunAt(timing, new Date());
+  if (!(next instanceof Date) || Number.isNaN(next.getTime())) {
+    throw new RecoveryError('Unable to calculate the next automation run.', 400, 'INVALID_AUTOMATION_TIME');
+  }
+  return next;
+}
+
+function scheduleResponse(row) {
+  return {
+    id: row.id,
+    schedule_id: row.id,
+    schedule_reference: row.schedule_reference,
+    schedule_name: row.name,
+    name: row.name,
+    backup_type: row.backup_type,
+    storage_provider: row.storage_provider,
+    included_modules: normalizeModules(parseJson(row.included_modules, [])),
+    frequency: row.frequency,
+    run_time: row.run_time,
+    day_of_week: row.day_of_week,
+    day_of_month: row.day_of_month,
+    timezone: row.timezone,
+    next_run_at: row.next_run_at,
+    last_run_at: row.last_run_at,
+    last_status: row.last_status,
+    enabled: Boolean(row.enabled),
+    retention_policy_id: row.retention_policy_id,
+    created_by: row.created_by,
+    created_by_username: row.created_by_username || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function retentionPolicyResponse(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    policy_id: row.id,
+    policy_reference: row.policy_reference,
+    policy_name: row.policy_name,
+    backup_type: row.backup_type || 'ALL',
+    storage_provider: row.storage_provider || 'ALL',
+    keep_last: Number(row.keep_last),
+    max_age_days: Number(row.max_age_days),
+    delete_expired_artifacts: Boolean(row.delete_expired_artifacts),
+    enabled: Boolean(row.enabled),
+    created_by: row.created_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function drillScheduleResponse(row) {
+  const latestResult = row.latest_result_message_encrypted
+    ? parseJson(revealText(row.latest_result_message_encrypted), null)
+    : null;
+  const latestFailure = row.latest_failure_message_encrypted
+    ? revealText(row.latest_failure_message_encrypted)
+    : null;
+  return {
+    id: row.id,
+    drill_id: row.id,
+    schedule_reference: row.schedule_reference,
+    drill_name: row.name,
+    name: row.name,
+    selection_strategy: row.selection_strategy,
+    backup_type: row.backup_type_filter || 'ALL',
+    storage_provider: row.storage_provider_filter || 'ALL',
+    affected_module: row.module_key_filter || null,
+    frequency: row.frequency,
+    run_time: row.run_time,
+    day_of_week: row.day_of_week,
+    day_of_month: row.day_of_month,
+    timezone: row.timezone,
+    next_run_at: row.next_run_at,
+    last_run_at: row.last_run_at,
+    last_status: row.last_status,
+    enabled: Boolean(row.enabled),
+    latest_run_id: row.latest_run_id || null,
+    latest_run_status: row.latest_run_status || null,
+    latest_integrity_status: row.latest_integrity_status || null,
+    latest_result_message: latestResult,
+    latest_failure_message: latestFailure,
+    latest_completed_at: row.latest_completed_at || null,
+    latest_run: row.latest_run_id ? {
+      id: row.latest_run_id,
+      run_id: row.latest_run_id,
+      backup_set_id: row.latest_backup_set_id || null,
+      status: row.latest_run_status || null,
+      integrity_status: row.latest_integrity_status || null,
+      result: latestResult,
+      failure_message: latestFailure,
+      completed_at: row.latest_completed_at || null,
+    } : null,
+    created_by: row.created_by,
+    created_by_username: row.created_by_username || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function notificationResponse(row) {
+  return {
+    id: row.id,
+    notification_id: row.id,
+    category: row.category,
+    resource_type: row.resource_type,
+    resource_id: row.resource_id,
+    action_required: Boolean(row.action_required),
+    title: row.title,
+    message: row.message,
+    status: row.status,
+    read_at: row.read_at,
+    resolved_at: row.resolved_at,
+    created_at: row.created_at,
+    action_tab: row.resource_type === 'BACKUP_SET'
+      ? 'sets'
+      : row.resource_type === 'RESTORE_JOB'
+        ? 'restore'
+        : row.resource_type === 'ROLLBACK_REQUEST'
+          ? 'rollback'
+          : row.resource_type === 'RESTORE_DRILL'
+            ? 'settings'
+            : 'overview',
+  };
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function integerInRange(value, minimum, maximum, fieldName) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new RecoveryError(`${fieldName} must be between ${minimum} and ${maximum}.`, 400, 'INVALID_AUTOMATION_INPUT');
+  }
+  return parsed;
+}
+
+function normalizeRequiredModules(value) {
+  const input = Array.isArray(value) ? value : parseJson(value, null);
+  if (!Array.isArray(input) || !input.length) {
+    throw new RecoveryError('At least one valid module is required.', 400, 'INVALID_BACKUP_MODULE');
+  }
+  const modules = [...new Set(input.map(item => cleanText(item, 80)))];
+  if (modules.some(moduleKey => !MODULE_MAP.has(moduleKey))) {
+    throw new RecoveryError('One or more included modules are invalid.', 400, 'INVALID_BACKUP_MODULE');
+  }
+  return modules;
+}
+
+function normalizeExecutableProvider(value, backupType) {
+  const provider = normalizeEnum(value || 'LOCAL', STORAGE_PROVIDERS, 'storage_provider');
+  if (provider === 'MANUAL') {
+    throw new RecoveryError('Select LOCAL, S3, or RDS_SNAPSHOT for executable backups.', 400, 'EXECUTABLE_BACKUP_PROVIDER_REQUIRED');
+  }
+  if (provider === 'RDS_SNAPSHOT' && backupType !== 'DATABASE') {
+    throw new RecoveryError('RDS snapshots can only be scheduled for DATABASE backups.', 400, 'BACKUP_PROVIDER_TYPE_MISMATCH');
+  }
+  return provider;
+}
+
+function scheduleMutation(body = {}, existing = null) {
+  const name = cleanText(
+    hasOwn(body, 'schedule_name') ? body.schedule_name : (hasOwn(body, 'name') ? body.name : existing?.name),
+    160
+  );
+  if (name.length < 3) throw new RecoveryError('Schedule name must contain at least 3 characters.', 400, 'INVALID_AUTOMATION_INPUT');
+  const backupType = normalizeEnum(
+    hasOwn(body, 'backup_type') ? body.backup_type : existing?.backup_type,
+    BACKUP_TYPES,
+    'backup_type'
+  );
+  const storageProvider = normalizeExecutableProvider(
+    hasOwn(body, 'storage_provider') ? body.storage_provider : existing?.storage_provider,
+    backupType
+  );
+  const includedModules = normalizeRequiredModules(
+    hasOwn(body, 'included_modules') ? body.included_modules : parseJson(existing?.included_modules, [])
+  );
+  const timing = normalizeAutomationTiming({
+    frequency: hasOwn(body, 'frequency') ? body.frequency : existing?.frequency,
+    run_time: hasOwn(body, 'run_time') ? body.run_time : existing?.run_time,
+    day_of_week: hasOwn(body, 'day_of_week') ? body.day_of_week : existing?.day_of_week,
+    day_of_month: hasOwn(body, 'day_of_month') ? body.day_of_month : existing?.day_of_month,
+    timezone: hasOwn(body, 'timezone') ? body.timezone : existing?.timezone,
+  });
+  const enabled = booleanInput(hasOwn(body, 'enabled') ? body.enabled : existing?.enabled, true);
+  const retentionPolicyId = hasOwn(body, 'retention_policy_id')
+    ? nullablePositiveId(body.retention_policy_id, 'retention_policy_id')
+    : (existing?.retention_policy_id || null);
+  return {
+    name,
+    backup_type: backupType,
+    storage_provider: storageProvider,
+    included_modules: includedModules,
+    ...timing,
+    enabled,
+    retention_policy_id: retentionPolicyId,
+    next_run_at: automationNextRun(timing, enabled),
+  };
+}
+
+function retentionMutation(body = {}, existing = null) {
+  const policyName = cleanText(
+    hasOwn(body, 'policy_name') ? body.policy_name : existing?.policy_name,
+    160
+  );
+  if (policyName.length < 3) throw new RecoveryError('Policy name must contain at least 3 characters.', 400, 'INVALID_AUTOMATION_INPUT');
+  const rawType = String(hasOwn(body, 'backup_type') ? body.backup_type : (existing?.backup_type || 'ALL')).trim().toUpperCase();
+  const rawProvider = String(hasOwn(body, 'storage_provider') ? body.storage_provider : (existing?.storage_provider || 'ALL')).trim().toUpperCase();
+  const backupType = rawType === 'ALL' ? null : normalizeEnum(rawType, BACKUP_TYPES, 'backup_type');
+  const storageProvider = rawProvider === 'ALL'
+    ? null
+    : normalizeExecutableProvider(rawProvider, backupType || 'DATABASE');
+  if (storageProvider === 'RDS_SNAPSHOT' && backupType && backupType !== 'DATABASE') {
+    throw new RecoveryError('RDS retention can only target DATABASE snapshot backups.', 400, 'BACKUP_PROVIDER_TYPE_MISMATCH');
+  }
+  return {
+    policy_name: policyName,
+    backup_type: backupType,
+    storage_provider: storageProvider,
+    keep_last: integerInRange(hasOwn(body, 'keep_last') ? body.keep_last : existing?.keep_last, 1, 1000, 'keep_last'),
+    max_age_days: integerInRange(hasOwn(body, 'max_age_days') ? body.max_age_days : existing?.max_age_days, 1, 3650, 'max_age_days'),
+    delete_expired_artifacts: booleanInput(
+      hasOwn(body, 'delete_expired_artifacts') ? body.delete_expired_artifacts : existing?.delete_expired_artifacts,
+      false
+    ),
+    enabled: booleanInput(hasOwn(body, 'enabled') ? body.enabled : existing?.enabled, false),
+  };
+}
+
+function drillMutation(body = {}, existing = null) {
+  const name = cleanText(
+    hasOwn(body, 'drill_name') ? body.drill_name : (hasOwn(body, 'name') ? body.name : existing?.name),
+    160
+  );
+  if (name.length < 3) throw new RecoveryError('Drill name must contain at least 3 characters.', 400, 'INVALID_AUTOMATION_INPUT');
+  const rawType = String(
+    hasOwn(body, 'backup_type')
+      ? body.backup_type
+      : (existing ? (existing.backup_type_filter || 'ALL') : 'DATABASE')
+  ).trim().toUpperCase();
+  const backupType = rawType === 'ALL' ? null : normalizeEnum(rawType, BACKUP_TYPES, 'backup_type');
+  if (backupType === 'DEPLOYMENT_VERSION') {
+    throw new RecoveryError('Deployment artifacts use the controlled rollback workflow, not restore drills.', 400, 'INVALID_RESTORE_DRILL_TYPE');
+  }
+  const rawProvider = String(
+    hasOwn(body, 'storage_provider') ? body.storage_provider : (existing?.storage_provider_filter || 'ALL')
+  ).trim().toUpperCase();
+  const storageProvider = rawProvider === 'ALL'
+    ? null
+    : normalizeEnum(rawProvider, new Set(['LOCAL', 'S3', 'RDS_SNAPSHOT']), 'storage_provider');
+  if (storageProvider === 'RDS_SNAPSHOT' && backupType && backupType !== 'DATABASE') {
+    throw new RecoveryError('RDS restore drills can only select DATABASE snapshots.', 400, 'BACKUP_PROVIDER_TYPE_MISMATCH');
+  }
+  const rawModule = hasOwn(body, 'affected_module') ? body.affected_module : existing?.module_key_filter;
+  const moduleKey = cleanText(rawModule, 80) || null;
+  if (moduleKey && !MODULE_MAP.has(moduleKey)) throw new RecoveryError('Affected module is invalid.', 400, 'INVALID_BACKUP_MODULE');
+  const timing = normalizeAutomationTiming({
+    frequency: hasOwn(body, 'frequency') ? body.frequency : existing?.frequency,
+    run_time: hasOwn(body, 'run_time') ? body.run_time : existing?.run_time,
+    day_of_week: hasOwn(body, 'day_of_week') ? body.day_of_week : existing?.day_of_week,
+    day_of_month: hasOwn(body, 'day_of_month') ? body.day_of_month : existing?.day_of_month,
+    timezone: hasOwn(body, 'timezone') ? body.timezone : existing?.timezone,
+  });
+  const enabled = booleanInput(hasOwn(body, 'enabled') ? body.enabled : existing?.enabled, true);
+  return {
+    name,
+    backup_type_filter: backupType,
+    storage_provider_filter: storageProvider,
+    module_key_filter: moduleKey,
+    ...timing,
+    enabled,
+    next_run_at: automationNextRun(timing, enabled),
+  };
+}
+
+async function assertRetentionPolicyExists(executor, policyId) {
+  if (!policyId) return;
+  const [rows] = await executor.execute('SELECT id FROM backup_retention_policies WHERE id=? LIMIT 1', [policyId]);
+  if (!rows.length) throw new RecoveryError('Retention policy was not found.', 404, 'RETENTION_POLICY_NOT_FOUND');
+}
+
+async function claimAutomationAction(connection, req, {
+  actionType,
+  resourceType,
+  resourceId,
+  purpose,
+  fingerprintPayload = null,
+}) {
+  const key = idempotencyKey(req);
+  const fingerprint = requestFingerprint('BACKUP_AUTOMATION_ACTION', {
+    actionType,
+    actorId: Number(req.user.id),
+    resourceId: Number(resourceId),
+    resourceType,
+    payload: fingerprintPayload,
+  });
+  const [existingRows] = await connection.execute(
+    'SELECT * FROM backup_automation_action_requests WHERE idempotency_key=? FOR UPDATE',
+    [key]
+  );
+  const existing = existingRows[0] || null;
+  if (existing) assertIdempotentReplay(existing, fingerprint);
+
+  const proof = await consumeBackupStepUpChallenge(connection, req, {
+    challengeId: req.body?.step_up_challenge_id,
+    challengeToken: req.body?.step_up_token,
+    purpose,
+    resourceType,
+    resourceId,
+  });
+
+  if (existing?.status === 'COMPLETED') {
+    return {
+      actionId: Number(existing.id),
+      idempotencyKey: key,
+      operationTime: existing.operation_time,
+      replay: true,
+      result: parseJson(existing.result_json, {}),
+    };
+  }
+  if (existing?.status === 'IN_PROGRESS') {
+    const staleAfterMs = Math.max(15, Math.min(Number(process.env.BACKUP_WORKER_LEASE_MINUTES || 120), 1440)) * 60 * 1000;
+    const updatedAt = new Date(existing.updated_at).getTime();
+    if (Number.isFinite(updatedAt) && Date.now() - updatedAt < staleAfterMs) {
+      throw new RecoveryError('This protected action is already in progress.', 409, 'AUTOMATION_ACTION_IN_PROGRESS');
+    }
+  }
+
+  if (existing) {
+    const retryTime = existing.status === 'FAILED' ? new Date() : existing.operation_time;
+    await connection.execute(
+      `UPDATE backup_automation_action_requests
+          SET status='IN_PROGRESS', operation_time=?, result_json=NULL, failure_code=NULL,
+              requested_by=?, step_up_challenge_id=?, completed_at=NULL, failed_at=NULL, updated_at=NOW()
+        WHERE id=?`,
+      [retryTime, req.user.id, proof.challengeId, existing.id]
+    );
+    return {
+      actionId: Number(existing.id),
+      idempotencyKey: key,
+      operationTime: retryTime,
+      replay: false,
+      retried: true,
+    };
+  }
+
+  const operationTime = new Date();
+  const [insert] = await connection.execute(
+    `INSERT INTO backup_automation_action_requests
+       (idempotency_key,request_fingerprint,action_type,resource_type,resource_id,status,
+        operation_time,requested_by,step_up_challenge_id)
+     VALUES (?,?,?,?,?,'IN_PROGRESS',?,?,?)`,
+    [key, fingerprint, actionType, resourceType, resourceId, operationTime, req.user.id, proof.challengeId]
+  );
+  return {
+    actionId: Number(insert.insertId),
+    idempotencyKey: key,
+    operationTime,
+    replay: false,
+    retried: false,
+  };
+}
+
+async function completeAutomationAction(actionId, result) {
+  const safeResult = JSON.stringify(result || {});
+  const [update] = await pool.execute(
+    `UPDATE backup_automation_action_requests
+        SET status='COMPLETED',result_json=?,completed_at=NOW(),failed_at=NULL,failure_code=NULL,updated_at=NOW()
+      WHERE id=? AND status='IN_PROGRESS'`,
+    [safeResult, actionId]
+  );
+  if (update.affectedRows !== 1) {
+    throw new RecoveryError('Protected action completion could not be recorded.', 409, 'AUTOMATION_ACTION_STATE_CONFLICT');
+  }
+}
+
+async function failAutomationAction(actionId, error) {
+  const code = cleanText(error?.code || 'BACKUP_AUTOMATION_FAILED', 80).replace(/[^A-Za-z0-9_:-]/g, '_') || 'BACKUP_AUTOMATION_FAILED';
+  await pool.execute(
+    `UPDATE backup_automation_action_requests
+        SET status='FAILED',failure_code=?,failed_at=NOW(),completed_at=NULL,result_json=NULL,updated_at=NOW()
+      WHERE id=? AND status='IN_PROGRESS'`,
+    [code, actionId]
+  ).catch(() => {});
+}
+
 async function buildCoverage(actorId) {
   const [backups, recoveryPoints, healthRows] = await Promise.all([
     listBackups(actorId, 200),
@@ -551,29 +1209,46 @@ async function buildCoverage(actorId) {
 }
 
 async function buildOverview(actorId) {
-  const [backups, restoreJobs, rollbackRequests, recoveryPoints, coverage] = await Promise.all([
+  const [backups, restoreJobs, rollbackRequests, recoveryPoints, coverage, summaryRows] = await Promise.all([
     listBackups(actorId, 200),
     listRestoreJobs(actorId, 50),
     listRollbackRequests(actorId, 50),
     listRecoveryPoints(50),
     buildCoverage(actorId),
+    pool.execute(
+      `SELECT COUNT(*) AS total_backup_sets,
+              SUM(CASE WHEN status IN ('VERIFIED','RESTORED')
+                            AND verification_status='MATCH' AND integrity_status='PASSED'
+                            AND verified_at IS NOT NULL AND verified_by IS NOT NULL
+                            AND storage_location_encrypted IS NOT NULL AND checksum IS NOT NULL
+                            AND retention_status='ACTIVE' AND artifact_deleted_at IS NULL
+                       THEN 1 ELSE 0 END) AS verified_backup_sets,
+              SUM(CASE WHEN status='FAILED' OR verification_status IN ('MISMATCH','ERROR')
+                       THEN 1 ELSE 0 END) AS failed_backup_jobs,
+              SUM(CASE WHEN status IN ('PENDING','RUNNING','COMPLETED') THEN 1 ELSE 0 END) AS active_backup_jobs
+         FROM backup_sets`
+    ).then(([rows]) => rows).catch(() => []),
   ]);
+  const aggregate = summaryRows[0] || {};
   const verified = backups.filter(item => item.artifact_verified);
   const latest = type => verified.find(item => item.backup_type === type) || null;
-  const failed = backups.filter(item => item.status === 'FAILED' || ['MISMATCH', 'ERROR'].includes(item.verification_status)).length;
-  const active = backups.filter(item => ['PENDING', 'RUNNING', 'COMPLETED'].includes(item.status)).length;
+  const failed = Number(aggregate.failed_backup_jobs || 0);
+  const active = Number(aggregate.active_backup_jobs || 0);
+  const totalBackupSets = Number(aggregate.total_backup_sets || 0);
+  const verifiedBackupSets = Number(aggregate.verified_backup_sets || 0);
+  const providerReadiness = backupAutomation.providerReadiness();
   return {
     generated_at: new Date().toISOString(),
-    status: failed ? 'Failed' : verified.length ? (active ? 'Warning' : 'Healthy') : 'Warning',
+    status: failed ? 'Failed' : verifiedBackupSets ? (active ? 'Warning' : 'Healthy') : 'Warning',
     cards: {
       latest_database_backup: latest('DATABASE'),
       latest_file_backup: latest('FILES'),
       latest_configuration_backup: latest('CONFIGURATION'),
       latest_module_recovery_point: recoveryPoints.find(item => item.artifact_verified) || null,
       latest_deployment_version: latest('DEPLOYMENT_VERSION'),
-      backup_status: failed ? 'Failed' : verified.length ? 'Healthy' : 'Warning',
-      total_backup_sets: backups.length,
-      verified_backup_sets: verified.length,
+      backup_status: failed ? 'Failed' : verifiedBackupSets ? 'Healthy' : 'Warning',
+      total_backup_sets: totalBackupSets,
+      verified_backup_sets: verifiedBackupSets,
       failed_backup_jobs: failed,
       last_restore_attempt: restoreJobs[0] || null,
     },
@@ -585,13 +1260,20 @@ async function buildOverview(actorId) {
       database_provider: process.env.AWS_RDS_DB_INSTANCE_IDENTIFIER ? 'RDS snapshot adapter' : 'Local MySQL dump adapter',
       file_provider: process.env.AWS_S3_BUCKET ? 'Amazon S3 adapter' : 'Private local storage adapter',
       config_provider: 'Encrypted non-secret configuration artifact',
-      deployment_provider: process.env.DEPLOYMENT_ARTIFACT_URI ? 'Deployment artifact adapter' : 'Local module artifact adapter',
+      deployment_provider: process.env.AWS_S3_BUCKET
+        ? 'Encrypted Amazon S3 source-code artifact'
+        : 'Encrypted local source-code artifact',
+      source_code_backup_configured: true,
+      module_code_cutover_enabled: String(process.env.NODE_ENV || 'development').toLowerCase() !== 'production'
+        || String(process.env.BACKUP_CODE_CUTOVER_ENABLED || '').toLowerCase() === 'true',
       aws_region_configured: Boolean(process.env.AWS_REGION),
       s3_bucket_configured: Boolean(process.env.AWS_S3_BUCKET),
       rds_snapshot_configured: Boolean(process.env.AWS_RDS_DB_INSTANCE_IDENTIFIER),
       rds_restore_verification_configured: Boolean(
         process.env.BACKUP_RDS_VERIFY_DB_USER
         && process.env.BACKUP_RDS_VERIFY_DB_PASSWORD
+        && process.env.BACKUP_RDS_VERIFY_DB_NAME
+        && String(process.env.BACKUP_RDS_VERIFY_DB_SSL || '').toLowerCase() === 'true'
       ),
       live_restore_enabled: String(process.env.BACKUP_LIVE_RESTORE_ENABLED || '').toLowerCase() === 'true',
       backup_worker_enabled: true,
@@ -603,6 +1285,13 @@ async function buildOverview(actorId) {
       ),
       maker_checker_required: true,
       step_up_mfa_required: true,
+      automation_enabled: String(process.env.BACKUP_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      retention_automation_enabled: String(process.env.BACKUP_RETENTION_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      restore_drill_automation_enabled: String(process.env.BACKUP_RESTORE_DRILL_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      backup_scheduler_enabled: String(process.env.BACKUP_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      retention_cleanup_enabled: String(process.env.BACKUP_RETENTION_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      restore_drill_worker_enabled: String(process.env.BACKUP_RESTORE_DRILL_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
+      provider_readiness: providerReadiness,
     },
   };
 }
@@ -612,7 +1301,11 @@ router.use(requireRole(ROLES.admin_any));
 router.use(requirePermission('admin_panel:access'));
 
 router.get('/', async (req, res) => {
-  try { return res.json(await listBackups(req.user.id)); }
+  try {
+    return res.json(requestedPagination(req.query)
+      ? await listBackupsPaginated(req.user.id, req.query)
+      : await listBackups(req.user.id));
+  }
   catch (error) { return errorResponse(res, error, 'Failed to load backup history.'); }
 });
 
@@ -622,18 +1315,736 @@ router.get('/overview', async (req, res) => {
 });
 
 router.get('/recovery-points', async (req, res) => {
-  try { return res.json(await listRecoveryPoints(100)); }
+  try {
+    return res.json(requestedPagination(req.query)
+      ? await listRecoveryPointsPaginated(req.query)
+      : await listRecoveryPoints(100));
+  }
   catch (error) { return errorResponse(res, error, 'Failed to load module recovery points.'); }
 });
 
 router.get('/restore-jobs', async (req, res) => {
-  try { return res.json(await listRestoreJobs(req.user.id, 100)); }
+  try {
+    return res.json(requestedPagination(req.query)
+      ? await listRestoreJobsPaginated(req.user.id, req.query)
+      : await listRestoreJobs(req.user.id, 100));
+  }
   catch (error) { return errorResponse(res, error, 'Failed to load restore jobs.'); }
 });
 
 router.get('/rollback-requests', async (req, res) => {
-  try { return res.json(await listRollbackRequests(req.user.id, 100)); }
+  try {
+    return res.json(requestedPagination(req.query)
+      ? await listRollbackRequestsPaginated(req.user.id, req.query)
+      : await listRollbackRequests(req.user.id, 100));
+  }
   catch (error) { return errorResponse(res, error, 'Failed to load rollback requests.'); }
+});
+
+router.get('/provider-readiness', async (_req, res) => {
+  return res.json({
+    generated_at: new Date().toISOString(),
+    providers: backupAutomation.providerReadiness(),
+  });
+});
+
+router.get('/schedules', async (req, res) => {
+  try {
+    const options = paginationOptions({ page_size: '100', ...req.query });
+    const where = [];
+    const params = [];
+    addSearchClause(where, params, options.search, [
+      's.schedule_reference', 's.name', 's.backup_type', 's.storage_provider', 's.included_modules',
+    ]);
+    if (options.status !== 'ALL') {
+      if (options.status === 'ENABLED') where.push('s.enabled=1');
+      else if (options.status === 'DISABLED') where.push('s.enabled=0');
+      else if (['NEVER', 'QUEUED', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED'].includes(options.status)) {
+        where.push('s.last_status=?');
+        params.push(options.status);
+      } else throw new RecoveryError('Schedule status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    if (options.type !== 'ALL') {
+      if (!BACKUP_TYPES.has(options.type)) throw new RecoveryError('Backup type filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+      where.push('s.backup_type=?');
+      params.push(options.type);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [[countRow]] = await pool.execute(`SELECT COUNT(*) AS total FROM backup_schedules s ${whereSql}`, params);
+    clampPaginationToTotal(options, countRow.total);
+    const [rows] = await pool.execute(
+      `SELECT s.*, creator.username AS created_by_username
+         FROM backup_schedules s
+         LEFT JOIN users creator ON creator.id=s.created_by
+         ${whereSql}
+        ORDER BY s.enabled DESC,s.next_run_at IS NULL,s.next_run_at ASC,s.id DESC
+        LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+      params
+    );
+    const result = paginatedResult(rows.map(scheduleResponse), countRow.total, options);
+    return res.json({ ...result, schedules: result.items });
+  } catch (error) {
+    return errorResponse(res, error, 'Failed to load backup schedules.');
+  }
+});
+
+router.post('/schedules', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const key = idempotencyKey(req);
+    const schedule = scheduleMutation(req.body || {});
+    const fingerprint = requestFingerprint('BACKUP_SCHEDULE_CREATE', {
+      ...schedule,
+      included_modules: [...schedule.included_modules].sort(),
+      next_run_at: undefined,
+    });
+    await connection.beginTransaction();
+    const [existingRows] = await connection.execute(
+      'SELECT * FROM backup_schedules WHERE idempotency_key=? FOR UPDATE',
+      [key]
+    );
+    if (existingRows.length) {
+      assertIdempotentReplay(existingRows[0], fingerprint);
+      await connection.commit();
+      return res.json({
+        message: 'Existing backup schedule returned for this idempotency key.',
+        schedule: scheduleResponse(existingRows[0]),
+        schedule_id: existingRows[0].id,
+        idempotent_replay: true,
+      });
+    }
+    await assertRetentionPolicyExists(connection, schedule.retention_policy_id);
+    const reference = makeReference('BKS');
+    const [insert] = await connection.execute(
+      `INSERT INTO backup_schedules
+         (schedule_reference,idempotency_key,request_fingerprint,name,backup_type,storage_provider,
+          included_modules,frequency,run_time,day_of_week,day_of_month,timezone,next_run_at,enabled,
+          retention_policy_id,created_by,updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [reference, key, fingerprint, schedule.name, schedule.backup_type, schedule.storage_provider,
+        JSON.stringify(schedule.included_modules), schedule.frequency, schedule.run_time, schedule.day_of_week,
+        schedule.day_of_month, schedule.timezone, schedule.next_run_at, schedule.enabled ? 1 : 0,
+        schedule.retention_policy_id, req.user.id, req.user.id]
+    );
+    await audit(connection, req, `CREATE_BACKUP_SCHEDULE: ${reference}`, {
+      schedule_id: insert.insertId,
+      backup_type: schedule.backup_type,
+      storage_provider: schedule.storage_provider,
+      frequency: schedule.frequency,
+      enabled: schedule.enabled,
+    });
+    const [createdRows] = await connection.execute('SELECT * FROM backup_schedules WHERE id=?', [insert.insertId]);
+    await connection.commit();
+    return res.status(201).json({
+      message: schedule.enabled ? 'Backup schedule created and enabled.' : 'Disabled backup schedule created.',
+      schedule: scheduleResponse(createdRows[0]),
+      schedule_id: insert.insertId,
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to create backup schedule.');
+  } finally { connection.release(); }
+});
+
+router.patch('/schedules/:scheduleId', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    idempotencyKey(req);
+    const scheduleId = positiveId(req.params.scheduleId, 'schedule_id');
+    await connection.beginTransaction();
+    const [rows] = await connection.execute('SELECT * FROM backup_schedules WHERE id=? FOR UPDATE', [scheduleId]);
+    const existing = rows[0];
+    if (!existing) throw new RecoveryError('Backup schedule was not found.', 404, 'BACKUP_SCHEDULE_NOT_FOUND');
+    const schedule = scheduleMutation(req.body || {}, existing);
+    const timingChanged = ['frequency', 'run_time', 'day_of_week', 'day_of_month', 'timezone']
+      .some(field => hasOwn(req.body, field));
+    const enabledChanged = hasOwn(req.body, 'enabled') && Boolean(existing.enabled) !== schedule.enabled;
+    if (schedule.enabled && !timingChanged && !enabledChanged && existing.next_run_at) {
+      schedule.next_run_at = existing.next_run_at;
+    }
+    await assertRetentionPolicyExists(connection, schedule.retention_policy_id);
+    await connection.execute(
+      `UPDATE backup_schedules
+          SET name=?,backup_type=?,storage_provider=?,included_modules=?,frequency=?,run_time=?,
+              day_of_week=?,day_of_month=?,timezone=?,next_run_at=?,enabled=?,retention_policy_id=?,updated_by=?
+        WHERE id=?`,
+      [schedule.name, schedule.backup_type, schedule.storage_provider, JSON.stringify(schedule.included_modules),
+        schedule.frequency, schedule.run_time, schedule.day_of_week, schedule.day_of_month, schedule.timezone,
+        schedule.next_run_at, schedule.enabled ? 1 : 0, schedule.retention_policy_id, req.user.id, scheduleId]
+    );
+    await audit(connection, req, `UPDATE_BACKUP_SCHEDULE: ${existing.schedule_reference}`, {
+      schedule_id: scheduleId,
+      enabled: schedule.enabled,
+      next_run_at: schedule.next_run_at,
+    });
+    const [updatedRows] = await connection.execute('SELECT * FROM backup_schedules WHERE id=?', [scheduleId]);
+    await connection.commit();
+    return res.json({
+      message: `Backup schedule ${schedule.enabled ? 'saved' : 'disabled'}.`,
+      schedule: scheduleResponse(updatedRows[0]),
+      schedule_id: scheduleId,
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to update backup schedule.');
+  } finally { connection.release(); }
+});
+
+router.post('/schedules/:scheduleId/run-now', async (req, res) => {
+  const scheduleId = positiveId(req.params.scheduleId, 'schedule_id');
+  const connection = await pool.getConnection();
+  let action = null;
+  try {
+    await connection.beginTransaction();
+    const [scheduleRows] = await connection.execute('SELECT * FROM backup_schedules WHERE id=? FOR UPDATE', [scheduleId]);
+    const schedule = scheduleRows[0];
+    if (!schedule) throw new RecoveryError('Backup schedule was not found.', 404, 'BACKUP_SCHEDULE_NOT_FOUND');
+    const [activeRows] = await connection.execute(
+      `SELECT id FROM backup_sets
+        WHERE schedule_id=? AND status IN ('PENDING','RUNNING')
+        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [scheduleId]
+    );
+    if (activeRows.length) throw new RecoveryError('This schedule already has an active backup job.', 409, 'BACKUP_SCHEDULE_ALREADY_RUNNING');
+    action = await claimAutomationAction(connection, req, {
+      actionType: 'SCHEDULE_RUN',
+      resourceType: 'BACKUP_SCHEDULE',
+      resourceId: scheduleId,
+      purpose: 'SCHEDULE_RUN',
+    });
+    if (action.replay) {
+      await connection.commit();
+      connection.release();
+      return res.json({
+        message: 'Existing schedule run result returned for this idempotency key.',
+        result: action.result,
+        idempotent_replay: true,
+      });
+    }
+    await audit(connection, req, `RUN_BACKUP_SCHEDULE_NOW: ${schedule.schedule_reference}`, {
+      schedule_id: scheduleId,
+      action_request_id: action.actionId,
+    });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    connection.release();
+    return errorResponse(res, error, 'Failed to start the backup schedule.');
+  }
+  connection.release();
+
+  try {
+    const result = await backupAutomation.runScheduleById(scheduleId, {
+      actorId: req.user.id,
+      scheduledFor: action.operationTime,
+    });
+    await completeAutomationAction(action.actionId, result);
+    await backupAutomation.reconcileNotifications().catch(() => {});
+    return res.json({
+      message: 'Scheduled backup completed. Independent checker verification is now required.',
+      result,
+      schedule_id: scheduleId,
+      backup_set_id: result.backupSetId,
+    });
+  } catch (error) {
+    await failAutomationAction(action.actionId, error);
+    return errorResponse(res, error, 'Scheduled backup execution failed.');
+  }
+});
+
+router.get('/retention-policy', async (_req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT p.*, creator.username AS created_by_username
+         FROM backup_retention_policies p
+         LEFT JOIN users creator ON creator.id=p.created_by
+        ORDER BY p.enabled DESC,p.updated_at DESC,p.id DESC
+        LIMIT 100`
+    );
+    const policies = rows.map(retentionPolicyResponse);
+    return res.json({ policy: policies[0] || null, policies, items: policies });
+  } catch (error) {
+    return errorResponse(res, error, 'Failed to load the backup retention policy.');
+  }
+});
+
+router.put('/retention-policy', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const requestedPolicyId = req.body?.policy_id || req.body?.id || null;
+    await connection.beginTransaction();
+    if (!requestedPolicyId) {
+      const key = idempotencyKey(req);
+      const policy = retentionMutation(req.body || {});
+      if (policy.enabled) {
+        throw new RecoveryError(
+          'Create the policy as a disabled draft before enabling it with step-up MFA.',
+          409,
+          'RETENTION_POLICY_DRAFT_REQUIRED'
+        );
+      }
+      const fingerprint = requestFingerprint('RETENTION_POLICY_CREATE', policy);
+      const [existingRows] = await connection.execute(
+        'SELECT * FROM backup_retention_policies WHERE idempotency_key=? FOR UPDATE',
+        [key]
+      );
+      if (existingRows.length) {
+        assertIdempotentReplay(existingRows[0], fingerprint);
+        await connection.commit();
+        return res.json({
+          message: 'Existing disabled retention-policy draft returned for this idempotency key.',
+          policy: retentionPolicyResponse(existingRows[0]),
+          policy_id: existingRows[0].id,
+          idempotent_replay: true,
+        });
+      }
+      const reference = makeReference('BRP');
+      const [insert] = await connection.execute(
+        `INSERT INTO backup_retention_policies
+           (policy_reference,idempotency_key,request_fingerprint,policy_name,backup_type,storage_provider,
+            keep_last,max_age_days,delete_expired_artifacts,enabled,created_by,updated_by)
+         VALUES (?,?,?,?,?,?,?,?,?,0,?,?)`,
+        [reference, key, fingerprint, policy.policy_name, policy.backup_type, policy.storage_provider,
+          policy.keep_last, policy.max_age_days, policy.delete_expired_artifacts ? 1 : 0,
+          req.user.id, req.user.id]
+      );
+      await audit(connection, req, `CREATE_RETENTION_POLICY_DRAFT: ${reference}`, {
+        policy_id: insert.insertId,
+        enabled: false,
+        physical_deletion_executed: false,
+      });
+      const [createdRows] = await connection.execute('SELECT * FROM backup_retention_policies WHERE id=?', [insert.insertId]);
+      await connection.commit();
+      return res.status(201).json({
+        message: 'Disabled retention-policy draft created. MFA is required to enable it.',
+        policy: retentionPolicyResponse(createdRows[0]),
+        policy_id: insert.insertId,
+      });
+    }
+
+    const policyId = positiveId(requestedPolicyId, 'policy_id');
+    const [rows] = await connection.execute('SELECT * FROM backup_retention_policies WHERE id=? FOR UPDATE', [policyId]);
+    const existing = rows[0];
+    if (!existing) throw new RecoveryError('Retention policy was not found.', 404, 'RETENTION_POLICY_NOT_FOUND');
+    const policy = retentionMutation(req.body || {}, existing);
+    const action = await claimAutomationAction(connection, req, {
+      actionType: 'RETENTION_UPDATE',
+      resourceType: 'RETENTION_POLICY',
+      resourceId: policyId,
+      purpose: 'RETENTION_EXECUTE',
+      fingerprintPayload: policy,
+    });
+    if (action.replay) {
+      await connection.commit();
+      return res.json({
+        message: 'Existing retention-policy update returned for this idempotency key.',
+        ...action.result,
+        idempotent_replay: true,
+      });
+    }
+    await connection.execute(
+      `UPDATE backup_retention_policies
+          SET policy_name=?,backup_type=?,storage_provider=?,keep_last=?,max_age_days=?,
+              delete_expired_artifacts=?,enabled=?,updated_by=?
+        WHERE id=?`,
+      [policy.policy_name, policy.backup_type, policy.storage_provider, policy.keep_last, policy.max_age_days,
+        policy.delete_expired_artifacts ? 1 : 0, policy.enabled ? 1 : 0, req.user.id, policyId]
+    );
+    const [updatedRows] = await connection.execute('SELECT * FROM backup_retention_policies WHERE id=?', [policyId]);
+    const result = { policy: retentionPolicyResponse(updatedRows[0]), policy_id: policyId };
+    await connection.execute(
+      `UPDATE backup_automation_action_requests
+          SET status='COMPLETED',result_json=?,completed_at=NOW(),failed_at=NULL,failure_code=NULL
+        WHERE id=? AND status='IN_PROGRESS'`,
+      [JSON.stringify(result), action.actionId]
+    );
+    await audit(connection, req, `UPDATE_RETENTION_POLICY: ${existing.policy_reference}`, {
+      policy_id: policyId,
+      enabled: policy.enabled,
+      delete_expired_artifacts: policy.delete_expired_artifacts,
+      keep_last: policy.keep_last,
+      max_age_days: policy.max_age_days,
+      physical_deletion_executed: false,
+    });
+    await connection.commit();
+    return res.json({
+      message: `Retention policy ${policy.enabled ? 'enabled and saved' : 'disabled and saved'}.`,
+      ...result,
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to save the backup retention policy.');
+  } finally { connection.release(); }
+});
+
+router.post('/retention/run', async (req, res) => {
+  const policyId = positiveId(req.body?.policy_id, 'policy_id');
+  const connection = await pool.getConnection();
+  let action = null;
+  let preservedVerified = 0;
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute('SELECT * FROM backup_retention_policies WHERE id=? FOR UPDATE', [policyId]);
+    const policy = rows[0];
+    if (!policy) throw new RecoveryError('Retention policy was not found.', 404, 'RETENTION_POLICY_NOT_FOUND');
+    if (!policy.enabled) throw new RecoveryError('Enable the retention policy before running cleanup.', 409, 'RETENTION_POLICY_DISABLED');
+    const [[eligibleRow]] = await connection.execute(
+      `SELECT COUNT(*) AS total FROM backup_sets
+        WHERE status IN ('VERIFIED','RESTORED') AND artifact_deleted_at IS NULL
+          AND storage_location_encrypted IS NOT NULL AND checksum IS NOT NULL
+          AND (? IS NULL OR backup_type=?) AND (? IS NULL OR storage_provider=?)`,
+      [policy.backup_type, policy.backup_type, policy.storage_provider, policy.storage_provider]
+    );
+    preservedVerified = Math.min(Number(eligibleRow.total || 0), Number(policy.keep_last || 0));
+    action = await claimAutomationAction(connection, req, {
+      actionType: 'RETENTION_RUN',
+      resourceType: 'RETENTION_POLICY',
+      resourceId: policyId,
+      purpose: 'RETENTION_EXECUTE',
+    });
+    if (action.replay) {
+      await connection.commit();
+      connection.release();
+      return res.json({
+        message: 'Existing retention cleanup result returned for this idempotency key.',
+        result: action.result,
+        idempotent_replay: true,
+      });
+    }
+    await audit(connection, req, `RUN_BACKUP_RETENTION: ${policy.policy_reference}`, {
+      policy_id: policyId,
+      action_request_id: action.actionId,
+      delete_expired_artifacts: Boolean(policy.delete_expired_artifacts),
+    });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    connection.release();
+    return errorResponse(res, error, 'Failed to start retention cleanup.');
+  }
+  connection.release();
+
+  try {
+    const actions = await backupAutomation.runRetention({ policyId, actorId: req.user.id });
+    const result = {
+      policy_id: policyId,
+      expired_count: actions.filter(item => ['EXPIRED', 'DELETE_PENDING', 'DELETED'].includes(item.status)).length,
+      deletion_pending: actions.filter(item => item.status === 'DELETE_PENDING').length,
+      deleted_artifacts: actions.filter(item => item.status === 'DELETED').length,
+      errors: actions.filter(item => item.status === 'ERROR').length,
+      preserved_verified: preservedVerified,
+      actions,
+    };
+    await completeAutomationAction(action.actionId, result);
+    await audit(pool, req, `COMPLETE_BACKUP_RETENTION: ${policyId}`, {
+      policy_id: policyId,
+      expired_count: result.expired_count,
+      deleted_artifacts: result.deleted_artifacts,
+      errors: result.errors,
+      database_evidence_preserved: true,
+    }).catch(() => {});
+    return res.json({ message: 'Retention cleanup completed.', result });
+  } catch (error) {
+    await failAutomationAction(action.actionId, error);
+    return errorResponse(res, error, 'Backup retention cleanup failed safely.');
+  }
+});
+
+router.get('/notifications', async (req, res) => {
+  try {
+    await backupAutomation.reconcileNotifications().catch(error => {
+      console.error('[backup-checker-notifications]', error.message);
+    });
+    const options = paginationOptions({ page_size: '100', ...req.query });
+    const where = ['n.recipient_user_id=?'];
+    const params = [req.user.id];
+    addSearchClause(where, params, options.search, [
+      'n.title', 'n.message', 'n.category', 'n.resource_type', 'CAST(n.resource_id AS CHAR)',
+    ]);
+    if (options.status !== 'ALL') {
+      if (!['UNREAD', 'READ', 'RESOLVED'].includes(options.status)) {
+        throw new RecoveryError('Notification status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+      }
+      where.push('n.status=?');
+      params.push(options.status);
+    }
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+    const [[countRow]] = await pool.execute(
+      `SELECT COUNT(*) AS total FROM backup_action_notifications n ${whereSql}`,
+      params
+    );
+    clampPaginationToTotal(options, countRow.total);
+    const [rows] = await pool.execute(
+      `SELECT n.* FROM backup_action_notifications n ${whereSql}
+        ORDER BY n.status='UNREAD' DESC,n.action_required DESC,n.created_at DESC,n.id DESC
+        LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+      params
+    );
+    const [[unreadRow]] = await pool.execute(
+      `SELECT COUNT(*) AS total FROM backup_action_notifications
+        WHERE recipient_user_id=? AND status='UNREAD'`,
+      [req.user.id]
+    );
+    const result = paginatedResult(rows.map(notificationResponse), countRow.total, options);
+    return res.json({ ...result, notifications: result.items, unread_count: Number(unreadRow.total || 0) });
+  } catch (error) {
+    return errorResponse(res, error, 'Failed to load checker notifications.');
+  }
+});
+
+router.patch('/notifications/:notificationId/read', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    idempotencyKey(req);
+    const notificationId = positiveId(req.params.notificationId, 'notification_id');
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT * FROM backup_action_notifications
+        WHERE id=? AND recipient_user_id=? FOR UPDATE`,
+      [notificationId, req.user.id]
+    );
+    const notification = rows[0];
+    if (!notification) throw new RecoveryError('Notification was not found.', 404, 'BACKUP_NOTIFICATION_NOT_FOUND');
+    if (notification.status === 'UNREAD') {
+      await connection.execute(
+        `UPDATE backup_action_notifications
+            SET status='READ',read_at=NOW(),resolved_at=NULL,updated_at=NOW()
+          WHERE id=? AND recipient_user_id=? AND status='UNREAD'`,
+        [notificationId, req.user.id]
+      );
+    }
+    const [updatedRows] = await connection.execute(
+      'SELECT * FROM backup_action_notifications WHERE id=? AND recipient_user_id=?',
+      [notificationId, req.user.id]
+    );
+    await connection.commit();
+    const updated = notificationResponse(updatedRows[0]);
+    return res.json({
+      message: notification.status === 'UNREAD' ? 'Notification marked as read.' : 'Notification was already read.',
+      notification: updated,
+      notification_id: notificationId,
+      status: updated.status,
+      read_at: updated.read_at,
+      idempotent_replay: notification.status !== 'UNREAD',
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to mark the notification as read.');
+  } finally { connection.release(); }
+});
+
+router.get('/restore-drills', async (req, res) => {
+  try {
+    const options = paginationOptions({ page_size: '100', ...req.query });
+    const where = [];
+    const params = [];
+    addSearchClause(where, params, options.search, [
+      's.schedule_reference', 's.name', 's.backup_type_filter', 's.storage_provider_filter', 's.module_key_filter',
+    ]);
+    if (options.status !== 'ALL') {
+      if (options.status === 'ENABLED') where.push('s.enabled=1');
+      else if (options.status === 'DISABLED') where.push('s.enabled=0');
+      else if (['NEVER', 'QUEUED', 'RUNNING', 'PASSED', 'FAILED', 'SKIPPED'].includes(options.status)) {
+        where.push('s.last_status=?');
+        params.push(options.status);
+      } else throw new RecoveryError('Restore drill status filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+    }
+    if (options.type !== 'ALL') {
+      if (!BACKUP_TYPES.has(options.type)) throw new RecoveryError('Restore drill type filter is invalid.', 400, 'INVALID_BACKUP_FILTER');
+      where.push('s.backup_type_filter=?');
+      params.push(options.type);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [[countRow]] = await pool.execute(
+      `SELECT COUNT(*) AS total FROM backup_restore_drill_schedules s ${whereSql}`,
+      params
+    );
+    clampPaginationToTotal(options, countRow.total);
+    const [rows] = await pool.execute(
+      `SELECT s.*,creator.username AS created_by_username,
+              latest.id AS latest_run_id,latest.status AS latest_run_status,
+              latest.integrity_status AS latest_integrity_status,
+              latest.result_message_encrypted AS latest_result_message_encrypted,
+              latest.failure_message_encrypted AS latest_failure_message_encrypted,
+              latest.completed_at AS latest_completed_at,latest.backup_set_id AS latest_backup_set_id
+         FROM backup_restore_drill_schedules s
+         LEFT JOIN users creator ON creator.id=s.created_by
+         LEFT JOIN backup_restore_drill_runs latest
+           ON latest.id=(SELECT MAX(run2.id) FROM backup_restore_drill_runs run2 WHERE run2.schedule_id=s.id)
+         ${whereSql}
+        ORDER BY s.enabled DESC,s.next_run_at IS NULL,s.next_run_at ASC,s.id DESC
+        LIMIT ${options.pageSize} OFFSET ${options.offset}`,
+      params
+    );
+    const result = paginatedResult(rows.map(drillScheduleResponse), countRow.total, options);
+    return res.json({ ...result, drills: result.items });
+  } catch (error) {
+    return errorResponse(res, error, 'Failed to load restore drills.');
+  }
+});
+
+router.post('/restore-drills', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const key = idempotencyKey(req);
+    const drill = drillMutation(req.body || {});
+    const fingerprint = requestFingerprint('RESTORE_DRILL_CREATE', { ...drill, next_run_at: undefined });
+    await connection.beginTransaction();
+    const [existingRows] = await connection.execute(
+      'SELECT * FROM backup_restore_drill_schedules WHERE idempotency_key=? FOR UPDATE',
+      [key]
+    );
+    if (existingRows.length) {
+      assertIdempotentReplay(existingRows[0], fingerprint);
+      await connection.commit();
+      return res.json({
+        message: 'Existing restore drill returned for this idempotency key.',
+        drill: drillScheduleResponse(existingRows[0]),
+        drill_id: existingRows[0].id,
+        idempotent_replay: true,
+      });
+    }
+    const reference = makeReference('RDSD');
+    const [insert] = await connection.execute(
+      `INSERT INTO backup_restore_drill_schedules
+         (schedule_reference,idempotency_key,request_fingerprint,name,selection_strategy,
+          backup_type_filter,storage_provider_filter,module_key_filter,frequency,run_time,
+          day_of_week,day_of_month,timezone,next_run_at,enabled,created_by,updated_by)
+       VALUES (?,?,?,?,'LATEST_VERIFIED',?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [reference, key, fingerprint, drill.name, drill.backup_type_filter, drill.storage_provider_filter,
+        drill.module_key_filter, drill.frequency, drill.run_time, drill.day_of_week, drill.day_of_month,
+        drill.timezone, drill.next_run_at, drill.enabled ? 1 : 0, req.user.id, req.user.id]
+    );
+    await audit(connection, req, `CREATE_RESTORE_DRILL: ${reference}`, {
+      drill_schedule_id: insert.insertId,
+      backup_type_filter: drill.backup_type_filter,
+      storage_provider_filter: drill.storage_provider_filter,
+      module_key_filter: drill.module_key_filter,
+      isolated_only: true,
+      enabled: drill.enabled,
+    });
+    const [createdRows] = await connection.execute('SELECT * FROM backup_restore_drill_schedules WHERE id=?', [insert.insertId]);
+    await connection.commit();
+    return res.status(201).json({
+      message: drill.enabled ? 'Isolated restore drill created and enabled.' : 'Disabled restore drill created.',
+      drill: drillScheduleResponse(createdRows[0]),
+      drill_id: insert.insertId,
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to create the restore drill.');
+  } finally { connection.release(); }
+});
+
+router.patch('/restore-drills/:drillId', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    idempotencyKey(req);
+    const drillId = positiveId(req.params.drillId, 'drill_id');
+    await connection.beginTransaction();
+    const [rows] = await connection.execute('SELECT * FROM backup_restore_drill_schedules WHERE id=? FOR UPDATE', [drillId]);
+    const existing = rows[0];
+    if (!existing) throw new RecoveryError('Restore drill was not found.', 404, 'RESTORE_DRILL_SCHEDULE_NOT_FOUND');
+    const drill = drillMutation(req.body || {}, existing);
+    const timingChanged = ['frequency', 'run_time', 'day_of_week', 'day_of_month', 'timezone']
+      .some(field => hasOwn(req.body, field));
+    const enabledChanged = hasOwn(req.body, 'enabled') && Boolean(existing.enabled) !== drill.enabled;
+    if (drill.enabled && !timingChanged && !enabledChanged && existing.next_run_at) {
+      drill.next_run_at = existing.next_run_at;
+    }
+    await connection.execute(
+      `UPDATE backup_restore_drill_schedules
+          SET name=?,backup_type_filter=?,storage_provider_filter=?,module_key_filter=?,frequency=?,run_time=?,
+              day_of_week=?,day_of_month=?,timezone=?,next_run_at=?,enabled=?,updated_by=?
+        WHERE id=?`,
+      [drill.name, drill.backup_type_filter, drill.storage_provider_filter, drill.module_key_filter,
+        drill.frequency, drill.run_time, drill.day_of_week, drill.day_of_month, drill.timezone,
+        drill.next_run_at, drill.enabled ? 1 : 0, req.user.id, drillId]
+    );
+    await audit(connection, req, `UPDATE_RESTORE_DRILL: ${existing.schedule_reference}`, {
+      drill_schedule_id: drillId,
+      enabled: drill.enabled,
+      next_run_at: drill.next_run_at,
+      isolated_only: true,
+    });
+    const [updatedRows] = await connection.execute('SELECT * FROM backup_restore_drill_schedules WHERE id=?', [drillId]);
+    await connection.commit();
+    return res.json({
+      message: `Restore drill ${drill.enabled ? 'saved' : 'disabled'}.`,
+      drill: drillScheduleResponse(updatedRows[0]),
+      drill_id: drillId,
+    });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return errorResponse(res, error, 'Failed to update the restore drill.');
+  } finally { connection.release(); }
+});
+
+router.post('/restore-drills/:drillId/run-now', async (req, res) => {
+  const drillId = positiveId(req.params.drillId, 'drill_id');
+  const connection = await pool.getConnection();
+  let action = null;
+  try {
+    await connection.beginTransaction();
+    const [drillRows] = await connection.execute(
+      'SELECT * FROM backup_restore_drill_schedules WHERE id=? FOR UPDATE',
+      [drillId]
+    );
+    const drill = drillRows[0];
+    if (!drill) throw new RecoveryError('Restore drill was not found.', 404, 'RESTORE_DRILL_SCHEDULE_NOT_FOUND');
+    const [activeRows] = await connection.execute(
+      `SELECT id FROM backup_restore_drill_runs
+        WHERE schedule_id=? AND status IN ('QUEUED','RUNNING')
+        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [drillId]
+    );
+    if (activeRows.length) throw new RecoveryError('This restore drill is already running.', 409, 'RESTORE_DRILL_ALREADY_RUNNING');
+    action = await claimAutomationAction(connection, req, {
+      actionType: 'DRILL_RUN',
+      resourceType: 'RESTORE_DRILL',
+      resourceId: drillId,
+      purpose: 'DRILL_RUN',
+    });
+    if (action.replay) {
+      await connection.commit();
+      connection.release();
+      return res.json({
+        message: 'Existing restore drill result returned for this idempotency key.',
+        result: action.result,
+        idempotent_replay: true,
+      });
+    }
+    await audit(connection, req, `RUN_RESTORE_DRILL_NOW: ${drill.schedule_reference}`, {
+      drill_schedule_id: drillId,
+      action_request_id: action.actionId,
+      isolated_only: true,
+    });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    connection.release();
+    return errorResponse(res, error, 'Failed to start the restore drill.');
+  }
+  connection.release();
+
+  try {
+    const result = await backupAutomation.runDrillById(drillId, {
+      actorId: req.user.id,
+      scheduledFor: action.operationTime,
+    });
+    await completeAutomationAction(action.actionId, result);
+    return res.json({
+      message: result.status === 'PASSED'
+        ? 'Isolated restore drill passed. No production restore was applied.'
+        : 'Restore drill completed without changing production.',
+      result,
+      drill_id: drillId,
+      drill_run_id: result.runId,
+    });
+  } catch (error) {
+    await failAutomationAction(action.actionId, error);
+    return errorResponse(res, error, 'Isolated restore drill failed safely.');
+  }
 });
 
 router.post('/step-up/challenges', async (req, res) => {
@@ -904,8 +2315,7 @@ router.post('/:backupId/verify', async (req, res) => {
           const stableVersion = process.env[`MODULE_${moduleKey.toUpperCase()}_STABLE_VERSION`] || currentVersion;
           const rollbackAvailable = Boolean(
             module.rollback
-            && ['MODULE_STATE', 'DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(backup.backup_type)
-            && stableVersion !== currentVersion
+            && ['DEPLOYMENT_VERSION', 'FULL_BACKUP'].includes(backup.backup_type)
           );
           const [healthRows] = await finalize.execute('SELECT status FROM system_health_checks WHERE module_key = ? LIMIT 1', [moduleKey]);
           await finalize.execute(
@@ -1499,6 +2909,7 @@ router.post('/rollback-requests', async (req, res) => {
         WHERE mrp.id=? AND mrp.module_key=? AND mrp.status='AVAILABLE' AND mrp.rollback_available=1
           AND mrp.verification_status='MATCH' AND mrp.integrity_status='PASSED'
           AND mrp.verified_at IS NOT NULL AND bs.status IN ('VERIFIED','RESTORED')
+          AND bs.backup_type IN ('DEPLOYMENT_VERSION','FULL_BACKUP')
         LIMIT 1 FOR UPDATE`,
       [recoveryPointId, affectedModule]
     );
@@ -1521,8 +2932,8 @@ router.post('/rollback-requests', async (req, res) => {
         fingerprint,
         point.id,
         affectedModule,
-        point.current_version,
-        point.stable_version,
+        process.env.APP_VERSION || point.current_version,
+        point.stable_version || point.current_version,
         point.artifact_location_encrypted,
         point.artifact_checksum,
         protectedText(reason),
@@ -1647,7 +3058,7 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
       affectedModule: record.affected_module,
       rollback: true,
     });
-    const passed = result.integrityPassed !== false && Boolean(result.integrityReport || result.verified);
+    const passed = result.restored === true && result.integrityPassed === true && result.verified === true;
     const finalize = await pool.getConnection();
     try {
       await finalize.beginTransaction();
@@ -1664,7 +3075,9 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
           passed ? 'COMPLETED' : 'FAILED',
           passed ? 'PASSED' : 'FAILED',
           protectedText(JSON.stringify(result.integrityReport || result)),
-          protectedText(passed ? 'Rollback completed and integrity checks passed.' : 'Rollback integrity verification failed.'),
+          protectedText(passed
+            ? `Module source-code rollback completed and integrity checks passed.${result.restartRequired ? ' Application restart required.' : ''}`
+            : 'Rollback integrity verification failed.'),
           req.user.id,
           requestId,
           lease.hash,
@@ -1678,7 +3091,7 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
         moduleKey: record.affected_module,
         status: passed ? 'WARNING' : 'OFFLINE',
         remarks: passed
-          ? `Rollback request ${requestId} passed integrity checks. Run a fresh module health check before returning it to normal service.`
+          ? `Rollback request ${requestId} replaced verified module source code and passed integrity checks.${result.restartRequired ? ' Restart the application before' : ' Run'} a fresh module health check before returning it to normal service.`
           : `Rollback request ${requestId} failed integrity checks.`,
         actorId: req.user.id,
         operationReference: `rollback-${requestId}-complete`,
@@ -1689,7 +3102,15 @@ router.post('/rollback-requests/:requestId/execute', async (req, res) => {
       throw error;
     } finally { finalize.release(); }
     if (!passed) return res.status(409).json({ error: 'Rollback integrity verification failed.', code: 'ROLLBACK_INTEGRITY_FAILED' });
-    return res.json({ message: 'Rollback completed and integrity verified.', rollback_request_id: requestId, status: 'COMPLETED', result });
+    return res.json({
+      message: result.restartRequired
+        ? 'Module code rollback completed and verified. Restart the application, then run a fresh health check.'
+        : 'Module code rollback completed and integrity verified.',
+      rollback_request_id: requestId,
+      status: 'COMPLETED',
+      restart_required: Boolean(result.restartRequired),
+      result,
+    });
   } catch (error) {
     await pool.execute(
       `UPDATE module_rollback_requests SET status='FAILED', integrity_status='ERROR', failed_at=NOW(),
@@ -1853,6 +3274,10 @@ if (process.env.NODE_ENV !== 'test' && String(process.env.BACKUP_RECOVERY_REAPER
   reaperTimer.unref?.();
 }
 
+if (process.env.NODE_ENV !== 'test' && String(process.env.BACKUP_AUTOMATION_SERVICE_ENABLED || 'true').toLowerCase() !== 'false') {
+  backupAutomation.start();
+}
+
 module.exports = router;
 module.exports._test = {
   BACKUP_TRANSITIONS,
@@ -1861,6 +3286,13 @@ module.exports._test = {
   backupArtifactAvailable,
   backupArtifactVerified,
   backupResponse,
+  booleanInput,
+  clampPaginationToTotal,
+  drillMutation,
+  normalizeAutomationTiming,
+  paginationOptions,
+  retentionMutation,
+  scheduleMutation,
   recoverExpiredOperations,
   assertIdempotentReplay,
   assertMakerChecker,
