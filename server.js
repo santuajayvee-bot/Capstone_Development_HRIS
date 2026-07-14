@@ -6319,7 +6319,7 @@ app.get('/api/leave', requireAuth, requireRole(ROLES.any), async (req, res) => {
              LEFT JOIN users filed ON filed.id = lr.filed_by
              LEFT JOIN users encoded ON encoded.id = lr.encoded_by
              LEFT JOIN users payrollReviewer ON payrollReviewer.id = lr.payroll_approved_by
-             LEFT JOIN users reviewecomputeLeaveBalanceIntegrityHashr ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
+             LEFT JOIN users reviewer ON reviewer.id = COALESCE(lr.approved_by, lr.rejected_by, lr.reviewed_by)`;
     const p = [];
     if (!hasLeavePermission(req.user, 'leave.request.view_all')) {
       q += ' WHERE lr.employee_id = ?';
