@@ -476,6 +476,19 @@ async function pollDeviceApprovalStatus() {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      if (response.status === 429) {
+        const retryAfterMs = Math.max(Number(response.headers.get('Retry-After') || 5), 1) * 1000;
+        if (deviceApprovalPollTimer) {
+          clearInterval(deviceApprovalPollTimer);
+          deviceApprovalPollTimer = null;
+        }
+        loginError(data.message || 'Still waiting for trusted-device approval. Retrying shortly...', true);
+        deviceApprovalPollTimer = setTimeout(() => {
+          deviceApprovalPollTimer = setInterval(pollDeviceApprovalStatus, Math.max(Number(state.pollIntervalMs || 3000), retryAfterMs));
+          pollDeviceApprovalStatus();
+        }, retryAfterMs);
+        return;
+      }
       stopDeviceApprovalPolling();
       resetLoginCaptcha();
       loginError(data.message || 'Device approval expired. Please sign in again.');
@@ -537,6 +550,7 @@ function startDeviceApprovalPolling({ username, approvalRequestId, deviceFingerp
     username,
     approvalRequestId,
     deviceFingerprint,
+    pollIntervalMs: Math.max(Number(pollIntervalMs || 3000), 2000),
   };
 
   loginError(message || 'Waiting for approval from a trusted device.', true);
@@ -545,8 +559,7 @@ function startDeviceApprovalPolling({ username, approvalRequestId, deviceFingerp
     btnEl.disabled = true;
   }
 
-  const interval = Math.max(Number(pollIntervalMs || 3000), 2000);
-  deviceApprovalPollTimer = setInterval(pollDeviceApprovalStatus, interval);
+  deviceApprovalPollTimer = setInterval(pollDeviceApprovalStatus, activeDeviceApprovalState.pollIntervalMs);
   setTimeout(pollDeviceApprovalStatus, 1000);
 }
 

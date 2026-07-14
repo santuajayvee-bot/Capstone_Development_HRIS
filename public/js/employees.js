@@ -648,9 +648,7 @@ function renderEmployees(list) {
     const statusClass = e.status === 'Active' ? 'active' : 'inactive';
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     const integrityStatus = String(e.integrityStatus || e._raw?.integrity_status || '').toUpperCase();
-    const integrityBadge = integrityStatus === 'TAMPERED'
-      ? '<span class="employee-integrity-badge employee-integrity-badge-tampered" title="Database integrity mismatch detected">Tampered</span>'
-      : integrityStatus === 'UNSEALED'
+    const integrityBadge = integrityStatus === 'UNSEALED'
         ? '<span class="employee-integrity-badge employee-integrity-badge-unsealed" title="Integrity hash has not been sealed yet">Unsealed</span>'
         : '';
     const rowClass = integrityStatus === 'TAMPERED' ? 'employee-row-tampered' : '';
@@ -1896,9 +1894,7 @@ function renderManagementTable(list) {
     const statusDisplay = e.status === 'Active' ? '✓ Active' : '✗ Inactive';
     const toggleLabel = e.status === 'Active' ? 'Deactivate' : 'Activate';
     const integrityStatus = String(e.integrityStatus || e._raw?.integrity_status || '').toUpperCase();
-    const integrityBadge = integrityStatus === 'TAMPERED'
-      ? '<span class="employee-integrity-badge employee-integrity-badge-tampered" title="Database integrity mismatch detected">Tampered</span>'
-      : integrityStatus === 'UNSEALED'
+    const integrityBadge = integrityStatus === 'UNSEALED'
         ? '<span class="employee-integrity-badge employee-integrity-badge-unsealed" title="Integrity hash has not been sealed yet">Unsealed</span>'
         : '';
     const rowClass = integrityStatus === 'TAMPERED' ? 'employee-row-tampered' : '';
