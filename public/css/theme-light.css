@@ -3635,12 +3635,18 @@ button,
 }
 
 .employee-row-tampered td {
-  background: rgba(185, 28, 28, 0.08) !important;
-  color: var(--red) !important;
+  background: #fee2e2 !important;
+  color: #7f1d1d !important;
+  border-top: 1px solid #fecaca !important;
+  border-bottom: 1px solid #fecaca !important;
 }
 
 .employee-row-tampered:hover td {
-  background: rgba(185, 28, 28, 0.14) !important;
+  background: #fecaca !important;
+}
+
+.employee-row-tampered td:first-child {
+  box-shadow: inset 4px 0 0 var(--red);
 }
 
 .employee-integrity-badge {

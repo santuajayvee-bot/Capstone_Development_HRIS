@@ -113,6 +113,16 @@ const AUTH_RATE_LIMIT = createRateLimiter({
   keyGenerator: req => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.body?.username || req.body?.email || '').toLowerCase()}`,
   auditAction: 'blocked_auth_rate_limit_exceeded',
 });
+const DEVICE_APPROVAL_POLL_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.DEVICE_APPROVAL_POLL_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
+  max: Number(process.env.DEVICE_APPROVAL_POLL_RATE_LIMIT_MAX || 360),
+  keyGenerator: req => [
+    req.ip || req.socket?.remoteAddress || 'unknown',
+    String(req.body?.username || req.body?.email || '').toLowerCase(),
+    String(req.body?.approvalRequestId || 'unknown'),
+  ].join(':'),
+  auditAction: 'blocked_device_approval_poll_rate_limit_exceeded',
+});
 const ATTENDANCE_ROUTE_RATE_LIMIT = createAttendanceRouteRateLimiter();
 const PAYROLL_ROUTE_RATE_LIMIT = createPayrollRouteRateLimiter();
 function apiRateLimit(req, res, next) {
@@ -857,9 +867,9 @@ app.use('/api', auditSuspiciousRequestPatterns);
 // Enforce shared input rules before any API route receives a write request.
 // This is the final authority; browser validation is only a usability layer.
 app.use(validateRequestBody);
+app.use('/api/auth/device-approval/status', DEVICE_APPROVAL_POLL_RATE_LIMIT);
 app.use([
   '/api/auth/login',
-  '/api/auth/device-approval/status',
   '/api/auth/mfa/verify',
   '/api/auth/mfa/resend',
   '/api/auth/lockout-status',

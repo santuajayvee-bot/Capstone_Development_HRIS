@@ -68,6 +68,13 @@ function fingerprintHash(userId, fingerprint = {}, req = null) {
   return sha256(JSON.stringify({ userId: Number(userId), fingerprint: canonical, pepper }));
 }
 
+function clientDeviceIdHash(userId, fingerprint = {}) {
+  const clientDeviceId = cleanText(fingerprint?.clientDeviceId, 120);
+  if (!clientDeviceId) return null;
+  const pepper = process.env.TRUSTED_DEVICE_PEPPER || process.env.JWT_SECRET || 'lgsv-trusted-device-local';
+  return sha256(JSON.stringify({ userId: Number(userId), clientDeviceId, pepper }));
+}
+
 function deviceMetadata(fingerprint = {}, req = null) {
   const ua = userAgent(req) || fingerprint.userAgent || '';
   const socketMetadata = getSocketDeviceMetadata(fingerprint.clientDeviceId);
@@ -101,6 +108,59 @@ function approximateLocationFromRequest(req = null) {
 function normalizeRiskLevel(value) {
   const text = cleanText(value, 20) || 'Low';
   return RISK_LEVELS.has(text) ? text : 'Low';
+}
+
+function normalizeBrowserFamily(value = '') {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  if (text.includes('edg')) return 'edge';
+  if (text.includes('chrome') || text.includes('chromium')) return 'chrome';
+  if (text.includes('firefox')) return 'firefox';
+  if (text.includes('safari')) return 'safari';
+  if (text.includes('opera') || text.includes('opr')) return 'opera';
+  return text.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function normalizeOsFamily(value = '') {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  if (text.includes('windows')) return 'windows';
+  if (text.includes('mac')) return 'macos';
+  if (text.includes('ios')) return 'ios';
+  if (text.includes('android')) return 'android';
+  if (text.includes('linux') || text.includes('ubuntu')) return 'linux';
+  return text.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function normalizeDeviceTypeForMatch(value = '') {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'mobile') return 'mobile';
+  if (text === 'tablet') return 'tablet';
+  return 'desktop';
+}
+
+function normalizeDeviceModelForMatch(value = '') {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function sameDeviceMetadata(row = {}, metadata = {}) {
+  const rowBrowser = normalizeBrowserFamily(row.browser);
+  const currentBrowser = normalizeBrowserFamily(metadata.browser);
+  const rowOs = normalizeOsFamily(row.operating_system || row.operatingSystem);
+  const currentOs = normalizeOsFamily(metadata.operatingSystem);
+  const rowType = normalizeDeviceTypeForMatch(row.device_type || row.deviceType);
+  const currentType = normalizeDeviceTypeForMatch(metadata.deviceType);
+  if (!rowBrowser || !currentBrowser || rowBrowser !== currentBrowser) return false;
+  if (!rowOs || !currentOs || rowOs !== currentOs) return false;
+  if (rowType !== currentType) return false;
+
+  const rowModel = normalizeDeviceModelForMatch(row.device_model || row.deviceModel);
+  const currentModel = normalizeDeviceModelForMatch(metadata.deviceModel);
+  return !rowModel
+    || !currentModel
+    || rowModel === currentModel
+    || rowModel.includes(currentModel)
+    || currentModel.includes(rowModel);
 }
 
 async function scoreDeviceRisk(userId, fingerprint = {}, req = null, deviceStatus = null) {
@@ -160,6 +220,7 @@ async function ensureTrustedDevicesTable() {
       user_id BIGINT NOT NULL,
       device_name VARCHAR(120) NOT NULL,
       device_hash CHAR(64) NOT NULL,
+      client_device_id_hash CHAR(64) NULL,
       browser VARCHAR(100) NULL,
       operating_system VARCHAR(120) NULL,
       device_type ENUM('Desktop','Mobile','Tablet') NOT NULL DEFAULT 'Desktop',
@@ -186,6 +247,7 @@ async function ensureTrustedDevicesTable() {
   await ensureColumn('trusted_devices', 'restored_at', 'DATETIME NULL');
   await ensureColumn('trusted_devices', 'status', "VARCHAR(20) NOT NULL DEFAULT 'Trusted'");
   await ensureColumn('trusted_devices', 'device_model', 'VARCHAR(160) NULL');
+  await ensureColumn('trusted_devices', 'client_device_id_hash', 'CHAR(64) NULL');
 }
 
 async function ensureDeviceSessionTable() {
@@ -286,6 +348,7 @@ async function ensureSecurityCenterSchema() {
       id BIGINT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
       device_hash CHAR(64) NOT NULL,
+      client_device_id_hash CHAR(64) NULL,
       device_name VARCHAR(120) NOT NULL,
       browser VARCHAR(100) NULL,
       operating_system VARCHAR(120) NULL,
@@ -306,6 +369,7 @@ async function ensureSecurityCenterSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await ensureColumn('device_approval_requests', 'device_model', 'VARCHAR(160) NULL');
+  await ensureColumn('device_approval_requests', 'client_device_id_hash', 'CHAR(64) NULL');
 }
 
 async function auditTrustedDevice(req, action, result, details = {}) {
@@ -395,24 +459,62 @@ async function createSecurityNotification({ userId, type, title, message, riskLe
 async function createDeviceApprovalRequest({ userId, deviceHash, fingerprint = {}, req = null, riskLevel = 'Medium', loginStatus = 'Pending Approval', metadata = {} }) {
   await ensureSecurityCenterSchema();
   const device = deviceMetadata(fingerprint, req);
+  const clientHash = clientDeviceIdHash(userId, fingerprint);
   const location = metadata.location || approximateLocationFromRequest(req);
   const [existing] = await pool.execute(
     `SELECT id FROM device_approval_requests
-      WHERE user_id = ? AND device_hash = ?
+      WHERE user_id = ?
+        AND (device_hash = ? OR (? IS NOT NULL AND client_device_id_hash = ?))
         AND requested_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
         AND status IN ('Pending','Approved','Ignored','Secured')
       ORDER BY id DESC LIMIT 1`,
-    [userId, deviceHash]
+    [userId, deviceHash, clientHash, clientHash]
   );
-  if (existing[0]) return existing[0].id;
+  if (existing[0]) {
+    await pool.execute(
+      `UPDATE device_approval_requests
+          SET device_hash = ?,
+              client_device_id_hash = COALESCE(?, client_device_id_hash),
+              device_name = ?,
+              browser = ?,
+              operating_system = ?,
+              device_type = ?,
+              device_model = ?,
+              ip_address = ?,
+              location = COALESCE(?, location),
+              risk_level = ?,
+              login_status = ?,
+              expires_at = DATE_ADD(NOW(), INTERVAL 30 MINUTE),
+              metadata = ?
+        WHERE id = ? AND user_id = ?`,
+      [
+        deviceHash,
+        clientHash,
+        device.deviceName,
+        device.browser,
+        device.operatingSystem,
+        device.deviceType,
+        device.deviceModel,
+        device.ipAddress,
+        location,
+        normalizeRiskLevel(riskLevel),
+        loginStatus,
+        JSON.stringify(metadata),
+        existing[0].id,
+        userId,
+      ]
+    );
+    return existing[0].id;
+  }
   const [result] = await pool.execute(
     `INSERT INTO device_approval_requests
-       (user_id, device_hash, device_name, browser, operating_system, device_type,
+       (user_id, device_hash, client_device_id_hash, device_name, browser, operating_system, device_type,
         device_model, ip_address, location, risk_level, login_status, expires_at, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), ?)`,
     [
       userId,
       deviceHash,
+      clientHash,
       device.deviceName,
       device.browser,
       device.operatingSystem,
@@ -535,43 +637,97 @@ async function recordUnknownDeviceAttempt({ userId, fingerprint = {}, req = null
 async function findTrustedDevice(userId, fingerprint = {}, req = null) {
   await ensureTrustedDevicesTable();
   const hash = fingerprintHash(userId, fingerprint, req);
+  const clientHash = clientDeviceIdHash(userId, fingerprint);
   const [rows] = await pool.execute(
-    `SELECT id, user_id, device_name, device_hash, browser, operating_system,
-            device_type, device_model, ip_address, last_used, registered_at, is_trusted, revoked_at,
-            removed_at, removed_by, restored_at, status
-       FROM trusted_devices
-      WHERE user_id = ? AND device_hash = ?
-      LIMIT 1`,
-    [userId, hash]
-  );
-  if (rows[0]) return { device: rows[0], deviceHash: hash };
-
-  const metadata = deviceMetadata(fingerprint, req);
-  const [fallbackRows] = await pool.execute(
-    `SELECT id, user_id, device_name, device_hash, browser, operating_system,
+    `SELECT id, user_id, device_name, device_hash, client_device_id_hash, browser, operating_system,
             device_type, device_model, ip_address, last_used, registered_at, is_trusted, revoked_at,
             removed_at, removed_by, restored_at, status
        FROM trusted_devices
       WHERE user_id = ?
-        AND browser = ?
-        AND operating_system = ?
-        AND device_type = ?
+        AND (device_hash = ? OR (? IS NOT NULL AND client_device_id_hash = ?))
+      LIMIT 1`,
+    [userId, hash, clientHash, clientHash]
+  );
+  if (rows[0]) {
+    const matched = rows[0];
+    if (matched.device_hash !== hash || (clientHash && matched.client_device_id_hash !== clientHash)) {
+      const metadata = deviceMetadata(fingerprint, req);
+      await pool.execute(
+        `UPDATE trusted_devices
+            SET device_hash = ?,
+                client_device_id_hash = COALESCE(?, client_device_id_hash),
+                browser = COALESCE(?, browser),
+                operating_system = COALESCE(?, operating_system),
+                device_type = COALESCE(?, device_type),
+                device_model = COALESCE(?, device_model),
+                last_used = NOW(),
+                ip_address = COALESCE(?, ip_address)
+          WHERE id = ? AND user_id = ?`,
+        [
+          hash,
+          clientHash,
+          metadata.browser,
+          metadata.operatingSystem,
+          metadata.deviceType,
+          metadata.deviceModel,
+          metadata.ipAddress,
+          matched.id,
+          userId,
+        ]
+      ).catch(error => {
+        if (error?.code !== 'ER_DUP_ENTRY') throw error;
+      });
+      matched.device_hash = hash;
+      matched.client_device_id_hash = clientHash || matched.client_device_id_hash;
+    }
+    return { device: matched, deviceHash: hash };
+  }
+
+  const metadata = deviceMetadata(fingerprint, req);
+  const [fallbackRows] = await pool.execute(
+    `SELECT id, user_id, device_name, device_hash, client_device_id_hash, browser, operating_system,
+            device_type, device_model, ip_address, last_used, registered_at, is_trusted, revoked_at,
+            removed_at, removed_by, restored_at, status
+       FROM trusted_devices
+      WHERE user_id = ?
         AND status = 'Trusted'
       ORDER BY COALESCE(last_used, registered_at) DESC, id DESC
-      LIMIT 1`,
-    [userId, metadata.browser, metadata.operatingSystem, metadata.deviceType]
+      LIMIT 25`,
+    [userId]
   );
 
-  const fallback = fallbackRows[0] || null;
+  const fallback = fallbackRows.find(row => sameDeviceMetadata(row, metadata)) || null;
   if (fallback) {
     try {
       await pool.execute(
         `UPDATE trusted_devices
-            SET device_hash = ?, last_used = NOW(), ip_address = COALESCE(?, ip_address)
+            SET device_hash = ?,
+                client_device_id_hash = COALESCE(?, client_device_id_hash),
+                browser = COALESCE(?, browser),
+                operating_system = COALESCE(?, operating_system),
+                device_type = COALESCE(?, device_type),
+                device_model = COALESCE(?, device_model),
+                last_used = NOW(),
+                ip_address = COALESCE(?, ip_address)
           WHERE id = ? AND user_id = ?`,
-        [hash, metadata.ipAddress, fallback.id, userId]
+        [
+          hash,
+          clientHash,
+          metadata.browser,
+          metadata.operatingSystem,
+          metadata.deviceType,
+          metadata.deviceModel,
+          metadata.ipAddress,
+          fallback.id,
+          userId,
+        ]
       );
       fallback.device_hash = hash;
+      fallback.client_device_id_hash = clientHash || fallback.client_device_id_hash;
+      fallback.browser = metadata.browser || fallback.browser;
+      fallback.operating_system = metadata.operatingSystem || fallback.operating_system;
+      fallback.device_type = metadata.deviceType || fallback.device_type;
+      fallback.device_model = metadata.deviceModel || fallback.device_model;
       fallback.last_used = new Date();
     } catch (error) {
       if (error?.code !== 'ER_DUP_ENTRY') throw error;
@@ -619,9 +775,11 @@ async function deduplicateTrustedDevices(userId, fingerprint = {}, req = null) {
 async function listDevices(userId, fingerprint = {}, req = null) {
   await ensureTrustedDevicesTable();
   await deduplicateTrustedDevices(userId, fingerprint, req);
-  const currentHash = fingerprintHash(userId, fingerprint, req);
+  const current = await findTrustedDevice(userId, fingerprint, req);
+  const currentHash = current.deviceHash || fingerprintHash(userId, fingerprint, req);
+  const currentClientHash = clientDeviceIdHash(userId, fingerprint);
   const [rows] = await pool.execute(
-    `SELECT id, device_name, device_hash, browser, operating_system, device_type,
+    `SELECT id, device_name, device_hash, client_device_id_hash, browser, operating_system, device_type,
             device_model, ip_address, last_used, registered_at, is_trusted, revoked_at,
             removed_at, removed_by, restored_at, status
        FROM trusted_devices
@@ -645,14 +803,14 @@ async function listDevices(userId, fingerprint = {}, req = null) {
     removedAt: row.removed_at,
     removedBy: row.removed_by,
     restoredAt: row.restored_at,
-    currentDevice: row.device_hash === currentHash,
+    currentDevice: row.device_hash === currentHash || Boolean(currentClientHash && row.client_device_id_hash === currentClientHash),
   }));
 }
 
 async function listDeviceHistory(userId) {
   await ensureTrustedDevicesTable();
   const [rows] = await pool.execute(
-    `SELECT id, device_name, device_hash, browser, operating_system, device_type,
+    `SELECT id, device_name, device_hash, client_device_id_hash, browser, operating_system, device_type,
             device_model, ip_address, last_used, registered_at, is_trusted, revoked_at,
             removed_at, removed_by, restored_at, status
        FROM trusted_devices
@@ -718,6 +876,7 @@ async function registerDevice({ userId, fingerprint, req, password = null, passw
     throw error;
   }
   const hash = fingerprintHash(userId, fingerprint, req);
+  const clientHash = clientDeviceIdHash(userId, fingerprint);
   const metadata = deviceMetadata({ ...(fingerprint || {}), deviceName }, req);
   const existing = await findTrustedDevice(userId, fingerprint, req);
   if (existing.device) {
@@ -738,13 +897,14 @@ async function registerDevice({ userId, fingerprint, req, password = null, passw
 
   await pool.execute(
     `INSERT INTO trusted_devices
-       (user_id, device_name, device_hash, browser, operating_system, device_type, device_model,
+       (user_id, device_name, device_hash, client_device_id_hash, browser, operating_system, device_type, device_model,
         ip_address, first_registered_ip, last_location, last_used, registered_at, is_trusted, revoked_at, removed_at, removed_by, restored_at, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), TRUE, NULL, NULL, NULL, NULL, 'Trusted')`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), TRUE, NULL, NULL, NULL, NULL, 'Trusted')`,
     [
       userId,
       metadata.deviceName,
       hash,
+      clientHash,
       metadata.browser,
       metadata.operatingSystem,
       metadata.deviceType,
@@ -1104,8 +1264,11 @@ async function approveDeviceRequest({ userId, requestId, req = null }) {
     throw error;
   }
   const [existing] = await pool.execute(
-    `SELECT id FROM trusted_devices WHERE user_id = ? AND device_hash = ? LIMIT 1`,
-    [userId, request.device_hash]
+    `SELECT id FROM trusted_devices
+      WHERE user_id = ?
+        AND (device_hash = ? OR (? IS NOT NULL AND client_device_id_hash = ?))
+      LIMIT 1`,
+    [userId, request.device_hash, request.client_device_id_hash, request.client_device_id_hash]
   );
   let deviceId = existing[0]?.id || null;
   if (deviceId) {
@@ -1113,17 +1276,18 @@ async function approveDeviceRequest({ userId, requestId, req = null }) {
       `UPDATE trusted_devices
           SET status = 'Trusted', is_trusted = TRUE, revoked_at = NULL, removed_at = NULL,
               device_name = ?, browser = ?, operating_system = ?, device_type = ?, device_model = ?,
+              device_hash = ?, client_device_id_hash = COALESCE(?, client_device_id_hash),
               ip_address = ?, last_location = ?, last_used = NOW()
         WHERE id = ? AND user_id = ?`,
-      [request.device_name, request.browser, request.operating_system, request.device_type, request.device_model, request.ip_address, request.location, deviceId, userId]
+      [request.device_name, request.browser, request.operating_system, request.device_type, request.device_model, request.device_hash, request.client_device_id_hash, request.ip_address, request.location, deviceId, userId]
     );
   } else {
     const [created] = await pool.execute(
       `INSERT INTO trusted_devices
-         (user_id, device_name, device_hash, browser, operating_system, device_type, device_model,
+         (user_id, device_name, device_hash, client_device_id_hash, browser, operating_system, device_type, device_model,
           ip_address, first_registered_ip, last_location, last_used, registered_at, is_trusted, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), TRUE, 'Trusted')`,
-      [userId, request.device_name, request.device_hash, request.browser, request.operating_system, request.device_type || 'Desktop', request.device_model, request.ip_address, request.ip_address, request.location]
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), TRUE, 'Trusted')`,
+      [userId, request.device_name, request.device_hash, request.client_device_id_hash, request.browser, request.operating_system, request.device_type || 'Desktop', request.device_model, request.ip_address, request.ip_address, request.location]
     );
     deviceId = created.insertId;
   }
