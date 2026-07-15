@@ -6,6 +6,7 @@ const vm = require('vm');
 const root = path.join(__dirname, '..');
 const script = fs.readFileSync(path.join(root, 'public/js/system-admin.js'), 'utf8');
 const page = fs.readFileSync(path.join(root, 'public/pages/system-admin.html'), 'utf8');
+const styles = fs.readFileSync(path.join(root, 'public/css/system-admin.css'), 'utf8');
 
 const context = {
   window: {},
@@ -99,12 +100,33 @@ assert.deepStrictEqual(
     next: 'Verify checksum and integrity.',
     complete: false,
   },
-  'A completed worker job must guide the admin to independent artifact verification.'
+  'A completed worker job must guide the admin to protected artifact verification.'
 );
 assert.strictEqual(
   hooks.backupLifecycleGuide('AWAITING_APPROVAL', 'restore').next,
-  'A different authorized admin must approve with MFA.',
-  'Restore guidance must preserve maker-checker and MFA requirements.'
+  'The same System Administrator completes this step using a fresh MFA challenge.',
+  'Restore guidance must explain the single-admin MFA requirement.'
+);
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(hooks.backupAdminApprovalPolicy({
+    eligible_system_admin_count: 50,
+    single_admin_mode: false,
+    admin_approval_mode: 'UNEXPECTED_SERVER_MODE',
+  }))),
+  {
+    singleAdminMode: true,
+    mode: 'SINGLE_ADMIN_STEP_UP',
+  },
+  'The Backup & Restore UI must always render the MFA-protected single-admin flow.'
+);
+assert.strictEqual(
+  hooks.backupApprovalInstruction(hooks.backupAdminApprovalPolicy({})),
+  'The same System Administrator completes this step using a fresh MFA challenge.'
+);
+assert.strictEqual(
+  hooks.backupAdminApprovalPolicy({ eligible_system_admin_count: 0 }).singleAdminMode,
+  true,
+  'Admin-account counts must not change the fixed single-admin Backup & Restore workflow.'
 );
 assert.strictEqual(
   hooks.backupLifecycleGuide('DRY_RUN_PASSED', 'restore').next,
@@ -136,7 +158,7 @@ assert.strictEqual(hooks.backupNotificationRead({ read_at: '2026-07-14T01:00:00Z
 assert.deepStrictEqual(
   JSON.parse(JSON.stringify(hooks.backupNotificationTarget('ROLLBACK_REQUEST'))),
   ['rollback', 'rollback-requests-tbody'],
-  'Checker notifications must deep-link to the related workflow.'
+  'Action notifications must deep-link to the related workflow.'
 );
 assert.deepStrictEqual(
   JSON.parse(JSON.stringify(hooks.backupNotificationTarget('DRILL_RUN'))),
@@ -174,13 +196,25 @@ assert(!script.includes('SHA-256 manifest/checksum hash:'), 'The UI must never a
 assert(script.includes("headers: { 'Idempotency-Key': idempotencyKey }"), 'Mutating recovery requests must carry an idempotency key.');
 assert(script.includes('sessionStorage.setItem(storageKey, value)'), 'Request idempotency keys must survive an ambiguous network retry.');
 assert(script.includes('clearBackupIdempotencyKey'), 'Successful operations must rotate their persisted idempotency key.');
+assert(script.includes('function openBackupRequestModal'), 'Recovery request buttons must open the dedicated in-page request form.');
+assert(script.includes('async function submitBackupRecoveryRequest'), 'The request form must submit restore and rollback actions explicitly.');
+assert(script.includes("confirmation !== 'RESTORE'"), 'Restore requests must require the typed RESTORE confirmation in the visible form.');
+assert(script.includes('setBackupRequestSubmitting(true)'), 'The request form must show a bounded submitting state.');
+assert(script.includes('async function backupApiFetch'), 'Backup workspace requests must use a bounded fetch helper.');
+assert(script.includes('controller.abort()'), 'Backup workspace requests must time out instead of remaining indefinitely loading.');
+assert(script.includes('Core recovery data loaded. Loading operational details...'), 'Restore and rollback data must render before optional operational resources finish loading.');
+assert(script.includes('fetchAndRenderBackupCoreResource'), 'Each core Backup & Restore resource must render independently.');
+assert(script.includes("if (key === 'restore')"), 'Restore rows must render as soon as the Restore endpoint responds.');
+assert(script.includes("if (key === 'rollback')"), 'Rollback rows must render as soon as the Rollback endpoint responds.');
 assert(script.includes('verifyRestoreTarget'), 'Pending RDS restores must expose a post-restore verification action.');
 assert(script.includes("if (normalized !== 'CANCELLED')"), 'Manual restore/rollback completion and unprotected rejection must be blocked in the UI.');
-assert(script.includes("payload: { approval_notes: notes }"), 'Checker approval notes must use the backend approval_notes contract.');
+assert(script.includes("payload: { approval_notes: notes }"), 'Admin approval notes must use the backend approval_notes contract.');
 assert(script.includes("confirmation_phrase: confirmationPhrase.trim()"), 'Restore and rollback execution must carry the typed confirmation phrase.');
-assert(script.includes("method: 'PATCH'") && script.includes("purpose: 'RESTORE_APPROVE'") && script.includes("purpose: 'ROLLBACK_APPROVE'"), 'Restore and rollback rejection must use checker MFA step-up before PATCH.');
+assert(script.includes("method: 'PATCH'") && script.includes("purpose: 'RESTORE_APPROVE'") && script.includes("purpose: 'ROLLBACK_APPROVE'"), 'Restore and rollback rejection must use admin MFA step-up before PATCH.');
 
 assert(page.includes('id="backup-step-up-modal"'), 'Backup UI must include an MFA step-up dialog.');
+assert(page.includes('id="backup-request-modal"'), 'Backup UI must include a dedicated Restore/Rollback request form.');
+assert(page.includes('id="backup-request-submit"'), 'Backup request form must include an explicit submit button.');
 assert(page.includes('id="backup-process-title"'), 'Backup UI must include a visible backup and restore process map.');
 assert(page.includes('id="backup-next-actions"'), 'Backup UI must include a live next-actions center.');
 assert(page.includes('id="backup-readiness-card"'), 'Backup UI must summarize verified recovery readiness.');
@@ -199,15 +233,24 @@ assert(script.includes('backup-action-primary'), 'The UI must visually identify 
 assert(script.includes('backup-action-danger'), 'Reject and cancel actions must be visually distinct.');
 assert(page.includes("focusBackupArea('sets', 'backup-request-panel')"), 'Backup UI must provide a direct Create Backup path.');
 assert(page.includes('Only verified artifacts can be restored.'), 'The process map must state when an artifact becomes usable.');
-assert(page.includes('A different admin checks it with MFA.'), 'The process map must show maker-checker approval and MFA.');
+assert(page.includes('The same admin confirms with fresh MFA.'), 'The process map must explain same-admin approval and fresh MFA.');
 assert(page.includes('Deployment Version (module source code)'), 'Deployment backups must be identified as real module source-code artifacts.');
 assert(page.includes('Module State (metadata only)'), 'Module-state backups must not be presented as executable code rollback artifacts.');
 assert(script.includes('Module Source-code Capture'), 'Backup configuration must report source-code capture readiness.');
 assert(script.includes('Transactional Code Cutover'), 'Backup configuration must report transactional cutover readiness.');
 assert(page.includes('autocomplete="one-time-code"'), 'MFA code input must use one-time-code autocomplete.');
 assert(page.includes('isolated dry-run'), 'Restore lifecycle guidance must disclose isolated dry-run validation.');
-assert(page.includes('maker-checker approval'), 'Recovery guidance must disclose maker-checker approval.');
+assert(page.includes('Single-admin + fresh MFA'), 'Recovery guidance must disclose the fixed protected single-admin path.');
+assert(page.includes('The same System Administrator performs each step.'), 'Restore guidance must identify the same-admin process clearly.');
+assert(page.includes('id="backup-approval-mode"'), 'The UI must show the currently active admin approval mode.');
+assert(page.includes('Action Inbox'), 'The approval workspace must use clear action-inbox language.');
 assert(page.includes('Only artifacts reported by the backend as available and verified count as recovery coverage.'), 'Coverage semantics must be explicit.');
+for (const content of [page, script]) {
+  assert(!/another\s+(?:system\s+)?admin/i.test(content), 'Backup & Restore must never tell the client to use another administrator.');
+  assert(!/two\s+or\s+more\s+active\s+system\s+administrators/i.test(content), 'Backup & Restore must not expose a conditional administrator-count flow.');
+  assert(!/adaptive\s+(?:admin|approval)/i.test(content), 'Backup & Restore must not expose adaptive approval wording.');
+}
+assert(!styles.includes('.backup-approval-mode.is-multi-admin'), 'Unused multi-admin styling must be removed.');
 
 for (const endpoint of [
   '/api/admin/backups/schedules',
@@ -245,7 +288,7 @@ for (const id of [
 ]) {
   assert(page.includes(`id="${id}"`), `Backup operations UI must include #${id}.`);
 }
-assert(page.includes('Opening a notification does not approve anything.'), 'Checker inbox must preserve maker-checker semantics.');
+assert(page.includes('Open an item, review it, then use a fresh MFA code to complete the step.'), 'Action inbox must explain the protected same-admin action flow.');
 assert(page.includes('runs only against the isolated dry-run target'), 'Restore drills must be clearly identified as isolated, non-production checks.');
 assert(script.includes("document.getElementById('backup-drill-provider')"), 'Restore drills must allow an exact LOCAL, S3, or RDS provider filter.');
 

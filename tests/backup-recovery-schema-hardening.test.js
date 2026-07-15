@@ -18,6 +18,18 @@ const down = fs.readFileSync(
   path.join(root, 'migrations', 'sqls', '20260712123000_backup_restore_execution_hardening-down.sql'),
   'utf8'
 );
+const adaptiveWrapper = fs.readFileSync(
+  path.join(root, 'migrations', '20260714130000-adaptive-single-admin-backup-approval.js'),
+  'utf8'
+);
+const adaptiveUp = fs.readFileSync(
+  path.join(root, 'migrations', 'sqls', '20260714130000_adaptive_single_admin_backup_approval-up.sql'),
+  'utf8'
+);
+const adaptiveDown = fs.readFileSync(
+  path.join(root, 'migrations', 'sqls', '20260714130000_adaptive_single_admin_backup_approval-down.sql'),
+  'utf8'
+);
 
 assert(wrapper.includes("runSqlFile(db, '20260712123000_backup_restore_execution_hardening-up.sql')"));
 assert(wrapper.includes("runSqlFile(db, '20260712123000_backup_restore_execution_hardening-down.sql')"));
@@ -69,5 +81,21 @@ assert(down.includes("MODIFY COLUMN status ENUM('PENDING','IN_PROGRESS','COMPLET
 
 assert.strictEqual(splitStatements(up).length, 14, 'The migration runner must parse every up statement.');
 assert.strictEqual(splitStatements(down).length, 9, 'The migration runner must parse every down statement.');
+
+assert(adaptiveWrapper.includes("runSqlFile(db, '20260714130000_adaptive_single_admin_backup_approval-up.sql')"));
+assert(adaptiveWrapper.includes("runSqlFile(db, '20260714130000_adaptive_single_admin_backup_approval-down.sql')"));
+for (const constraint of [
+  'chk_backup_sets_maker_checker',
+  'chk_restore_jobs_maker_checker',
+  'chk_module_rollback_maker_checker',
+]) {
+  assert(adaptiveUp.includes(`DROP CONSTRAINT ${constraint}`), `${constraint} must be removed for the single-administrator workflow.`);
+  assert(adaptiveDown.includes(`ADD CONSTRAINT ${constraint}`), `${constraint} must be restored by the down migration.`);
+}
+assert(!adaptiveUp.includes('chk_backup_sets_verified_artifact'), 'Artifact verification evidence must remain enforced.');
+assert(!adaptiveUp.includes('chk_restore_jobs_approval_evidence'), 'Restore MFA approval evidence must remain enforced.');
+assert(!adaptiveUp.includes('chk_module_rollback_approval_evidence'), 'Rollback MFA approval evidence must remain enforced.');
+assert.strictEqual(splitStatements(adaptiveUp).length, 3, 'Single-admin approval up migration must contain three ALTER statements.');
+assert.strictEqual(splitStatements(adaptiveDown).length, 3, 'Single-admin approval down migration must contain three ALTER statements.');
 
 console.log('Backup/restore schema hardening migration tests passed.');

@@ -33,6 +33,7 @@ let sysBackupModuleSelectionInitialized = false;
 let sysBackupModulePickerQuery = '';
 let sysBackupScheduleModuleQuery = '';
 let sysBackupWorkspaceLoading = false;
+let sysBackupRequestContext = null;
 const sysBackupPendingMutations = new Set();
 let sysHealthSnapshot = null;
 let sysHealthModules = [];
@@ -2581,9 +2582,24 @@ function normalizeBackupCollection(payload) {
   return [];
 }
 
+async function backupApiFetch(path, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await apiFetch(path, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('The backup service did not respond in time. Refresh the workspace and try again.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchBackupOperationalResource(path, key) {
   try {
-    const response = await apiFetch(path);
+    const response = await backupApiFetch(path);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || payload.message || `Failed to load ${key}.`);
     delete sysBackupOperationalErrors[key];
@@ -2591,6 +2607,110 @@ async function fetchBackupOperationalResource(path, key) {
   } catch (error) {
     sysBackupOperationalErrors[key] = error.message || `Failed to load ${key}.`;
     return null;
+  }
+}
+
+// Each core resource has an independent failure state. A slow dashboard or
+// backup-history request must never keep the Restore or Rollback tables on a
+// generic loading row after those specific endpoints have already responded.
+const BACKUP_CORE_RESOURCE_FAILURES = Object.freeze({
+  overview: ['backup-coverage-tbody', 9, 'Backup overview could not be loaded.'],
+  backups: ['backup-logs-tbody', 9, 'Backup history could not be loaded.'],
+  recovery: ['module-recovery-tbody', 10, 'Recovery points could not be loaded.'],
+  restore: ['restore-jobs-tbody', 11, 'Restore jobs could not be loaded.'],
+  rollback: ['rollback-requests-tbody', 9, 'Rollback requests could not be loaded.'],
+});
+
+function renderBackupCoreResourceFailure(key, error) {
+  const failure = BACKUP_CORE_RESOURCE_FAILURES[key];
+  if (!failure) return;
+  const [tbodyId, colspan, title] = failure;
+  const tbody = document.getElementById(tbodyId);
+  if (tbody) {
+    tbody.innerHTML = backupEmptyFilterRow(
+      colspan,
+      title,
+      error?.message || 'Refresh the workspace and try again.'
+    );
+  }
+  if (key !== 'overview') return;
+  const readiness = document.getElementById('backup-readiness-card');
+  if (readiness) {
+    readiness.innerHTML = '<span class="backup-readiness-label">Recovery readiness</span><strong>Status unavailable</strong><small>Restore and rollback records will continue loading independently.</small>';
+  }
+  const nextActions = document.getElementById('backup-next-actions');
+  if (nextActions) {
+    nextActions.innerHTML = '<div class="backup-next-action backup-next-action-neutral"><strong>Backup overview is unavailable.</strong><small>Restore and rollback records remain available when their own requests succeed.</small></div>';
+  }
+}
+
+function applyBackupCoreResource(key, payload) {
+  if (key === 'overview') {
+    sysBackupDashboard = payload || {};
+    sysBackupCoverage = Array.isArray(payload?.coverage) ? payload.coverage : [];
+    return;
+  }
+  if (key === 'backups') {
+    sysBackupLogs = normalizeBackupPagedResponse(payload, 'backups');
+    return;
+  }
+  if (key === 'recovery') {
+    sysModuleRecoveryPoints = normalizeBackupPagedResponse(payload, 'recovery');
+    return;
+  }
+  if (key === 'restore') {
+    sysRestoreJobs = normalizeBackupPagedResponse(payload, 'restore');
+    return;
+  }
+  if (key === 'rollback') {
+    sysRollbackRequests = normalizeBackupPagedResponse(payload, 'rollback');
+  }
+}
+
+function renderBackupCoreResource(key) {
+  if (key === 'overview') {
+    renderBackupModuleOptions();
+    renderBackupOperationalModuleOptions();
+    renderBackupApprovalMode();
+    renderBackupReadiness();
+    renderBackupNextActions();
+    renderBackupSummaryCards();
+    renderBackupCoverage();
+    renderBackupSettings();
+    return;
+  }
+  if (key === 'backups') {
+    renderBackupLogs();
+    renderBackupPagination('backups');
+    return;
+  }
+  if (key === 'recovery') {
+    renderModuleRecoveryPoints();
+    renderBackupPagination('recovery');
+    return;
+  }
+  if (key === 'restore') {
+    renderRestoreJobs();
+    renderBackupPagination('restore');
+    return;
+  }
+  if (key === 'rollback') {
+    renderRollbackRequests();
+    renderBackupPagination('rollback');
+  }
+}
+
+async function fetchAndRenderBackupCoreResource(key, path) {
+  try {
+    const response = await backupApiFetch(path);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.message || `Failed to load ${key}.`);
+    applyBackupCoreResource(key, payload);
+    renderBackupCoreResource(key);
+    return true;
+  } catch (error) {
+    renderBackupCoreResourceFailure(key, error);
+    return false;
   }
 }
 
@@ -2622,61 +2742,47 @@ async function loadBackupLogs() {
   }
   if (updatedLabel) updatedLabel.textContent = 'Refreshing recovery data...';
   try {
-    const [overviewRes, backupsRes, recoveryRes, restoreRes, rollbackRes] = await Promise.all([
-      apiFetch('/api/admin/backups/overview'),
-      apiFetch(backupPaginatedUrl('/api/admin/backups', 'backups')),
-      apiFetch(backupPaginatedUrl('/api/admin/backups/recovery-points', 'recovery')),
-      apiFetch(backupPaginatedUrl('/api/admin/backups/restore-jobs', 'restore')),
-      apiFetch(backupPaginatedUrl('/api/admin/backups/rollback-requests', 'rollback')),
+    // Do not aggregate these with Promise.all before rendering. Restore and
+    // Rollback must paint as soon as their own endpoints return; an unrelated
+    // slow overview/history request used to leave both tables stuck on
+    // "Loading" until the 15-second fetch timeout elapsed.
+    const coreResults = await Promise.all([
+      fetchAndRenderBackupCoreResource('overview', '/api/admin/backups/overview'),
+      fetchAndRenderBackupCoreResource('backups', backupPaginatedUrl('/api/admin/backups', 'backups')),
+      fetchAndRenderBackupCoreResource('recovery', backupPaginatedUrl('/api/admin/backups/recovery-points', 'recovery')),
+      fetchAndRenderBackupCoreResource('restore', backupPaginatedUrl('/api/admin/backups/restore-jobs', 'restore')),
+      fetchAndRenderBackupCoreResource('rollback', backupPaginatedUrl('/api/admin/backups/rollback-requests', 'rollback')),
     ]);
-    const [overview, backups, recovery, restore, rollback] = await Promise.all([
-      overviewRes.json(),
-      backupsRes.json(),
-      recoveryRes.json(),
-      restoreRes.json(),
-      rollbackRes.json(),
-    ]);
-    if (!overviewRes.ok) throw new Error(overview.error || 'Failed to load backup dashboard.');
-    if (!backupsRes.ok) throw new Error(backups.error || 'Failed to load backup records.');
-    if (!recoveryRes.ok) throw new Error(recovery.error || 'Failed to load module recovery points.');
-    if (!restoreRes.ok) throw new Error(restore.error || 'Failed to load restore jobs.');
-    if (!rollbackRes.ok) throw new Error(rollback.error || 'Failed to load rollback requests.');
-
-    sysBackupDashboard = overview || {};
-    sysBackupCoverage = Array.isArray(overview?.coverage) ? overview.coverage : [];
-    sysBackupLogs = normalizeBackupPagedResponse(backups, 'backups');
-    sysModuleRecoveryPoints = normalizeBackupPagedResponse(recovery, 'recovery');
-    sysRestoreJobs = normalizeBackupPagedResponse(restore, 'restore');
-    sysRollbackRequests = normalizeBackupPagedResponse(rollback, 'rollback');
+    const loadedCoreCount = coreResults.filter(Boolean).length;
+    if (updatedLabel) {
+      updatedLabel.textContent = loadedCoreCount
+        ? 'Core recovery data loaded. Loading operational details...'
+        : 'Core recovery data could not be loaded. Review the table messages below.';
+    }
 
     const [schedulePayload, retentionPayload, notificationPayload, drillPayload] = await Promise.all([
       fetchBackupOperationalResource('/api/admin/backups/schedules', 'backup schedules'),
       fetchBackupOperationalResource('/api/admin/backups/retention-policy', 'retention policy'),
-      fetchBackupOperationalResource('/api/admin/backups/notifications', 'checker notifications'),
+      fetchBackupOperationalResource('/api/admin/backups/notifications', 'action notifications'),
       fetchBackupOperationalResource('/api/admin/backups/restore-drills', 'restore drills'),
     ]);
     sysBackupSchedules = schedulePayload === null ? [] : normalizeBackupCollection(schedulePayload);
     sysBackupRetentionPolicy = retentionPayload?.policy || retentionPayload?.item || retentionPayload || null;
     sysBackupNotifications = notificationPayload === null ? [] : normalizeBackupCollection(notificationPayload);
     sysBackupRestoreDrills = drillPayload === null ? [] : normalizeBackupCollection(drillPayload);
-    renderBackupRecoveryWorkspace();
+    // Render only operational sections here. Re-rendering the entire workspace
+    // would overwrite a successfully rendered Restore/Rollback table when an
+    // unrelated core resource failed.
+    renderBackupSchedules();
+    populateBackupRetentionForm();
+    renderBackupNotifications();
+    renderBackupRestoreDrills();
+    renderBackupSettings();
+    switchBackupRecoveryTab(sysBackupActiveTab);
     if (updatedLabel) updatedLabel.textContent = `Updated ${sysFormatDateTime(new Date())}`;
   } catch (err) {
-    const colspans = {
-      'backup-coverage-tbody': 9,
-      'backup-logs-tbody': 9,
-      'module-recovery-tbody': 10,
-      'restore-jobs-tbody': 11,
-      'rollback-requests-tbody': 9,
-      'backup-schedules-tbody': 7,
-      'backup-drills-tbody': 7,
-    };
-    Object.keys(colspans).forEach(id => {
-      const tbody = document.getElementById(id);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="${colspans[id]}" class="table-empty">${sysEsc(err.message || 'Failed to load backup recovery data.')}</td></tr>`;
-    });
-    const inbox = document.getElementById('backup-notification-inbox');
-    if (inbox) inbox.innerHTML = `<div class="backup-notification-empty"><strong>Backup workspace could not be loaded.</strong><small>${sysEsc(err.message || 'Try refreshing the page.')}</small></div>`;
+    // Individual core fetches have already rendered a table-specific result.
+    // Do not replace successful Restore/Rollback rows with a global error.
     if (updatedLabel) updatedLabel.textContent = 'Refresh failed — try again';
     showSysToast(err.message || 'Failed to load backup recovery data.', 'error');
   } finally {
@@ -2729,6 +2835,23 @@ function backupExplicitBoolean(record, keys) {
     if (value === false || value === 0 || String(value).trim().toLowerCase() === 'false') return false;
   }
   return null;
+}
+
+function backupAdminApprovalPolicy(source = sysBackupDashboard || {}) {
+  void source;
+  return {
+    singleAdminMode: true,
+    mode: 'SINGLE_ADMIN_STEP_UP',
+  };
+}
+
+function backupApprovalInstruction(policy = backupAdminApprovalPolicy()) {
+  void policy;
+  return 'The same System Administrator completes this step using a fresh MFA challenge.';
+}
+
+function backupApprovalUnavailableMessage(subject = 'request') {
+  return `This ${subject} is not ready for approval. Refresh the workspace and review its current status.`;
 }
 
 function backupStatusValue(record, keys, fallback = '-') {
@@ -2843,8 +2966,8 @@ function backupLifecycleGuide(status, workflow = 'backup') {
     },
     restore: {
       PENDING: ['Restore requested', 'Wait for the protected workflow to start.', false],
-      AWAITING_APPROVAL: ['Waiting for checker approval', 'A different authorized admin must approve with MFA.', false],
-      APPROVED: ['Approved by checker', 'Run the isolated dry-run with fresh MFA.', false],
+      AWAITING_APPROVAL: ['Waiting for admin approval', backupApprovalInstruction(), false],
+      APPROVED: ['Admin approval complete', 'Run the isolated dry-run with fresh MFA.', false],
       DRY_RUN_RUNNING: ['Dry-run in progress', 'Wait for isolated validation to finish.', false],
       DRY_RUN_PASSED: ['Dry-run passed', 'Execute the restore with fresh MFA.', false],
       DRY_RUN_FAILED: ['Dry-run blocked restore', 'Resolve the validation failure before a new attempt.', false],
@@ -2857,13 +2980,13 @@ function backupLifecycleGuide(status, workflow = 'backup') {
     },
     rollback: {
       PENDING: ['Rollback requested', 'Wait for the protected workflow to start.', false],
-      AWAITING_APPROVAL: ['Waiting for checker approval', 'A different authorized admin must approve with MFA.', false],
-      APPROVED: ['Approved by checker', 'Execute rollback with fresh MFA.', false],
+      AWAITING_APPROVAL: ['Waiting for admin approval', backupApprovalInstruction(), false],
+      APPROVED: ['Admin approval complete', 'Execute rollback with fresh MFA.', false],
       EXECUTING: ['Rollback in progress', 'Wait for integrity validation to finish.', false],
       VERIFYING: ['Validating module version', 'Wait for integrity and health checks.', false],
       COMPLETED: ['Rollback completed', 'Review the integrity result and module health.', true],
       FAILED: ['Rollback failed safely', 'Review the result before requesting another rollback.', false],
-      REJECTED: ['Request rejected', 'Resolve the checker concern before a new request.', true],
+      REJECTED: ['Request rejected', 'Resolve the review concern before a new request.', true],
       CANCELLED: ['Request cancelled', 'No further rollback action is required.', true],
     },
   };
@@ -3224,14 +3347,13 @@ function collectBackupNextActions() {
     const status = backupStatusValue(job, ['lifecycle_status', 'status'], 'UNKNOWN');
     const reference = job.backup_reference || job.backup_set_id || `Job #${id}`;
     if (status === 'AWAITING_APPROVAL') {
-      const canApprove = backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false);
       add({
         priority: 5,
         label: 'Restore step B2',
-        title: canApprove ? `Approve restore ${reference}` : `Restore ${reference} needs a different checker`,
-        detail: canApprove ? 'Review the request and approve or reject it with fresh MFA.' : 'Maker-checker separation prevents the requester from approving their own restore.',
-        button: canApprove ? 'Review and Approve' : 'Open Restore Jobs',
-        onclick: canApprove ? `approveRestoreJob(${id})` : "focusBackupArea('restore', 'restore-jobs-table')",
+        title: `Approve restore ${reference}`,
+        detail: 'Review the request and approve or reject it with fresh MFA.',
+        button: 'Review and Approve',
+        onclick: `approveRestoreJob(${id})`,
       });
     } else if (status === 'APPROVED') {
       const canDryRun = backupActionAllowedAny(job, ['RESTORE_DRY_RUN', 'DRY_RUN'], true);
@@ -3281,12 +3403,11 @@ function collectBackupNextActions() {
     const status = backupStatusValue(request, ['lifecycle_status', 'status'], 'UNKNOWN');
     const moduleName = backupModuleName(request.affected_module) || `Request #${id}`;
     if (status === 'AWAITING_APPROVAL') {
-      const canApprove = isVerifiedRollbackRequestArtifact(request)
-        && backupActionAllowedAny(request, ['ROLLBACK_APPROVE', 'APPROVE'], false);
+      const canApprove = isVerifiedRollbackRequestArtifact(request);
       add({
         priority: 8,
         label: 'Rollback approval',
-        title: canApprove ? `Review ${moduleName} rollback` : `${moduleName} rollback needs a different checker`,
+        title: canApprove ? `Review ${moduleName} rollback` : `${moduleName} rollback is waiting for approval`,
         detail: 'The target artifact must stay verified and approval requires fresh MFA.',
         button: canApprove ? 'Review and Approve' : 'Open Rollback',
         onclick: canApprove ? `approveRollbackRequest(${id})` : "focusBackupArea('rollback')",
@@ -3660,10 +3781,8 @@ function renderRestoreJobs() {
     const dryRunPassed = status === 'DRY_RUN_PASSED' || ['PASSED', 'DRY_RUN_PASSED'].includes(dryRunStatus);
     const actions = [];
     if (status === 'AWAITING_APPROVAL') {
-      const canApprove = backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false);
-      const canReject = backupActionAllowedAny(job, ['RESTORE_REJECT', 'REJECT'], canApprove);
-      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRestoreJob(${id})" ${canApprove ? '' : 'disabled'} title="A different authorized System Administrator must approve">Approve with MFA</button>`);
-      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRestoreJob(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRestoreJob(${id})" title="Review and approve with fresh MFA">Approve with MFA</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRestoreJob(${id})">Reject</button>`);
     }
     if (status === 'APPROVED' && !dryRunPassed) {
       const canDryRun = backupActionAllowedAny(job, ['RESTORE_DRY_RUN', 'DRY_RUN'], true);
@@ -3712,10 +3831,10 @@ function renderRollbackRequests() {
     const artifactReady = isVerifiedRollbackRequestArtifact(request);
     const actions = [];
     if (status === 'AWAITING_APPROVAL') {
-      const canApprove = artifactReady && backupActionAllowedAny(request, ['ROLLBACK_APPROVE', 'APPROVE'], false);
-      const canReject = backupActionAllowedAny(request, ['ROLLBACK_REJECT', 'REJECT'], canApprove);
-      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRollbackRequest(${id})" ${canApprove ? '' : 'disabled'} title="Requires a verified artifact and a different authorized checker">Approve with MFA</button>`);
-      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRollbackRequest(${id})" ${canReject ? '' : 'disabled'}>Reject</button>`);
+      const canApprove = artifactReady;
+      const approvalTitle = canApprove ? 'Verified artifact; approve with fresh MFA' : backupApprovalUnavailableMessage('rollback request');
+      actions.push(`<button class="btn-sysadmin-sm backup-action-primary" onclick="approveRollbackRequest(${id})" ${canApprove ? '' : 'disabled'} title="${sysEsc(approvalTitle)}">Approve with MFA</button>`);
+      actions.push(`<button class="btn-sysadmin-sm backup-action-danger" onclick="rejectRollbackRequest(${id})">Reject</button>`);
     }
     if (status === 'APPROVED') {
       const canExecute = artifactReady && backupActionAllowedAny(request, ['ROLLBACK_EXECUTE', 'EXECUTE'], true);
@@ -4181,9 +4300,9 @@ function renderBackupNotifications() {
     badge.textContent = String(unreadCount > 99 ? '99+' : unreadCount);
     badge.hidden = unreadCount === 0;
   }
-  const error = sysBackupOperationalErrors['checker notifications'];
+  const error = sysBackupOperationalErrors['action notifications'];
   if (error) {
-    target.innerHTML = `<div class="backup-notification-empty"><strong>Checker inbox could not be loaded.</strong><small>${sysEsc(error)}</small></div>`;
+    target.innerHTML = `<div class="backup-notification-empty"><strong>Action inbox could not be loaded.</strong><small>${sysEsc(error)}</small></div>`;
     setBackupResultCount('backup-notification-results', 0, 0, 'notification');
     return;
   }
@@ -4197,7 +4316,7 @@ function renderBackupNotifications() {
   });
   setBackupResultCount('backup-notification-results', visible.length, sysBackupNotifications.length, 'notification');
   if (!visible.length) {
-    target.innerHTML = '<div class="backup-notification-empty"><strong>No notifications match this view.</strong><small>Pending checker actions will appear here without bypassing maker-checker separation.</small></div>';
+    target.innerHTML = `<div class="backup-notification-empty"><strong>No notifications match this view.</strong><small>${sysEsc(backupApprovalInstruction())} Pending protected actions will appear here.</small></div>`;
     return;
   }
   target.innerHTML = visible.map(notification => {
@@ -4356,6 +4475,16 @@ function renderBackupRestoreDrills() {
   }).join('');
 }
 
+function renderBackupApprovalMode() {
+  const target = document.getElementById('backup-approval-mode');
+  const inboxHelp = document.getElementById('backup-approval-inbox-help');
+  if (target) {
+    target.classList.add('is-single-admin');
+    target.innerHTML = '<span class="backup-approval-mode-icon" aria-hidden="true">&#128274;</span><div><strong>Single-admin + fresh MFA</strong><small>The same System Administrator creates, verifies, approves, dry-runs, and executes. Every protected step still requires fresh MFA, confirmation, idempotency, and audit logging.</small></div>';
+  }
+  if (inboxHelp) inboxHelp.textContent = 'This is your protected action queue. Open an item, review it, then use a fresh MFA code to complete the step.';
+}
+
 function renderBackupSettings() {
   const target = document.getElementById('backup-settings-grid');
   if (!target) return;
@@ -4368,7 +4497,6 @@ function renderBackupSettings() {
   const workerStatus = backupExplicitBoolean(settings, ['backup_worker_enabled']);
   const localAdapterStatus = backupExplicitBoolean(settings, ['local_adapter_configured']);
   const isolatedRestoreStatus = backupExplicitBoolean(settings, ['isolated_restore_configured']);
-  const makerCheckerStatus = backupExplicitBoolean(settings, ['maker_checker_required']);
   const stepUpStatus = backupExplicitBoolean(settings, ['step_up_mfa_required']);
   const sourceCodeStatus = backupExplicitBoolean(settings, ['source_code_backup_configured']);
   const codeCutoverStatus = backupExplicitBoolean(settings, ['module_code_cutover_enabled']);
@@ -4391,7 +4519,7 @@ function renderBackupSettings() {
     ['Configuration Backups', settings.config_provider || 'Not configured'],
     ['Local Development Adapter', configurationLabel(localAdapterStatus)],
     ['Isolated Restore Validation', configurationLabel(isolatedRestoreStatus)],
-    ['Maker-checker Approval', enforcementLabel(makerCheckerStatus)],
+    ['Admin Approval Mode', 'Single admin + fresh MFA'],
     ['Step-up MFA', enforcementLabel(stepUpStatus)],
     ['Deployment Rollback', settings.deployment_provider || 'Not configured'],
     ['Module Source-code Capture', configurationLabel(sourceCodeStatus)],
@@ -4416,6 +4544,7 @@ function renderBackupSettings() {
 function renderBackupRecoveryWorkspace() {
   renderBackupModuleOptions();
   renderBackupOperationalModuleOptions();
+  renderBackupApprovalMode();
   renderBackupReadiness();
   renderBackupNextActions();
   renderBackupSummaryCards();
@@ -4676,58 +4805,210 @@ async function updateBackupStatus(backupId, status, extra = {}) {
   return null;
 }
 
-async function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABASE') {
+function backupRequestField(id) {
+  return document.getElementById(id);
+}
+
+function setBackupRequestError(message = '') {
+  const target = backupRequestField('backup-request-error');
+  if (target) target.textContent = message;
+}
+
+function setBackupRequestSubmitting(submitting) {
+  const submit = backupRequestField('backup-request-submit');
+  if (!submit) return;
+  submit.disabled = Boolean(submitting);
+  submit.textContent = submitting ? 'Submitting…' : 'Create Request';
+}
+
+function closeBackupRequestModal() {
+  const modal = backupRequestField('backup-request-modal');
+  if (modal) modal.style.display = 'none';
+  sysBackupRequestContext = null;
+  setBackupRequestError('');
+  setBackupRequestSubmitting(false);
+}
+
+function openBackupRequestModal(context) {
+  const modal = backupRequestField('backup-request-modal');
+  if (!modal) {
+    showSysToast('The recovery request form is unavailable. Refresh the page and try again.', 'error');
+    return false;
+  }
+  const isRestore = context.kind === 'restore';
+  const title = backupRequestField('backup-request-title');
+  const description = backupRequestField('backup-request-description');
+  const scope = backupRequestField('backup-request-scope');
+  const confirmationWrap = backupRequestField('backup-request-confirmation-wrap');
+  const confirmation = backupRequestField('backup-request-confirmation');
+  const maintenanceWrap = backupRequestField('backup-request-maintenance-wrap');
+  const maintenance = backupRequestField('backup-request-maintenance');
+  const moduleWrap = backupRequestField('backup-request-module-wrap');
+  const moduleSelect = backupRequestField('backup-request-module');
+  const reason = backupRequestField('backup-request-reason');
+
+  sysBackupRequestContext = context;
+  if (title) title.textContent = isRestore ? 'Request Restore' : 'Request Rollback';
+  if (description) {
+    description.textContent = isRestore
+      ? 'Create a protected restore request. The same System Administrator approves it with fresh MFA, then an isolated dry-run must pass before execution.'
+      : 'Create a protected code rollback request. The same System Administrator approves it with fresh MFA before controlled execution.';
+  }
+  if (scope) scope.textContent = context.scopeText || 'Review the selected recovery artifact before continuing.';
+  if (confirmationWrap) confirmationWrap.hidden = !isRestore;
+  if (confirmation) {
+    confirmation.value = '';
+    confirmation.placeholder = isRestore ? 'Type RESTORE' : '';
+  }
+  if (maintenanceWrap) maintenanceWrap.hidden = !isRestore;
+  if (maintenance) maintenance.checked = false;
+  if (reason) reason.value = context.defaultReason || '';
+
+  const moduleOptions = Array.isArray(context.moduleOptions) ? context.moduleOptions : [];
+  if (moduleWrap) moduleWrap.hidden = moduleOptions.length <= 1;
+  if (moduleSelect) {
+    moduleSelect.innerHTML = moduleOptions.map(moduleKey => (
+      `<option value="${sysEsc(moduleKey)}">${sysEsc(backupModuleName(moduleKey))} (${sysEsc(moduleKey)})</option>`
+    )).join('');
+    moduleSelect.value = context.moduleKey || moduleOptions[0] || '';
+  }
+
+  setBackupRequestError('');
+  setBackupRequestSubmitting(false);
+  modal.style.display = 'flex';
+  requestAnimationFrame(() => (isRestore ? confirmation : reason)?.focus?.());
+  return true;
+}
+
+function requestRestoreJob(backupId, moduleKey = '', restoreType = 'DATABASE') {
   const normalizedBackupId = Number(backupId || 0);
   if (!normalizedBackupId) {
     showSysToast('Select a completed backup before requesting restore.', 'error');
-    return;
+    return null;
   }
   if (!isRestorableBackupType(restoreType)) {
     showSysToast('Deployment version backups use rollback requests, not restore jobs.', 'error');
-    return;
+    return null;
   }
   const record = sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === normalizedBackupId);
   if (!record || !isRestorableBackupArtifact(record)) {
     showSysToast('Restore requires an artifact that the backend reports as available, verified, and restorable.', 'error');
-    return;
+    return null;
   }
-  const warning = 'This creates an approval request. A different authorized administrator must approve it, then an isolated dry-run and integrity check must pass before execution.\n\nType RESTORE to continue:';
-  const phrase = prompt(warning, '');
-  if (phrase === null) return;
-  if (phrase.trim() !== 'RESTORE') {
-    showSysToast('Type RESTORE exactly to confirm the request.', 'error');
-    return;
+  const includedModules = Array.isArray(record.included_modules) ? record.included_modules.filter(Boolean) : [];
+  const scopeText = moduleKey
+    ? `Backup ${record.backup_reference || `#${normalizedBackupId}`} · Module: ${backupModuleName(moduleKey)}`
+    : `Backup ${record.backup_reference || `#${normalizedBackupId}`} · Scope: ${includedModules.length ? `all ${includedModules.length} included module(s)` : 'all included backup contents'}`;
+  return openBackupRequestModal({
+    kind: 'restore',
+    backupId: normalizedBackupId,
+    moduleKey,
+    restoreType,
+    scopeText,
+    defaultReason: moduleKey ? `Restore ${backupModuleName(moduleKey)} from selected backup.` : `Restore ${record.backup_reference || `backup #${normalizedBackupId}`}.`,
+  });
+}
+
+async function submitBackupRecoveryRequest() {
+  const context = sysBackupRequestContext;
+  if (!context) {
+    showSysToast('Open a restore or rollback request first.', 'error');
+    return null;
   }
-  const reason = prompt('Restore reason:', moduleKey ? `Restore ${backupModuleName(moduleKey)} from selected backup.` : '');
-  if (reason === null) return;
-  const maintenance = confirm('Place the affected module under maintenance before restore?');
-  const idempotencyKey = backupIdempotencyKey('restore-request', normalizedBackupId);
-  return runBackupMutation(`restore-request:${normalizedBackupId}:${moduleKey}`, async () => {
+  const reason = String(backupRequestField('backup-request-reason')?.value || '').trim();
+  if (reason.length < 5) {
+    setBackupRequestError('Enter a reason with at least 5 characters.');
+    backupRequestField('backup-request-reason')?.focus?.();
+    return null;
+  }
+
+  if (context.kind === 'restore') {
+    const confirmation = String(backupRequestField('backup-request-confirmation')?.value || '').trim();
+    if (confirmation !== 'RESTORE') {
+      setBackupRequestError('Type RESTORE exactly to confirm this request.');
+      backupRequestField('backup-request-confirmation')?.focus?.();
+      return null;
+    }
+    const maintenance = Boolean(backupRequestField('backup-request-maintenance')?.checked);
+    const idempotencyKey = backupIdempotencyKey('restore-request', context.backupId);
+    setBackupRequestSubmitting(true);
+    return runBackupMutation(`restore-request:${context.backupId}:${context.moduleKey || ''}`, async () => {
+      try {
+        const res = await backupApiFetch(`/api/admin/backups/${context.backupId}/restore`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': idempotencyKey },
+          body: JSON.stringify({
+            restore_type: context.restoreType === 'FULL_BACKUP' ? 'FULL_BACKUP' : (context.restoreType || 'DATABASE'),
+            affected_module: context.moduleKey || '',
+            reason,
+            confirmation_phrase: confirmation,
+            place_under_maintenance: maintenance,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('restore-request', context.backupId);
+          throw new Error(data.error || 'Failed to queue restore request.');
+        }
+        clearBackupIdempotencyKey('restore-request', context.backupId);
+        closeBackupRequestModal();
+        switchBackupRecoveryTab('restore');
+        showSysToast(data.message || 'Restore request queued for approval.', 'success');
+        void loadBackupLogs();
+        void loadSystemHealth();
+        return data;
+      } catch (error) {
+        setBackupRequestError(error.message || 'Failed to submit the restore request.');
+        return null;
+      } finally {
+        setBackupRequestSubmitting(false);
+      }
+    });
+  }
+
+  const selectedModule = String(backupRequestField('backup-request-module')?.value || context.moduleKey || '').trim();
+  const module = sysBackupCoverage.find(item => item.module_key === selectedModule);
+  const point = sysModuleRecoveryPoints.find(item => (
+    item.module_key === selectedModule
+    && isVerifiedRollbackPoint(item)
+    && (!context.backupSetId || Number(item.backup_set_id) === Number(context.backupSetId))
+  ));
+  if (!point) {
+    setBackupRequestError('The selected module no longer has a verified rollback artifact. Refresh and try again.');
+    return null;
+  }
+  const idempotencyKey = backupIdempotencyKey('rollback-request', point.id || selectedModule);
+  setBackupRequestSubmitting(true);
+  return runBackupMutation(`rollback-request:${selectedModule}`, async () => {
     try {
-      const res = await apiFetch(`/api/admin/backups/${normalizedBackupId}/restore`, {
+      const res = await backupApiFetch('/api/admin/backups/rollback-requests', {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
-          restore_type: restoreType === 'FULL_BACKUP' ? 'FULL_BACKUP' : (restoreType || 'DATABASE'),
-          affected_module: moduleKey || '',
+          affected_module: selectedModule,
+          recovery_point_id: Number(point.id),
+          current_version: point.current_version || module?.current_version || '',
+          target_version: point.stable_version || module?.stable_version || '',
+          artifact_location: point.artifact_location || '',
           reason,
-          confirmation_phrase: phrase,
-          place_under_maintenance: maintenance,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('restore-request', normalizedBackupId);
-        throw new Error(data.error || 'Failed to queue restore request.');
+        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('rollback-request', point.id || selectedModule);
+        throw new Error(data.error || 'Failed to request rollback.');
       }
-      clearBackupIdempotencyKey('restore-request', normalizedBackupId);
-      showSysToast(data.message || 'Restore request queued for checker approval.', 'success');
-      loadBackupLogs();
-      loadSystemHealth();
+      clearBackupIdempotencyKey('rollback-request', point.id || selectedModule);
+      closeBackupRequestModal();
+      switchBackupRecoveryTab('rollback');
+      showSysToast(data.message || 'Rollback request queued for approval.', 'success');
+      void loadBackupLogs();
       return data;
-    } catch (err) {
-      showSysToast(err.message || 'Network error.', 'error');
+    } catch (error) {
+      setBackupRequestError(error.message || 'Failed to submit the rollback request.');
       return null;
+    } finally {
+      setBackupRequestSubmitting(false);
     }
   });
 }
@@ -4741,10 +5022,6 @@ async function approveRestoreJob(jobId) {
   const job = findRestoreJob(id);
   if (!job || backupStatusValue(job, ['lifecycle_status', 'status']) !== 'AWAITING_APPROVAL') {
     showSysToast('This restore request is not awaiting approval.', 'error');
-    return null;
-  }
-  if (!backupActionAllowedAny(job, ['RESTORE_APPROVE', 'APPROVE'], false)) {
-    showSysToast('Maker-checker policy requires a different authorized administrator to approve this request.', 'error');
     return null;
   }
   const notes = prompt('Approval notes:', 'Approved for isolated dry-run validation.');
@@ -4766,11 +5043,7 @@ async function rejectRestoreJob(jobId) {
     showSysToast('This restore request is not awaiting approval.', 'error');
     return null;
   }
-  if (!backupActionAllowedAny(job, ['RESTORE_REJECT', 'REJECT'], false)) {
-    showSysToast('You are not the eligible checker for this restore request.', 'error');
-    return null;
-  }
-  const notes = prompt('Rejection reason:', 'Restore request rejected after independent review.');
+  const notes = prompt('Rejection reason:', 'Restore request rejected after protected review.');
   if (notes === null) return null;
   return backupProtectedMutation({
     lockKey: `restore-reject:${id}`,
@@ -4869,32 +5142,37 @@ function requestBackupSetRollback(backupId) {
   const record = sysBackupLogs.find(item => Number(item.backup_set_id || item.backup_id || item.id) === Number(backupId));
   if (!record) {
     showSysToast('Backup set not found.', 'error');
-    return;
+    return null;
   }
   if (!isVerifiedBackupArtifact(record)) {
     showSysToast('Rollback requires a deployment artifact that the backend reports as available and verified.', 'error');
-    return;
+    return null;
   }
   const modules = Array.isArray(record.included_modules) ? record.included_modules.filter(Boolean) : [];
   if (!modules.length) {
     showSysToast('This deployment backup has no module recovery list.', 'error');
-    return;
+    return null;
   }
-  let moduleKey = modules[0];
-  if (modules.length > 1) {
-    const selected = prompt(`Module key to roll back:\n${modules.join(', ')}`, moduleKey);
-    if (selected === null) return;
-    moduleKey = selected.trim();
-    if (!modules.includes(moduleKey)) {
-      showSysToast('Selected module is not included in this deployment backup.', 'error');
-      return;
-    }
+  const availableModules = modules.filter(moduleKey => sysModuleRecoveryPoints.some(point => (
+    point.module_key === moduleKey
+    && Number(point.backup_set_id) === Number(backupId)
+    && isVerifiedRollbackPoint(point)
+  )));
+  if (!availableModules.length) {
+    showSysToast('This backup has no verified module artifact available for rollback.', 'error');
+    return null;
   }
-  requestModuleRollback(moduleKey, Number(backupId));
+  return openBackupRequestModal({
+    kind: 'rollback',
+    backupSetId: Number(backupId),
+    moduleKey: availableModules[0],
+    moduleOptions: availableModules,
+    scopeText: `Backup ${record.backup_reference || `#${backupId}`} · Choose one verified module to roll back.`,
+    defaultReason: `Rollback request from ${record.backup_reference || `backup #${backupId}`}.`,
+  });
 }
 
-async function requestModuleRollback(moduleKey, backupSetId = null) {
-  const module = sysBackupCoverage.find(item => item.module_key === moduleKey);
+function requestModuleRollback(moduleKey, backupSetId = null) {
   const point = sysModuleRecoveryPoints.find(item => (
     item.module_key === moduleKey
     && isVerifiedRollbackPoint(item)
@@ -4904,36 +5182,13 @@ async function requestModuleRollback(moduleKey, backupSetId = null) {
     showSysToast('Rollback requires a verified, available module recovery artifact.', 'error');
     return null;
   }
-  const reason = prompt('Rollback reason:', `Rollback request for ${backupModuleName(moduleKey)}.`);
-  if (reason === null) return;
-  const idempotencyKey = backupIdempotencyKey('rollback-request', point.id || moduleKey);
-  return runBackupMutation(`rollback-request:${moduleKey}`, async () => {
-    try {
-      const res = await apiFetch('/api/admin/backups/rollback-requests', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({
-          affected_module: moduleKey,
-          recovery_point_id: Number(point.id),
-          current_version: point.current_version || module?.current_version || '',
-          target_version: point.stable_version || module?.stable_version || '',
-          artifact_location: point.artifact_location || '',
-          reason,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (data.code === 'IDEMPOTENCY_CONFLICT') clearBackupIdempotencyKey('rollback-request', point.id || moduleKey);
-        throw new Error(data.error || 'Failed to request rollback.');
-      }
-      clearBackupIdempotencyKey('rollback-request', point.id || moduleKey);
-      showSysToast(data.message || 'Rollback request logged for checker approval.', 'success');
-      loadBackupLogs();
-      return data;
-    } catch (err) {
-      showSysToast(err.message || 'Network error.', 'error');
-      return null;
-    }
+  return openBackupRequestModal({
+    kind: 'rollback',
+    backupSetId: backupSetId ? Number(backupSetId) : Number(point.backup_set_id),
+    moduleKey,
+    moduleOptions: [moduleKey],
+    scopeText: `Module: ${backupModuleName(moduleKey)} · Recovery point: ${point.backup_reference || point.recovery_reference || `#${point.id}`}`,
+    defaultReason: `Rollback request for ${backupModuleName(moduleKey)}.`,
   });
 }
 
@@ -4950,10 +5205,6 @@ async function approveRollbackRequest(requestId) {
   }
   if (!isVerifiedRollbackRequestArtifact(request)) {
     showSysToast('The rollback artifact is not verified and cannot be approved.', 'error');
-    return null;
-  }
-  if (!backupActionAllowedAny(request, ['ROLLBACK_APPROVE', 'APPROVE'], false)) {
-    showSysToast('Maker-checker policy requires a different authorized administrator to approve this request.', 'error');
     return null;
   }
   const notes = prompt('Approval notes:', 'Approved for controlled rollback execution.');
@@ -4975,11 +5226,7 @@ async function rejectRollbackRequest(requestId) {
     showSysToast('This rollback request is not awaiting approval.', 'error');
     return null;
   }
-  if (!backupActionAllowedAny(request, ['ROLLBACK_REJECT', 'REJECT'], false)) {
-    showSysToast('You are not the eligible checker for this rollback request.', 'error');
-    return null;
-  }
-  const notes = prompt('Rejection reason:', 'Rollback request rejected after independent review.');
+  const notes = prompt('Rejection reason:', 'Rollback request rejected after protected review.');
   if (notes === null) return null;
   return backupProtectedMutation({
     lockKey: `rollback-reject:${id}`,
@@ -5176,6 +5423,8 @@ window.runBackup             = runBackup;
 window.updateBackupStatus    = updateBackupStatus;
 window.verifyBackup          = verifyBackup;
 window.requestRestoreJob     = requestRestoreJob;
+window.submitBackupRecoveryRequest = submitBackupRecoveryRequest;
+window.closeBackupRequestModal = closeBackupRequestModal;
 window.approveRestoreJob     = approveRestoreJob;
 window.rejectRestoreJob      = rejectRestoreJob;
 window.runRestoreDryRun      = runRestoreDryRun;
@@ -5195,6 +5444,8 @@ window.completeBackupStepUp  = completeBackupStepUp;
 window.closeBackupStepUp     = closeBackupStepUp;
 window.__backupRecoveryUiTestHooks = Object.freeze({
   backupExplicitBoolean,
+  backupAdminApprovalPolicy,
+  backupApprovalInstruction,
   isVerifiedBackupArtifact,
   isRestorableBackupArtifact,
   isVerifiedRollbackPoint,

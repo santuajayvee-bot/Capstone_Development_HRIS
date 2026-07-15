@@ -1,5 +1,5 @@
 /*
- * Controlled local backup/rollback integration test.
+ * Controlled local backup, restore-dry-run, and rollback integration test.
  *
  * This script intentionally exercises the live HTTP API and database. It is
  * fail-closed, localhost-only, blocked in production, and requires an explicit
@@ -36,9 +36,9 @@ const USER_AGENT = 'LGSV-controlled-backup-e2e/1.0';
 
 function assertSafeEnvironment() {
   assert.equal(process.env.ALLOW_CONTROLLED_BACKUP_E2E, 'true', 'Set ALLOW_CONTROLLED_BACKUP_E2E=true to run this controlled test.');
-  assert.notEqual(String(process.env.NODE_ENV || 'development').toLowerCase(), 'production', 'Controlled rollback tests are blocked in production.');
+  assert.notEqual(String(process.env.NODE_ENV || 'development').toLowerCase(), 'production', 'Controlled backup/restore tests are blocked in production.');
   const url = new URL(BASE_URL);
-  assert.ok(['127.0.0.1', 'localhost', '::1'].includes(url.hostname), 'Controlled rollback tests may target localhost only.');
+  assert.ok(['127.0.0.1', 'localhost', '::1'].includes(url.hostname), 'Controlled backup/restore tests may target localhost only.');
 }
 
 function safeStep(message) {
@@ -114,26 +114,59 @@ async function findTestActors() {
        JOIN roles r ON r.id = u.role_id
        LEFT JOIN employees e ON e.id = u.employee_id
       WHERE u.is_active = 1
-        AND LOWER(REPLACE(REPLACE(r.name, ' ', '_'), '-', '_')) IN ('system_admin', 'system_administrator', 'admin')
+        AND LOWER(REPLACE(REPLACE(TRIM(r.name), ' ', '_'), '-', '_')) IN ('system_admin', 'system_administrator', 'admin')
       ORDER BY u.id`
   );
-  assert.ok(admins.length >= 2, 'Two active System Administrator accounts are required for maker-checker testing.');
+  assert.ok(admins.length >= 1, 'At least one active System Administrator account is required for controlled testing.');
 
-  let checker = null;
+  let operator = null;
   for (const admin of admins) {
-    if (!admin.Employee_ID) continue;
+    if (!admin.Employee_ID || Number(admin.force_password_change) !== 0) continue;
     const profile = await getEmployeeMfaProfile(admin.Employee_ID);
     if (profile?.secret && profile?.enrolledAt) {
-      checker = { ...admin, mfaProfile: profile };
+      operator = { ...admin, mfaProfile: profile };
       break;
     }
   }
-  assert.ok(checker, 'An active System Administrator with enrolled TOTP MFA is required as checker.');
-  const maker = admins.find(admin => Number(admin.id) !== Number(checker.id));
-  assert.ok(maker, 'A distinct System Administrator is required as maker.');
-  assert.equal(Number(maker.force_password_change), 0, 'Maker account must not be forced through password change.');
-  assert.equal(Number(checker.force_password_change), 0, 'Checker account must not be forced through password change.');
-  return { maker, checker };
+  assert.ok(operator, 'An active System Administrator with enrolled TOTP MFA is required for controlled testing.');
+
+  // Keep these aliases so older controlled scenarios share one operator without
+  // requiring, disabling, or modifying a second administrator account.
+  return { maker: operator, checker: operator };
+}
+
+async function findSingleAdminActor() {
+  const [admins] = await pool.execute(
+    `SELECT u.id, u.username, u.employee_id AS employee_table_id, u.role_id,
+            COALESCE(u.token_version, 0) AS token_version,
+            COALESCE(u.force_password_change, 0) AS force_password_change,
+            r.name AS role_name, r.access_level, e.Employee_ID
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       LEFT JOIN employees e ON e.id = u.employee_id
+      WHERE u.is_active = 1
+        AND LOWER(REPLACE(REPLACE(TRIM(r.name), ' ', '_'), '-', '_')) IN ('system_admin', 'system_administrator', 'admin')
+      ORDER BY u.id`
+  );
+  assert.ok(admins.length >= 1, 'At least one active System Administrator account is required for single-admin testing.');
+
+  for (const admin of admins) {
+    if (!admin.Employee_ID || Number(admin.force_password_change) !== 0) continue;
+    const profile = await getEmployeeMfaProfile(admin.Employee_ID);
+    if (profile?.secret && profile?.enrolledAt) return { ...admin, mfaProfile: profile };
+  }
+  assert.fail('Single-admin testing requires an active System Administrator linked to an employee, not forced to change password, and enrolled in TOTP MFA.');
+}
+
+async function countActiveSystemAdmins() {
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS total
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+      WHERE u.is_active = 1
+        AND LOWER(REPLACE(REPLACE(TRIM(r.name), ' ', '_'), '-', '_')) IN ('system_admin', 'system_administrator', 'admin')`
+  );
+  return Number(rows[0]?.total || 0);
 }
 
 async function findTemporaryEmployeeLink(checker) {
@@ -336,7 +369,7 @@ async function main() {
 
     await requestJson(makerSession.token, 'GET', '/overview');
     await requestJson(checkerSession.token, 'GET', '/overview');
-    safeStep('Authenticated maker and MFA-enabled checker through revocable sessions.');
+    safeStep('Authenticated one MFA-enabled System Administrator through revocable sessions.');
 
     const beforeHashes = await moduleHashes(TEST_MODULE);
     const backupKey = uniqueKey('controlled-backup-e2e');
@@ -372,7 +405,9 @@ async function main() {
 
     const run = await requestJson(makerSession.token, 'POST', `/${backupId}/run`, { body: {} });
     assert.equal(run.body?.result?.status, 'COMPLETED');
-    assert.equal(run.body?.result?.independent_verification_required, true);
+    if (run.body?.result?.independent_verification_required !== undefined) {
+      assert.equal(run.body.result.independent_verification_required, false);
+    }
     const duplicateRun = await requestJson(makerSession.token, 'POST', `/${backupId}/run`, {
       expectedStatuses: [409],
       body: {},
@@ -380,18 +415,12 @@ async function main() {
     assert.equal(duplicateRun.body.code, 'INVALID_LIFECYCLE_TRANSITION');
     safeStep('Worker produced an encrypted local artifact; duplicate execution was blocked by the state machine.');
 
-    const makerVerify = await requestJson(makerSession.token, 'POST', `/${backupId}/verify`, {
-      expectedStatuses: [409],
-      body: {},
-    });
-    assert.equal(makerVerify.body.code, 'MAKER_CHECKER_REQUIRED');
-
     const backupProof = await freshStepUp(checkerSession.token, checker, 'BACKUP_VERIFY', 'BACKUP_SET', backupId);
     const verifiedBackup = await requestJson(checkerSession.token, 'POST', `/${backupId}/verify`, {
       body: backupProof,
     });
     assert.equal(verifiedBackup.body?.verification?.valid, true);
-    safeStep('Independent checker matched the server-generated SHA-256 checksum using fresh TOTP step-up MFA.');
+    safeStep('The same System Administrator matched the server-generated SHA-256 checksum using fresh TOTP step-up MFA.');
 
     const points = await requestJson(checkerSession.token, 'GET', '/recovery-points');
     const point = points.body.find(item => Number(item.backup_set_id) === backupId && item.module_key === TEST_MODULE);
@@ -422,7 +451,7 @@ async function main() {
     const approved = await requestJson(checkerSession.token, 'POST', `/rollback-requests/${rollbackRequestId}/approve`, {
       body: {
         ...approvalProof,
-        approval_notes: 'Controlled E2E checker approval after verified checksum and recovery-point review.',
+        approval_notes: 'Controlled E2E approval by the same System Administrator after checksum and recovery-point review.',
       },
     });
     assert.equal(approved.body.status, 'APPROVED');
@@ -494,6 +523,241 @@ async function main() {
     }
     if (cleanup.makerLinkChanged && cleanup.makerUserId) {
       await pool.execute('UPDATE users SET employee_id = ? WHERE id = ?', [cleanup.makerOriginalEmployeeTableId || null, cleanup.makerUserId]).catch(() => {});
+    }
+    await pool.end().catch(() => {});
+  }
+
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+}
+
+async function runSingleAdminWorkflow() {
+  assertSafeEnvironment();
+  const cleanup = {
+    jwtIds: [],
+    dpaAcceptanceId: null,
+  };
+  let summary = null;
+
+  try {
+    await pool.execute('SELECT 1');
+    const health = await fetch(`${BASE_URL}/health`, { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } });
+    assert.ok(health.ok, `Server health endpoint returned ${health.status}.`);
+
+    const admin = await findSingleAdminActor();
+    const activeAdminCountBefore = await countActiveSystemAdmins();
+    assert.ok(activeAdminCountBefore >= 1, 'At least one active System Administrator is required.');
+    const version = getCurrentDpaVersion();
+    const [acceptances] = await pool.execute(
+      'SELECT Acceptance_ID FROM DATA_PRIVACY_AGREEMENT_ACCEPTANCE WHERE User_ID = ? AND Agreement_Version = ? LIMIT 1',
+      [admin.id, version]
+    );
+    if (!acceptances.length) {
+      const [inserted] = await pool.execute(
+        `INSERT INTO DATA_PRIVACY_AGREEMENT_ACCEPTANCE
+           (User_ID, Employee_ID, Agreement_Version, Accepted_At, IP_Address, User_Agent)
+         VALUES (?, ?, ?, NOW(), '127.0.0.1', ?)`,
+        [admin.id, admin.employee_table_id, version, USER_AGENT]
+      );
+      cleanup.dpaAcceptanceId = inserted.insertId;
+    }
+
+    const session = await createControlledSession(admin, admin.Employee_ID);
+    cleanup.jwtIds.push(session.jwtId);
+    safeStep(`Testing the permanent one-admin workflow with account ${admin.id}; all ${activeAdminCountBefore} active administrator account(s) remain unchanged.`);
+
+    const overview = await requestJson(session.token, 'GET', '/overview');
+    assert.equal(overview.body?.settings?.admin_approval_mode, 'SINGLE_ADMIN_STEP_UP');
+    assert.equal(overview.body?.settings?.single_admin_mode, true);
+
+    const marker = new Date().toISOString();
+    const backupPayload = {
+      backup_name: `CONTROLLED SINGLE ADMIN CONFIG ${marker}`,
+      backup_type: 'CONFIGURATION',
+      storage_provider: 'LOCAL',
+      included_modules: [TEST_MODULE],
+      notes: 'Controlled localhost single-admin backup verification and isolated restore dry-run; no live restore is executed.',
+    };
+    const backupKey = uniqueKey('controlled-single-admin-backup');
+    const created = await requestJson(session.token, 'POST', '/request', {
+      expectedStatuses: [201],
+      idempotencyKey: backupKey,
+      body: backupPayload,
+    });
+    const backupId = Number(created.body.backup_set_id);
+    assert.ok(backupId > 0, 'Single-admin backup request did not return an ID.');
+    const backupReplay = await requestJson(session.token, 'POST', '/request', {
+      idempotencyKey: backupKey,
+      body: backupPayload,
+    });
+    assert.equal(backupReplay.body.idempotent_replay, true);
+    assert.equal(Number(backupReplay.body.backup_set_id), backupId);
+
+    const run = await requestJson(session.token, 'POST', `/${backupId}/run`, { body: {} });
+    assert.equal(run.body?.result?.status, 'COMPLETED');
+    assert.equal(run.body?.approval_policy?.single_admin_mode, true);
+    const verifyProof = await freshStepUp(session.token, admin, 'BACKUP_VERIFY', 'BACKUP_SET', backupId);
+    const verified = await requestJson(session.token, 'POST', `/${backupId}/verify`, { body: verifyProof });
+    assert.equal(verified.body?.verification?.valid, true, 'The same administrator could not verify the stored checksum in single-admin mode.');
+    assert.equal(verified.body?.approval_policy?.approval_mode, 'SINGLE_ADMIN_STEP_UP');
+    safeStep(`Backup ${backupId} completed and its server-generated checksum was verified by the same administrator with fresh MFA.`);
+
+    const restorePayload = {
+      restore_type: 'CONFIGURATION',
+      affected_module: TEST_MODULE,
+      reason: 'Controlled single-admin validation of isolated configuration restore without production cutover.',
+      confirmation_phrase: 'RESTORE',
+    };
+    const restoreKey = uniqueKey('controlled-single-admin-restore');
+    const requested = await requestJson(session.token, 'POST', `/${backupId}/restore`, {
+      expectedStatuses: [201],
+      idempotencyKey: restoreKey,
+      body: restorePayload,
+    });
+    const restoreJobId = Number(requested.body.restore_job_id);
+    assert.ok(restoreJobId > 0, 'Single-admin restore request did not return an ID.');
+    assert.equal(requested.body?.approval_policy?.single_admin_mode, true);
+    const restoreReplay = await requestJson(session.token, 'POST', `/${backupId}/restore`, {
+      idempotencyKey: restoreKey,
+      body: restorePayload,
+    });
+    assert.equal(restoreReplay.body.idempotent_replay, true);
+    assert.equal(Number(restoreReplay.body.restore_job_id), restoreJobId);
+
+    const approvalProof = await freshStepUp(session.token, admin, 'RESTORE_APPROVE', 'RESTORE_JOB', restoreJobId);
+    const approved = await requestJson(session.token, 'POST', `/restore-jobs/${restoreJobId}/approve`, {
+      body: {
+        ...approvalProof,
+        approval_notes: 'Same System Administrator approval with fresh MFA for controlled local dry-run only.',
+      },
+    });
+    assert.equal(approved.body.status, 'APPROVED');
+    assert.equal(approved.body?.approval_policy?.approval_mode, 'SINGLE_ADMIN_STEP_UP');
+
+    const dryRunProof = await freshStepUp(session.token, admin, 'RESTORE_DRY_RUN', 'RESTORE_JOB', restoreJobId);
+    const dryRun = await requestJson(session.token, 'POST', `/restore-jobs/${restoreJobId}/dry-run`, {
+      body: dryRunProof,
+    });
+    assert.equal(dryRun.body.status, 'DRY_RUN_PASSED');
+    assert.equal(dryRun.body?.report?.safeToRestore, true);
+    const cancelled = await requestJson(session.token, 'PATCH', `/restore-jobs/${restoreJobId}`, {
+      body: {
+        status: 'CANCELLED',
+        result_message: 'Controlled single-admin test stopped after isolated dry-run; live restore was intentionally not executed.',
+      },
+    });
+    assert.equal(cancelled.body.status, 'CANCELLED');
+    safeStep(`Restore job ${restoreJobId} passed the isolated dry-run and was cancelled before live execution.`);
+
+    const [[backupRows], [restoreRows], [challengeRows]] = await Promise.all([
+      pool.execute(
+        `SELECT id, backup_reference, status, created_by, verified_by, checksum, verified_checksum,
+                verification_status, integrity_status
+           FROM backup_sets WHERE id = ?`,
+        [backupId]
+      ),
+      pool.execute(
+        `SELECT id, status, approval_status, requested_by, approved_by, dry_run_status,
+                integrity_status, attempt_count, started_at, completed_at, cancelled_at,
+                restored_checksum, restore_target_encrypted
+           FROM restore_jobs WHERE id = ?`,
+        [restoreJobId]
+      ),
+      pool.execute(
+        `SELECT purpose, resource_type, resource_id, status, user_id, verified_at, consumed_at
+           FROM backup_step_up_challenges
+          WHERE user_id = ? AND status = 'CONSUMED'
+            AND ((purpose = 'BACKUP_VERIFY' AND resource_type = 'BACKUP_SET' AND resource_id = ?)
+              OR (purpose IN ('RESTORE_APPROVE', 'RESTORE_DRY_RUN') AND resource_type = 'RESTORE_JOB' AND resource_id = ?))
+          ORDER BY id`,
+        [admin.id, backupId, restoreJobId]
+      ),
+    ]);
+    const backup = backupRows[0];
+    const restore = restoreRows[0];
+    assert.ok(backup, 'Single-admin backup evidence is missing.');
+    assert.ok(restore, 'Single-admin restore evidence is missing.');
+    const [auditRows] = await pool.execute(
+      `SELECT action_performed, user_id
+         FROM system_audit_log
+        WHERE module = 'BACKUP_RESTORE'
+          AND timestamp >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+          AND action_performed IN (?, ?, ?, ?, ?, ?)
+        ORDER BY timestamp`,
+      [
+        `CREATE_BACKUP: ${backup.backup_reference}`,
+        `RUN_BACKUP: ${backup.backup_reference}`,
+        `VERIFY_BACKUP: ${backup.backup_reference}`,
+        `REQUEST_RESTORE: ${backup.backup_reference}`,
+        `APPROVE_RESTORE_JOB: ${restoreJobId}`,
+        `CANCELLED_RESTORE_JOB: ${restoreJobId}`,
+      ]
+    );
+    assert.equal(backup.status, 'VERIFIED');
+    assert.equal(backup.verification_status, 'MATCH');
+    assert.equal(backup.integrity_status, 'PASSED');
+    assert.equal(backup.checksum, backup.verified_checksum);
+    assert.equal(Number(backup.created_by), Number(admin.id));
+    assert.equal(Number(backup.verified_by), Number(admin.id));
+    assert.equal(restore.status, 'CANCELLED');
+    assert.equal(restore.approval_status, 'APPROVED');
+    assert.equal(Number(restore.requested_by), Number(admin.id));
+    assert.equal(Number(restore.approved_by), Number(admin.id));
+    assert.equal(restore.dry_run_status, 'PASSED');
+    assert.equal(restore.integrity_status, 'PASSED');
+    assert.equal(Number(restore.attempt_count), 0, 'A live restore execution attempt was unexpectedly recorded.');
+    assert.equal(restore.started_at, null, 'A live restore unexpectedly started.');
+    assert.equal(restore.completed_at, null, 'A live restore unexpectedly completed.');
+    assert.ok(restore.cancelled_at, 'The safe test restore was not cancelled.');
+    assert.equal(restore.restored_checksum, null, 'A production restore checksum was unexpectedly recorded.');
+    assert.equal(restore.restore_target_encrypted, null, 'A live restore target was unexpectedly recorded.');
+    assert.equal(challengeRows.length, 3, 'Expected three separately consumed MFA proofs for the same administrator.');
+    assert.deepEqual(
+      challengeRows.map(row => row.purpose).sort(),
+      ['BACKUP_VERIFY', 'RESTORE_APPROVE', 'RESTORE_DRY_RUN']
+    );
+    const requiredAuditPrefixes = [
+      'CREATE_BACKUP:',
+      'RUN_BACKUP:',
+      'VERIFY_BACKUP:',
+      'REQUEST_RESTORE:',
+      'APPROVE_RESTORE_JOB:',
+      'CANCELLED_RESTORE_JOB:',
+    ];
+    for (const prefix of requiredAuditPrefixes) {
+      const evidence = auditRows.find(row => String(row.action_performed).startsWith(prefix));
+      assert.ok(evidence, `${prefix} audit evidence is missing.`);
+      assert.equal(Number(evidence.user_id), Number(admin.id), `${prefix} was not audited to the initiating administrator.`);
+    }
+    const activeAdminCountAfter = await countActiveSystemAdmins();
+    assert.equal(
+      activeAdminCountAfter,
+      activeAdminCountBefore,
+      'The controlled one-admin workflow must not activate or deactivate any administrator account.'
+    );
+
+    summary = {
+      result: 'PASS',
+      approval_mode: 'SINGLE_ADMIN_STEP_UP',
+      system_admin_id: Number(admin.id),
+      backup_set_id: backupId,
+      backup_status: backup.status,
+      checksum_match: backup.checksum === backup.verified_checksum,
+      restore_job_id: restoreJobId,
+      restore_status: restore.status,
+      dry_run_status: restore.dry_run_status,
+      integrity_status: restore.integrity_status,
+      mfa_proofs_consumed: challengeRows.length,
+      live_restore_executed: false,
+      active_system_admins_before: activeAdminCountBefore,
+      active_system_admins_after: activeAdminCountAfter,
+      admin_account_states_changed: false,
+    };
+  } finally {
+    if (cleanup.jwtIds.length) {
+      await pool.query('DELETE FROM USER_SESSION WHERE JWT_ID IN (?)', [cleanup.jwtIds]).catch(() => {});
+    }
+    if (cleanup.dpaAcceptanceId) {
+      await pool.execute('DELETE FROM DATA_PRIVACY_AGREEMENT_ACCEPTANCE WHERE Acceptance_ID = ?', [cleanup.dpaAcceptanceId]).catch(() => {});
     }
     await pool.end().catch(() => {});
   }
@@ -601,7 +865,7 @@ async function runAutomationWorkflow() {
     const checkerNotification = inboxBeforeVerify.body.notifications.find(item => (
       item.resource_type === 'BACKUP_SET' && Number(item.resource_id) === backupId
     ));
-    assert.ok(checkerNotification, 'Checker inbox did not publish the pending backup verification.');
+    assert.ok(checkerNotification, 'Action inbox did not publish the pending backup verification for the initiating administrator.');
     const notificationRead = await requestJson(
       checkerSession.token,
       'PATCH',
@@ -858,6 +1122,8 @@ const runner = process.argv.includes('--post-restore-health-check')
     ? disableControlledRetentionPolicies
   : process.argv.some(value => value.startsWith('--verify-backup='))
     ? verifyControlledBackup
+  : process.argv.includes('--single-admin')
+    ? runSingleAdminWorkflow
   : process.argv.includes('--automation')
     ? runAutomationWorkflow
     : main;

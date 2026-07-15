@@ -6,7 +6,7 @@ const { BackupWorker } = require('./backupWorker');
 const { createBackupRuntimeFromEnv } = require('./backupRuntime');
 
 const FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
-const CHECKER_CATEGORIES = Object.freeze([
+const ADMIN_ACTION_CATEGORIES = Object.freeze([
   'BACKUP_VERIFICATION_REQUIRED',
   'RESTORE_APPROVAL_REQUIRED',
   'ROLLBACK_APPROVAL_REQUIRED',
@@ -578,7 +578,7 @@ class BackupAutomationRepository {
     return result.affectedRows === 1;
   }
 
-  async listPendingCheckerActions() {
+  async listPendingAdminActions() {
     const [backups] = await this.pool.execute(
       `SELECT id, created_by AS requested_by, backup_reference AS reference
          FROM backup_sets WHERE status='COMPLETED' AND verification_status='NOT_VERIFIED'`
@@ -592,19 +592,19 @@ class BackupAutomationRepository {
          FROM module_rollback_requests WHERE status='AWAITING_APPROVAL'`
     );
     return [
-      ...backups.map(row => ({ ...row, category: 'BACKUP_VERIFICATION_REQUIRED', resourceType: 'BACKUP_SET', title: 'Backup verification required', message: `${row.reference} is ready for independent checksum verification.` })),
-      ...restores.map(row => ({ ...row, category: 'RESTORE_APPROVAL_REQUIRED', resourceType: 'RESTORE_JOB', title: 'Restore approval required', message: `${row.reference} is waiting for independent approval.` })),
-      ...rollbacks.map(row => ({ ...row, category: 'ROLLBACK_APPROVAL_REQUIRED', resourceType: 'ROLLBACK_REQUEST', title: 'Rollback approval required', message: `${row.reference} is waiting for independent approval.` })),
+      ...backups.map(row => ({ ...row, category: 'BACKUP_VERIFICATION_REQUIRED', resourceType: 'BACKUP_SET', title: 'Backup verification required', message: `${row.reference} is ready for MFA-protected checksum verification.` })),
+      ...restores.map(row => ({ ...row, category: 'RESTORE_APPROVAL_REQUIRED', resourceType: 'RESTORE_JOB', title: 'Restore approval required', message: `${row.reference} is waiting for MFA-protected administrator approval.` })),
+      ...rollbacks.map(row => ({ ...row, category: 'ROLLBACK_APPROVAL_REQUIRED', resourceType: 'ROLLBACK_REQUEST', title: 'Rollback approval required', message: `${row.reference} is waiting for MFA-protected administrator approval.` })),
     ];
   }
 
-  async listEligibleCheckers(excludedUserId = null) {
+  async listActiveSystemAdmins() {
     const [rows] = await this.pool.execute(
       `SELECT u.id
          FROM users u JOIN roles r ON r.id=u.role_id
-        WHERE u.is_active=1 AND r.name IN ('system_admin','admin') AND (? IS NULL OR u.id<>?)
-        ORDER BY u.id`,
-      [excludedUserId || null, excludedUserId || null]
+        WHERE u.is_active=1
+          AND LOWER(REPLACE(REPLACE(TRIM(r.name),' ','_'),'-','_')) IN ('system_admin','system_administrator','admin')
+        ORDER BY u.id`
     );
     return rows.map(row => Number(row.id));
   }
@@ -623,21 +623,22 @@ class BackupAutomationRepository {
     );
   }
 
-  async resolveStaleCheckerNotifications() {
+  async resolveStaleActionNotifications() {
     const statements = [
-      [`BACKUP_VERIFICATION_REQUIRED`, `BACKUP_SET`, `backup_sets`, `b.status<>'COMPLETED' OR b.verification_status<>'NOT_VERIFIED'`],
-      [`RESTORE_APPROVAL_REQUIRED`, `RESTORE_JOB`, `restore_jobs`, `b.status<>'AWAITING_APPROVAL'`],
-      [`ROLLBACK_APPROVAL_REQUIRED`, `ROLLBACK_REQUEST`, `module_rollback_requests`, `b.status<>'AWAITING_APPROVAL'`],
+      [`BACKUP_VERIFICATION_REQUIRED`, `BACKUP_SET`, `backup_sets`, `created_by`, `b.status<>'COMPLETED' OR b.verification_status<>'NOT_VERIFIED'`],
+      [`RESTORE_APPROVAL_REQUIRED`, `RESTORE_JOB`, `restore_jobs`, `requested_by`, `b.status<>'AWAITING_APPROVAL'`],
+      [`ROLLBACK_APPROVAL_REQUIRED`, `ROLLBACK_REQUEST`, `module_rollback_requests`, `requested_by`, `b.status<>'AWAITING_APPROVAL'`],
     ];
     let resolved = 0;
-    for (const [category, resourceType, table, stale] of statements) {
+    for (const [category, resourceType, table, makerColumn, stale] of statements) {
       const [result] = await this.pool.execute(
         `UPDATE backup_action_notifications n
            LEFT JOIN ${table} b ON b.id=n.resource_id
             SET n.status='RESOLVED', n.action_required=0, n.read_at=COALESCE(n.read_at,NOW()),
                 n.resolved_at=NOW(), n.updated_at=NOW()
           WHERE n.category=? AND n.resource_type=? AND n.status IN ('UNREAD','READ')
-            AND (b.id IS NULL OR ${stale})`,
+            AND (b.id IS NULL OR ${stale}
+                 OR n.recipient_user_id<>b.${makerColumn})`,
         [category, resourceType]
       );
       resolved += Number(result.affectedRows || 0);
@@ -792,9 +793,9 @@ class BackupAutomationService {
       await this.repository.finishBackupSchedule(schedule.id, 'SUCCESS');
       await this.repository.audit('COMPLETE_SCHEDULED_BACKUP', {
         schedule_id: Number(schedule.id), backup_set_id: Number(backup.id), status: result.status,
-        independent_verification_required: true,
+        administrator_verification_required: true,
       }, actorId || schedule.created_by);
-      return { scheduleId: Number(schedule.id), backupSetId: Number(backup.id), status: result.status, independentVerificationRequired: true };
+      return { scheduleId: Number(schedule.id), backupSetId: Number(backup.id), status: result.status, administratorVerificationRequired: true };
     } catch (error) {
       if (result?.status === 'COMPLETED' && result?.integrityReport) {
         await this.repository.transitionBackup({
@@ -835,9 +836,14 @@ class BackupAutomationService {
         await this.repository.finishBackupSchedule(backup.schedule_id, 'SUCCESS');
         await this.repository.audit('RESUME_SCHEDULED_BACKUP', {
           schedule_id: Number(backup.schedule_id), backup_set_id: Number(backup.id), status: result.status,
-          independent_verification_required: true,
+          administrator_verification_required: true,
         }, backup.created_by);
-        results.push({ scheduleId: Number(backup.schedule_id), backupSetId: Number(backup.id), status: result.status });
+        results.push({
+          scheduleId: Number(backup.schedule_id),
+          backupSetId: Number(backup.id),
+          status: result.status,
+          administratorVerificationRequired: true,
+        });
       } catch (error) {
         if (result?.status === 'COMPLETED' && result?.integrityReport) {
           await this.repository.transitionBackup({
@@ -957,8 +963,14 @@ class BackupAutomationService {
     return results;
   }
 
-  async notifyAdmins(notification, excludedUserId = null) {
-    const recipients = await this.repository.listEligibleCheckers(excludedUserId);
+  async notifyAdmins(notification, preferredUserId = null) {
+    const eligibleAdmins = await this.repository.listActiveSystemAdmins();
+    const preferred = Number(preferredUserId);
+    // Pending workflow actions belong in the requester's own Action Inbox.
+    // General operational alerts (no preferred user) still go to all admins.
+    const recipients = Number.isSafeInteger(preferred) && eligibleAdmins.includes(preferred)
+      ? [preferred]
+      : eligibleAdmins;
     for (const recipientUserId of recipients) {
       await this.repository.upsertNotification({
         ...notification,
@@ -971,7 +983,7 @@ class BackupAutomationService {
   }
 
   async reconcileNotifications() {
-    const pending = await this.repository.listPendingCheckerActions();
+    const pending = await this.repository.listPendingAdminActions();
     let createdOrRefreshed = 0;
     for (const action of pending) {
       createdOrRefreshed += await this.notifyAdmins({
@@ -983,7 +995,7 @@ class BackupAutomationService {
         dedupePrefix: `${action.category}:${action.id}`,
       }, action.requested_by);
     }
-    const resolved = await this.repository.resolveStaleCheckerNotifications();
+    const resolved = await this.repository.resolveStaleActionNotifications();
     return { pendingActions: pending.length, createdOrRefreshed, resolved };
   }
 
@@ -1162,7 +1174,9 @@ function createBackupAutomationService(options = {}) {
 module.exports = {
   BackupAutomationRepository,
   BackupAutomationService,
-  CHECKER_CATEGORIES,
+  ADMIN_ACTION_CATEGORIES,
+  // Compatibility alias for older imports; new code uses ADMIN_ACTION_CATEGORIES.
+  CHECKER_CATEGORIES: ADMIN_ACTION_CATEGORIES,
   computeNextRunAt,
   createBackupAutomationService,
   providerReadinessFromEnv,

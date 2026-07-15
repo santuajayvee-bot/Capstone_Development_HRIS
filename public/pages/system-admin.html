@@ -437,7 +437,7 @@
       <div class="backup-command-actions" aria-label="Backup and restore quick actions">
         <button type="button" class="btn-sysadmin-primary backup-quick-action" onclick="focusBackupArea('sets', 'backup-request-panel')"><span aria-hidden="true">+</span>Create a Backup</button>
         <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('restore', 'restore-jobs-table')"><span aria-hidden="true">&#8634;</span>Continue a Restore</button>
-        <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('inbox', 'backup-notification-inbox')"><span aria-hidden="true">&#128276;</span>Review Approvals</button>
+        <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('inbox', 'backup-notification-inbox')"><span aria-hidden="true">&#128276;</span>Open Action Inbox</button>
         <button type="button" class="btn-sysadmin-outline backup-quick-action" onclick="focusBackupArea('overview', 'backup-coverage-table')"><span aria-hidden="true">&#10003;</span>Check Readiness</button>
       </div>
     </div>
@@ -481,12 +481,16 @@
         </div>
         <ol class="backup-process-steps backup-process-steps-five">
           <li><span>1</span><div><strong>Request</strong><small>Select a verified backup.</small></div></li>
-          <li><span>2</span><div><strong>Approve</strong><small>A different admin checks it with MFA.</small></div></li>
+          <li><span>2</span><div><strong>Approve</strong><small>The same admin confirms with fresh MFA.</small></div></li>
           <li><span>3</span><div><strong>Dry-run</strong><small>Validate in an isolated target.</small></div></li>
           <li><span>4</span><div><strong>Restore</strong><small>Execute with a fresh MFA check.</small></div></li>
           <li><span>5</span><div><strong>Validate</strong><small>Confirm integrity and system health.</small></div></li>
         </ol>
       </section>
+    </div>
+    <div class="backup-approval-mode" id="backup-approval-mode" aria-live="polite">
+      <span class="backup-approval-mode-icon" aria-hidden="true">&#128274;</span>
+      <div><strong>Single-admin + fresh MFA</strong><small>The same System Administrator completes the full protected workflow.</small></div>
     </div>
   </div>
 
@@ -497,13 +501,13 @@
     <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="restore" onclick="switchBackupRecoveryTab('restore')"><strong>Restore</strong><small>Approval to validation</small></button>
     <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="rollback" onclick="switchBackupRecoveryTab('rollback')"><strong>Rollback</strong><small>Controlled version recovery</small></button>
     <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="automation" onclick="switchBackupRecoveryTab('automation')"><strong>Automation</strong><small>Schedules and retention</small></button>
-    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="inbox" onclick="switchBackupRecoveryTab('inbox')"><strong>Checker Inbox <span id="backup-notification-count" class="backup-tab-count" hidden>0</span></strong><small>Approvals and alerts</small></button>
+    <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="inbox" onclick="switchBackupRecoveryTab('inbox')"><strong>Action Inbox <span id="backup-notification-count" class="backup-tab-count" hidden>0</span></strong><small>Your protected next steps</small></button>
     <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="drills" onclick="switchBackupRecoveryTab('drills')"><strong>Restore Drills</strong><small>Scheduled dry-runs</small></button>
     <button type="button" role="tab" aria-selected="false" class="backup-recovery-tab" data-backup-tab="settings" onclick="switchBackupRecoveryTab('settings')"><strong>Configuration</strong><small>Providers and safeguards</small></button>
   </div>
 
   <div class="backup-recovery-note backup-safety-note">
-    <strong>Safety rule:</strong> A backup request does not automatically overwrite source code or production data. Only artifacts reported by the backend as available and verified count as recovery coverage. Restore and rollback require maker-checker approval by a different authorized administrator, fresh MFA, an isolated dry-run, and final integrity checks. These technical recovery actions do not bypass HR or Payroll business approval workflows.
+    <strong>Safety rule:</strong> A backup request does not automatically overwrite source code or production data. Only artifacts reported by the backend as available and verified count as recovery coverage. The same System Administrator completes every protected step using a new MFA challenge. Isolated dry-runs and final integrity checks still apply, and these technical actions do not bypass HR or Payroll business approvals.
   </div>
 
   <section class="backup-recovery-section active" data-backup-panel="overview">
@@ -560,7 +564,7 @@
   <section class="backup-recovery-section" data-backup-panel="sets">
     <div class="backup-section-heading">
       <div><span class="backup-command-eyebrow">Step A1</span><h4>Create a backup request</h4></div>
-      <small>After submitting, run the worker and independently verify the artifact in the table below.</small>
+      <small>After submitting, run the worker and verify the artifact with fresh MFA in the table below.</small>
     </div>
     <div class="sysadmin-settings-card backup-request-panel" id="backup-request-panel">
       <div class="sysadmin-form-grid">
@@ -735,7 +739,7 @@
       <small>Follow the Next step in each row; protected actions always request fresh MFA.</small>
     </div>
     <div class="backup-recovery-note">
-      <strong>Restore sequence:</strong> request &rarr; approval by a different admin &rarr; isolated dry-run &rarr; MFA-protected execution &rarr; integrity and health validation. A failed check stops the workflow.
+      <strong>Restore sequence:</strong> request &rarr; approve with fresh MFA &rarr; isolated dry-run &rarr; execute with fresh MFA &rarr; integrity and health validation. The same System Administrator performs each step. A failed check stops the workflow.
     </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper" id="restore-jobs-table">
       <table class="sysadmin-table">
@@ -777,7 +781,7 @@
       <small>Rollback changes a deployed module version; it does not bypass business approvals.</small>
     </div>
     <div class="backup-recovery-note">
-      Rollback requests are available only from verified module recovery artifacts. A different authorized administrator must approve the request before MFA-protected execution and final integrity verification.
+      Rollback requests are available only from verified module recovery artifacts. The same System Administrator requests, approves with fresh MFA, executes with another fresh MFA challenge, and confirms final integrity.
     </div>
     <div class="sysadmin-table-wrapper backup-table-wrapper">
       <table class="sysadmin-table">
@@ -814,7 +818,7 @@
   <section class="backup-recovery-section" data-backup-panel="automation">
     <div class="backup-section-heading">
       <div><span class="backup-command-eyebrow">Automatic protection</span><h4>Backup schedules</h4></div>
-      <small>Schedules create backup requests automatically. Artifacts still require worker completion and independent verification before recovery use.</small>
+      <small>Schedules create backup requests automatically. Artifacts still require worker completion and MFA-protected verification before recovery use.</small>
     </div>
     <div class="backup-operations-grid">
       <form class="sysadmin-settings-card backup-operation-form" id="backup-schedule-form" onsubmit="event.preventDefault(); saveBackupSchedule();">
@@ -862,16 +866,16 @@
 
   <section class="backup-recovery-section" data-backup-panel="inbox">
     <div class="backup-section-heading">
-      <div><span class="backup-command-eyebrow">Maker-checker actions</span><h4>Checker notification inbox</h4></div>
-      <small>Opening a notification does not approve anything. A different authorized administrator and fresh MFA are still required for protected actions.</small>
+      <div><span class="backup-command-eyebrow">Protected actions</span><h4>Your pending backup actions</h4></div>
+      <small id="backup-approval-inbox-help">Open an item, review it, then use a fresh MFA code to complete the step.</small>
     </div>
     <div class="backup-filter-toolbar" role="search" aria-label="Filter backup notifications">
-      <label class="backup-search-field" for="backup-notification-search"><span class="backup-search-icon" aria-hidden="true">&#128269;</span><input id="backup-notification-search" class="sysadmin-input" type="search" placeholder="Search approvals, backups, restores, or modules..." autocomplete="off" oninput="renderBackupNotifications()" /></label>
+      <label class="backup-search-field" for="backup-notification-search"><span class="backup-search-icon" aria-hidden="true">&#128269;</span><input id="backup-notification-search" class="sysadmin-input" type="search" placeholder="Search actions, backups, restores, or modules..." autocomplete="off" oninput="renderBackupNotifications()" /></label>
       <select id="backup-notification-filter" class="sysadmin-input backup-filter-select" onchange="renderBackupNotifications()" aria-label="Filter notification read status"><option value="ALL">All notifications</option><option value="UNREAD">Unread only</option><option value="READ">Read only</option></select>
       <span id="backup-notification-results" class="backup-filter-results" aria-live="polite">0 notifications</span>
       <button type="button" class="btn-sysadmin-outline backup-filter-clear" onclick="clearBackupNotificationFilters()">Clear filters</button>
     </div>
-    <div id="backup-notification-inbox" class="backup-notification-list" aria-live="polite"><div class="backup-notification-empty">Loading checker notifications...</div></div>
+    <div id="backup-notification-inbox" class="backup-notification-list" aria-live="polite"><div class="backup-notification-empty">Loading action notifications...</div></div>
   </section>
 
   <section class="backup-recovery-section" data-backup-panel="drills">
@@ -908,6 +912,47 @@
     </div>
     <div class="backup-settings-grid" id="backup-settings-grid"></div>
   </section>
+</div>
+
+<div class="sysadmin-modal-overlay" id="backup-request-modal" style="display:none;">
+  <div class="sysadmin-modal backup-detail-dialog backup-request-dialog" role="dialog" aria-modal="true" aria-labelledby="backup-request-title">
+    <div class="modal-header">
+      <h3 id="backup-request-title">Create Recovery Request</h3>
+      <button class="modal-close" type="button" onclick="closeBackupRequestModal()" aria-label="Cancel recovery request">&times;</button>
+    </div>
+    <form id="backup-request-form" onsubmit="event.preventDefault(); submitBackupRecoveryRequest();">
+      <div class="modal-body">
+        <p id="backup-request-description" class="backup-request-description"></p>
+        <div id="backup-request-scope" class="backup-request-scope"></div>
+
+        <div id="backup-request-module-wrap" hidden>
+          <label class="sysadmin-label" for="backup-request-module">Module to roll back</label>
+          <select id="backup-request-module" class="sysadmin-input"></select>
+        </div>
+
+        <div id="backup-request-confirmation-wrap">
+          <label class="sysadmin-label" for="backup-request-confirmation">Confirmation phrase</label>
+          <input id="backup-request-confirmation" class="sysadmin-input" type="text" autocomplete="off" placeholder="Type RESTORE" />
+          <small class="sysadmin-muted">Type <strong>RESTORE</strong> exactly to create a restore request.</small>
+        </div>
+
+        <label class="sysadmin-label" for="backup-request-reason">Reason</label>
+        <textarea id="backup-request-reason" class="sysadmin-textarea" maxlength="2000" placeholder="Explain why this recovery action is needed."></textarea>
+
+        <label id="backup-request-maintenance-wrap" class="backup-toggle-row">
+          <input id="backup-request-maintenance" type="checkbox" />
+          <span><strong>Place the affected module under maintenance</strong><small>Recommended before a restore. This does not apply to a rollback request.</small></span>
+        </label>
+
+        <small id="backup-request-error" class="backup-request-error" role="alert" aria-live="polite"></small>
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-sysadmin-outline" type="button" onclick="closeBackupRequestModal()">Cancel</button>
+        <button id="backup-request-submit" class="btn-sysadmin-primary" type="submit">Create Request</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="sysadmin-modal-overlay" id="backup-step-up-modal" style="display:none;">

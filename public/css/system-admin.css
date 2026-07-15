@@ -440,6 +440,55 @@
   line-height: 1.4;
 }
 
+.backup-approval-mode {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #d7e1ef;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: var(--text, #111827);
+}
+
+.backup-approval-mode.is-single-admin {
+  border-color: #b7ddc7;
+  background: #f1fbf5;
+}
+
+.backup-approval-mode-icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #e9eef5;
+  font-size: 15px;
+}
+
+.backup-approval-mode.is-single-admin .backup-approval-mode-icon {
+  background: #d9f2e3;
+}
+
+.backup-approval-mode strong,
+.backup-approval-mode small {
+  display: block;
+}
+
+.backup-approval-mode strong {
+  font-size: 13px;
+}
+
+.backup-approval-mode small {
+  margin-top: 2px;
+  color: var(--muted, #667085);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .backup-recovery-tabs {
   display: grid;
   grid-template-columns: repeat(9, minmax(118px, 1fr));
@@ -1004,6 +1053,40 @@
 
 .backup-detail-dialog {
   max-width: 680px;
+}
+
+.backup-request-dialog {
+  max-width: 620px;
+}
+
+.backup-request-description {
+  margin: 0 0 10px;
+  color: var(--text, #344054);
+  line-height: 1.55;
+}
+
+.backup-request-scope {
+  margin: 0 0 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 8px;
+  background: var(--card2, #f8fafc);
+  color: var(--muted, #667085);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.backup-request-dialog .sysadmin-label {
+  margin-top: 14px;
+}
+
+.backup-request-error {
+  display: block;
+  min-height: 18px;
+  margin-top: 10px;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .backup-maintenance-note {

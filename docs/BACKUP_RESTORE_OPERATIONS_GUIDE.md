@@ -1,6 +1,6 @@
 # LGSV HR Backup and Restore Operations Guide
 
-This guide explains how the LGSV HR backup, restore, rollback, retention, and restore-drill transactions work. The module is restricted to an authenticated System Administrator. Destructive or recovery-sensitive actions require a fresh authenticator-code challenge, and approval actions preserve maker-checker separation.
+This guide explains how the LGSV HR backup, restore, rollback, retention, and restore-drill transactions work. The module is restricted to an authenticated System Administrator. It uses a fixed single-administrator workflow: the same System Administrator creates, runs, verifies, requests, approves, dry-runs, and executes the protected transaction. Destructive or recovery-sensitive actions still require a fresh authenticator-code challenge, confirmation, idempotency protection, integrity checks, and audit logging.
 
 ## 1. What is actually backed up?
 
@@ -36,20 +36,25 @@ Storage providers:
 
 Never place AWS access keys, database passwords, encryption keys, or MFA secrets in the browser or database records. Production should use an EC2 instance role and server-side environment/secret management.
 
+### Single-administrator approval
+
+The same authenticated System Administrator completes the entire backup, restore, or rollback flow. Each verification, approval, dry-run, and execution requests a new MFA challenge. Typed confirmation, idempotency controls, checksum validation, integrity checks, and audit logging remain mandatory. The browser cannot disable these safeguards.
+
 ## 3. Manual backup transaction
 
 1. In **Backup Sets**, select the backup type, provider, and covered modules.
 2. Submit the backup request. The server validates RBAC and input, records an idempotency key, writes an audit entry, and creates a `PENDING` transaction.
 3. Select **Run backup**. The worker moves the transaction through `PENDING → RUNNING → COMPLETED`, generates the artifact, stores it, calculates SHA-256 server-side, and records the protected storage location.
-4. A different System Administrator opens the **Checker Inbox** and selects the verification notification.
-5. The checker selects **Verify**, enters a fresh authenticator code, and verifies the stored artifact against the server-generated checksum.
+4. Open the **Action Inbox** and select the verification notification.
+5. Select **Verify** and enter a fresh authenticator code. The same System Administrator verifies the stored artifact against the server-generated checksum.
 6. A successful check moves the transaction to `VERIFIED`. Only now does it count as dashboard coverage or become eligible for restore/drill selection.
 
 Important transaction rules:
 
 - Repeating a request with the same idempotency key returns the original transaction.
-- The backup creator cannot verify their own artifact.
-- `COMPLETED` means bytes were created; it does not mean independently trusted.
+- The same System Administrator who created the backup verifies it using a new MFA challenge.
+- `COMPLETED` means bytes were created; it is not yet trusted backup coverage.
+- `VERIFIED` means the stored bytes match the server-generated checksum and the MFA-protected verification completed.
 - A checksum mismatch is recorded as failed integrity evidence and is never accepted as coverage.
 
 ## 4. Automated backup schedules
@@ -59,28 +64,28 @@ Important transaction rules:
 3. Supported frequencies are hourly, daily, weekly, and monthly. Weekly days use Monday=1 through Sunday=7. Month-end schedules safely use the last available day when a configured day does not exist.
 4. Save and enable the schedule.
 
-At each due time, the background service atomically claims the schedule, advances `next_run_at`, creates a normal auditable backup transaction, and runs the worker. A scheduled backup stops at `COMPLETED`; it still needs an independent checker before it is `VERIFIED`.
+At each due time, the background service atomically claims the schedule, advances `next_run_at`, creates a normal auditable backup transaction, and runs the worker. A scheduled backup stops at `COMPLETED`; the System Administrator still completes MFA-protected verification before it becomes `VERIFIED`.
 
 **Run now with MFA** executes the same transaction immediately. It uses a protected idempotency ledger, so a lost/retried network response cannot create a duplicate run.
 
 To stop future jobs, select **Disable**. Disabling a schedule does not delete prior backup evidence.
 
-## 5. Checker notification inbox
+## 5. Action Inbox
 
 The inbox creates action items for:
 
-- completed backup artifacts awaiting independent verification;
-- restore requests awaiting another administrator's approval;
-- rollback requests awaiting another administrator's approval;
+- completed backup artifacts awaiting checksum verification;
+- restore requests awaiting administrator approval;
+- rollback requests awaiting administrator approval;
 - failed retention cleanup or restore drills that need review.
 
-Opening or marking a notification as read never approves the action. Approval/verification still checks backend RBAC, maker-checker separation, and fresh MFA. When the underlying action is completed, the notification becomes `RESOLVED` instead of being silently deleted.
+The Action Inbox is the signed-in System Administrator's protected work queue. Opening or marking a notification as read never completes the action. The administrator must review the item and use fresh MFA for its verification or approval step. When the underlying action is completed, the notification becomes `RESOLVED` instead of being silently deleted.
 
 ## 6. Restore process for data, files, and configuration
 
 1. Select a `VERIFIED` backup and choose **Request restore**.
 2. Enter the reason, affected module when applicable, and the confirmation phrase. The transaction becomes `AWAITING_APPROVAL`.
-3. A different System Administrator reviews the request in the checker inbox, enters fresh MFA, and approves it. Status becomes `APPROVED`.
+3. The same System Administrator reviews the request in the Action Inbox, enters fresh MFA, and approves it. Status becomes `APPROVED`.
 4. Run **Isolated dry-run** with another fresh MFA challenge. The system verifies the artifact and restores into a disposable/staged target, not production.
 5. The dry-run must pass checksum, bundle, and post-restore integrity checks. Status becomes `DRY_RUN_PASSED`.
 6. Run **Execute restore** with fresh MFA and the required confirmation phrase. Server configuration must explicitly allow and identify the recovery target.
@@ -92,9 +97,9 @@ For an RDS snapshot, execution always restores to a new `lgsv-restore-*` RDS ins
 
 Use the rollback workflow for source-code replacement:
 
-1. Create and independently verify a `DEPLOYMENT_VERSION` or `FULL_BACKUP` artifact covering the module.
+1. Create and verify a `DEPLOYMENT_VERSION` or `FULL_BACKUP` artifact with fresh MFA.
 2. Open its published module recovery point and request a rollback with a reason.
-3. A different administrator approves with fresh MFA.
+3. The same System Administrator approves the rollback request with fresh MFA.
 4. Execute with a separate fresh MFA challenge and the rollback confirmation phrase.
 5. The runtime validates the source manifest, syntax, and hashes; saves a transaction snapshot; stages the verified code; atomically replaces only allowlisted module paths; and verifies post-cutover hashes.
 6. If cutover verification fails, the saved transaction snapshot is restored automatically. Health/audit history records the maintenance and result states.
@@ -182,11 +187,38 @@ Restore drill: `QUEUED/RUNNING → PASSED`, `FAILED`, or `SKIPPED` when no eligi
 
 ## 13. Verification commands
 
+### Safe manual UI test for a one-admin client
+
+Use a local/development environment and the `LOCAL` provider. Do not test by executing a live restore against production.
+
+1. Start the server, sign in as the System Administrator, and confirm that TOTP MFA is enrolled.
+2. Create a `CONFIGURATION` backup covering a small module such as `reports`, then select **Run backup**.
+3. Confirm the backup reaches `COMPLETED`, has a SHA-256 checksum, and does **not** count as verified coverage yet.
+4. Open the Action Inbox, select **Verify**, and enter a newly generated authenticator code. Confirm the same backup reaches `VERIFIED`, checksum status is `MATCH`, and integrity is `PASSED`.
+5. Select **Request restore**, choose `CONFIGURATION`, enter a clear test reason, and type `RESTORE`.
+6. Open the approval action, select **Approve**, and enter a new authenticator code. Confirm the job reaches `APPROVED`.
+7. Select **Isolated dry-run**, enter another new authenticator code, and wait for `DRY_RUN_PASSED` with integrity `PASSED`.
+8. Select **Cancel**. Confirm the final restore status is `CANCELLED`. Do **not** select **Execute restore** merely to prove that the module works.
+9. Check the Audit Logs for backup create/run/complete/verify and restore request/approve/cancel entries. Confirm the backup creator/verifier and restore requester/approver are the same sole administrator, with separate consumed MFA proofs.
+
+This test proves artifact creation, server-side checksum verification, single-admin approval, isolated restore validation, cancellation, idempotency, and audit evidence without changing live application configuration.
+
+### Automated tests
+
 Run the full focused regression suite:
 
 ```powershell
 npm run test:backup-recovery
 ```
+
+Run the safe localhost-only single-admin transaction test:
+
+```powershell
+$env:ALLOW_CONTROLLED_BACKUP_E2E='true'
+node scripts/backup-restore-controlled-e2e.js --single-admin
+```
+
+The `--single-admin` test requires a System Administrator with enrolled TOTP MFA, a valid employee link, and an accepted data-privacy agreement. It uses the same account for backup create/run/verify and restore request/approve/dry-run/cancel. It never calls live restore execution and never logs credentials or MFA secrets.
 
 Run the localhost-only controlled automation transaction test:
 
@@ -195,19 +227,14 @@ $env:ALLOW_CONTROLLED_BACKUP_E2E='true'
 node scripts/backup-restore-controlled-e2e.js --automation
 ```
 
-Run the controlled backup/module rollback test:
-
-```powershell
-$env:ALLOW_CONTROLLED_BACKUP_E2E='true'
-node scripts/backup-restore-controlled-e2e.js
-```
-
-These controlled tests refuse production and non-localhost targets. Real AWS restore drills should be scheduled only after the readiness card is green, IAM/network controls have been reviewed, and the disposable-instance cost window is understood.
+All controlled tests refuse production and non-localhost targets. Never enable or execute a live production restore merely as a functional test. Real AWS restore drills should be scheduled only after the readiness card is green, IAM/network controls have been reviewed, and the disposable-instance cost window is understood.
 
 ## 14. Troubleshooting
 
 - **Provider not configured**: open Settings and configure only the missing server-side variables shown by readiness diagnostics.
-- **Backup remains COMPLETED**: this is expected until a different administrator verifies it with MFA.
+- **Backup remains COMPLETED**: the same System Administrator still needs to select **Verify** and complete the fresh MFA checksum check.
+- **Verification or approval is unavailable**: refresh the workspace and confirm that the transaction is in the expected lifecycle status, the artifact is available, and the signed-in account is an active System Administrator with enrolled MFA.
+- **Single-admin controlled test cannot start**: confirm localhost, non-production `NODE_ENV`, explicit `ALLOW_CONTROLLED_BACKUP_E2E=true`, a healthy server, current migrations, an employee-linked active System Administrator, accepted data-privacy agreement, and enrolled TOTP MFA.
 - **No restore/drill candidate**: verify that type, provider, module, checksum, integrity, retention status, and `VERIFIED` state all match.
 - **Policy does not clean anything**: an item must be older than the age limit and outside `keep_last`; disabled policies do not run.
 - **Action already in progress**: wait for its worker lease. A stale protected action becomes retryable without duplicating its original occurrence.

@@ -19,14 +19,19 @@ const {
   BACKUP_TRANSITIONS,
   RESTORE_TRANSITIONS,
   ROLLBACK_TRANSITIONS,
+  adminApprovalPolicyFromCount,
+  acquireConnectionWithTimeout,
   backupArtifactAvailable,
   backupArtifactVerified,
+  backupDatabaseAcquireTimeoutMs,
   backupResponse,
   assertIdempotentReplay,
-  assertMakerChecker,
   assertTransition,
+  loadAdminApprovalPolicy,
   requestFingerprint,
   recoverExpiredOperations,
+  restoreResponse,
+  rollbackResponse,
   workerLease,
 } = router._test;
 
@@ -52,8 +57,53 @@ async function run() {
     () => assertTransition(ROLLBACK_TRANSITIONS, 'AWAITING_APPROVAL', 'IN_PROGRESS', 'Rollback'),
     'INVALID_LIFECYCLE_TRANSITION'
   );
-  expectCode(() => assertMakerChecker(42, 42), 'MAKER_CHECKER_REQUIRED');
-  assert.doesNotThrow(() => assertMakerChecker(42, 43));
+  const singleAdminPolicy = adminApprovalPolicyFromCount(1);
+  assert.deepStrictEqual(singleAdminPolicy, {
+    approval_mode: 'SINGLE_ADMIN_STEP_UP',
+    active_system_admin_count: 1,
+    eligible_system_admin_count: 1,
+    single_admin_mode: true,
+    self_approval_allowed: true,
+    maker_checker_required: false,
+    administrator_verification_required: true,
+    independent_verification_required: false,
+    step_up_mfa_required: true,
+  });
+  const multiAdminPolicy = adminApprovalPolicyFromCount(2);
+  assert.strictEqual(multiAdminPolicy.approval_mode, 'SINGLE_ADMIN_STEP_UP');
+  assert.strictEqual(multiAdminPolicy.single_admin_mode, true);
+  assert.strictEqual(multiAdminPolicy.self_approval_allowed, true);
+  assert.strictEqual(multiAdminPolicy.maker_checker_required, false);
+  assert.strictEqual(multiAdminPolicy.independent_verification_required, false);
+  for (const count of [0, 1, 2, 99]) {
+    const fixedPolicy = adminApprovalPolicyFromCount(count);
+    assert.strictEqual(fixedPolicy.approval_mode, 'SINGLE_ADMIN_STEP_UP');
+    assert.strictEqual(fixedPolicy.single_admin_mode, true);
+    assert.strictEqual(fixedPolicy.self_approval_allowed, true);
+    assert.strictEqual(fixedPolicy.maker_checker_required, false);
+    assert.strictEqual(fixedPolicy.independent_verification_required, false);
+    assert.strictEqual(fixedPolicy.step_up_mfa_required, true);
+  }
+
+  let policyExecutorCalled = false;
+  const loadedPolicy = await loadAdminApprovalPolicy({
+    async execute() {
+      policyExecutorCalled = true;
+      throw new Error('The fixed single-admin policy must not query the database.');
+    },
+  });
+  assert.strictEqual(policyExecutorCalled, false);
+  assert.deepStrictEqual(loadedPolicy, {
+    approval_mode: 'SINGLE_ADMIN_STEP_UP',
+    active_system_admin_count: null,
+    eligible_system_admin_count: null,
+    single_admin_mode: true,
+    self_approval_allowed: true,
+    maker_checker_required: false,
+    administrator_verification_required: true,
+    independent_verification_required: false,
+    step_up_mfa_required: true,
+  });
 
   const requestHash = requestFingerprint('RESTORE_REQUEST', { backupId: 9, reason: 'Recovery test' });
   assert.match(requestHash, /^[a-f0-9]{64}$/);
@@ -64,6 +114,23 @@ async function run() {
   const lease = workerLease();
   assert.match(lease.hash, /^[a-f0-9]{64}$/);
   assert(lease.minutes >= 15 && lease.minutes <= 1440);
+  assert(backupDatabaseAcquireTimeoutMs() >= 1000 && backupDatabaseAcquireTimeoutMs() <= 30000);
+
+  const immediateConnection = { release() {} };
+  assert.strictEqual(
+    await acquireConnectionWithTimeout(async () => immediateConnection, 1000),
+    immediateConnection
+  );
+  let lateConnectionReleased = false;
+  await expectRejectedCode(
+    acquireConnectionWithTimeout(
+      () => new Promise(resolve => setTimeout(() => resolve({ release() { lateConnectionReleased = true; } }), 20)),
+      5
+    ),
+    'BACKUP_DATABASE_BUSY'
+  );
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.strictEqual(lateConnectionReleased, true, 'A late pool connection must be released after a timeout.');
 
   const reaperSql = [];
   const recovered = await recoverExpiredOperations({
@@ -115,8 +182,39 @@ async function run() {
   }
 
   const completed = { ...verifiedRow, status: 'COMPLETED', verification_status: 'NOT_VERIFIED', integrity_status: 'NOT_CHECKED', verified_at: null, verified_by: null };
-  assert.deepStrictEqual(backupResponse(completed, 42).allowed_actions, []);
+  assert.deepStrictEqual(backupResponse(completed, 42).allowed_actions, ['verify']);
   assert.deepStrictEqual(backupResponse(completed, 43).allowed_actions, ['verify']);
+  const singleAdminBackup = backupResponse(completed, 42, singleAdminPolicy);
+  assert.deepStrictEqual(singleAdminBackup.allowed_actions, ['verify']);
+  assert.strictEqual(singleAdminBackup.administrator_verification_required, true);
+  assert.strictEqual(singleAdminBackup.independent_verification_required, false);
+  assert.strictEqual(singleAdminBackup.maker_checker_required, false);
+
+  const awaitingRestore = {
+    id: 21,
+    status: 'AWAITING_APPROVAL',
+    approval_status: 'PENDING',
+    requested_by: 42,
+  };
+  assert.deepStrictEqual(restoreResponse(awaitingRestore, 42, multiAdminPolicy).allowed_actions, ['approve', 'reject', 'cancel']);
+  const singleAdminRestore = restoreResponse(awaitingRestore, 42, singleAdminPolicy);
+  assert.deepStrictEqual(singleAdminRestore.allowed_actions, ['approve', 'reject', 'cancel']);
+  assert.strictEqual(singleAdminRestore.approval_policy.approval_mode, 'SINGLE_ADMIN_STEP_UP');
+
+  const awaitingRollback = {
+    id: 31,
+    status: 'AWAITING_APPROVAL',
+    approval_status: 'PENDING',
+    requested_by: 42,
+    artifact_location_encrypted: 'encrypted-location',
+    artifact_checksum: 'a'.repeat(64),
+    verification_status: 'MATCH',
+    integrity_status: 'PASSED',
+  };
+  assert.deepStrictEqual(
+    rollbackResponse(awaitingRollback, 42, multiAdminPolicy).allowed_actions,
+    ['approve', 'reject', 'cancel']
+  );
 
   const rawToken = 'single-use-step-up-token';
   const tokenHash = _hashTokenForTest(rawToken);

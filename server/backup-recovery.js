@@ -88,6 +88,59 @@ class RecoveryError extends Error {
   }
 }
 
+function backupDatabaseAcquireTimeoutMs() {
+  const configured = Number.parseInt(process.env.BACKUP_DATABASE_ACQUIRE_TIMEOUT_MS || '10000', 10);
+  return Number.isFinite(configured) ? Math.min(Math.max(configured, 1000), 30000) : 10000;
+}
+
+/**
+ * mysql2 queues pool acquisition indefinitely by default.  A queued request is
+ * especially confusing in the Backup & Restore screen because its submit
+ * button appears to load forever.  Bound that wait and release a connection
+ * that arrives after the caller has already received the busy response.
+ */
+function acquireConnectionWithTimeout(getConnection, timeoutMs = backupDatabaseAcquireTimeoutMs()) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(new RecoveryError(
+        'Backup service is busy. Please try again in a moment.',
+        503,
+        'BACKUP_DATABASE_BUSY'
+      ));
+    }, timeoutMs);
+    timer.unref?.();
+
+    Promise.resolve()
+      .then(() => getConnection())
+      .then(
+        connection => {
+          if (settled) {
+            connection?.release?.();
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          resolve(connection);
+        },
+        error => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+  });
+}
+
+function acquireBackupConnection() {
+  return acquireConnectionWithTimeout(
+    () => pool.getConnection(),
+    backupDatabaseAcquireTimeoutMs()
+  );
+}
+
 function cleanText(value, maxLength = 500) {
   return String(value ?? '').trim().replace(/[<>]/g, '').slice(0, maxLength);
 }
@@ -207,10 +260,59 @@ function sameActor(left, right) {
   return Number(left || 0) > 0 && Number(left) === Number(right || 0);
 }
 
-function assertMakerChecker(requestedBy, actorId) {
-  if (sameActor(requestedBy, actorId)) {
-    throw new RecoveryError('The requester cannot approve or verify their own recovery action.', 409, 'MAKER_CHECKER_REQUIRED');
-  }
+const DEFAULT_ADMIN_APPROVAL_POLICY = Object.freeze({
+  approval_mode: 'SINGLE_ADMIN_STEP_UP',
+  active_system_admin_count: null,
+  eligible_system_admin_count: null,
+  single_admin_mode: true,
+  self_approval_allowed: true,
+  maker_checker_required: false,
+  administrator_verification_required: true,
+  independent_verification_required: false,
+  step_up_mfa_required: true,
+});
+
+function adminApprovalPolicyFromCount(value) {
+  const parsed = Number(value);
+  const activeSystemAdminCount = Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  return {
+    approval_mode: 'SINGLE_ADMIN_STEP_UP',
+    active_system_admin_count: activeSystemAdminCount,
+    eligible_system_admin_count: activeSystemAdminCount,
+    single_admin_mode: true,
+    self_approval_allowed: true,
+    maker_checker_required: false,
+    administrator_verification_required: true,
+    independent_verification_required: false,
+    step_up_mfa_required: true,
+  };
+}
+
+async function loadAdminApprovalPolicy(executor = pool) {
+  // This workflow intentionally supports one System Administrator. The
+  // authorization policy must never depend on how many admin rows happen to
+  // exist, so loading it performs no database query.
+  void executor;
+  return { ...DEFAULT_ADMIN_APPROVAL_POLICY };
+}
+
+function approvalAuditDetails(approvalPolicy, makerUserId, actorUserId, stepUpProof = null) {
+  const policy = approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY;
+  return {
+    approval_mode: policy.approval_mode,
+    active_system_admin_count: policy.active_system_admin_count,
+    eligible_system_admin_count: policy.eligible_system_admin_count,
+    maker_checker_required: policy.maker_checker_required,
+    administrator_verification_required: true,
+    independent_verification_required: policy.independent_verification_required,
+    single_admin_mode: policy.single_admin_mode,
+    maker_user_id: Number(makerUserId),
+    actor_user_id: Number(actorUserId),
+    same_actor_authorized: sameActor(makerUserId, actorUserId) && policy.single_admin_mode === true,
+    step_up_mfa_required: true,
+    step_up_challenge_id: stepUpProof?.challengeId || null,
+    step_up_verified_at: stepUpProof?.verifiedAt || null,
+  };
 }
 
 function assertTransition(map, current, next, entityName) {
@@ -297,14 +399,14 @@ function backupArtifactVerified(row) {
   );
 }
 
-function backupResponse(row, actorId = null) {
+function backupResponse(row, actorId = null, approvalPolicy = DEFAULT_ADMIN_APPROVAL_POLICY) {
   const artifactAvailable = backupArtifactAvailable(row);
   const artifactVerified = backupArtifactVerified(row);
   const isRestorable = artifactVerified && ['VERIFIED', 'RESTORED'].includes(row.status) && row.backup_type !== 'DEPLOYMENT_VERSION';
   const includedModules = normalizeModules(parseJson(row.included_modules, []));
   const allowedActions = [];
   if (['PENDING', 'FAILED'].includes(row.status)) allowedActions.push('run');
-  if (row.status === 'COMPLETED' && !sameActor(row.created_by, actorId)) allowedActions.push('verify');
+  if (row.status === 'COMPLETED') allowedActions.push('verify');
   if (isRestorable) allowedActions.push('restore');
   if (artifactVerified && row.backup_type === 'DEPLOYMENT_VERSION') allowedActions.push('rollback');
   return {
@@ -349,15 +451,19 @@ function backupResponse(row, actorId = null) {
     failure_message: revealText(row.failure_message_encrypted),
     remarks: revealText(row.remarks_encrypted),
     adapter_metadata: parseJson(revealText(row.adapter_metadata_encrypted), null),
+    approval_policy: { ...(approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY) },
+    administrator_verification_required: true,
+    independent_verification_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).independent_verification_required,
+    maker_checker_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).maker_checker_required,
     allowed_actions: allowedActions,
     can_verify: allowedActions.includes('verify'),
     can_restore: allowedActions.includes('restore'),
   };
 }
 
-function restoreResponse(row, actorId = null) {
+function restoreResponse(row, actorId = null, approvalPolicy = DEFAULT_ADMIN_APPROVAL_POLICY) {
   const allowedActions = [];
-  if (row.status === 'AWAITING_APPROVAL' && !sameActor(row.requested_by, actorId)) allowedActions.push('approve', 'reject');
+  if (row.status === 'AWAITING_APPROVAL') allowedActions.push('approve', 'reject');
   if (row.status === 'APPROVED') allowedActions.push('dry_run');
   if (row.status === 'DRY_RUN_PASSED' && row.approval_status === 'APPROVED' && row.integrity_status === 'PASSED') allowedActions.push('execute');
   if (row.status === 'VERIFYING') allowedActions.push('verify_target');
@@ -390,6 +496,10 @@ function restoreResponse(row, actorId = null) {
     integrity_report: parseJson(revealText(row.integrity_report_encrypted), null),
     failure_message: revealText(row.failure_message_encrypted),
     created_at: row.created_at,
+    approval_policy: { ...(approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY) },
+    administrator_verification_required: true,
+    independent_verification_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).independent_verification_required,
+    maker_checker_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).maker_checker_required,
     allowed_actions: allowedActions,
     can_approve: allowedActions.includes('approve'),
     can_dry_run: allowedActions.includes('dry_run'),
@@ -397,11 +507,14 @@ function restoreResponse(row, actorId = null) {
   };
 }
 
-function rollbackResponse(row, actorId = null) {
+function rollbackResponse(row, actorId = null, approvalPolicy = DEFAULT_ADMIN_APPROVAL_POLICY) {
   const artifactAvailable = Boolean(revealText(row.artifact_location_encrypted) && row.artifact_checksum);
   const artifactVerified = Boolean(artifactAvailable && row.verification_status === 'MATCH' && row.integrity_status === 'PASSED');
   const allowedActions = [];
-  if (artifactVerified && row.status === 'AWAITING_APPROVAL' && !sameActor(row.requested_by, actorId)) allowedActions.push('approve', 'reject');
+  if (
+    artifactVerified
+    && row.status === 'AWAITING_APPROVAL'
+  ) allowedActions.push('approve', 'reject');
   if (artifactVerified && row.status === 'APPROVED') allowedActions.push('execute');
   if (['AWAITING_APPROVAL', 'APPROVED'].includes(row.status)) allowedActions.push('cancel');
   return {
@@ -430,6 +543,10 @@ function rollbackResponse(row, actorId = null) {
     integrity_report: parseJson(revealText(row.integrity_report_encrypted), null),
     created_at: row.created_at,
     completed_at: row.completed_at,
+    approval_policy: { ...(approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY) },
+    administrator_verification_required: true,
+    independent_verification_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).independent_verification_required,
+    maker_checker_required: (approvalPolicy || DEFAULT_ADMIN_APPROVAL_POLICY).maker_checker_required,
     allowed_actions: allowedActions,
     can_approve: allowedActions.includes('approve'),
     can_execute: allowedActions.includes('execute'),
@@ -471,7 +588,7 @@ function recoveryPointResponse(row) {
   };
 }
 
-async function listBackups(actorId, limit = 100, executor = pool) {
+async function listBackups(actorId, limit = 100, executor = pool, approvalPolicy = null) {
   const [rows] = await executor.execute(
     `SELECT bs.*, creator.username AS created_by_username, verifier.username AS verified_by_username
        FROM backup_sets bs
@@ -480,7 +597,8 @@ async function listBackups(actorId, limit = 100, executor = pool) {
       ORDER BY bs.created_at DESC, bs.id DESC
       LIMIT ${Math.min(Math.max(Number(limit) || 100, 1), 200)}`
   );
-  return rows.map(row => backupResponse(row, actorId));
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return rows.map(row => backupResponse(row, actorId, policy));
 }
 
 async function listRecoveryPoints(limit = 100, executor = pool) {
@@ -495,7 +613,7 @@ async function listRecoveryPoints(limit = 100, executor = pool) {
   return rows.map(recoveryPointResponse);
 }
 
-async function listRestoreJobs(actorId, limit = 100, executor = pool) {
+async function listRestoreJobs(actorId, limit = 100, executor = pool, approvalPolicy = null) {
   const [rows] = await executor.execute(
     `SELECT rj.*, bs.backup_reference,
             requester.username AS requested_by_username,
@@ -507,10 +625,11 @@ async function listRestoreJobs(actorId, limit = 100, executor = pool) {
       ORDER BY rj.created_at DESC, rj.id DESC
       LIMIT ${Math.min(Math.max(Number(limit) || 100, 1), 200)}`
   );
-  return rows.map(row => restoreResponse(row, actorId));
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return rows.map(row => restoreResponse(row, actorId, policy));
 }
 
-async function listRollbackRequests(actorId, limit = 100, executor = pool) {
+async function listRollbackRequests(actorId, limit = 100, executor = pool, approvalPolicy = null) {
   const [rows] = await executor.execute(
     `SELECT mrr.*, requester.username AS requested_by_username,
             approver.username AS approved_by_username
@@ -520,7 +639,8 @@ async function listRollbackRequests(actorId, limit = 100, executor = pool) {
       ORDER BY mrr.created_at DESC, mrr.id DESC
       LIMIT ${Math.min(Math.max(Number(limit) || 100, 1), 200)}`
   );
-  return rows.map(row => rollbackResponse(row, actorId));
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return rows.map(row => rollbackResponse(row, actorId, policy));
 }
 
 function requestedPagination(query = {}) {
@@ -573,7 +693,7 @@ function addSearchClause(where, params, search, columns) {
   columns.forEach(() => params.push(pattern));
 }
 
-async function listBackupsPaginated(actorId, query = {}, executor = pool) {
+async function listBackupsPaginated(actorId, query = {}, executor = pool, approvalPolicy = null) {
   const options = paginationOptions(query);
   const where = [];
   const params = [];
@@ -612,7 +732,8 @@ async function listBackupsPaginated(actorId, query = {}, executor = pool) {
       LIMIT ${options.pageSize} OFFSET ${options.offset}`,
     params
   );
-  return paginatedResult(rows.map(row => backupResponse(row, actorId)), countRow.total, options);
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return paginatedResult(rows.map(row => backupResponse(row, actorId, policy)), countRow.total, options);
 }
 
 async function listRecoveryPointsPaginated(query = {}, executor = pool) {
@@ -657,7 +778,7 @@ async function listRecoveryPointsPaginated(query = {}, executor = pool) {
   return paginatedResult(rows.map(recoveryPointResponse), countRow.total, options);
 }
 
-async function listRestoreJobsPaginated(actorId, query = {}, executor = pool) {
+async function listRestoreJobsPaginated(actorId, query = {}, executor = pool, approvalPolicy = null) {
   const options = paginationOptions(query);
   const where = [];
   const params = [];
@@ -687,10 +808,11 @@ async function listRestoreJobsPaginated(actorId, query = {}, executor = pool) {
       LIMIT ${options.pageSize} OFFSET ${options.offset}`,
     params
   );
-  return paginatedResult(rows.map(row => restoreResponse(row, actorId)), countRow.total, options);
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return paginatedResult(rows.map(row => restoreResponse(row, actorId, policy)), countRow.total, options);
 }
 
-async function listRollbackRequestsPaginated(actorId, query = {}, executor = pool) {
+async function listRollbackRequestsPaginated(actorId, query = {}, executor = pool, approvalPolicy = null) {
   const options = paginationOptions(query);
   const where = [];
   const params = [];
@@ -718,7 +840,8 @@ async function listRollbackRequestsPaginated(actorId, query = {}, executor = poo
       LIMIT ${options.pageSize} OFFSET ${options.offset}`,
     params
   );
-  return paginatedResult(rows.map(row => rollbackResponse(row, actorId)), countRow.total, options);
+  const policy = approvalPolicy || await loadAdminApprovalPolicy(executor);
+  return paginatedResult(rows.map(row => rollbackResponse(row, actorId, policy)), countRow.total, options);
 }
 
 const AUTOMATION_FREQUENCIES = new Set(['HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY']);
@@ -1159,9 +1282,9 @@ async function failAutomationAction(actionId, error) {
   ).catch(() => {});
 }
 
-async function buildCoverage(actorId) {
+async function buildCoverage(actorId, approvalPolicy = null) {
   const [backups, recoveryPoints, healthRows] = await Promise.all([
-    listBackups(actorId, 200),
+    listBackups(actorId, 200, pool, approvalPolicy),
     listRecoveryPoints(200),
     pool.execute('SELECT module_key, status, last_checked_at FROM system_health_checks').then(([rows]) => rows).catch(() => []),
   ]);
@@ -1203,18 +1326,19 @@ async function buildCoverage(actorId) {
       ],
       recommended_action: backup
         ? 'Keep the verified artifact and recovery test current.'
-        : 'Create and independently verify a backup artifact.',
+        : 'Create and verify a backup artifact with fresh step-up MFA.',
     };
   });
 }
 
 async function buildOverview(actorId) {
+  const approvalPolicy = await loadAdminApprovalPolicy(pool);
   const [backups, restoreJobs, rollbackRequests, recoveryPoints, coverage, summaryRows] = await Promise.all([
-    listBackups(actorId, 200),
-    listRestoreJobs(actorId, 50),
-    listRollbackRequests(actorId, 50),
+    listBackups(actorId, 200, pool, approvalPolicy),
+    listRestoreJobs(actorId, 50, pool, approvalPolicy),
+    listRollbackRequests(actorId, 50, pool, approvalPolicy),
     listRecoveryPoints(50),
-    buildCoverage(actorId),
+    buildCoverage(actorId, approvalPolicy),
     pool.execute(
       `SELECT COUNT(*) AS total_backup_sets,
               SUM(CASE WHEN status IN ('VERIFIED','RESTORED')
@@ -1283,7 +1407,15 @@ async function buildOverview(actorId) {
         && process.env.BACKUP_DRY_RUN_DB_USER
         && process.env.BACKUP_DRY_RUN_DB_PASSWORD
       ),
-      maker_checker_required: true,
+      approval_policy: approvalPolicy,
+      admin_approval_mode: approvalPolicy.approval_mode,
+      active_system_admin_count: approvalPolicy.active_system_admin_count,
+      eligible_system_admin_count: approvalPolicy.eligible_system_admin_count,
+      single_admin_mode: approvalPolicy.single_admin_mode,
+      self_approval_allowed: approvalPolicy.self_approval_allowed,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
       step_up_mfa_required: true,
       automation_enabled: String(process.env.BACKUP_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
       retention_automation_enabled: String(process.env.BACKUP_RETENTION_AUTOMATION_ENABLED || 'true').toLowerCase() !== 'false',
@@ -1534,17 +1666,29 @@ router.post('/schedules/:scheduleId/run-now', async (req, res) => {
   connection.release();
 
   try {
-    const result = await backupAutomation.runScheduleById(scheduleId, {
+    const workerResult = await backupAutomation.runScheduleById(scheduleId, {
       actorId: req.user.id,
       scheduledFor: action.operationTime,
     });
+    const approvalPolicy = await loadAdminApprovalPolicy(pool);
+    const result = {
+      ...workerResult,
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    };
     await completeAutomationAction(action.actionId, result);
     await backupAutomation.reconcileNotifications().catch(() => {});
     return res.json({
-      message: 'Scheduled backup completed. Independent checker verification is now required.',
+      message: 'Scheduled backup completed. Verify it with fresh step-up MFA.',
       result,
       schedule_id: scheduleId,
       backup_set_id: result.backupSetId,
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
     });
   } catch (error) {
     await failAutomationAction(action.actionId, error);
@@ -1753,7 +1897,7 @@ router.post('/retention/run', async (req, res) => {
 router.get('/notifications', async (req, res) => {
   try {
     await backupAutomation.reconcileNotifications().catch(error => {
-      console.error('[backup-checker-notifications]', error.message);
+      console.error('[backup-action-notifications]', error.message);
     });
     const options = paginationOptions({ page_size: '100', ...req.query });
     const where = ['n.recipient_user_id=?'];
@@ -1788,7 +1932,7 @@ router.get('/notifications', async (req, res) => {
     const result = paginatedResult(rows.map(notificationResponse), countRow.total, options);
     return res.json({ ...result, notifications: result.items, unread_count: Number(unreadRow.total || 0) });
   } catch (error) {
-    return errorResponse(res, error, 'Failed to load checker notifications.');
+    return errorResponse(res, error, 'Failed to load backup action notifications.');
   }
 });
 
@@ -2095,15 +2239,17 @@ router.post('/request', async (req, res) => {
       storageProvider,
     });
     await connection.beginTransaction();
+    const approvalPolicy = await loadAdminApprovalPolicy(connection);
     const [existing] = await connection.execute('SELECT * FROM backup_sets WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
       assertIdempotentReplay(existing[0], fingerprint);
       await connection.commit();
       return res.status(200).json({
         message: 'Existing backup request returned for this idempotency key.',
-        backup: backupResponse(existing[0], req.user.id),
+        backup: backupResponse(existing[0], req.user.id, approvalPolicy),
         backup_set_id: existing[0].id,
         backup_reference: existing[0].backup_reference,
+        approval_policy: approvalPolicy,
         idempotent_replay: true,
       });
     }
@@ -2122,6 +2268,7 @@ router.post('/request', async (req, res) => {
       storage_provider: storageProvider,
       included_modules: includedModules,
       status: 'PENDING',
+      approval_policy: approvalPolicy,
     });
     await connection.commit();
     return res.status(201).json({
@@ -2130,6 +2277,10 @@ router.post('/request', async (req, res) => {
       backup_id: result.insertId,
       backup_reference: reference,
       status: 'PENDING',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
     });
   } catch (error) {
     await connection.rollback().catch(() => {});
@@ -2206,14 +2357,25 @@ async function executeBackupSet(req, backupId) {
         ]
       );
       if (update.affectedRows !== 1) throw new RecoveryError('Backup worker lease expired or was replaced.', 409, 'BACKUP_WORKER_LEASE_LOST');
+      const approvalPolicy = await loadAdminApprovalPolicy(completed);
       await audit(completed, req, `COMPLETE_BACKUP: ${backup.backup_reference}`, {
         backup_set_id: backupId,
         status: 'COMPLETED',
         checksum_recorded: true,
-        independent_verification_required: true,
+        administrator_verification_required: true,
+        independent_verification_required: approvalPolicy.independent_verification_required,
+        maker_checker_required: approvalPolicy.maker_checker_required,
+        approval_policy: approvalPolicy,
       });
       await completed.commit();
-      return { ...result, status: 'COMPLETED', independent_verification_required: true };
+      return {
+        ...result,
+        status: 'COMPLETED',
+        approval_policy: approvalPolicy,
+        administrator_verification_required: true,
+        independent_verification_required: approvalPolicy.independent_verification_required,
+        maker_checker_required: approvalPolicy.maker_checker_required,
+      };
     } catch (error) {
       await completed.rollback().catch(() => {});
       throw error;
@@ -2236,7 +2398,15 @@ router.post('/:backupId/run', async (req, res) => {
   try {
     const backupId = positiveId(req.params.backupId, 'backup_set_id');
     const result = await executeBackupSet(req, backupId);
-    return res.json({ message: 'Backup artifact created. Independent verification is required.', backup_set_id: backupId, result });
+    return res.json({
+      message: 'Backup artifact created. Verify it with fresh step-up MFA.',
+      backup_set_id: backupId,
+      approval_policy: result.approval_policy,
+      administrator_verification_required: true,
+      independent_verification_required: result.independent_verification_required,
+      maker_checker_required: result.maker_checker_required,
+      result,
+    });
   } catch (error) {
     return errorResponse(res, error, 'Failed to execute backup.');
   }
@@ -2247,13 +2417,14 @@ router.post('/:backupId/verify', async (req, res) => {
   const connection = await pool.getConnection();
   let backup;
   let stepUp;
+  let approvalPolicy = DEFAULT_ADMIN_APPROVAL_POLICY;
   try {
     await connection.beginTransaction();
     const [rows] = await connection.execute('SELECT * FROM backup_sets WHERE id = ? FOR UPDATE', [backupId]);
     backup = rows[0];
     if (!backup) throw new RecoveryError('Backup set not found.', 404, 'BACKUP_NOT_FOUND');
-    assertMakerChecker(backup.created_by, req.user.id);
-    if (backup.status !== 'COMPLETED') throw new RecoveryError('Only completed backups can be independently verified.', 409, 'BACKUP_NOT_READY');
+    approvalPolicy = await loadAdminApprovalPolicy(connection);
+    if (backup.status !== 'COMPLETED') throw new RecoveryError('Only completed backups can be verified.', 409, 'BACKUP_NOT_READY');
     if (!backup.storage_location_encrypted || !backup.checksum) throw new RecoveryError('Backup artifact metadata is incomplete.', 409, 'BACKUP_ARTIFACT_MISSING');
     stepUp = await consumeBackupStepUpChallenge(connection, req, {
       challengeId: req.body?.step_up_challenge_id,
@@ -2356,6 +2527,7 @@ router.post('/:backupId/verify', async (req, res) => {
         backup_set_id: backupId,
         result: valid ? 'MATCH' : 'MISMATCH',
         checksum_algorithm: 'SHA-256',
+        ...approvalAuditDetails(approvalPolicy, backup.created_by, req.user.id, stepUp),
       });
       await finalize.commit();
     } catch (error) {
@@ -2364,8 +2536,23 @@ router.post('/:backupId/verify', async (req, res) => {
     } finally {
       finalize.release();
     }
-    if (!valid) return res.status(409).json({ error: 'Backup checksum verification failed.', code: 'BACKUP_CHECKSUM_MISMATCH' });
-    return res.json({ message: 'Backup artifact independently verified.', backup_set_id: backupId, verification });
+    if (!valid) return res.status(409).json({
+      error: 'Backup checksum verification failed.',
+      code: 'BACKUP_CHECKSUM_MISMATCH',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    });
+    return res.json({
+      message: 'Backup artifact verified by the System Administrator with fresh step-up MFA.',
+      backup_set_id: backupId,
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+      verification,
+    });
   } catch (error) {
     await pool.execute(
       `UPDATE backup_sets SET verification_status = 'ERROR', integrity_status = 'ERROR',
@@ -2377,8 +2564,9 @@ router.post('/:backupId/verify', async (req, res) => {
 });
 
 router.post('/:backupId/restore', async (req, res) => {
-  const connection = await pool.getConnection();
+  let connection;
   try {
+    connection = await acquireBackupConnection();
     if (String(req.body?.confirmation_phrase || '').trim() !== 'RESTORE') {
       throw new RecoveryError('Type RESTORE to confirm this recovery request.', 400, 'RESTORE_CONFIRMATION_REQUIRED');
     }
@@ -2397,19 +2585,26 @@ router.post('/:backupId/restore', async (req, res) => {
     });
 
     await connection.beginTransaction();
+    const approvalPolicy = await loadAdminApprovalPolicy(connection);
     const [existing] = await connection.execute('SELECT id, request_fingerprint FROM restore_jobs WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
       assertIdempotentReplay(existing[0], fingerprint);
       const jobs = await listRestoreJobs(req.user.id, 200, connection);
       const job = jobs.find(item => Number(item.id) === Number(existing[0].id));
       await connection.commit();
-      return res.json({ message: 'Existing restore request returned for this idempotency key.', restore_job_id: existing[0].id, restore_job: job, idempotent_replay: true });
+      return res.json({
+        message: 'Existing restore request returned for this idempotency key.',
+        restore_job_id: existing[0].id,
+        restore_job: job,
+        approval_policy: approvalPolicy,
+        idempotent_replay: true,
+      });
     }
     const [backupRows] = await connection.execute('SELECT * FROM backup_sets WHERE id = ? FOR UPDATE', [backupId]);
     const backup = backupRows[0];
     if (!backup) throw new RecoveryError('Backup set not found.', 404, 'BACKUP_NOT_FOUND');
     if (!backupArtifactVerified(backup) || !['VERIFIED', 'RESTORED'].includes(backup.status)) {
-      throw new RecoveryError('Only independently verified backup artifacts can be restored.', 409, 'BACKUP_NOT_VERIFIED');
+      throw new RecoveryError('Only MFA-protected administrator-verified backup artifacts can be restored.', 409, 'BACKUP_NOT_VERIFIED');
     }
     if (backup.backup_type === 'DEPLOYMENT_VERSION') throw new RecoveryError('Deployment artifacts use the rollback workflow.', 409, 'USE_ROLLBACK_WORKFLOW');
     if (backup.backup_type !== 'FULL_BACKUP' && restoreType !== backup.backup_type) {
@@ -2443,7 +2638,7 @@ router.post('/:backupId/restore', async (req, res) => {
         affectedModule,
         req.user.id,
         protectedText(reason),
-        protectedText('Awaiting independent Level 4 approval and step-up MFA.'),
+        protectedText('Awaiting System Administrator approval with fresh step-up MFA.'),
         backup.checksum,
         req.user.id,
       ]
@@ -2454,14 +2649,23 @@ router.post('/:backupId/restore', async (req, res) => {
       restore_type: restoreType,
       affected_module: affectedModule,
       status: 'AWAITING_APPROVAL',
+      approval_policy: approvalPolicy,
     });
     await connection.commit();
-    return res.status(201).json({ message: 'Restore request is awaiting independent approval.', restore_job_id: result.insertId, status: 'AWAITING_APPROVAL' });
+    return res.status(201).json({
+      message: 'Restore request is awaiting MFA-protected System Administrator approval.',
+      restore_job_id: result.insertId,
+      status: 'AWAITING_APPROVAL',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    });
   } catch (error) {
-    await connection.rollback().catch(() => {});
+    await connection?.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to request restore.');
   } finally {
-    connection.release();
+    connection?.release();
   }
 });
 
@@ -2473,7 +2677,7 @@ router.post('/restore-jobs/:jobId/approve', async (req, res) => {
     const [rows] = await connection.execute('SELECT * FROM restore_jobs WHERE id = ? FOR UPDATE', [jobId]);
     const job = rows[0];
     if (!job) throw new RecoveryError('Restore job not found.', 404, 'RESTORE_NOT_FOUND');
-    assertMakerChecker(job.requested_by, req.user.id);
+    const approvalPolicy = await loadAdminApprovalPolicy(connection);
     assertTransition(RESTORE_TRANSITIONS, job.status, 'APPROVED', 'Restore job');
     const proof = await consumeBackupStepUpChallenge(connection, req, {
       challengeId: req.body?.step_up_challenge_id,
@@ -2490,7 +2694,7 @@ router.post('/restore-jobs/:jobId/approve', async (req, res) => {
         WHERE id = ?`,
       [
         req.user.id,
-        protectedText(req.body?.approval_notes || 'Restore approved after independent review.'),
+        protectedText(req.body?.approval_notes || 'Restore approved after MFA-protected administrator review.'),
         proof.challengeId,
         proof.verifiedAt,
         protectedText('Approved. A successful isolated dry-run is required before execution.'),
@@ -2498,9 +2702,21 @@ router.post('/restore-jobs/:jobId/approve', async (req, res) => {
         jobId,
       ]
     );
-    await audit(connection, req, `APPROVE_RESTORE_JOB: ${jobId}`, { restore_job_id: jobId, status: 'APPROVED' });
+    await audit(connection, req, `APPROVE_RESTORE_JOB: ${jobId}`, {
+      restore_job_id: jobId,
+      status: 'APPROVED',
+      ...approvalAuditDetails(approvalPolicy, job.requested_by, req.user.id, proof),
+    });
     await connection.commit();
-    return res.json({ message: 'Restore approved. Run the isolated dry-run next.', restore_job_id: jobId, status: 'APPROVED' });
+    return res.json({
+      message: 'Restore approved with fresh step-up MFA. Run the isolated dry-run next.',
+      restore_job_id: jobId,
+      status: 'APPROVED',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    });
   } catch (error) {
     await connection.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to approve restore.');
@@ -2525,7 +2741,7 @@ router.post('/restore-jobs/:jobId/dry-run', async (req, res) => {
     job = rows[0];
     backup = rows[0];
     if (!job) throw new RecoveryError('Restore job not found.', 404, 'RESTORE_NOT_FOUND');
-    if (job.approval_status !== 'APPROVED') throw new RecoveryError('Restore requires independent approval.', 409, 'RESTORE_NOT_APPROVED');
+    if (job.approval_status !== 'APPROVED') throw new RecoveryError('Restore requires MFA-protected administrator approval.', 409, 'RESTORE_NOT_APPROVED');
     assertTransition(RESTORE_TRANSITIONS, job.status, 'DRY_RUN_IN_PROGRESS', 'Restore job');
     const proof = await consumeBackupStepUpChallenge(connection, req, {
       challengeId: req.body?.step_up_challenge_id,
@@ -2882,8 +3098,9 @@ router.post('/restore-jobs/:jobId/verify-target', async (req, res) => {
 });
 
 router.post('/rollback-requests', async (req, res) => {
-  const connection = await pool.getConnection();
+  let connection;
   try {
+    connection = await acquireBackupConnection();
     const key = idempotencyKey(req);
     const affectedModule = cleanText(req.body?.affected_module, 80);
     const module = MODULE_MAP.get(affectedModule);
@@ -2897,11 +3114,17 @@ router.post('/rollback-requests', async (req, res) => {
       recoveryPointId,
     });
     await connection.beginTransaction();
+    const approvalPolicy = await loadAdminApprovalPolicy(connection);
     const [existing] = await connection.execute('SELECT id, request_fingerprint FROM module_rollback_requests WHERE idempotency_key = ? FOR UPDATE', [key]);
     if (existing.length) {
       assertIdempotentReplay(existing[0], fingerprint);
       await connection.commit();
-      return res.json({ message: 'Existing rollback request returned for this idempotency key.', rollback_request_id: existing[0].id, idempotent_replay: true });
+      return res.json({
+        message: 'Existing rollback request returned for this idempotency key.',
+        rollback_request_id: existing[0].id,
+        approval_policy: approvalPolicy,
+        idempotent_replay: true,
+      });
     }
     const [points] = await connection.execute(
       `SELECT mrp.*, bs.backup_reference, bs.backup_type
@@ -2945,13 +3168,22 @@ router.post('/rollback-requests', async (req, res) => {
       rollback_request_id: result.insertId,
       recovery_point_id: point.id,
       status: 'AWAITING_APPROVAL',
+      approval_policy: approvalPolicy,
     });
     await connection.commit();
-    return res.status(201).json({ message: 'Rollback request is awaiting independent approval.', rollback_request_id: result.insertId, status: 'AWAITING_APPROVAL' });
+    return res.status(201).json({
+      message: 'Rollback request is awaiting MFA-protected System Administrator approval.',
+      rollback_request_id: result.insertId,
+      status: 'AWAITING_APPROVAL',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    });
   } catch (error) {
-    await connection.rollback().catch(() => {});
+    await connection?.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to request rollback.');
-  } finally { connection.release(); }
+  } finally { connection?.release(); }
 });
 
 router.post('/rollback-requests/:requestId/approve', async (req, res) => {
@@ -2962,7 +3194,7 @@ router.post('/rollback-requests/:requestId/approve', async (req, res) => {
     const [rows] = await connection.execute('SELECT * FROM module_rollback_requests WHERE id=? FOR UPDATE', [requestId]);
     const request = rows[0];
     if (!request) throw new RecoveryError('Rollback request not found.', 404, 'ROLLBACK_NOT_FOUND');
-    assertMakerChecker(request.requested_by, req.user.id);
+    const approvalPolicy = await loadAdminApprovalPolicy(connection);
     assertTransition(ROLLBACK_TRANSITIONS, request.status, 'APPROVED', 'Rollback request');
     const proof = await consumeBackupStepUpChallenge(connection, req, {
       challengeId: req.body?.step_up_challenge_id,
@@ -2978,16 +3210,28 @@ router.post('/rollback-requests/:requestId/approve', async (req, res) => {
         WHERE id=?`,
       [
         req.user.id,
-        protectedText(req.body?.approval_notes || 'Rollback approved after recovery-point review.'),
+        protectedText(req.body?.approval_notes || 'Rollback approved after MFA-protected recovery-point review.'),
         proof.challengeId,
         proof.verifiedAt,
         req.user.id,
         requestId,
       ]
     );
-    await audit(connection, req, `APPROVE_MODULE_ROLLBACK: ${request.affected_module}`, { rollback_request_id: requestId, status: 'APPROVED' });
+    await audit(connection, req, `APPROVE_MODULE_ROLLBACK: ${request.affected_module}`, {
+      rollback_request_id: requestId,
+      status: 'APPROVED',
+      ...approvalAuditDetails(approvalPolicy, request.requested_by, req.user.id, proof),
+    });
     await connection.commit();
-    return res.json({ message: 'Rollback approved.', rollback_request_id: requestId, status: 'APPROVED' });
+    return res.json({
+      message: 'Rollback approved with fresh step-up MFA.',
+      rollback_request_id: requestId,
+      status: 'APPROVED',
+      approval_policy: approvalPolicy,
+      administrator_verification_required: true,
+      independent_verification_required: approvalPolicy.independent_verification_required,
+      maker_checker_required: approvalPolicy.maker_checker_required,
+    });
   } catch (error) {
     await connection.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to approve rollback.');
@@ -3143,8 +3387,9 @@ router.patch('/restore-jobs/:jobId', async (req, res) => {
     if (!job) throw new RecoveryError('Restore job not found.', 404, 'RESTORE_NOT_FOUND');
     assertTransition(RESTORE_TRANSITIONS, job.status, status, 'Restore job');
     let proof = null;
+    let approvalPolicy = null;
     if (status === 'REJECTED') {
-      assertMakerChecker(job.requested_by, req.user.id);
+      approvalPolicy = await loadAdminApprovalPolicy(connection);
       proof = await consumeBackupStepUpChallenge(connection, req, {
         challengeId: req.body?.step_up_challenge_id,
         challengeToken: req.body?.step_up_token,
@@ -3172,9 +3417,23 @@ router.patch('/restore-jobs/:jobId', async (req, res) => {
         jobId,
       ]
     );
-    await audit(connection, req, `${status}_RESTORE_JOB: ${jobId}`, { restore_job_id: jobId, status });
+    await audit(connection, req, `${status}_RESTORE_JOB: ${jobId}`, {
+      restore_job_id: jobId,
+      status,
+      ...(approvalPolicy ? approvalAuditDetails(approvalPolicy, job.requested_by, req.user.id, proof) : {}),
+    });
     await connection.commit();
-    return res.json({ message: `Restore job ${status.toLowerCase()}.`, restore_job_id: jobId, status });
+    return res.json({
+      message: `Restore job ${status.toLowerCase()}${status === 'REJECTED' ? ' with fresh step-up MFA' : ''}.`,
+      restore_job_id: jobId,
+      status,
+      ...(approvalPolicy ? {
+        approval_policy: approvalPolicy,
+        administrator_verification_required: true,
+        independent_verification_required: approvalPolicy.independent_verification_required,
+        maker_checker_required: approvalPolicy.maker_checker_required,
+      } : {}),
+    });
   } catch (error) {
     await connection.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to update restore job.');
@@ -3195,8 +3454,9 @@ router.patch('/rollback-requests/:requestId', async (req, res) => {
     if (!request) throw new RecoveryError('Rollback request not found.', 404, 'ROLLBACK_NOT_FOUND');
     assertTransition(ROLLBACK_TRANSITIONS, request.status, status, 'Rollback request');
     let proof = null;
+    let approvalPolicy = null;
     if (status === 'REJECTED') {
-      assertMakerChecker(request.requested_by, req.user.id);
+      approvalPolicy = await loadAdminApprovalPolicy(connection);
       proof = await consumeBackupStepUpChallenge(connection, req, {
         challengeId: req.body?.step_up_challenge_id,
         challengeToken: req.body?.step_up_token,
@@ -3224,9 +3484,23 @@ router.patch('/rollback-requests/:requestId', async (req, res) => {
         requestId,
       ]
     );
-    await audit(connection, req, `${status}_MODULE_ROLLBACK: ${request.affected_module}`, { rollback_request_id: requestId, status });
+    await audit(connection, req, `${status}_MODULE_ROLLBACK: ${request.affected_module}`, {
+      rollback_request_id: requestId,
+      status,
+      ...(approvalPolicy ? approvalAuditDetails(approvalPolicy, request.requested_by, req.user.id, proof) : {}),
+    });
     await connection.commit();
-    return res.json({ message: `Rollback request ${status.toLowerCase()}.`, rollback_request_id: requestId, status });
+    return res.json({
+      message: `Rollback request ${status.toLowerCase()}${status === 'REJECTED' ? ' with fresh step-up MFA' : ''}.`,
+      rollback_request_id: requestId,
+      status,
+      ...(approvalPolicy ? {
+        approval_policy: approvalPolicy,
+        administrator_verification_required: true,
+        independent_verification_required: approvalPolicy.independent_verification_required,
+        maker_checker_required: approvalPolicy.maker_checker_required,
+      } : {}),
+    });
   } catch (error) {
     await connection.rollback().catch(() => {});
     return errorResponse(res, error, 'Failed to update rollback request.');
@@ -3240,7 +3514,7 @@ router.patch('/:backupId', async (req, res) => {
     const requestedStatus = req.body?.status ? String(req.body.status).trim().toUpperCase() : null;
     const notesProvided = req.body?.notes !== undefined;
     if (requestedStatus && requestedStatus !== 'CANCELLED') {
-      throw new RecoveryError('Use the run and independently verified backup endpoints for lifecycle changes.', 409, 'CONTROLLED_BACKUP_ACTION_REQUIRED');
+      throw new RecoveryError('Use the run and administrator verification endpoints for lifecycle changes.', 409, 'CONTROLLED_BACKUP_ACTION_REQUIRED');
     }
     if (!requestedStatus && !notesProvided) throw new RecoveryError('No backup updates provided.', 400, 'NO_BACKUP_UPDATE');
     await connection.beginTransaction();
@@ -3283,8 +3557,11 @@ module.exports._test = {
   BACKUP_TRANSITIONS,
   RESTORE_TRANSITIONS,
   ROLLBACK_TRANSITIONS,
+  adminApprovalPolicyFromCount,
   backupArtifactAvailable,
   backupArtifactVerified,
+  acquireConnectionWithTimeout,
+  backupDatabaseAcquireTimeoutMs,
   backupResponse,
   booleanInput,
   clampPaginationToTotal,
@@ -3295,8 +3572,10 @@ module.exports._test = {
   scheduleMutation,
   recoverExpiredOperations,
   assertIdempotentReplay,
-  assertMakerChecker,
   assertTransition,
+  loadAdminApprovalPolicy,
   requestFingerprint,
+  restoreResponse,
+  rollbackResponse,
   workerLease,
 };

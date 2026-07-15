@@ -105,7 +105,7 @@ assert(systemAdminPage.includes('id="module-recovery-tbody"'), 'Backup dashboard
 assert(systemAdminPage.includes('id="restore-jobs-tbody"'), 'Backup dashboard must show restore jobs.');
 assert(systemAdminPage.includes('id="rollback-requests-tbody"'), 'Backup dashboard must show rollback requests.');
 assert(systemAdminPage.includes('does not automatically overwrite source code'), 'Backup page must explain controlled recovery limits.');
-assert(systemAdminPage.includes('do not bypass HR or Payroll business approval workflows'), 'Backup page must state recovery does not bypass approvals.');
+assert(systemAdminPage.includes('do not bypass HR or Payroll business approvals'), 'Backup page must state recovery does not bypass approvals.');
 assert(systemAdminPage.includes('value="SYSTEM_HEALTH"'), 'Audit Trail must include System Health module filter.');
 assert(blockchainPage.includes('bc-view-support'), 'Blockchain support view must live inside the Blockchain module.');
 assert(attendancePage.includes('bio-device-settings-card'), 'Biometric settings must live inside Attendance Sync.');

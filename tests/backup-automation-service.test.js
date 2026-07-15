@@ -10,6 +10,7 @@ const { Readable } = require('stream');
 process.env.NODE_ENV = 'test';
 
 const {
+  BackupAutomationRepository,
   BackupAutomationService,
   BackupRuntime,
   LocalStorageAdapter,
@@ -188,7 +189,7 @@ class FakeRepository {
     this.deleted = [];
     this.retentionRows = [];
     this.pendingActions = [];
-    this.checkers = [1, 15];
+    this.activeSystemAdmins = [1, 15];
     this.drillSchedule = {
       id: 8,
       schedule_reference: 'DRS-8',
@@ -238,10 +239,10 @@ class FakeRepository {
   async listRetentionScope() { return this.retentionRows; }
   async markBackupExpired(id) { this.expired.push(id); return true; }
   async markArtifactDeleted(id) { this.deleted.push(id); return true; }
-  async listPendingCheckerActions() { return this.pendingActions; }
-  async listEligibleCheckers(excluded) { return this.checkers.filter(id => id !== Number(excluded)); }
+  async listPendingAdminActions() { return this.pendingActions; }
+  async listActiveSystemAdmins() { return [...this.activeSystemAdmins]; }
   async upsertNotification(value) { this.notifications.push(value); }
-  async resolveStaleCheckerNotifications() { return 2; }
+  async resolveStaleActionNotifications() { return 2; }
 
   async listDueDrillSchedules() { return [this.drillSchedule]; }
   async getDrillSchedule() { return this.drillSchedule; }
@@ -497,7 +498,7 @@ test('runtime still removes the disposable RDS instance after an integrity failu
   assert.strictEqual(deletionCount, 2);
 });
 
-test('due schedule creates an artifact and stops at COMPLETED pending an independent checker', async () => {
+test('due schedule creates an artifact and stops at COMPLETED pending administrator verification', async () => {
   const repository = new FakeRepository();
   const runtime = {
     async createBackup() {
@@ -511,13 +512,13 @@ test('due schedule creates an artifact and stops at COMPLETED pending an indepen
   const service = new BackupAutomationService({ repository, runtime, clock: () => new Date('2026-07-14T18:05:00.000Z') });
   const results = await service.runDueBackupSchedules();
   assert.strictEqual(results[0].status, 'COMPLETED');
-  assert.strictEqual(results[0].independentVerificationRequired, true);
+  assert.strictEqual(results[0].administratorVerificationRequired, true);
   assert.strictEqual(repository.backup.status, 'COMPLETED');
   assert.strictEqual(repository.scheduleStatus, 'SUCCESS');
   assert.strictEqual(repository.backup.verified_by, undefined);
 });
 
-test('scheduled RDS backup persists source integrity metadata before checker verification', async () => {
+test('scheduled RDS backup persists source integrity metadata before administrator verification', async () => {
   const repository = new FakeRepository();
   repository.schedule.backup_type = 'DATABASE';
   repository.schedule.storage_provider = 'RDS_SNAPSHOT';
@@ -556,7 +557,7 @@ test('retention keeps newest verified evidence and deletes only the expired arti
   assert.strictEqual(result[0].status, 'DELETED');
 });
 
-test('notification reconciliation excludes the maker and creates checker inbox entries', async () => {
+test('notification reconciliation routes protected actions to the requesting admin', async () => {
   const repository = new FakeRepository();
   repository.pendingActions = [{
     id: 41, requested_by: 1, category: 'BACKUP_VERIFICATION_REQUIRED', resourceType: 'BACKUP_SET',
@@ -566,8 +567,44 @@ test('notification reconciliation excludes the maker and creates checker inbox e
   const result = await service.reconcileNotifications();
   assert.strictEqual(result.pendingActions, 1);
   assert.strictEqual(repository.notifications.length, 1);
-  assert.strictEqual(repository.notifications[0].recipientUserId, 15);
+  assert.strictEqual(repository.notifications[0].recipientUserId, 1);
   assert.strictEqual(repository.notifications[0].actionRequired, true);
+});
+
+test('notification reconciliation still routes an action to the requester when only one admin exists', async () => {
+  const repository = new FakeRepository();
+  repository.activeSystemAdmins = [1];
+  repository.pendingActions = [{
+    id: 41, requested_by: 1, category: 'BACKUP_VERIFICATION_REQUIRED', resourceType: 'BACKUP_SET',
+    title: 'Backup verification required', message: 'Backup is ready.',
+  }];
+  const service = new BackupAutomationService({ repository, runtime: {} });
+  const result = await service.reconcileNotifications();
+  assert.strictEqual(result.pendingActions, 1);
+  assert.strictEqual(repository.notifications.length, 1);
+  assert.strictEqual(repository.notifications[0].recipientUserId, 1);
+  assert.strictEqual(repository.notifications[0].actionRequired, true);
+});
+
+test('notification repository returns all active System Administrators without excluding the requester', async () => {
+  let activeAdmins = [{ id: 1 }];
+  let capturedSql = '';
+  const repository = new BackupAutomationRepository({
+    pool: {
+      async execute(sql) {
+        capturedSql = sql;
+        return [activeAdmins];
+      },
+    },
+    protectText: value => value,
+    revealText: value => value,
+  });
+
+  assert.deepStrictEqual(await repository.listActiveSystemAdmins(), [1]);
+  activeAdmins = [{ id: 1 }, { id: 15 }];
+  assert.deepStrictEqual(await repository.listActiveSystemAdmins(), [1, 15]);
+  assert.match(capturedSql, /u\.is_active=1/);
+  assert.match(capturedSql, /system_administrator/);
 });
 
 test('scheduled restore drill selects only the repository verified candidate and never applies a live restore', async () => {

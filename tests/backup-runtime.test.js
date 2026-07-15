@@ -642,7 +642,7 @@ test('runtime stages verified file/config recovery and blocks live restore by de
   }
 });
 
-test('backup worker stops at COMPLETED until an independent checker verifies it', async () => {
+test('backup worker stops at COMPLETED until the API-authorized administrator verifies it', async () => {
   const transitions = [];
   const worker = new BackupWorker({
     runtime: {
@@ -661,7 +661,7 @@ test('backup worker stops at COMPLETED until an independent checker verifies it'
     backupSet: { id: 1, status: 'PENDING', backup_reference: 'WORKER-1', backup_type: 'DATABASE', storage_provider: 'LOCAL' },
   });
   assert.strictEqual(result.status, 'COMPLETED');
-  assert.strictEqual(result.independentVerificationRequired, true);
+  assert.strictEqual(result.administratorVerificationRequired, true);
   assert.deepStrictEqual(transitions.map(item => `${item.expectedStatus}->${item.status}`), [
     'PENDING->RUNNING', 'RUNNING->COMPLETED',
   ]);

@@ -1975,8 +1975,8 @@ async function checkBackupHealth() {
         : failedStatuses.includes(latest.status)
           ? 'Latest backup failed or failed verification.'
           : verifiedArtifact || backupTable !== 'backup_sets'
-            ? 'Latest backup artifact is independently verified and available.'
-            : 'Latest backup record is not yet independently verified and restorable.',
+            ? 'Latest backup artifact passed MFA-protected checksum verification and is available.'
+            : 'Latest backup record is not yet MFA-verified and restorable.',
     {
       dependencies: {
         backup_log: await tableDependency(backupTable, 'Backup log'),

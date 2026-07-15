@@ -68,8 +68,8 @@ class BackupWorker {
         await this.transition(backupSetId, 'COMPLETED', 'FAILED', { failureCode: 'BACKUP_INTEGRITY_MISMATCH' });
         throw backupError('Completed backup failed checksum verification.', 'BACKUP_INTEGRITY_MISMATCH');
       }
-      // Artifact-byte verification is not maker-checker approval. The API's
-      // independently authenticated checker performs COMPLETED -> VERIFIED.
+      // Artifact-byte verification is not administrator approval. The API's
+      // fixed single-admin flow requires fresh MFA before COMPLETED -> VERIFIED.
       return { status: 'COMPLETED', artifactVerified: true, idempotent: true, verification };
     }
     if (initialStatus !== 'PENDING') {
@@ -95,7 +95,7 @@ class BackupWorker {
       return {
         ...result,
         status: 'COMPLETED',
-        independentVerificationRequired: true,
+        administratorVerificationRequired: true,
       };
     } catch (error) {
       if (['RUNNING', 'COMPLETED'].includes(currentStatus)) {
