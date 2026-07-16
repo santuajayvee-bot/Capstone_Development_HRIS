@@ -127,7 +127,6 @@ ALTER TABLE backup_sets
         AND verification_status = 'MATCH'
         AND integrity_status = 'PASSED'
         AND verified_at IS NOT NULL
-        AND verified_by IS NOT NULL
         AND step_up_challenge_id IS NOT NULL
         AND step_up_verified_at IS NOT NULL
       )
@@ -258,8 +257,7 @@ ALTER TABLE restore_jobs
     CHECK (
       approval_status <> 'APPROVED'
       OR (
-        approved_by IS NOT NULL
-        AND approved_at IS NOT NULL
+        approved_at IS NOT NULL
         AND step_up_challenge_id IS NOT NULL
         AND step_up_verified_at IS NOT NULL
       )
@@ -351,8 +349,7 @@ ALTER TABLE module_rollback_requests
     CHECK (
       approval_status <> 'APPROVED'
       OR (
-        approved_by IS NOT NULL
-        AND approved_at IS NOT NULL
+        approved_at IS NOT NULL
         AND step_up_challenge_id IS NOT NULL
         AND step_up_verified_at IS NOT NULL
       )
