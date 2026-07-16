@@ -1036,15 +1036,20 @@ function backupResponse(row) {
   };
 }
 
+function sqlLimit(value, fallback = 100, max = 200) {
+  const parsed = Math.trunc(Number(value));
+  return Math.max(1, Math.min(Number.isFinite(parsed) ? parsed : fallback, max));
+}
+
 async function listBackupSets(limit = 100) {
+  const safeLimit = sqlLimit(limit);
   if (await hasTable('backup_sets')) {
     const [rows] = await pool.execute(
       `SELECT bs.*, creator.username AS created_by_username
          FROM backup_sets bs
          LEFT JOIN users creator ON creator.id = bs.created_by
         ORDER BY bs.created_at DESC
-        LIMIT ?`,
-      [Math.max(1, Math.min(Number(limit) || 100, 200))]
+        LIMIT ${safeLimit}`
     );
     return rows.map(backupSetResponse);
   }
@@ -1055,8 +1060,7 @@ async function listBackupSets(limit = 100) {
          FROM system_backup_log bl
          LEFT JOIN users requester ON requester.id = bl.requested_by
         ORDER BY bl.created_at DESC
-        LIMIT ?`,
-      [Math.max(1, Math.min(Number(limit) || 100, 200))]
+        LIMIT ${safeLimit}`
     );
     return rows.map(row => {
       const legacy = backupResponse(row);
@@ -1081,20 +1085,21 @@ async function listBackupSets(limit = 100) {
 
 async function listModuleRecoveryPoints(limit = 100) {
   if (!(await hasTable('module_recovery_points'))) return [];
+  const safeLimit = sqlLimit(limit);
   const [rows] = await pool.execute(
     `SELECT mrp.*, bs.backup_reference, creator.username AS created_by_username
        FROM module_recovery_points mrp
        LEFT JOIN backup_sets bs ON bs.id = mrp.backup_set_id
        LEFT JOIN users creator ON creator.id = mrp.created_by
       ORDER BY mrp.created_at DESC
-      LIMIT ?`,
-    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+      LIMIT ${safeLimit}`
   );
   return rows.map(moduleRecoveryPointResponse);
 }
 
 async function listRestoreJobs(limit = 100) {
   if (!(await hasTable('restore_jobs'))) return [];
+  const safeLimit = sqlLimit(limit);
   const [rows] = await pool.execute(
     `SELECT rj.*, bs.backup_reference,
             requester.username AS requested_by_username,
@@ -1104,14 +1109,14 @@ async function listRestoreJobs(limit = 100) {
        LEFT JOIN users requester ON requester.id = rj.requested_by
        LEFT JOIN users approver ON approver.id = rj.approved_by
       ORDER BY rj.created_at DESC
-      LIMIT ?`,
-    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+      LIMIT ${safeLimit}`
   );
   return rows.map(restoreJobResponse);
 }
 
 async function listRollbackRequests(limit = 100) {
   if (!(await hasTable('module_rollback_requests'))) return [];
+  const safeLimit = sqlLimit(limit);
   const [rows] = await pool.execute(
     `SELECT mrr.*,
             requester.username AS requested_by_username,
@@ -1120,8 +1125,7 @@ async function listRollbackRequests(limit = 100) {
        LEFT JOIN users requester ON requester.id = mrr.requested_by
        LEFT JOIN users approver ON approver.id = mrr.approved_by
       ORDER BY mrr.created_at DESC
-      LIMIT ?`,
-    [Math.max(1, Math.min(Number(limit) || 100, 200))]
+      LIMIT ${safeLimit}`
   );
   return rows.map(rollbackRequestResponse);
 }

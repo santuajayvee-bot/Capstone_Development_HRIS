@@ -274,14 +274,15 @@ class BackupAutomationRepository {
   }
 
   async listDueBackupSchedules(now, limit = 10) {
+    const safeLimit = boundedInteger(limit, 1, 100, 10);
     const [rows] = await this.pool.execute(
       `SELECT s.*, p.max_age_days AS retention_max_age_days
          FROM backup_schedules s
          LEFT JOIN backup_retention_policies p ON p.id=s.retention_policy_id AND p.enabled=1
         WHERE s.enabled=1 AND s.next_run_at IS NOT NULL AND s.next_run_at <= ?
         ORDER BY s.next_run_at ASC, s.id ASC
-        LIMIT ?`,
-      [now, boundedInteger(limit, 1, 100, 10)]
+        LIMIT ${safeLimit}`,
+      [now]
     );
     return rows;
   }
@@ -465,11 +466,11 @@ class BackupAutomationRepository {
   }
 
   async listPendingScheduledBackups(limit = 20) {
+    const safeLimit = boundedInteger(limit, 1, 100, 20);
     const [rows] = await this.pool.execute(
       `SELECT * FROM backup_sets
         WHERE schedule_id IS NOT NULL AND status='PENDING'
-        ORDER BY created_at ASC,id ASC LIMIT ?`,
-      [boundedInteger(limit, 1, 100, 20)]
+        ORDER BY created_at ASC,id ASC LIMIT ${safeLimit}`
     );
     return rows;
   }
@@ -647,11 +648,12 @@ class BackupAutomationRepository {
   }
 
   async listDueDrillSchedules(now, limit = 10) {
+    const safeLimit = boundedInteger(limit, 1, 100, 10);
     const [rows] = await this.pool.execute(
       `SELECT * FROM backup_restore_drill_schedules
         WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=?
-        ORDER BY next_run_at ASC,id ASC LIMIT ?`,
-      [now, boundedInteger(limit, 1, 100, 10)]
+        ORDER BY next_run_at ASC,id ASC LIMIT ${safeLimit}`,
+      [now]
     );
     return rows;
   }

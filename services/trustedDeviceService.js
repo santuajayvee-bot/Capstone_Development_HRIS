@@ -1182,16 +1182,16 @@ async function listDeviceActivity({ userId, search = '', riskLevel = '', status 
     const like = `%${cleanText(search, 80)}%`;
     params.push(like, like, like, like, like, like);
   }
-  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
-  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const safeLimit = Math.min(Math.max(Math.trunc(Number(limit)) || 100, 1), 500);
+  const safeOffset = Math.max(Math.trunc(Number(offset)) || 0, 0);
   const [rows] = await pool.query(
     `SELECT dal.*, u.username
        FROM device_audit_logs dal
        LEFT JOIN users u ON u.id = dal.user_id
       WHERE ${clauses.join(' AND ')}
       ORDER BY dal.timestamp DESC, dal.id DESC
-      LIMIT ? OFFSET ?`,
-    [...params, safeLimit, safeOffset]
+      LIMIT ${safeLimit} OFFSET ${safeOffset}`,
+    params
   );
   return rows.map(row => ({
     id: row.id,

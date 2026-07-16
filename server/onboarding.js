@@ -1672,7 +1672,7 @@ router.get('/applicants/:applicantId/audit', async (req, res) => {
 
 router.get('/audit', async (req, res) => {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 250);
+    const limit = Math.min(Math.max(Math.trunc(Number(req.query.limit || 100)) || 100, 1), 250);
     const [rows] = await pool.query(
       `SELECT sal.id AS log_id, sal.user_id, sal.employee_id, sal.target_employee_id,
               sal.action_performed, sal.module, sal.old_value, sal.new_value,
@@ -1683,8 +1683,7 @@ router.get('/audit', async (req, res) => {
          LEFT JOIN roles r ON r.id = u.role_id
         WHERE sal.module = 'ONBOARDING'
         ORDER BY sal.timestamp DESC, sal.id DESC
-        LIMIT ?`,
-      [limit]
+        LIMIT ${limit}`
     );
     res.json(rows.map(row => ({
       log_id: row.log_id,
