@@ -645,16 +645,24 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
        FROM trusted_devices
       WHERE user_id = ?
         AND (device_hash = ? OR (? IS NOT NULL AND client_device_id_hash = ?))
-      LIMIT 1`,
+      ORDER BY CASE
+          WHEN status = 'Trusted' THEN 0
+          WHEN status = 'Revoked' THEN 1
+          ELSE 2
+        END,
+        COALESCE(last_used, registered_at) DESC,
+        id DESC
+      LIMIT 5`,
     [userId, hash, clientHash, clientHash]
   );
-  if (rows[0]) {
-    const matched = rows[0];
+  const matched = rows.find(row => normalizeDeviceStatus(row) === 'Trusted') || null;
+  const inactiveMatch = matched ? null : (rows[0] || null);
+  if (matched) {
     if (matched.device_hash !== hash || (clientHash && matched.client_device_id_hash !== clientHash)) {
       const metadata = deviceMetadata(fingerprint, req);
-      await pool.execute(
+      const updateMetadata = async includeDeviceHash => pool.execute(
         `UPDATE trusted_devices
-            SET device_hash = ?,
+            SET ${includeDeviceHash ? 'device_hash = ?,' : ''}
                 client_device_id_hash = COALESCE(?, client_device_id_hash),
                 browser = COALESCE(?, browser),
                 operating_system = COALESCE(?, operating_system),
@@ -663,7 +671,7 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
                 last_used = NOW(),
                 ip_address = COALESCE(?, ip_address)
           WHERE id = ? AND user_id = ?`,
-        [
+        includeDeviceHash ? [
           hash,
           clientHash,
           metadata.browser,
@@ -673,11 +681,24 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
           metadata.ipAddress,
           matched.id,
           userId,
+        ] : [
+          clientHash,
+          metadata.browser,
+          metadata.operatingSystem,
+          metadata.deviceType,
+          metadata.deviceModel,
+          metadata.ipAddress,
+          matched.id,
+          userId,
         ]
-      ).catch(error => {
+      );
+      try {
+        await updateMetadata(true);
+        matched.device_hash = hash;
+      } catch (error) {
         if (error?.code !== 'ER_DUP_ENTRY') throw error;
-      });
-      matched.device_hash = hash;
+        await updateMetadata(false);
+      }
       matched.client_device_id_hash = clientHash || matched.client_device_id_hash;
     }
     return { device: matched, deviceHash: hash };
@@ -699,9 +720,9 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
   const fallback = fallbackRows.find(row => sameDeviceMetadata(row, metadata)) || null;
   if (fallback) {
     try {
-      await pool.execute(
+      const updateMetadata = async includeDeviceHash => pool.execute(
         `UPDATE trusted_devices
-            SET device_hash = ?,
+            SET ${includeDeviceHash ? 'device_hash = ?,' : ''}
                 client_device_id_hash = COALESCE(?, client_device_id_hash),
                 browser = COALESCE(?, browser),
                 operating_system = COALESCE(?, operating_system),
@@ -710,8 +731,17 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
                 last_used = NOW(),
                 ip_address = COALESCE(?, ip_address)
           WHERE id = ? AND user_id = ?`,
-        [
+        includeDeviceHash ? [
           hash,
+          clientHash,
+          metadata.browser,
+          metadata.operatingSystem,
+          metadata.deviceType,
+          metadata.deviceModel,
+          metadata.ipAddress,
+          fallback.id,
+          userId,
+        ] : [
           clientHash,
           metadata.browser,
           metadata.operatingSystem,
@@ -722,7 +752,13 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
           userId,
         ]
       );
-      fallback.device_hash = hash;
+      try {
+        await updateMetadata(true);
+        fallback.device_hash = hash;
+      } catch (error) {
+        if (error?.code !== 'ER_DUP_ENTRY') throw error;
+        await updateMetadata(false);
+      }
       fallback.client_device_id_hash = clientHash || fallback.client_device_id_hash;
       fallback.browser = metadata.browser || fallback.browser;
       fallback.operating_system = metadata.operatingSystem || fallback.operating_system;
@@ -734,7 +770,7 @@ async function findTrustedDevice(userId, fingerprint = {}, req = null) {
     }
   }
 
-  return { device: fallback, deviceHash: hash };
+  return { device: fallback || inactiveMatch, deviceHash: hash };
 }
 
 async function deduplicateTrustedDevices(userId, fingerprint = {}, req = null) {
