@@ -112,11 +112,6 @@ ALTER TABLE backup_sets
     FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL,
   ADD CONSTRAINT fk_backup_sets_step_up
     FOREIGN KEY (step_up_challenge_id) REFERENCES backup_step_up_challenges(id) ON DELETE RESTRICT,
-  ADD CONSTRAINT chk_backup_sets_maker_checker
-    CHECK (
-      (approved_by IS NULL OR approved_by <> created_by)
-      AND (verified_by IS NULL OR verified_by <> created_by)
-    ),
   ADD CONSTRAINT chk_backup_sets_idempotency
     CHECK (CHAR_LENGTH(idempotency_key) > 0),
   ADD CONSTRAINT chk_backup_sets_artifact_size
@@ -257,8 +252,6 @@ ALTER TABLE restore_jobs
     FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   ADD CONSTRAINT fk_restore_jobs_step_up
     FOREIGN KEY (step_up_challenge_id) REFERENCES backup_step_up_challenges(id) ON DELETE RESTRICT,
-  ADD CONSTRAINT chk_restore_jobs_maker_checker
-    CHECK (approved_by IS NULL OR approved_by <> requested_by),
   ADD CONSTRAINT chk_restore_jobs_idempotency
     CHECK (CHAR_LENGTH(idempotency_key) > 0),
   ADD CONSTRAINT chk_restore_jobs_approval_evidence
@@ -350,8 +343,6 @@ ALTER TABLE module_rollback_requests
     FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   ADD CONSTRAINT fk_module_rollback_step_up
     FOREIGN KEY (step_up_challenge_id) REFERENCES backup_step_up_challenges(id) ON DELETE RESTRICT,
-  ADD CONSTRAINT chk_module_rollback_maker_checker
-    CHECK (approved_by IS NULL OR approved_by <> requested_by),
   ADD CONSTRAINT chk_module_rollback_idempotency
     CHECK (CHAR_LENGTH(idempotency_key) > 0),
   ADD CONSTRAINT chk_module_rollback_versions
