@@ -281,7 +281,7 @@ async function completeAuthenticatedLogin(data, options = {}) {
   stopLockoutCountdown();
   stopDeviceApprovalPolling();
 
-  saveAuth(data.accessToken || data.token, data.user);
+  saveAuth(data.accessToken || data.token, data.user, data.sessionBinding);
 
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';

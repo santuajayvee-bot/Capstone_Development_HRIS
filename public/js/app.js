@@ -630,7 +630,10 @@ document.addEventListener('partialsLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
   startTopbarClock();
   window.addEventListener('popstate', () => handleAppRoute({ fromPopState: true }));
-  setTimeout(() => handleAppRoute({ replace: true }), 0);
+  setTimeout(async () => {
+    if (window.authReady) await window.authReady;
+    handleAppRoute({ replace: true });
+  }, 0);
 
   const pageBody = document.querySelector('.page-body');
   if (!pageBody) return;

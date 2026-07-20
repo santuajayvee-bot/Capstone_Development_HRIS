@@ -569,6 +569,7 @@ async function createUserSession(sessionData) {
     Employee_ID,
     Refresh_Token_Hash,
     JWT_ID,
+    Session_Binding_Hash,
     IP_Address,
     User_Agent,
     Expires_At,
@@ -577,6 +578,7 @@ async function createUserSession(sessionData) {
   ensureEmployeeId(Employee_ID);
   ensureNonEmptyString(Refresh_Token_Hash);
   ensureNonEmptyString(JWT_ID);
+  ensureNonEmptyString(Session_Binding_Hash);
 
   if (!Expires_At) {
     throw new Error(AUTH_INPUT_ERROR);
@@ -585,12 +587,13 @@ async function createUserSession(sessionData) {
   try {
     const [result] = await pool.execute(
       `INSERT INTO USER_SESSION
-        (Employee_ID, Refresh_Token_Hash, JWT_ID, IP_Address, User_Agent, Expires_At)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (Employee_ID, Refresh_Token_Hash, JWT_ID, Session_Binding_Hash, IP_Address, User_Agent, Expires_At)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         Employee_ID,
         Refresh_Token_Hash,
         JWT_ID,
+        Session_Binding_Hash,
         toNullable(IP_Address),
         toNullable(User_Agent),
         Expires_At,
@@ -614,6 +617,7 @@ async function findActiveSessionByRefreshTokenHash(refreshTokenHash) {
          s.Employee_ID,
          s.Refresh_Token_Hash,
          s.JWT_ID,
+         s.Session_Binding_Hash,
          s.IP_Address,
          s.User_Agent,
          s.Created_At,

@@ -215,6 +215,7 @@ function closeDpaDeclinedTab() {
     clearAuth();
   } else {
     sessionStorage.removeItem('vp_token');
+    sessionStorage.removeItem('vp_session_binding');
     sessionStorage.removeItem('vp_user');
   }
 

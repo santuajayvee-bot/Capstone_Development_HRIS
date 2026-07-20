@@ -133,6 +133,18 @@ function hashRefreshToken(refreshToken) {
   return crypto.createHash('sha256').update(refreshToken).digest('hex');
 }
 
+function generateSessionBindingSecret() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function hashSessionBindingSecret(bindingSecret) {
+  if (!isNonEmptyString(bindingSecret)) {
+    throw new Error('Session binding secret is required.');
+  }
+
+  return crypto.createHash('sha256').update(bindingSecret, 'utf8').digest('hex');
+}
+
 function getRefreshTokenExpiryDate() {
   return new Date(Date.now() + getRefreshTokenExpiresDays() * MS_PER_DAY);
 }
@@ -157,6 +169,8 @@ module.exports = {
   verifyAccessToken,
   generateRefreshToken,
   hashRefreshToken,
+  generateSessionBindingSecret,
+  hashSessionBindingSecret,
   getRefreshTokenExpiryDate,
   getRefreshCookieOptions,
 };

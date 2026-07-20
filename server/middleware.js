@@ -2,8 +2,11 @@
    server/middleware.js — JWT auth + role-based route guards
    ============================================================ */
 
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { revokeSessionByJwtId } = require('../db/authQueries');
+const { hashSessionBindingSecret } = require('../services/tokenService');
 const { auditSecurityEvent } = require('./security-controls');
 const {
   getLinkedEmployeeProfile,
@@ -176,6 +179,7 @@ async function getAccountSessionState(tokenPayload) {
        u.force_password_change,
        COALESCE(u.password_changed_at, e.Password_Changed_At) AS password_changed_at,
        s.Session_ID,
+       s.Session_Binding_Hash,
        s.Revoked_At,
        s.Expires_At
      FROM users u
@@ -205,6 +209,17 @@ function isInactiveAccount(accountState) {
 
 function authError(res, message = 'Invalid token.') {
   return res.status(401).json({ error: message });
+}
+
+function sessionBindingMatches(providedSecret, expectedHash) {
+  if (!isNonEmptyString(providedSecret) || !/^[a-f0-9]{64}$/i.test(String(expectedHash || ''))) {
+    return false;
+  }
+  const providedHash = hashSessionBindingSecret(providedSecret);
+  const providedBuffer = Buffer.from(providedHash, 'hex');
+  const expectedBuffer = Buffer.from(expectedHash, 'hex');
+  return providedBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
 function findClientAuthorityFields(body, path = '') {
@@ -276,6 +291,28 @@ async function requireAuth(req, res, next) {
     if (verifiedToken.jti) {
       if (!accountState.Session_ID || accountState.Revoked_At || new Date(accountState.Expires_At) <= new Date()) {
         return authError(res, 'Session expired. Please log in again.');
+      }
+
+      const sessionBinding = req.get('x-session-binding');
+      if (!sessionBindingMatches(sessionBinding, accountState.Session_Binding_Hash)) {
+        await revokeSessionByJwtId(verifiedToken.jti, 'session_binding_mismatch').catch(() => {});
+        await auditSecurityEvent(req, {
+          action: 'blocked_session_binding_mismatch',
+          module: 'AUTH_SECURITY',
+          targetTable: 'USER_SESSION',
+          targetRecord: accountState.Session_ID,
+          newValue: {
+            user_id: accountState.user_id,
+            username: accountState.username,
+            path: req.originalUrl,
+            binding_provided: isNonEmptyString(sessionBinding),
+          },
+          result: 'blocked',
+        }).catch(() => {});
+        return res.status(401).json({
+          error: 'Session validation failed. Please log in again.',
+          code: 'SESSION_BINDING_MISMATCH',
+        });
       }
     }
 

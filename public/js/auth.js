@@ -256,16 +256,54 @@ function applyUserRoleToDocument(user = null) {
   if (role) document.body.classList.add(`role-${role}`);
 }
 
-function saveAuth(token, user) {
+function saveAuth(token, user, sessionBinding) {
+  if (!token || !sessionBinding) throw new Error('Incomplete authenticated session.');
   if (typeof resetEmployeeDashboardState === 'function') resetEmployeeDashboardState();
   const normalizedUser = normalizeClientUser(user);
   sessionStorage.setItem('vp_token', token);
+  sessionStorage.setItem('vp_session_binding', sessionBinding);
   sessionStorage.setItem('vp_user', JSON.stringify(normalizedUser));
   applyUserRoleToDocument(normalizedUser);
 }
 
 function getToken() {
   return sessionStorage.getItem('vp_token');
+}
+
+function getSessionBinding() {
+  return sessionStorage.getItem('vp_session_binding');
+}
+
+let resolveAuthReady;
+const authReady = new Promise(resolve => {
+  resolveAuthReady = resolve;
+});
+
+async function refreshAuthenticatedIdentity() {
+  if (!getToken() || !getSessionBinding()) {
+    clearAuth();
+    return null;
+  }
+
+  try {
+    const response = await apiFetch('/api/auth/me', { cache: 'no-store' });
+    if (!response?.ok) return null;
+
+    const data = await response.json();
+    const user = normalizeClientUser(data?.user);
+    if (!user?.id) {
+      clearAuth();
+      return null;
+    }
+
+    sessionStorage.setItem('vp_user', JSON.stringify(user));
+    applyUserRoleToDocument(user);
+    return user;
+  } catch (error) {
+    console.warn('Unable to validate the authenticated session.', error);
+    clearAuth();
+    return null;
+  }
 }
 
 function getUser() {
@@ -328,6 +366,7 @@ function clearAuth() {
     sidebarAvatarObjectUrl = null;
   }
   sessionStorage.removeItem('vp_token');
+  sessionStorage.removeItem('vp_session_binding');
   sessionStorage.removeItem('vp_user');
   applyUserRoleToDocument(null);
   document.body.classList.remove('has-employee-bottom-nav');
@@ -459,9 +498,11 @@ function resolveApiUrl(url) {
 
 async function apiFetch(url, options = {}) {
   const token = getToken();
+  const sessionBinding = getSessionBinding();
   const isFormData = options.body instanceof FormData;
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(token && sessionBinding ? { 'X-Session-Binding': sessionBinding } : {}),
     ...(options.headers || {}),
   };
   if (!isFormData && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
@@ -653,13 +694,17 @@ function canAccess(pageId) {
 async function logout() {
   if (typeof stopAttendanceAjaxRefresh === 'function') stopAttendanceAjaxRefresh();
   const token = getToken();
+  const sessionBinding = getSessionBinding();
   if (token) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(sessionBinding ? { 'X-Session-Binding': sessionBinding } : {}),
+        },
         signal: controller.signal,
       });
     } catch (_) {
@@ -696,42 +741,52 @@ function toggleMobileSidebar() {
   if (toggle) toggle.setAttribute('aria-expanded', String(isOpen));
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initSidebarPreference();
-  if (isLoggedIn()) {
-    const user = getUser();
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    if (typeof requiresDpaGate === 'function' && requiresDpaGate(user)) {
-      if (typeof showDpaAgreementGate === 'function') {
-        showDpaAgreementGate({
-          afterAccept: () => {
-            const acceptedUser = getUser();
-            buildSidebar(acceptedUser);
-            if (typeof initAttendanceRealtime === 'function') {
-              initAttendanceRealtime();
-            }
-            startTrustedDeviceApprovalPrompts();
-            if (typeof handleAppRoute === 'function') handleAppRoute({ replace: true });
-          },
-        });
-      }
-      return;
-    }
-    buildSidebar(user);
-    if (typeof initAttendanceRealtime === 'function') {
-      initAttendanceRealtime();
-    }
-    startTrustedDeviceApprovalPrompts();
-  }
   document.getElementById('btn-logout')?.addEventListener('click', logout);
   document.getElementById('mobile-menu-toggle')?.addEventListener('click', toggleMobileSidebar);
   document.getElementById('mobile-sidebar-backdrop')?.addEventListener('click', closeMobileSidebar);
   document.getElementById('sidebar-collapse-toggle')?.addEventListener('click', toggleSidebarCollapsed);
+
+  try {
+    if (isLoggedIn()) {
+      const user = await refreshAuthenticatedIdentity();
+      if (!user) return;
+
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      if (typeof requiresDpaGate === 'function' && requiresDpaGate(user)) {
+        if (typeof showDpaAgreementGate === 'function') {
+          showDpaAgreementGate({
+            afterAccept: () => {
+              const acceptedUser = getUser();
+              buildSidebar(acceptedUser);
+              if (typeof initAttendanceRealtime === 'function') {
+                initAttendanceRealtime();
+              }
+              startTrustedDeviceApprovalPrompts();
+              if (typeof handleAppRoute === 'function') handleAppRoute({ replace: true });
+            },
+          });
+        }
+        return;
+      }
+      buildSidebar(user);
+      if (typeof initAttendanceRealtime === 'function') {
+        initAttendanceRealtime();
+      }
+      startTrustedDeviceApprovalPrompts();
+    }
+  } finally {
+    resolveAuthReady();
+  }
 });
 
 window.saveAuth = saveAuth;
 window.getToken = getToken;
+window.getSessionBinding = getSessionBinding;
+window.authReady = authReady;
+window.refreshAuthenticatedIdentity = refreshAuthenticatedIdentity;
 window.getUser = getUser;
 window.clearAuth = clearAuth;
 window.isLoggedIn = isLoggedIn;

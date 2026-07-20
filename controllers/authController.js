@@ -3,6 +3,8 @@ const {
   generateAccessToken,
   generateRefreshToken,
   hashRefreshToken,
+  generateSessionBindingSecret,
+  hashSessionBindingSecret,
   getRefreshTokenExpiryDate,
   getRefreshCookieOptions,
 } = require('../services/tokenService');
@@ -275,12 +277,15 @@ async function issueAuthenticatedSession(req, res, user, extras = {}) {
   const { token: accessToken, jwtId } = generateAccessToken(authenticatedUser);
   const refreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(refreshToken);
+  const sessionBinding = generateSessionBindingSecret();
+  const sessionBindingHash = hashSessionBindingSecret(sessionBinding);
   const refreshTokenExpiresAt = getRefreshTokenExpiryDate();
 
   const userSessionId = await createUserSession({
     Employee_ID: employeeId,
     Refresh_Token_Hash: refreshTokenHash,
     JWT_ID: jwtId,
+    Session_Binding_Hash: sessionBindingHash,
     IP_Address: ipAddress,
     User_Agent: userAgent,
     Expires_At: refreshTokenExpiresAt,
@@ -316,6 +321,7 @@ async function issueAuthenticatedSession(req, res, user, extras = {}) {
     message: 'Login successful.',
     accessToken,
     token: accessToken,
+    sessionBinding,
     user: authenticatedUser,
     mustChangePassword: Boolean(Number(user.force_password_change)),
     ...extras,
