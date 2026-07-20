@@ -866,14 +866,12 @@ async function printSewingRegistryHtml(kind, trigger = null, payrollPeriodOverri
   }
 
   try {
-    const cacheKey = `sewing-registry-html.${kind}.${payrollPeriod}`;
-    let registry = reportState.outputCache.get(cacheKey);
-    if (!registry) {
-      const response = await apiFetch(`/api/payroll/sewing-registries?month_year=${encodeURIComponent(payrollPeriod)}&kind=${encodeURIComponent(kind)}`);
-      registry = await response.json();
-      if (!response.ok) throw new Error(registry.error || 'Failed to load sewing registry.');
-      reportState.outputCache.set(cacheKey, registry);
-    }
+    const response = await apiFetch(
+      `/api/payroll/sewing-registries?month_year=${encodeURIComponent(payrollPeriod)}&kind=${encodeURIComponent(kind)}`,
+      { cache: 'no-store' }
+    );
+    const registry = await response.json();
+    if (!response.ok) throw new Error(registry.error || 'Failed to load sewing registry.');
     printHtmlDocument(renderSewingRegistryHtml(registry), 'Sewing Payroll Registry');
   } catch (err) {
     console.error('Unable to print sewing registry:', err);
@@ -891,13 +889,17 @@ function renderSewingRegistryHtml(registry) {
     : registry.kind === '45' ? '45% Sewing Payroll Registry'
       : 'Main Sewing Payroll Registry';
   const dates = Array.isArray(registry.dates) ? registry.dates : [];
-  const dailyHeaders = dates.map(date => `<th class="sewing-registry-date"><span>${escapeHtml(sewingRegistryDate(date))}</span><small>Daily Output</small></th>`).join('');
+  const shareRegistry = registry.kind === '55' || registry.kind === '45';
+  const dailyValueLabel = registry.daily_value_label || (shareRegistry ? 'Daily Production Value' : 'Daily Output');
+  const totalValueLabel = registry.total_value_label || (shareRegistry ? 'Total Value' : 'Total Output');
+  const earningsLabel = registry.earnings_label || (shareRegistry ? `${registry.kind}% Daily Earnings` : 'Employee Daily Total');
+  const dailyHeaders = dates.map(date => `<th class="sewing-registry-date"><span>${escapeHtml(sewingRegistryDate(date))}</span><small>${escapeHtml(dailyValueLabel)}</small></th>`).join('');
   const employees = (registry.employees || []).map(employee => {
     const body = (employee.rows || []).map(row => `
       <tr>
         <td>${escapeHtml(row.operation_type)}</td>
         <td>${escapeHtml(row.size_range || '-')}</td>
-        <td>${reportPeso(row.rate_per_piece)}</td>
+        <td>${reportPieceRate(row.rate_per_piece)}</td>
         ${dates.map(date => `<td>${registryNumber(row.daily?.[date] || 0)}</td>`).join('')}
         <td>${registryNumber(row.total_output)}</td>
         <td>${reportPeso(row.amount)}</td>
@@ -908,8 +910,8 @@ function renderSewingRegistryHtml(registry) {
     return `
       <tr class="sewing-registry-employee"><th colspan="${dates.length + 7}">${escapeHtml(employee.employee_name)}${employee.agency ? ` - ${escapeHtml(employee.agency)}` : ''}</th></tr>
       ${body}
-      <tr class="sewing-registry-total">
-        <th colspan="3">Employee Daily Total</th>
+      <tr class="sewing-registry-total ${shareRegistry ? 'sewing-registry-share-total' : ''}">
+        <th colspan="3">${escapeHtml(earningsLabel)}</th>
         ${dailyTotals}
         <th>${registryNumber(employee.total_output)}</th>
         <th>${reportPeso(employee.total_amount)}</th>
@@ -929,15 +931,15 @@ function renderSewingRegistryHtml(registry) {
             <th>Size</th>
             <th>Rate/Piece</th>
             ${dailyHeaders}
-            <th>Total Output</th>
+            <th>${escapeHtml(totalValueLabel)}</th>
             <th>Amount</th>
             <th>Partner Role</th>
           </tr>
         </thead>
         <tbody>${employees || `<tr><td colspan="${dates.length + 7}">No daily sewing output was encoded for this period.</td></tr>`}</tbody>
         <tfoot>
-          <tr>
-            <th colspan="3">Grand Daily Total</th>
+          <tr class="${shareRegistry ? 'sewing-registry-share-total' : ''}">
+            <th colspan="3">${shareRegistry ? `Grand ${escapeHtml(registry.kind)}% Earnings` : 'Grand Daily Total'}</th>
             ${grandDailyTotals}
             <th>${registryNumber(registry.totals?.total_output)}</th>
             <th>${reportPeso(registry.totals?.total_amount)}</th>
@@ -966,11 +968,15 @@ function printHtmlDocument(content, title) {
           table{border-collapse:collapse;width:100%;font-size:11px}
           th,td{border:1px solid #222;padding:4px;text-align:right;vertical-align:middle}
           th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+          thead{display:table-header-group}
+          tfoot{display:table-row-group}
+          tr{break-inside:avoid;page-break-inside:avoid}
           thead th{font-weight:700}
           .sewing-registry-date span,.sewing-registry-date small{display:block;line-height:1.1}
           .sewing-registry-date small{font-size:9px;font-weight:400}
           .sewing-registry-employee th{text-align:left;background:#eee}
           .sewing-registry-total th,tfoot th{background:#f7f7f7}
+          .sewing-registry-share-total th{background:#fff36a}
           @page{size:landscape;margin:10mm}
         </style>
       </head>
@@ -985,8 +991,10 @@ function printHtmlDocument(content, title) {
 }
 
 function sewingRegistryDate(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return '-';
-  return new Date(`${date}T00:00:00`).toLocaleDateString('en-PH', { day: '2-digit', month: 'short' });
+  const match = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '-';
+  const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return parsed.toLocaleDateString('en-PH', { day: '2-digit', month: 'short', timeZone: 'UTC' });
 }
 
 function registryNumber(value) {
@@ -1000,6 +1008,14 @@ function reportPeso(value) {
   return `PHP ${(Number.isFinite(number) ? number : 0).toLocaleString('en-PH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
+  })}`;
+}
+
+function reportPieceRate(value) {
+  const number = Number(value);
+  return `PHP ${(Number.isFinite(number) ? number : 0).toLocaleString('en-PH', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
   })}`;
 }
 

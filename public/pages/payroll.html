@@ -319,7 +319,7 @@
         <label>Worker 2 Share<span class="salary-readonly" id="salary-piece-worker2-share">0%</span></label>
         <label>Worker 2 Earnings<span class="salary-readonly" id="salary-piece-worker2-earnings">PHP 0.00</span></label>
         <label>Final Salary<span class="salary-readonly" id="salary-piece-final">PHP 0.00</span></label>
-        <label hidden>Piece Rate<span class="salary-readonly" id="salary-piece-rate-view">PHP 0.00</span></label>
+        <label hidden>Piece Rate<span class="salary-readonly" id="salary-piece-rate-view">PHP 0.0000</span></label>
         <label hidden>Quota Incentive View<span class="salary-readonly" id="salary-quota-view">PHP 0.00</span></label>
         <label hidden>Sunday Work Incentive View<span class="salary-readonly" id="salary-sunday-view">PHP 0.00</span></label>
         <label hidden>Sewing Type Incentive View<span class="salary-readonly" id="salary-special-view">PHP 0.00</span></label>
@@ -542,7 +542,7 @@
         <input type="hidden" name="id" />
         <label>Type of Sew<select name="sew_type_code" id="rate-sew-type" required><option value="">Select type</option></select></label>
         <label>Size Range<select name="size_range" id="rate-size-range" required><option value="">Select size range</option></select></label>
-        <label>Rate<input name="piece_rate" type="number" min="0.0001" step="0.0001" required /></label>
+        <label>Rate<input name="piece_rate" type="number" min="0.0001" max="99999999.9999" step="0.0001" placeholder="0.0000" required /></label>
         <label>Effective Date<input name="effective_date" type="date" required /></label>
         <label>Status<select name="is_active" required><option value="1">Active</option><option value="0">Inactive</option></select></label>
         <div class="payroll-form-actions"><button class="btn btn-outline" type="reset">Clear</button><button class="btn btn-primary" type="submit">Save Rate</button></div>
