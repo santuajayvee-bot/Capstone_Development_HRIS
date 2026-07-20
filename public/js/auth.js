@@ -9,7 +9,7 @@ const ROLE_PERMISSIONS = {
   ],
   hr_admin: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
+    'attendance', 'performance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
@@ -54,6 +54,7 @@ const NAV_CONFIG = {
     { page: 'organization-setup', icon: 'bi-diagram-3', label: 'Organization Setup' },
     { page: 'leave', icon: 'bi-calendar-check', label: 'Leave Management' },
     { page: 'attendance', icon: 'bi-clock-history', label: 'Attendance' },
+    { page: 'performance', icon: 'bi-file-earmark-bar-graph', label: 'Performance' },
     { page: 'reports', icon: 'bi-file-earmark-bar-graph', label: 'Reports' },
     { page: 'onboarding', icon: 'bi-person-plus', label: 'On-Boarding' },
     { page: 'blockchain', icon: 'bi-shield-check', label: 'Blockchain' },
@@ -120,7 +121,7 @@ const PAGE_ROLE_ALLOWLIST = {
   'organization-setup': new Set(['hr_admin', 'hr_manager']),
   register: new Set(['hr_admin', 'hr_manager']),
   onboarding: new Set(['hr_admin', 'hr_manager']),
-  performance: new Set(['hr_manager', 'employee']),
+  performance: new Set(['hr_admin', 'hr_manager', 'employee']),
   attendance: new Set(['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager', 'manager', 'employee']),
   payroll: new Set(['payroll_officer', 'payroll_manager']),
   reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
@@ -132,18 +133,22 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'lgsv_sidebar_collapsed';
 
 const ROLE_ALIASES = {
   administrator: 'system_admin',
-  admin: 'admin',
+  admin: 'system_admin',
+  system_administrator: 'system_admin',
   employee: 'employee',
   regular_employee: 'employee',
   regular: 'employee',
   worker: 'employee',
-  hr: 'hr_admin',
-  hradmin: 'hr_admin',
-  hr_admin: 'hr_admin',
+  hr: 'hr_manager',
+  hradmin: 'hr_manager',
+  hr_admin: 'hr_manager',
+  human_resources: 'hr_manager',
   hr_manager: 'hr_manager',
-  manager: 'manager',
+  manager: 'hr_manager',
   payroll: 'payroll_officer',
+  payrollofficer: 'payroll_officer',
   payroll_officer: 'payroll_officer',
+  payrollmanager: 'payroll_manager',
   payroll_manager: 'payroll_manager',
   system_admin: 'system_admin',
   sys_admin: 'system_admin',
@@ -160,7 +165,11 @@ function normalizeClientRole(role) {
 
 function normalizeClientUser(user = null) {
   if (!user) return null;
-  return { ...user, role: normalizeClientRole(user.role || user.roleName || user.role_label || user.roleLabel) };
+  const role = normalizeClientRole(user.role || user.roleName || user.role_label || user.roleLabel);
+  const sourceRole = normalizeClientRole(user.sourceRole || role);
+  // The API is authoritative. Never preserve a contradictory browser-side
+  // source role that could make navigation disagree with the authenticated role.
+  return { ...user, role, sourceRole: sourceRole === role ? sourceRole : role };
 }
 
 function escapeHtml(value = '') {
@@ -264,6 +273,7 @@ function saveAuth(token, user, sessionBinding) {
   sessionStorage.setItem('vp_session_binding', sessionBinding);
   sessionStorage.setItem('vp_user', JSON.stringify(normalizedUser));
   applyUserRoleToDocument(normalizedUser);
+  return normalizedUser;
 }
 
 function getToken() {
@@ -279,7 +289,7 @@ const authReady = new Promise(resolve => {
   resolveAuthReady = resolve;
 });
 
-async function refreshAuthenticatedIdentity() {
+async function refreshAuthenticatedIdentity({ reconcileUi = true } = {}) {
   if (!getToken() || !getSessionBinding()) {
     clearAuth();
     return null;
@@ -290,6 +300,7 @@ async function refreshAuthenticatedIdentity() {
     if (!response?.ok) return null;
 
     const data = await response.json();
+    const previousUser = getUser();
     const user = normalizeClientUser(data?.user);
     if (!user?.id) {
       clearAuth();
@@ -298,6 +309,13 @@ async function refreshAuthenticatedIdentity() {
 
     sessionStorage.setItem('vp_user', JSON.stringify(user));
     applyUserRoleToDocument(user);
+    if (reconcileUi && previousUser?.role && previousUser.role !== user.role) {
+      // A real administrator role change takes effect on the next identity
+      // refresh. Rebuild navigation once and re-run the route guard so an
+      // unauthorized active page cannot remain open.
+      buildSidebar(user);
+      if (typeof handleAppRoute === 'function') handleAppRoute({ replace: true });
+    }
     return user;
   } catch (error) {
     console.warn('Unable to validate the authenticated session.', error);
@@ -757,7 +775,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     if (isLoggedIn()) {
-      const user = await refreshAuthenticatedIdentity();
+      const user = await refreshAuthenticatedIdentity({ reconcileUi: false });
       if (!user) return;
 
       document.getElementById('login-screen').style.display = 'none';

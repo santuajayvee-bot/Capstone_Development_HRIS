@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { revokeSessionByJwtId } = require('../db/authQueries');
 const { hashSessionBindingSecret } = require('../services/tokenService');
+const { normalizeRole } = require('./utils/role-normalization');
 const { auditSecurityEvent } = require('./security-controls');
 const {
   getLinkedEmployeeProfile,
@@ -41,26 +42,6 @@ function isNonEmptyString(value) {
 }
 
 // ── Role hierarchy ───────────────────────────────────────────
-// Support both old role names (for backward compatibility with existing tokens) and new names
-const ROLE_ALIASES = {
-  'admin': 'system_admin',
-  'system_admin': 'system_admin',
-  'system_administrator': 'system_admin',
-  'hr': 'hr_manager',
-  'hradmin': 'hr_manager',
-  'hr_admin': 'hr_manager',
-  'hr_manager': 'hr_manager',
-  'human_resources': 'hr_manager',
-  'payroll': 'payroll_officer',
-  'payrollofficer': 'payroll_officer',
-  'payroll_officer': 'payroll_officer',
-  'payrollmanager': 'payroll_manager',
-  'payroll_manager': 'payroll_manager',
-  'it_staff': 'it_staff',
-  'manager': 'hr_manager',
-  'employee': 'employee'
-};
-
 const ROLES = {
   system_admin:    ['system_admin', 'admin'],
   hr_admin:        ['hr_manager', 'hr_admin'],
@@ -102,30 +83,6 @@ const CLIENT_AUTHORITY_FIELDS = new Set([
   'token_version',
   'user_type',
 ]);
-
-function normalizeRole(role) {
-  const key = String(role || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_');
-  const compact = key.replace(/_/g, '');
-  const withoutParenthetical = key.replace(/_*\([^)]*\)/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
-  const withoutLevelSuffix = key.replace(/_*\(?level_?\d+\)?/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
-  const candidates = [
-    key,
-    compact,
-    withoutParenthetical,
-    withoutParenthetical.replace(/_/g, ''),
-    withoutLevelSuffix,
-    withoutLevelSuffix.replace(/_/g, ''),
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (ROLE_ALIASES[candidate]) return ROLE_ALIASES[candidate];
-  }
-
-  return key || 'employee';
-}
 
 function normalizeAllowedRoles(allowedRoles) {
   return [...new Set((Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles]).map(normalizeRole))];
@@ -332,7 +289,9 @@ async function requireAuth(req, res, next) {
       id: accountState.user_id,
       username: accountState.username,
       role,
-      sourceRole: String(accountState.role_name || '').trim().toLowerCase(),
+      // Keep protected-module consumers (including Performance Management)
+      // aligned with the canonical database-backed application identity.
+      sourceRole: role,
       roleLabel: accountState.role_label,
       roleId: accountState.role_id,
       accessLevel: accountState.access_level,
@@ -490,4 +449,4 @@ function requireSelf(req, res, next) {
   next();
 }
 
-module.exports = { hasPermission, requireAuth, requirePermission, requireRole, requireSelf, ROLES };
+module.exports = { hasPermission, normalizeRole, requireAuth, requirePermission, requireRole, requireSelf, ROLES };

@@ -53,6 +53,7 @@ const {
   updateSessionStatus: updateDeviceSessionStatus,
 } = require('../services/trustedDeviceService');
 const { auditSecurityEvent } = require('../server/security-controls');
+const { normalizeRole } = require('../server/utils/role-normalization');
 const INVALID_LOGIN_MESSAGE = 'Invalid email or password.';
 const LOCKED_ACCOUNT_MESSAGE = 'Account temporarily locked. Please try again later.';
 const MISCONFIGURED_ACCOUNT_MESSAGE = 'Account is not fully configured. Please contact your administrator.';
@@ -117,12 +118,6 @@ function getAuthEmployeeId(user) {
   return user?.Employee_ID || user?.employee_table_id || null;
 }
 
-function normalizeRoleName(roleName) {
-  if (roleName === 'admin') return 'system_admin';
-  if (roleName === 'manager') return 'hr_manager';
-  return roleName || 'employee';
-}
-
 function getDefaultRoleLabel(roleName) {
   const labels = {
     system_admin: 'System Administrator (Level 4)',
@@ -136,7 +131,7 @@ function getDefaultRoleLabel(roleName) {
 }
 
 async function buildAuthenticatedUser(user) {
-  const role = normalizeRoleName(user.role_name);
+  const role = normalizeRole(user.role_name || user.role);
   const employeeId = user.employee_table_id || user.Employee_ID;
   const permissions = await getUserPermissions(user.id, role);
   const employeeProfile = await getLinkedEmployeeProfile(employeeId);
@@ -146,6 +141,7 @@ async function buildAuthenticatedUser(user) {
     id: user.id,
     username: user.username || user.Email,
     role,
+    sourceRole: role,
     roleLabel: user.role_label || getDefaultRoleLabel(role),
     employeeId,
     Employee_ID: user.Employee_ID,
@@ -885,4 +881,5 @@ module.exports = {
   verifyMfa,
   resendMfa,
   lockoutStatus,
+  normalizeRoleName: normalizeRole,
 };

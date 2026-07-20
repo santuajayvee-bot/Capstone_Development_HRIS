@@ -10,11 +10,13 @@ const {
   getUserPermissions,
   getLinkedEmployeeProfile,
 } = require('./users');
+const { normalizeRole } = require('./utils/role-normalization');
 const JWT_SECRET  = process.env.JWT_SECRET;
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '8h';
 
 /**
- * POST /api/auth/login
+ * Legacy POST /api/auth/login handler retained for compatibility. Active
+ * login, MFA, and device-approval routes are mounted from authController.
  * Body: { username, password }
  * Returns: { token, user: { id, username, role, roleLabel, employeeId } }
  */
@@ -143,17 +145,15 @@ async function login(req, res) {
       // Columns may not exist — continue
     }
 
-    const permissions = await getUserPermissions(user.id, user.role);
+    const effectiveRole = normalizeRole(user.role || user.role_name);
+    const permissions = await getUserPermissions(user.id, effectiveRole);
     const employeeProfile = await getLinkedEmployeeProfile(user.employee_id);
 
     // 6. Sign JWT
-    const effectiveRole = user.role === 'hr_admin' || user.role === 'manager'
-      ? 'hr_manager'
-      : user.role === 'admin'
-        ? 'system_admin'
-        : user.role;
     const effectiveRoleLabel = effectiveRole === 'hr_manager'
       ? 'HR Manager (Level 2)'
+      : effectiveRole === 'hr_admin'
+        ? 'HR Admin (Level 2)'
       : effectiveRole === 'system_admin'
         ? 'System Administrator (Level 4)'
       : user.role_label;
@@ -162,6 +162,7 @@ async function login(req, res) {
       id:         user.id,
       username:   user.username,
       role:       effectiveRole,
+      sourceRole: effectiveRole,
       roleLabel:  effectiveRoleLabel,
       employeeId: user.employee_id,
       permissions,

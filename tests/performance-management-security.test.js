@@ -14,6 +14,7 @@ function read(relativePath) {
 
 const api = read('server/performance-management.js');
 const server = read('server.js');
+const middleware = read('server/middleware.js');
 const ui = read('public/js/performance.js');
 const authUi = read('public/js/auth.js');
 const indexPage = read('public/index.html');
@@ -74,7 +75,10 @@ assert(page.includes('Rating Guide') && page.includes('Passing score: 2.50'));
 assert(page.includes('4</strong> Excellent') && page.includes('1</strong> Unsatisfactory'));
 assert(page.includes('HR Rating (1-4)') && page.includes('HR Remarks'));
 assert(!page.includes('Employee Comments') && !page.includes('Acknowledgement Comments'));
-assert(authUi.includes("performance: new Set(['hr_manager', 'employee'])"));
+assert(authUi.includes("performance: new Set(['hr_admin', 'hr_manager', 'employee'])"));
+assert(authUi.includes("hr_admin: 'hr_manager'") && authUi.includes("hr_manager: 'hr_manager'"));
+assert(authUi.includes("manager: 'hr_manager'"));
+assert(middleware.includes("require('./utils/role-normalization')"));
 assert(ui.includes("return performanceRole() === 'hr_manager'"));
 assert(!ui.includes('savePerformanceSelfAssessment') && !ui.includes('acknowledgePerformanceReview'));
 assert(ui.includes('loadPerformanceDepartments') && ui.includes('renderPerformancePagination'));

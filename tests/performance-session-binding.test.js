@@ -207,6 +207,20 @@ async function invokeOverview(req) {
   return result;
 }
 
+async function invokePerformanceAccess(req) {
+  const accessLayer = performanceRouter.stack.find(layer =>
+    layer.name === 'requirePerformanceAccess' || layer.handle?.name === 'requirePerformanceAccess'
+  );
+  assert(accessLayer, 'Expected exact Performance access guard.');
+  const result = { next: false, statusCode: null, body: null };
+  const res = {
+    status(code) { result.statusCode = code; return this; },
+    json(payload) { result.body = payload; return this; },
+  };
+  await accessLayer.handle(req, res, () => { result.next = true; });
+  return result;
+}
+
 (async () => {
   // Real requireAuth execution: the Performance route's first middleware sees
   // a valid bound session and forwards the request instead of returning 401.
@@ -237,6 +251,15 @@ async function invokeOverview(req) {
   assert.strictEqual(result.req.user.sourceRole, 'employee');
   const employeeOverview = await invokeOverview(result.req);
   assert.strictEqual(employeeOverview.statusCode, 200, 'A valid employee request must reach the real Performance overview handler.');
+
+  activeRole = 'hr_admin';
+  result = await invokeAuth(activeBinding);
+  assert.strictEqual(result.next, true);
+  assert.strictEqual(result.req.user.role, 'hr_manager');
+  assert.strictEqual(result.req.user.sourceRole, 'hr_manager');
+  const hrAdminAccess = await invokePerformanceAccess(result.req);
+  assert.strictEqual(hrAdminAccess.statusCode, null, 'HR Admin must have the same Performance access as HR Manager.');
+  assert.strictEqual(hrAdminAccess.next, true);
 
   // A wrong step-up password is operation denial, not primary-session expiry.
   revokeCount = 0;

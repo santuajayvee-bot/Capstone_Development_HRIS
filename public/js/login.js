@@ -281,35 +281,36 @@ async function completeAuthenticatedLogin(data, options = {}) {
   stopLockoutCountdown();
   stopDeviceApprovalPolling();
 
-  saveAuth(data.accessToken || data.token, data.user, data.sessionBinding);
+  const authenticatedUser = saveAuth(data.accessToken || data.token, data.user, data.sessionBinding);
+  const authenticatedData = { ...data, user: authenticatedUser };
 
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
 
-  if (!options.skipDpaGate && typeof requiresDpaGate === 'function' && requiresDpaGate(data.user)) {
+  if (!options.skipDpaGate && typeof requiresDpaGate === 'function' && requiresDpaGate(authenticatedUser)) {
     if (typeof showDpaAgreementGate === 'function') {
       showDpaAgreementGate({
         afterAccept: () => {
-          const acceptedUser = typeof getUser === 'function' ? getUser() : data.user;
-          completeAuthenticatedLogin({ ...data, user: acceptedUser }, { skipDpaGate: true });
+          const acceptedUser = typeof getUser === 'function' ? getUser() : authenticatedUser;
+          completeAuthenticatedLogin({ ...authenticatedData, user: acceptedUser }, { skipDpaGate: true });
         },
       });
       return;
     }
   }
 
-  buildSidebar(data.user);
+  buildSidebar(authenticatedUser);
 
   if (typeof initAttendanceRealtime === 'function') {
     initAttendanceRealtime();
   }
 
-  const passwordChangeRequired = data.mustChangePassword || data.user?.mustChangePassword || data.user?.forcePasswordChange;
-  if (!passwordChangeRequired && data.promptRegisterTrustedDevice && typeof promptRegisterTrustedDeviceAfterLogin === 'function') {
+  const passwordChangeRequired = authenticatedData.mustChangePassword || authenticatedUser?.mustChangePassword || authenticatedUser?.forcePasswordChange;
+  if (!passwordChangeRequired && authenticatedData.promptRegisterTrustedDevice && typeof promptRegisterTrustedDeviceAfterLogin === 'function') {
     promptRegisterTrustedDeviceAfterLogin();
   }
 
-  continueAuthenticatedNavigation(data);
+  continueAuthenticatedNavigation(authenticatedData);
 }
 
 function setLoginStep(mfaRequired) {
