@@ -74,6 +74,11 @@ const DEFAULT_MODULE_SOURCE_MAP = Object.freeze({
   leave: [
     'server.js', 'public/js/leave.js', 'public/pages/leave.html', 'public/css/leave.css',
   ],
+  performance: [
+    'server.js', 'server/performance-management.js', 'public/js/performance.js',
+    'public/pages/performance.html', 'public/css/performance.css',
+    'migrations/20260718110000-performance-management.js',
+  ],
   operational_logs: [
     'server.js', 'public/js/logistics-payroll.js', 'public/js/payroll.js',
     'public/pages/payroll.html', 'public/css/main.css',

@@ -1,0 +1,168 @@
+<div class="performance-shell">
+  <div class="performance-header">
+    <div>
+      <h2>Performance Management</h2>
+      <p id="performance-page-copy">Employee appraisals and development plans</p>
+    </div>
+    <div class="performance-header-actions" id="performance-manager-actions" hidden>
+      <button class="btn btn-outline btn-sm" type="button" onclick="openPerformanceCycleModal()">New Cycle</button>
+      <button class="btn btn-primary btn-sm" type="button" onclick="openPerformanceAssignmentModal()">Assign Review</button>
+    </div>
+  </div>
+
+  <div class="performance-metrics" aria-label="Performance summary">
+    <div class="performance-metric"><span>Total Reviews</span><strong id="performance-stat-total">0</strong></div>
+    <div class="performance-metric"><span>In Progress</span><strong id="performance-stat-progress">0</strong></div>
+    <div class="performance-metric"><span>Finalized</span><strong id="performance-stat-finalized">0</strong></div>
+    <div class="performance-metric"><span>Passed</span><strong id="performance-stat-passed">0</strong></div>
+    <div class="performance-metric"><span>Needs Follow-up</span><strong id="performance-stat-follow-up">0</strong></div>
+  </div>
+
+  <section class="performance-policy" aria-labelledby="performance-policy-title">
+    <div class="performance-policy-heading">
+      <h3 id="performance-policy-title">Rating Guide</h3>
+      <span>Passing score: 2.50</span>
+    </div>
+    <div class="performance-policy-bands">
+      <div class="excellent"><strong>3.50-4.00</strong><span>Excellent</span></div>
+      <div class="satisfactory"><strong>2.50-3.49</strong><span>Satisfactory</span></div>
+      <div class="needs-improvement"><strong>1.50-2.49</strong><span>Needs Improvement</span></div>
+      <div class="unsatisfactory"><strong>1.00-1.49</strong><span>Unsatisfactory</span></div>
+    </div>
+    <div class="performance-criteria-weights">
+      <span><strong>4</strong> Excellent</span><span><strong>3</strong> Satisfactory</span>
+      <span><strong>2</strong> Needs Improvement</span><span><strong>1</strong> Unsatisfactory</span>
+    </div>
+  </section>
+
+  <section class="performance-section" id="performance-cycles-section">
+    <div class="performance-section-heading">
+      <div>
+        <h3>Appraisal Cycles</h3>
+        <p>Current and previous review periods</p>
+      </div>
+    </div>
+    <div class="table-wrap" data-no-pagination="1">
+      <table class="performance-table" data-no-pagination="1">
+        <thead><tr><th>Cycle</th><th>Review Period</th><th>Due Date</th><th>Progress</th><th>Status</th><th id="performance-cycle-actions-heading">Action</th></tr></thead>
+        <tbody id="performance-cycles-body"><tr><td colspan="6" class="performance-empty">Loading cycles...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="performance-section">
+    <div class="performance-section-heading performance-review-heading">
+      <div>
+        <h3 id="performance-reviews-title">Performance Reviews</h3>
+        <p id="performance-reviews-copy">Appraisal records by cycle and workflow status</p>
+      </div>
+      <div class="performance-filters">
+        <select id="performance-cycle-filter" aria-label="Filter by cycle" onchange="resetPerformanceReviewPage()">
+          <option value="">All Cycles</option>
+        </select>
+        <select id="performance-department-filter" aria-label="Filter by department" onchange="resetPerformanceReviewPage()">
+          <option value="">All Departments</option>
+        </select>
+        <select id="performance-status-filter" aria-label="Filter by status" onchange="resetPerformanceReviewPage()">
+          <option value="">All Statuses</option>
+          <option value="ASSIGNED">In Progress</option>
+          <option value="FINALIZED">Finalized</option>
+        </select>
+        <input id="performance-search" type="search" maxlength="80" placeholder="Search employee..." onkeydown="if(event.key==='Enter') resetPerformanceReviewPage()" />
+        <select id="performance-page-size" aria-label="Rows per page" onchange="resetPerformanceReviewPage()">
+          <option value="10">10 rows</option><option value="20">20 rows</option><option value="50">50 rows</option>
+        </select>
+        <button class="btn btn-outline btn-sm" type="button" onclick="resetPerformanceReviewPage()">Refresh</button>
+      </div>
+    </div>
+    <div class="table-wrap" data-no-pagination="1">
+      <table class="performance-table performance-review-table" data-no-pagination="1">
+        <thead><tr><th>Employee</th><th>Cycle</th><th>Department</th><th>Due Date</th><th>Score</th><th>Integrity</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="performance-reviews-body"><tr><td colspan="8" class="performance-empty">Loading reviews...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="performance-pagination" id="performance-pagination" hidden>
+      <span id="performance-pagination-summary"></span>
+      <div>
+        <button type="button" id="performance-page-previous" class="performance-page-button" onclick="changePerformanceReviewPage(-1)" aria-label="Previous page" title="Previous page"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+        <strong id="performance-pagination-page">Page 1 of 1</strong>
+        <button type="button" id="performance-page-next" class="performance-page-button" onclick="changePerformanceReviewPage(1)" aria-label="Next page" title="Next page"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="performance-modal" id="performance-cycle-modal" hidden>
+  <div class="performance-dialog performance-dialog-sm" role="dialog" aria-modal="true" aria-labelledby="performance-cycle-title">
+    <div class="performance-dialog-head"><h3 id="performance-cycle-title">Create Appraisal Cycle</h3><button type="button" class="performance-close" onclick="closePerformanceModal('performance-cycle-modal')" aria-label="Close">&times;</button></div>
+    <form id="performance-cycle-form" class="performance-form" onsubmit="submitPerformanceCycle(event)">
+      <label>Cycle Name<input id="performance-cycle-name" maxlength="160" required placeholder="2026 Midyear Review" /></label>
+      <div class="performance-form-grid">
+        <label>Period Start<input id="performance-cycle-start" type="date" required /></label>
+        <label>Period End<input id="performance-cycle-end" type="date" required /></label>
+        <label>Due Date<input id="performance-cycle-due" type="date" required /></label>
+      </div>
+      <label>Description<textarea id="performance-cycle-description" maxlength="2000" rows="3"></textarea></label>
+      <div class="performance-dialog-actions"><button type="button" class="btn btn-outline" onclick="closePerformanceModal('performance-cycle-modal')">Cancel</button><button type="submit" class="btn btn-primary">Create Cycle</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="performance-modal" id="performance-assignment-modal" hidden>
+  <div class="performance-dialog" role="dialog" aria-modal="true" aria-labelledby="performance-assignment-title">
+    <div class="performance-dialog-head"><h3 id="performance-assignment-title">Assign Performance Review</h3><button type="button" class="performance-close" onclick="closePerformanceModal('performance-assignment-modal')" aria-label="Close">&times;</button></div>
+    <form id="performance-assignment-form" class="performance-form" onsubmit="submitPerformanceAssignment(event)">
+      <div class="performance-form-grid performance-assignment-fields">
+        <label>Appraisal Cycle<select id="performance-assignment-cycle" required></select></label>
+        <label>Department<select id="performance-assignment-department" onchange="filterPerformanceAssignmentEmployees()"><option value="">All Departments</option></select></label>
+        <label>Employee<select id="performance-assignment-employee" required></select></label>
+      </div>
+      <div class="performance-goal-editor">
+        <div class="performance-inline-heading"><h4>Goals and Targets</h4><button type="button" class="btn btn-outline btn-sm" onclick="addPerformanceGoalRow()">Add Goal</button></div>
+        <div id="performance-assignment-goals"></div>
+      </div>
+      <div class="performance-dialog-actions"><button type="button" class="btn btn-outline" onclick="closePerformanceModal('performance-assignment-modal')">Cancel</button><button type="submit" class="btn btn-primary">Assign Review</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="performance-modal" id="performance-review-modal" hidden>
+  <div class="performance-dialog performance-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="performance-review-dialog-title">
+    <div class="performance-dialog-head">
+      <div class="performance-review-identity">
+        <div class="performance-review-photo" id="performance-review-photo" aria-hidden="true">--</div>
+        <div><h3 id="performance-review-dialog-title">Performance Review</h3><p id="performance-review-dialog-subtitle"></p></div>
+      </div>
+      <button type="button" class="performance-close" onclick="closePerformanceModal('performance-review-modal')" aria-label="Close">&times;</button>
+    </div>
+    <div id="performance-integrity-alert" class="performance-integrity-alert" hidden></div>
+    <div id="performance-outcome-alert" class="performance-outcome-alert" hidden></div>
+    <div class="performance-review-meta" id="performance-review-meta"></div>
+    <div class="performance-review-body">
+      <div class="performance-rating-head"><span>Evaluation Indicator</span><span>HR Rating (1-4)</span></div>
+      <div id="performance-rating-grid"></div>
+      <div id="performance-rating-summary" class="performance-rating-summary"></div>
+      <div class="performance-goal-editor">
+        <div class="performance-inline-heading"><h4>Goals and Targets</h4><button id="performance-review-add-goal" type="button" class="btn btn-outline btn-sm" onclick="addPerformanceReviewGoalRow()">Add Goal</button></div>
+        <div id="performance-review-goals"></div>
+      </div>
+      <div class="performance-narratives">
+        <label>HR Remarks<textarea id="performance-reviewer-feedback" rows="4" maxlength="5000"></textarea></label>
+        <label>Recommendation / Development Plan<textarea id="performance-development-plan" rows="4" maxlength="5000"></textarea></label>
+      </div>
+    </div>
+    <div class="performance-dialog-actions" id="performance-review-actions"></div>
+  </div>
+</div>
+
+<div class="performance-modal" id="performance-step-up-modal" hidden>
+  <div class="performance-dialog performance-dialog-xs" role="dialog" aria-modal="true" aria-labelledby="performance-step-up-title">
+    <div class="performance-dialog-head"><h3 id="performance-step-up-title">Confirm Identity</h3><button type="button" class="performance-close" onclick="resolvePerformanceStepUp(null)" aria-label="Close">&times;</button></div>
+    <form class="performance-form" onsubmit="submitPerformanceStepUp(event)">
+      <p id="performance-step-up-message">Enter your current password to continue.</p>
+      <label>Current Password<input id="performance-step-up-password" type="password" autocomplete="current-password" required /></label>
+      <label id="performance-step-up-reason-wrap" hidden>Reason<textarea id="performance-step-up-reason" rows="3" maxlength="1000"></textarea></label>
+      <div class="performance-dialog-actions"><button type="button" class="btn btn-outline" onclick="resolvePerformanceStepUp(null)">Cancel</button><button type="submit" class="btn btn-primary">Confirm</button></div>
+    </form>
+  </div>
+</div>

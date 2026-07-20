@@ -13,7 +13,7 @@ const ROLE_PERMISSIONS = {
   ],
   hr_manager: [
     'dashboard', 'employees', 'organization-setup', 'register', 'leave',
-    'attendance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
+    'attendance', 'performance', 'reports', 'onboarding', 'blockchain', 'employee-profile', 'self-service',
   ],
   system_admin: [
     'dashboard', 'system-admin', 'attendance', 'blockchain', 'self-service',
@@ -28,7 +28,7 @@ const ROLE_PERMISSIONS = {
     'dashboard', 'attendance', 'leave', 'reports', 'self-service',
   ],
   employee: [
-    'employee-dashboard', 'requests', 'attendance', 'leave', 'employee-profile', 'self-service',
+    'employee-dashboard', 'requests', 'attendance', 'leave', 'performance', 'employee-profile', 'self-service',
   ],
 };
 
@@ -64,6 +64,7 @@ const NAV_CONFIG = {
     { page: 'organization-setup', icon: 'bi-diagram-3', label: 'Organization Setup' },
     { page: 'leave', icon: 'bi-calendar-check', label: 'Leave Management' },
     { page: 'attendance', icon: 'bi-clock-history', label: 'Attendance' },
+    { page: 'performance', icon: 'bi-file-earmark-bar-graph', label: 'Performance' },
     { page: 'reports', icon: 'bi-file-earmark-bar-graph', label: 'Reports' },
     { page: 'onboarding', icon: 'bi-person-plus', label: 'On-Boarding' },
     { page: 'blockchain', icon: 'bi-shield-check', label: 'Blockchain' },
@@ -100,6 +101,7 @@ const NAV_CONFIG = {
     { page: 'employee-dashboard', tab: 'payslips', icon: 'bi-receipt', label: 'My Payslips' },
     { page: 'requests', icon: 'bi-inbox', label: 'My Requests' },
     { page: 'attendance', icon: 'bi-clock-history', label: 'My Attendance' },
+    { page: 'performance', icon: 'bi-file-earmark-bar-graph', label: 'My Performance' },
   ],
 };
 
@@ -108,6 +110,7 @@ const EMPLOYEE_ALLOWED_PAGES = new Set([
   'requests',
   'attendance',
   'leave',
+  'performance',
   'self-service',
 ]);
 
@@ -117,6 +120,7 @@ const PAGE_ROLE_ALLOWLIST = {
   'organization-setup': new Set(['hr_admin', 'hr_manager']),
   register: new Set(['hr_admin', 'hr_manager']),
   onboarding: new Set(['hr_admin', 'hr_manager']),
+  performance: new Set(['hr_manager', 'employee']),
   attendance: new Set(['admin', 'hr_admin', 'hr_manager', 'system_admin', 'payroll_officer', 'payroll_manager', 'manager', 'employee']),
   payroll: new Set(['payroll_officer', 'payroll_manager']),
   reports: new Set(['hr_admin', 'hr_manager', 'payroll_officer', 'payroll_manager']),
@@ -226,6 +230,8 @@ function setSidebarCollapsed(collapsed, options = {}) {
     toggle.setAttribute('aria-expanded', String(!isCollapsed));
     toggle.setAttribute('aria-label', isCollapsed ? 'Open sidebar' : 'Collapse sidebar');
     toggle.title = isCollapsed ? 'Open sidebar' : 'Collapse sidebar';
+    const icon = toggle.querySelector('.sidebar-collapse-toggle-icon');
+    if (icon) icon.textContent = isCollapsed ? '\u203a' : '\u2039';
   }
 }
 
@@ -628,6 +634,7 @@ function canAccess(pageId) {
     'self-service': [],
     attendance: ['attendance.view', 'attendance.manage'],
     leave: ['leave.request.create', 'leave.request.approve', 'leave.request.view_all', 'leave.request.view_own'],
+    performance: [],
     payroll: ['payroll.view', 'payroll.calculate', 'payroll.settings.manage', 'payroll.approve'],
     reports: ['report.view', 'payroll.report.view', 'leave.report.view'],
     onboarding: ['employee.manage'],

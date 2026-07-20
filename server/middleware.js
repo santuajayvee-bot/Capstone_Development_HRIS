@@ -295,6 +295,7 @@ async function requireAuth(req, res, next) {
       id: accountState.user_id,
       username: accountState.username,
       role,
+      sourceRole: String(accountState.role_name || '').trim().toLowerCase(),
       roleLabel: accountState.role_label,
       roleId: accountState.role_id,
       accessLevel: accountState.access_level,

@@ -71,7 +71,8 @@ async function reloadAttendanceRealtimeSurfaces(forceDashboard = true, options =
       if (typeof loadBiometricAttendanceStatus === 'function') refreshTasks.push(loadBiometricAttendanceStatus());
       if (typeof loadOverviewStats === 'function') refreshTasks.push(loadOverviewStats());
       if (typeof loadMySummary === 'function') refreshTasks.push(loadMySummary());
-      if (typeof loadAttRecords === 'function') refreshTasks.push(loadAttRecords());
+      const recordMenuOpen = typeof hasOpenAttendanceActionMenu === 'function' && hasOpenAttendanceActionMenu();
+      if (typeof loadAttRecords === 'function' && !recordMenuOpen) refreshTasks.push(loadAttRecords());
       if (typeof loadBiometricEvents === 'function') refreshTasks.push(loadBiometricEvents());
       if (typeof loadBiometricExceptions === 'function') refreshTasks.push(loadBiometricExceptions());
     }

@@ -59,6 +59,15 @@ const authenticationSecret = validate({ password: '  Exact password value  ' });
 assert.strictEqual(authenticationSecret.nextCalled, true);
 assert.strictEqual(authenticationSecret.req.body.password, '  Exact password value  ');
 
+const authenticationSecretWithInjectionMarkers = validate({
+  password: 'Valid#Secret--With\'OR1=1<script>',
+});
+assert.strictEqual(authenticationSecretWithInjectionMarkers.nextCalled, true);
+assert.strictEqual(
+  authenticationSecretWithInjectionMarkers.req.body.password,
+  'Valid#Secret--With\'OR1=1<script>'
+);
+
 const invalidName = validate({ first_name: 'Juan123' });
 assertFieldError(invalidName, 'first_name', NAME_MESSAGE);
 

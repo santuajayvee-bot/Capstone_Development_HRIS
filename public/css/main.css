@@ -136,23 +136,15 @@ body *:not(code):not(pre) {
   outline: none;
 }
 .sidebar-collapse-toggle-icon {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-.sidebar-collapse-toggle-icon::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-  transition: transform .18s ease;
-}
-body.sidebar-collapsed .sidebar-collapse-toggle-icon::before {
-  transform: rotate(225deg);
+  font-family: Arial, sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
 }
 body.sidebar-collapsed .sidebar-collapse-toggle {
   right: -13px;

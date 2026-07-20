@@ -30,6 +30,12 @@
     'meal_allowance', 'transport_allowance', 'bonus_allowance', 'total_allowances', 'overtime_amount'
   ]);
   const EMAIL_FIELDS = new Set(['email', 'work_email', 'emergency_contact_email']);
+  const SECRET_FIELDS = new Set([
+    'password', 'current_password', 'new_password', 'confirm_password',
+    'temporary_password', 'mfa_token', 'otp_code', 'code',
+    'turnstile_token', 'cf_turnstile_response', 'captcha_token',
+    'g_recaptcha_response'
+  ]);
 
   function normalizeKey(value) {
     return String(value || '')
@@ -99,6 +105,11 @@
       || /\bon[a-z]+\s*=/i.test(value)
       || /\b(?:union\s+(?:all\s+)?select|drop\s+table|delete\s+from|insert\s+into|update\s+\w+\s+set|select\s+.+\s+from)\b/i.test(value)
       || /(?:'|\")\s*(?:or|and)\s+(?:'|\"|\d)/i.test(value);
+  }
+
+  function isSecretElement(element) {
+    return element?.type === 'password'
+      || SECRET_FIELDS.has(normalizeKey(element?.name || element?.id));
   }
 
   function fieldLabel(element) {
@@ -207,11 +218,14 @@
     if (element.closest('[hidden]') || element.offsetParent === null) return '';
     if (typeof element.value !== 'string') return '';
 
-    // Preserve a trailing space while typing so multi-word names remain enterable.
-    const value = element.value.trim();
-    if (commit && element.value !== value) element.value = value;
+    // Authentication secrets are opaque and must never be trimmed or scanned
+    // as display text. Server-side parameterized queries and Argon2 verification
+    // handle them without interpreting their contents as SQL or HTML.
+    const secret = isSecretElement(element);
+    const value = secret ? element.value : element.value.trim();
+    if (!secret && commit && element.value !== value) element.value = value;
     if (!value) return element.required ? withFieldLabel(element, 'This field is required.') : '';
-    if (unsafe(value)) return withFieldLabel(element, UNSAFE_MESSAGE);
+    if (!secret && unsafe(value)) return withFieldLabel(element, UNSAFE_MESSAGE);
 
     const type = fieldType(element);
     if (type === 'name' && !/^[\p{L}]+(?:[ '-][\p{L}]+)*$/u.test(value.replace(/\s+/g, ' '))) return withFieldLabel(element, NAME_MESSAGE);

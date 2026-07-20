@@ -37,6 +37,13 @@ assert(mfa.includes("crypto.createHmac('sha1'"), 'TOTP codes must be generated w
 assert(mfa.includes('MFA_TOTP_Secret_Encrypted'), 'TOTP secrets must be stored encrypted at rest.');
 assert(login.includes('mfa-qr-code'), 'The login client must support first-time TOTP QR enrollment.');
 assert(login.includes('captchaToken'), 'The login client must submit the reCAPTCHA token.');
+const suspiciousLoginDetector = login.match(/function detectSuspiciousLoginInput\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+assert(suspiciousLoginDetector.includes("getElementById('username')"), 'Login input screening must still inspect the username.');
+assert(!suspiciousLoginDetector.includes("getElementById('password')"), 'Login input screening must not reject valid password characters or patterns.');
+assert(
+  read('public/js/form-validation.js').includes("element?.type === 'password'"),
+  'Shared browser validation must preserve password inputs as opaque secrets.'
+);
 assert(login.includes('window.resetLoginFlow = resetLoginFlow'), 'The login client must expose a full login-flow reset helper.');
 assert(authClient.includes('window.resetLoginFlow()'), 'Logout must reset the login client back to the credential step.');
 assert(server.includes('https://www.google.com'), 'CSP must explicitly allow Google reCAPTCHA resources.');

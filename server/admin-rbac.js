@@ -715,6 +715,7 @@ const BACKUP_RECOVERY_MODULES = [
   { key: 'attendance', name: 'Attendance Management', data: true, files: false, config: true, rollback: true },
   { key: 'attendance_sync', name: 'Attendance Sync', data: true, files: false, config: true, rollback: true },
   { key: 'leave', name: 'Leave Management', data: true, files: false, config: true, rollback: true },
+  { key: 'performance', name: 'Performance Management', data: true, files: false, config: true, rollback: true },
   { key: 'payroll', name: 'Payroll Management', data: true, files: false, config: true, rollback: true },
   { key: 'payslip', name: 'Payslip Generation', data: true, files: true, config: true, rollback: true },
   { key: 'audit_trail', name: 'Audit Trail', data: true, files: false, config: true, rollback: false },

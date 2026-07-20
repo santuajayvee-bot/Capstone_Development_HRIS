@@ -97,9 +97,10 @@ function suspiciousLoginCategories(value) {
 }
 
 function detectSuspiciousLoginInput() {
+  // Passwords are opaque secrets and may legitimately contain SQL/XSS-like
+  // character sequences. Preserve them byte-for-byte for Argon2 verification.
   const fields = [
     { name: 'username', value: document.getElementById('username')?.value || '' },
-    { name: 'password', value: document.getElementById('password')?.value || '' },
   ];
   const findings = fields
     .map(field => ({ name: field.name, categories: suspiciousLoginCategories(field.value) }))

@@ -39,6 +39,7 @@ const MODULES = [
   ['attendance', 'Attendance Management', true],
   ['attendance_sync', 'Attendance Sync', true],
   ['leave', 'Leave Management', true],
+  ['performance', 'Performance Management', true],
   ['operational_logs', 'Operational Logs', true],
   ['payroll_settings', 'Payroll Settings', true],
   ['payroll', 'Payroll Management', true],

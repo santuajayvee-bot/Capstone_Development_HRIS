@@ -677,6 +677,10 @@ async function loadAttRecords() {
       count: ATT_RECORDS.length,
       first: ATT_RECORDS[0] || null,
     });
+
+    // Keep the current row interaction stable. The realtime poll can finish
+    // after a user opens the actions menu, so defer replacing its DOM row.
+    if (hasOpenAttendanceActionMenu()) return;
     renderAttRecords();
     populateAttendanceDepartmentFilter();
   } catch (err) {
@@ -948,6 +952,10 @@ function closeAttendanceActionMenus() {
     menu.style.removeProperty('top');
     menu.closest('.att-row-menu')?.querySelector('.att-menu-trigger')?.setAttribute('aria-expanded', 'false');
   });
+}
+
+function hasOpenAttendanceActionMenu() {
+  return Boolean(document.querySelector('#page-attendance .att-menu-panel.open'));
 }
 
 function handleAttendanceActionMenuDocumentClick(event) {
@@ -2734,6 +2742,7 @@ window.detailValidateAttendance = detailValidateAttendance;
 window.detailRejectAttendance = detailRejectAttendance;
 window.detailCorrectAttendance = detailCorrectAttendance;
 window.toggleAttendanceActionMenu = toggleAttendanceActionMenu;
+window.hasOpenAttendanceActionMenu = hasOpenAttendanceActionMenu;
 window.openOverrideModal = openOverrideModal;
 window.closeOverrideModal = closeOverrideModal;
 window.submitOverride = submitOverride;

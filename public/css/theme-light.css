@@ -1810,7 +1810,7 @@ button,
   }
 
   body.mobile-sidebar-open {
-    overflow: hidden !important;
+    overflow: visible !important;
   }
 
   .employee-bottom-nav {
@@ -3208,7 +3208,7 @@ button,
     display: inline-flex !important;
     position: absolute !important;
     top: 30px !important;
-    right: -16px !important;
+    right: 10px !important;
     width: 32px !important;
     height: 32px !important;
     z-index: 10120 !important;
@@ -3225,7 +3225,8 @@ button,
   }
 
   body.sidebar-collapsed .sidebar-collapse-toggle {
-    right: -16px !important;
+    top: 74px !important;
+    right: 22px !important;
   }
 
   .sidebar::after {

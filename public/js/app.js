@@ -10,6 +10,7 @@ const PAGE_TITLES = {
   leave:      'Leave Management',
   requests:   'Requests',
   attendance: 'Attendance Tracking',
+  performance: 'Performance Management',
   payroll:    'Payroll',
   reports:    'Reports',
   onboarding: 'HR - Onboarding Management',
@@ -25,6 +26,7 @@ const APP_ROUTE_MAP = {
   '/employees': { page: 'employees' },
   '/attendance': { page: 'attendance' },
   '/attendance-sync': { page: 'attendance', params: { attTab: 'biometric' } },
+  '/performance': { page: 'performance' },
   '/leave': { page: 'leave' },
   '/payroll': { page: 'payroll' },
   '/salary-calculation': { page: 'payroll', params: { payrollTab: 'salary' } },
@@ -462,6 +464,7 @@ function navigate(pageId, navEl, params = null) {
       'employee-dashboard:payslips': 'My Payslips',
       'employee-dashboard:settings': 'My Info',
       attendance: 'My Attendance',
+      performance: 'My Performance',
       leave: 'My Leave',
       'self-service': 'My Profile',
       'self-service:devices': 'Device Security',
@@ -533,6 +536,10 @@ function navigate(pageId, navEl, params = null) {
   if (pageId === 'attendance' && typeof initAttendance === 'function') {
     initAttendance();
     requestAnimationFrame(() => applyRoutePageState(pageId, routeParams));
+  }
+
+  if (pageId === 'performance' && typeof initPerformanceManagement === 'function') {
+    initPerformanceManagement();
   }
 
   if (pageId === 'blockchain' && typeof initBlockchainPage === 'function') {

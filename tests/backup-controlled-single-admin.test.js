@@ -32,7 +32,7 @@ assert.ok(!workflow.includes('temporarily_deactivated_admins'), 'Results must no
 assert.ok(adminCount.includes('SELECT COUNT(*) AS total'), 'The workflow must read the active administrator count without modifying accounts.');
 assert.ok(workflow.includes('activeAdminCountBefore = await countActiveSystemAdmins()'), 'The workflow must capture the administrator count before testing.');
 assert.ok(workflow.includes('activeAdminCountAfter = await countActiveSystemAdmins()'), 'The workflow must capture the administrator count after testing.');
-assert.ok(workflow.includes('activeAdminCountAfter,\n      activeAdminCountBefore'), 'The workflow must prove the administrator count is unchanged.');
+assert.ok(/activeAdminCountAfter,\r?\n\s+activeAdminCountBefore/.test(workflow), 'The workflow must prove the administrator count is unchanged.');
 assert.ok(workflow.includes('admin_account_states_changed: false'), 'The result must explicitly report unchanged administrator account states.');
 
 assert.ok(actorLookup.includes('return { maker: operator, checker: operator }'), 'Legacy controlled scenarios must use the same System Administrator for both aliases.');

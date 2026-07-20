@@ -28,6 +28,7 @@ const adminRbacRoutes                        = require('./server/admin-rbac');
 const backupRecoveryRoutes                   = require('./server/backup-recovery');
 const accountCreationRequestRoutes           = require('./server/account-creation-requests');
 const employeeDashboardRoutes                = require('./server/employee-dashboard');
+const performanceManagementRoutes            = require('./server/performance-management');
 const { encryptPII }                         = require('./server/crypto');
 const { decryptColumnValue, decryptPII, encryptColumnValue, encryptPII: encryptPiiJson, hashNullable, isEncryptedValue } = require('./server/data-protection');
 const dashboardRoutes                        = require('./server/dashboard');
@@ -124,6 +125,13 @@ const DEVICE_APPROVAL_POLL_RATE_LIMIT = createRateLimiter({
   auditAction: 'blocked_device_approval_poll_rate_limit_exceeded',
 });
 const ATTENDANCE_ROUTE_RATE_LIMIT = createAttendanceRouteRateLimiter();
+const PERFORMANCE_ROUTE_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.PERFORMANCE_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.PERFORMANCE_RATE_LIMIT_MAX || 120),
+  keyGenerator: req => `performance:${rateLimitPrincipal(req)}`,
+  auditAction: 'blocked_performance_rate_limit_exceeded',
+  module: 'PERFORMANCE_SECURITY',
+});
 const PAYROLL_ROUTE_RATE_LIMIT = createPayrollRouteRateLimiter();
 function apiRateLimit(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -877,6 +885,7 @@ app.use([
 ], AUTH_RATE_LIMIT);
 app.use(['/api/attendance', '/api/biometric'], ATTENDANCE_ROUTE_RATE_LIMIT);
 app.use(['/api/payroll', '/api/blockchain/payroll'], PAYROLL_ROUTE_RATE_LIMIT);
+app.use('/api/performance', PERFORMANCE_ROUTE_RATE_LIMIT);
 app.use('/api', apiRateLimit);
 app.use('/api', generalWriteAuditMiddleware);
 app.use((req, res, next) => {
@@ -1283,6 +1292,9 @@ app.use('/api/admin', adminRbacRoutes);
 
 // Employee Actor Module — Employee-only dashboard, 201-file, payslips
 app.use('/api/employee', employeeDashboardRoutes);
+
+// Performance Management (HR-managed appraisals and employee self-service)
+app.use('/api/performance', performanceManagementRoutes);
 
 function normalizeAddressPayload(body) {
   const sameCurrent = boolValue(body.current_address_same_as_home);
