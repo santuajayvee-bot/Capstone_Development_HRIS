@@ -324,7 +324,20 @@ function assertTransition(map, current, next, entityName) {
 
 function errorResponse(res, error, fallback) {
   const known = error instanceof RecoveryError || error instanceof BackupStepUpError || Number(error?.statusCode) >= 400;
-  if (!known) console.error('[backup-recovery]', error.message);
+  if (!known) {
+    const cause = error?.cause || {};
+    const stderr = String(cause?.stderr || '')
+      .replace(/(password|pwd)\s*=\s*[^\s]+/gi, '$1=[redacted]')
+      .slice(0, 2000);
+    // Preserve actionable process diagnostics in the server log only. Never
+    // return these details to the browser because they may expose internals.
+    console.error('[backup-recovery]', {
+      code: error?.code || 'BACKUP_RECOVERY_FAILED',
+      message: error?.message || fallback,
+      process_code: error?.details?.processCode || cause?.code || null,
+      stderr: stderr || null,
+    });
+  }
   return res.status(known ? Number(error.statusCode || 400) : 500).json({
     error: known ? error.message : fallback,
     code: known ? error.code || 'BACKUP_RECOVERY_ERROR' : 'BACKUP_RECOVERY_FAILED',

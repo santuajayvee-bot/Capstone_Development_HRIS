@@ -198,9 +198,21 @@ assert(script.includes('sessionStorage.setItem(storageKey, value)'), 'Request id
 assert(script.includes('clearBackupIdempotencyKey'), 'Successful operations must rotate their persisted idempotency key.');
 assert(script.includes('function openBackupRequestModal'), 'Recovery request buttons must open the dedicated in-page request form.');
 assert(script.includes('async function submitBackupRecoveryRequest'), 'The request form must submit restore and rollback actions explicitly.');
+assert(script.includes("onclick='requestRestoreJob("), 'Restore actions must retain a complete inline handler when serialized string arguments are present.');
+assert(script.includes("onclick='requestModuleRollback("), 'Rollback actions must retain a complete inline handler when serialized module keys are present.');
+assert(script.includes("onchange='toggleBackupModule("), 'Backup module picker handlers must safely serialize module keys.');
+assert(script.includes("onchange='toggleBackupScheduleModule("), 'Scheduled-backup picker handlers must safely serialize module keys.');
+assert(!script.includes('onclick="requestRestoreJob('), 'Double-quoted restore handlers break when JSON string arguments contain double quotes.');
+assert(!script.includes('onclick="requestModuleRollback('), 'Double-quoted rollback handlers break when JSON string arguments contain double quotes.');
 assert(script.includes("confirmation !== 'RESTORE'"), 'Restore requests must require the typed RESTORE confirmation in the visible form.');
 assert(script.includes('setBackupRequestSubmitting(true)'), 'The request form must show a bounded submitting state.');
 assert(script.includes('async function backupApiFetch'), 'Backup workspace requests must use a bounded fetch helper.');
+const protectedMutation = script.slice(
+  script.indexOf('async function backupProtectedMutation'),
+  script.indexOf('async function verifyBackup')
+);
+assert(protectedMutation.includes('void loadBackupLogs();'), 'A failed protected recovery action must refresh the backup lifecycle state.');
+assert(protectedMutation.includes('void loadSystemHealth();'), 'A failed protected recovery action must refresh the recovery health state.');
 assert(script.includes('controller.abort()'), 'Backup workspace requests must time out instead of remaining indefinitely loading.');
 assert(script.includes('Core recovery data loaded. Loading operational details...'), 'Restore and rollback data must render before optional operational resources finish loading.');
 assert(script.includes('fetchAndRenderBackupCoreResource'), 'Each core Backup & Restore resource must render independently.');

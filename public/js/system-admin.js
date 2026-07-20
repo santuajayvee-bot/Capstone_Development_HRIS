@@ -136,7 +136,14 @@ function sysFormatDateTime(value) {
 }
 
 function sysJsString(value) {
-  return JSON.stringify(String(value ?? ''));
+  // This value is inserted into a single-quoted inline handler attribute.
+  // Serialize it as a JavaScript string first, then encode HTML metacharacters
+  // so a module name or key cannot terminate the surrounding HTML attribute.
+  return JSON.stringify(String(value ?? ''))
+    .replace(/&/g, '&amp;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function sysFormatDuration(seconds) {
@@ -3183,7 +3190,7 @@ function renderBackupModulePicker() {
     const checked = selected.has(module.module_key);
     return `
       <label class="backup-module-option${checked ? ' is-selected' : ''}">
-        <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleBackupModule(${sysJsString(module.module_key)}, this.checked)" />
+        <input type="checkbox" ${checked ? 'checked' : ''} onchange='toggleBackupModule(${sysJsString(module.module_key)}, this.checked)' />
         <span class="backup-module-option-copy">
           <strong>${sysEsc(module.module_name)}</strong>
           <small>${sysEsc(module.module_key)}</small>
@@ -3562,8 +3569,8 @@ function renderBackupCoverage() {
         ? '<small class="sysadmin-muted">Verified recovery point ready for rollback</small>'
         : '<small class="sysadmin-muted">No verified usable artifact</small>';
     const recoveryAction = isDeploymentBackup
-      ? `<button class="btn-sysadmin-sm backup-action-primary" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Request Rollback</button>`
-      : `<button class="btn-sysadmin-sm backup-action-primary" onclick="requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})" ${restoreDisabled}>Restore Data</button>`;
+      ? `<button type="button" class="btn-sysadmin-sm backup-action-primary" onclick='requestModuleRollback(${sysJsString(module.module_key)})' ${rollbackDisabled} title="Requires a verified recovery artifact">Request Rollback</button>`
+      : `<button type="button" class="btn-sysadmin-sm backup-action-primary" onclick='requestRestoreJob(${Number(module.backup_set_id || 0)}, ${sysJsString(module.module_key)}, ${sysJsString(backupRestoreType(module.last_backup_type || 'DATABASE'))})' ${restoreDisabled}>Restore Data</button>`;
     return `
       <tr>
         <td><strong>${sysEsc(module.module_name)}</strong><br><small>${sysEsc(module.module_key)}</small><br>${readinessNote}</td>
@@ -3578,8 +3585,8 @@ function renderBackupCoverage() {
           <div class="support-row-actions">
             <button class="btn-sysadmin-sm" onclick="switchBackupRecoveryTab('sets')">View Backups</button>
             ${recoveryAction}
-            ${isDeploymentBackup ? '' : `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestModuleRollback(${sysJsString(module.module_key)})" ${rollbackDisabled} title="Requires a verified recovery artifact">Rollback Version</button>`}
-            <button class="btn-sysadmin-sm" onclick="createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})">Create Incident</button>
+            ${isDeploymentBackup ? '' : `<button type="button" class="btn-sysadmin-sm backup-action-safe" onclick='requestModuleRollback(${sysJsString(module.module_key)})' ${rollbackDisabled} title="Requires a verified recovery artifact">Rollback Version</button>`}
+            <button type="button" class="btn-sysadmin-sm" onclick='createBackupIncident(${sysJsString(module.module_key)}, ${sysJsString(module.module_name)})'>Create Incident</button>
           </div>
         </td>
       </tr>
@@ -3658,7 +3665,7 @@ function renderBackupLogs() {
       && backupActionAllowedAny(record, ['BACKUP_VERIFY', 'VERIFY'], true);
     const recoveryAction = backupType === 'DEPLOYMENT_VERSION'
       ? `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestBackupSetRollback(${id})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified module recovery point">Request Rollback</button>`
-      : `<button class="btn-sysadmin-sm backup-action-safe" onclick="requestRestoreJob(${id}, '', ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})" ${restorable && isRestorableBackupType(record.backup_type) ? '' : 'disabled'} title="Requires a verified usable artifact">Request Restore</button>`;
+      : `<button type="button" class="btn-sysadmin-sm backup-action-safe" onclick='requestRestoreJob(${id}, "", ${sysJsString(backupRestoreType(record.backup_type || 'DATABASE'))})' ${restorable && isRestorableBackupType(record.backup_type) ? '' : 'disabled'} title="Requires a verified usable artifact">Request Restore</button>`;
     const actions = [
       `<button class="btn-sysadmin-sm" onclick="openBackupDetails('backup', ${id})">View details</button>`,
       canRun ? `<button class="btn-sysadmin-sm backup-action-primary" onclick="runBackup(${id})">Run backup</button>` : '',
@@ -3758,7 +3765,7 @@ function renderModuleRecoveryPoints() {
         <td>
           <div class="support-row-actions">
             <button class="btn-sysadmin-sm" onclick="openBackupDetails('recovery', ${Number(point.id)})">View details</button>
-            <button class="btn-sysadmin-sm backup-action-primary" onclick="requestModuleRollback(${sysJsString(point.module_key)})" ${rollbackReady ? '' : 'disabled'} title="Requires a verified recovery artifact">Request Rollback</button>
+            <button type="button" class="btn-sysadmin-sm backup-action-primary" onclick='requestModuleRollback(${sysJsString(point.module_key)})' ${rollbackReady ? '' : 'disabled'} title="Requires a verified recovery artifact">Request Rollback</button>
           </div>
         </td>
       </tr>
@@ -3940,7 +3947,7 @@ function renderBackupScheduleModulePicker(query = sysBackupScheduleModuleQuery) 
   }
   picker.innerHTML = visible.map(module => {
     const checked = selected.has(module.module_key);
-    return `<label class="backup-operation-module-chip${checked ? ' is-selected' : ''}"><input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleBackupScheduleModule(${sysJsString(module.module_key)}, this.checked)" /><span>${sysEsc(module.module_name)}</span></label>`;
+    return `<label class="backup-operation-module-chip${checked ? ' is-selected' : ''}"><input type="checkbox" ${checked ? 'checked' : ''} onchange='toggleBackupScheduleModule(${sysJsString(module.module_key)}, this.checked)' /><span>${sysEsc(module.module_name)}</span></label>`;
   }).join('');
 }
 
@@ -4774,6 +4781,11 @@ async function backupProtectedMutation({ lockKey, purpose, resourceType, resourc
       return data;
     } catch (err) {
       showSysToast(err.message || 'Network error.', 'error');
+      // The server can safely commit a terminal lifecycle state before it
+      // returns an error (for example, a failed isolated dry-run). Refresh
+      // so the table never displays a stale approved or running action.
+      void loadBackupLogs();
+      void loadSystemHealth();
       return null;
     }
   });

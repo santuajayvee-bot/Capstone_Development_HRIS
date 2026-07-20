@@ -490,7 +490,14 @@ function resolveApiUrl(url) {
   if (typeof url !== 'string' || !url.startsWith('/api/')) return url;
   const host = window.location.hostname;
   const port = window.location.port;
-  if ((host === 'localhost' || host === '127.0.0.1') && port === '8080') {
+  if (window.location.protocol === 'file:') {
+    return `http://localhost:3000${url}`;
+  }
+  // The frontend is sometimes opened through a local static server (for
+  // example VS Code Live Server) while Express continues to run on port 3000.
+  // Keep API requests on the Express origin instead of sending them to the
+  // static server, which has no /api routes.
+  if ((host === 'localhost' || host === '127.0.0.1') && port && port !== '3000') {
     return `http://localhost:3000${url}`;
   }
   return url;

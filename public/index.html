@@ -5,6 +5,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>LGSV HR System</title>
+  <script>
+    // The Express server owns both the frontend and API. Redirect local files
+    // or Live Server copies to that same origin so browser-write CSRF checks
+    // remain effective and login requests always reach the correct API.
+    (() => {
+      const localHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+      const servedByExpress = window.location.protocol === 'http:' && window.location.port === '3000';
+      if (!localHost || servedByExpress) return;
+
+      const suffix = window.location.protocol === 'file:'
+        ? (window.location.hash || '')
+        : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      window.location.replace(`http://localhost:3000${suffix || '/'}`);
+    })();
+  </script>
 
   <!-- CSS Modules -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -245,13 +260,13 @@
 <script src="js/security-utils.js?v=1"></script>
 <script src="js/modal-utils.js?v=5"></script>
 <script src="js/form-validation.js?v=7"></script>
-<script src="js/auth.js?v=30"></script>
+<script src="js/auth.js?v=31"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/device-fingerprint.js?v=2"></script>
 <script src="js/dpa.js?v=3"></script>
 <script src="js/app.js?v=20"></script>
 <script src="js/draft-session.js?v=6"></script>
-<script src="js/login.js?v=19"></script>
+<script src="js/login.js?v=20"></script>
 <script src="js/dashboard.js?v=3"></script>
 <script src="js/ph-address.js?v=2"></script>
 <script src="js/register.js?v=16"></script>
@@ -267,7 +282,7 @@
 <script src="js/blockchain.js?v=13"></script>
 <script src="js/recruitment.js?v=10"></script>
 <script src="js/date-picker.js"></script>
-  <script src="js/system-admin.js?v=37"></script>
+  <script src="js/system-admin.js?v=39"></script>
 <script src="js/employee-dashboard.js?v=6"></script>
 <script src="js/attendance-realtime.js?v=4"></script>
 

@@ -40,7 +40,7 @@ function loadGoogleRecaptcha(siteKey) {
 async function initializeLoginCaptcha() {
   const container = document.getElementById('login-captcha');
   try {
-    const response = await fetch('/api/auth/captcha-config', { cache: 'no-store' });
+    const response = await fetch(resolveApiUrl('/api/auth/captcha-config'), { cache: 'no-store' });
     const config = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(config.message || 'CAPTCHA configuration unavailable.');
     recaptchaRequired = config.enabled === true;
@@ -121,7 +121,7 @@ async function auditBlockedLoginSuspiciousInput(reason = 'login_validation') {
   loginSecurityAuditCache.set(cacheKey, now);
 
   try {
-    await fetch('/api/auth/client-security-event', {
+    await fetch(resolveApiUrl('/api/auth/client-security-event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -203,7 +203,7 @@ async function refreshLockoutStatus() {
   if (!activeLockoutState?.username) return;
 
   try {
-    const res = await fetch(`/api/auth/lockout-status?username=${encodeURIComponent(activeLockoutState.username)}`, {
+    const res = await fetch(resolveApiUrl(`/api/auth/lockout-status?username=${encodeURIComponent(activeLockoutState.username)}`), {
       headers: { Accept: 'application/json' },
     });
     const data = await res.json();
@@ -406,7 +406,7 @@ async function verifyMfaCode() {
   button.disabled = true;
   button.textContent = 'Verifying...';
   try {
-    const response = await fetch('/api/auth/mfa/verify', {
+    const response = await fetch(resolveApiUrl('/api/auth/mfa/verify'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...activeMfaChallenge, code }),
@@ -438,7 +438,7 @@ async function resendMfaCode() {
   button.disabled = true;
   button.textContent = 'Sending...';
   try {
-    const response = await fetch('/api/auth/mfa/resend', {
+    const response = await fetch(resolveApiUrl('/api/auth/mfa/resend'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(activeMfaChallenge),
@@ -465,7 +465,7 @@ async function pollDeviceApprovalStatus() {
   const btnEl = document.getElementById('login-submit-btn');
 
   try {
-    const response = await fetch('/api/auth/device-approval/status', {
+    const response = await fetch(resolveApiUrl('/api/auth/device-approval/status'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -604,7 +604,7 @@ async function doLogin() {
     const deviceFingerprint = typeof buildTrustedDeviceFingerprint === 'function'
       ? await buildTrustedDeviceFingerprint()
       : {};
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(resolveApiUrl('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
