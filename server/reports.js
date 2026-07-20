@@ -9,6 +9,7 @@ const pool = require('../config/db');
 const { requireAuth, requireRole, ROLES } = require('./middleware');
 const { decryptColumnValue } = require('./data-protection');
 const { isStrictDateOnly } = require('./utils/dateValidation');
+const { calculatePieceShareTotal } = require('../services/pieceRateMath');
 
 const router = express.Router();
 
@@ -872,7 +873,17 @@ async function sewingRegistryData(payrollPeriod, kind) {
     ? 'AND s.share_percentage = 55.00'
     : kind === '45'
       ? 'AND s.share_percentage = 45.00'
-      : '';
+      : `AND s.id = (
+          SELECT s2.id
+            FROM piece_rate_output_shares s2
+           WHERE s2.piece_rate_output_id = o.id
+           ORDER BY CASE
+             WHEN s2.partner_role IN ('Solo', 'Sewer', 'Sewer 1') THEN 0
+             WHEN s2.partner_role = 'Fixer' THEN 1
+             ELSE 2
+           END, s2.id
+           LIMIT 1
+        )`;
   const [sourceRows] = await pool.execute(`
     SELECT o.output_date, o.operation_type, o.size_range, o.quantity_produced,
            o.rate_per_piece, o.full_amount, s.share_amount, s.partner_role,
@@ -889,37 +900,54 @@ async function sewingRegistryData(payrollPeriod, kind) {
     .map(row => registryDate(row.output_date))
     .filter(Boolean))].sort();
   const grouped = new Map();
+  const calculationRowsByEmployee = new Map();
   for (const source of sourceRows) {
     const date = registryDate(source.output_date);
     const role = source.partner_role || 'Solo';
-    const key = [source.employee_code, role, source.operation_type, source.size_range || '', source.rate_per_piece].join('|');
+    const operationType = String(source.operation_type || '').trim().toUpperCase() === 'MS'
+      ? 'HT'
+      : source.operation_type;
+    const key = [source.employee_code, role, operationType, source.size_range || '', source.rate_per_piece].join('|');
     const row = grouped.get(key) || {
       employee: registryEmployeeHeader(source),
       employee_code: source.employee_code,
       employee_key: source.employee_code || registryEmployeeHeader(source),
       agency: source.agency,
-      operation_type: source.operation_type || '-',
+      operation_type: operationType || '-',
       size_range: source.size_range || '-',
       rate_per_piece: numeric(source.rate_per_piece),
       partner_role: role,
       daily: {},
       total_output: 0,
-      amount: 0
+      amount: 0,
+      calculationRows: []
     };
-    const amount = kind === 'main' ? numeric(source.full_amount) : numeric(source.share_amount);
-    const dayValue = kind === 'main' ? numeric(source.quantity_produced) : numeric(source.share_amount);
+    const quantity = numeric(source.quantity_produced);
+    const productionValue = quantity * numeric(source.rate_per_piece);
+    const amount = kind === 'main' ? productionValue : numeric(source.share_amount);
+    const dayValue = kind === 'main' ? quantity : productionValue;
     row.daily[date] = numeric(row.daily[date]) + dayValue;
-    row.total_output += numeric(source.quantity_produced);
+    row.total_output += kind === 'main' ? quantity : productionValue;
     row.amount += amount;
+    row.calculationRows.push(source);
     grouped.set(key, row);
+    const calculationRows = calculationRowsByEmployee.get(source.employee_code) || [];
+    calculationRows.push(source);
+    calculationRowsByEmployee.set(source.employee_code, calculationRows);
   }
 
-  const rows = [...grouped.values()].map(row => ({
-    ...row,
-    amount: Number(row.amount.toFixed(2)),
-    total_output: Number(row.total_output.toFixed(2)),
-    daily: Object.fromEntries(Object.entries(row.daily).map(([date, quantity]) => [date, Number(quantity.toFixed(2))]))
-  }));
+  const rows = [...grouped.values()].map(row => {
+    const { calculationRows, ...publicRow } = row;
+    return {
+      ...publicRow,
+      amount: calculatePieceShareTotal(calculationRows.map(calculationRow => ({
+        ...calculationRow,
+        share_percentage: kind === 'main' ? 100 : calculationRow.share_percentage
+      }))),
+      total_output: Number(row.total_output.toFixed(2)),
+      daily: Object.fromEntries(Object.entries(row.daily).map(([date, quantity]) => [date, Number(quantity.toFixed(2))]))
+    };
+  });
   const employees = new Map();
   for (const row of rows) {
     const key = row.employee_key;
@@ -933,27 +961,53 @@ async function sewingRegistryData(payrollPeriod, kind) {
       totalAmount: 0
     };
     employee.rows.push(row);
-    dates.forEach(date => {
+    if (kind === 'main') dates.forEach(date => {
       employee.dailyTotals[date] = Number((numeric(employee.dailyTotals[date]) + numeric(row.daily[date])).toFixed(2));
     });
     employee.totalOutput = Number((numeric(employee.totalOutput) + numeric(row.total_output)).toFixed(2));
     employee.totalAmount = Number((numeric(employee.totalAmount) + numeric(row.amount)).toFixed(2));
     employees.set(key, employee);
   }
-  const employeeRows = [...employees.values()].sort((a, b) => a.employee.localeCompare(b.employee));
-  const dailyTotals = Object.fromEntries(dates.map(date => [
-    date,
-    Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.dailyTotals[date]), 0).toFixed(2))
+  const employeeRows = [...employees.values()].map(employee => {
+    const calculationRows = calculationRowsByEmployee.get(employee.employee_code) || [];
+    const exactAmount = calculatePieceShareTotal(calculationRows.map(calculationRow => ({
+      ...calculationRow,
+      share_percentage: kind === 'main' ? 100 : calculationRow.share_percentage
+    })));
+    return {
+      ...employee,
+      dailyTotals: kind === 'main'
+        ? employee.dailyTotals
+        : Object.fromEntries(dates.map(date => [
+          date,
+          calculatePieceShareTotal(calculationRows.filter(row => registryDate(row.output_date) === date))
+        ])),
+      totalOutput: kind === 'main' ? employee.totalOutput : exactAmount,
+      totalAmount: exactAmount
+    };
+  }).sort((a, b) => a.employee.localeCompare(b.employee));
+  const dailyTotals = Object.fromEntries(dates.map(date => [date, kind === 'main'
+    ? Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.dailyTotals[date]), 0).toFixed(2))
+    : calculatePieceShareTotal(sourceRows.filter(row => registryDate(row.output_date) === date))
   ]));
+  const exactTotalAmount = calculatePieceShareTotal(sourceRows.map(row => ({
+    ...row,
+    share_percentage: kind === 'main' ? 100 : row.share_percentage
+  })));
   return {
     payrollPeriod,
     kind,
     dates,
+    dailyValueLabel: kind === 'main' ? 'Daily Output' : 'Daily Production Value',
+    totalValueLabel: kind === 'main' ? 'Total Output' : 'Total Value',
+    earningsLabel: kind === 'main' ? 'Employee Daily Total' : `${kind}% Daily Earnings`,
     rows,
     employees: employeeRows,
     dailyTotals,
-    totalOutput: Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.totalOutput), 0).toFixed(2)),
-    totalAmount: Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.totalAmount), 0).toFixed(2))
+    totalOutput: kind === 'main'
+      ? Number(employeeRows.reduce((sum, employee) => sum + numeric(employee.totalOutput), 0).toFixed(2))
+      : exactTotalAmount,
+    totalAmount: exactTotalAmount
   };
 }
 
@@ -1278,8 +1332,10 @@ function sendSewingRegistryPdf(res, registry, req) {
   const width = doc.page.width - left - doc.page.margins.right;
   const fixedColumns = [92, 58, 76, 92, 100, 86];
   const dateWidth = Math.max(12, Math.floor((width - fixedColumns.reduce((sum, column) => sum + column, 0)) / Math.max(registry.dates.length, 1)));
-  const headers = ['Sew Type', 'Size', 'Rate/Piece', ...registry.dates.map(registryDateLabel), 'Total Output', 'Amount', 'Partner Role'];
+  const headers = ['Sew Type', 'Size', 'Rate/Piece', ...registry.dates.map(registryDateLabel), registry.totalValueLabel, 'Amount', 'Partner Role'];
   const widths = [92, 58, 76, ...registry.dates.map(() => dateWidth), 92, 100, 86];
+  const shareRegistry = registry.kind === '55' || registry.kind === '45';
+  const totalFill = shareRegistry ? '#fff36a' : '#f2f2f2';
   let y = 0;
 
   const heading = () => {
@@ -1327,7 +1383,7 @@ function sendSewingRegistryPdf(res, registry, req) {
         fill: '#ffffff',
         fontSize: 5.8,
         align: index >= 2 ? 'right' : 'left',
-        subtext: isDate ? 'Daily Output' : ''
+        subtext: isDate ? registry.dailyValueLabel : ''
       });
       x += widths[index];
     });
@@ -1378,25 +1434,25 @@ function sendSewingRegistryPdf(res, registry, req) {
         item.partner_role
       ]));
       drawRow([
-        'Employee Daily Total',
+        registry.earningsLabel,
         '',
         '',
         ...registry.dates.map(date => registryNumber(employee.dailyTotals?.[date] || 0)),
         registryNumber(employee.totalOutput),
         peso(employee.totalAmount),
         ''
-      ], { fill: '#f2f2f2', bold: true });
+      ], { fill: totalFill, bold: true });
     });
   }
   drawRow([
-    'Grand Daily Total',
+    shareRegistry ? `Grand ${registry.kind}% Earnings` : 'Grand Daily Total',
     '',
     '',
     ...registry.dates.map(date => registryNumber(registry.dailyTotals?.[date] || 0)),
     registryNumber(registry.totalOutput),
     peso(registry.totalAmount),
     ''
-  ], { fill: '#f2f2f2', bold: true });
+  ], { fill: totalFill, bold: true });
   doc.end();
 }
 

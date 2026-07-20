@@ -47,6 +47,10 @@ const {
   rejectUnexpectedFields,
 } = require('./security-controls');
 const { verifyPassword } = require('../services/passwordService');
+const {
+  calculatePieceShareTotal,
+  calculateProductionShareTotal,
+} = require('../services/pieceRateMath');
 
 const PAYROLL_PERMISSIONS = {
   view: ['payroll_officer', 'payroll_manager'],
@@ -1624,6 +1628,14 @@ function peso(value) {
   const amount = Number(value || 0);
   const formatted = `PHP ${Math.abs(amount).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return amount < 0 ? `(${formatted})` : formatted;
+}
+
+function pieceRatePeso(value) {
+  const rate = Number(value || 0);
+  return `PHP ${Math.abs(rate).toLocaleString('en-PH', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  })}`;
 }
 
 function numeric(value) {
@@ -4206,7 +4218,16 @@ async function computePieceRatePayroll(pool, input) {
   };
 }
 
-async function getApprovedPieceRatePayroll(pool, employeeId, period) {
+function roundedPieceShareFromFull(fullProduction, percentage, partnerRole) {
+  void partnerRole;
+  return calculateProductionShareTotal(fullProduction, percentage);
+}
+
+function aggregateDailyPieceShareTotal(rows = []) {
+  return calculatePieceShareTotal(rows);
+}
+
+async function getApprovedPieceRatePayroll(pool, employeeId, period, payrollRunId = null) {
   await ensurePieceRatePayrollSchema(pool);
   const [outputs] = await pool.execute(`
     SELECT id, output_date, payroll_period, product_type, product_category, sew_type_code, size_range,
@@ -4228,10 +4249,12 @@ async function getApprovedPieceRatePayroll(pool, employeeId, period) {
       FROM payroll_production_pairs
      WHERE (worker1_employee_id = ? OR worker2_employee_id = ?)
        AND production_date BETWEEN ? AND ?
-       AND status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
-       AND payroll_run_id IS NULL
+       AND (
+         (status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted') AND payroll_run_id IS NULL)
+         OR (status = 'Paid' AND payroll_run_id = ?)
+       )
      ORDER BY production_date, id
-  `, [employeeId, employeeId, period.start, period.end]);
+  `, [employeeId, employeeId, period.start, period.end, payrollRunId]);
 
   const [dailyOutputs] = await pool.execute(`
     SELECT o.id, o.payroll_period_id, o.output_date, o.operation_type, o.size_range,
@@ -4241,10 +4264,12 @@ async function getApprovedPieceRatePayroll(pool, employeeId, period) {
       JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
      WHERE s.employee_id = ?
        AND o.output_date BETWEEN ? AND ?
-       AND o.status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
-       AND o.payroll_run_id IS NULL
+       AND (
+         (o.status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted') AND o.payroll_run_id IS NULL)
+         OR (o.status = 'Paid' AND o.payroll_run_id = ?)
+       )
      ORDER BY o.output_date, o.id
-  `, [employeeId, period.start, period.end]);
+  `, [employeeId, period.start, period.end, payrollRunId]);
 
   const directRecords = outputs.map(row => ({
     id: row.id,
@@ -4279,11 +4304,16 @@ async function getApprovedPieceRatePayroll(pool, employeeId, period) {
     quantity: numeric(row.quantity_produced),
     piece_rate: numeric(row.rate_per_piece),
     gross_pay: numeric(row.share_amount),
+    raw_gross_pay: numeric(row.quantity_produced)
+      * numeric(row.rate_per_piece)
+      * (numeric(row.share_percentage) / 100),
     share_percentage: numeric(row.share_percentage),
     details: row
   }));
   const records = [...directRecords, ...pairRecords, ...dailyOutputRecords];
-  const total = roundMoney(records.reduce((sum, row) => sum + numeric(row.gross_pay), 0));
+  const legacyTotal = [...directRecords, ...pairRecords]
+    .reduce((sum, row) => sum + numeric(row.gross_pay), 0);
+  const total = roundMoney(legacyTotal + aggregateDailyPieceShareTotal(dailyOutputs));
   const quantity = records.reduce((sum, row) => sum + numeric(row.quantity), 0);
   const productionValue = records.reduce((sum, row) => sum + numeric(row.quantity) * numeric(row.piece_rate), 0);
   return {
@@ -5971,6 +6001,18 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
        ORDER BY pp.production_date DESC, pp.id DESC
        LIMIT 100
     `);
+    const [dailyOutputs] = await pool.execute(`
+      SELECT o.id, o.payroll_period_id, o.output_date, o.operation_type, o.size_range,
+             o.quantity_produced, o.rate_per_piece, o.full_amount, o.output_mode,
+             o.split_rule, o.remarks, o.status, o.created_at,
+             s.employee_id, s.partner_role, s.share_percentage, s.share_amount,
+             e.employee_code, e.first_name, e.middle_name, e.last_name
+        FROM piece_rate_outputs o
+        JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+        LEFT JOIN employees e ON e.id = s.employee_id
+       ORDER BY o.output_date DESC, o.id DESC, s.id
+       LIMIT 500
+    `);
     res.json({
       sew_types: sewTypes,
       size_ranges: sizeRanges,
@@ -5981,6 +6023,7 @@ router.get('/piece-rate-config', requireAuth, requireRole(PAYROLL_PERMISSIONS.vi
       incentives,
       incentive_entries: incentiveEntries.map(row => withPayrollEmployeeDisplay(row)),
       production_outputs: outputs.map(row => withPayrollEmployeeDisplay(row)),
+      daily_outputs: dailyOutputs.map(row => withPayrollEmployeeDisplay(row)),
       production_pairs: pairs.map(row => {
         const {
           worker1_first_name,
@@ -6442,12 +6485,14 @@ async function resolveDailyPieceOutput(pool, input) {
     size_range: sizeRange,
     quantity_produced: quantity
   });
+  const worker1Amount = roundMoney(pair.worker1_earnings);
+  const worker2Amount = roundMoney(fullAmount - worker1Amount);
   return {
     payrollPeriod, outputDate, operationType, sizeRange, quantity, rate, fullAmount,
     outputMode, splitRule: pairingType,
     shares: [
-      { employee_id: pair.worker1_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 1' : 'Sewer', share_percentage: pair.worker1_share, share_amount: roundMoney(pair.worker1_earnings) },
-      { employee_id: pair.worker2_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 2' : 'Fixer', share_percentage: pair.worker2_share, share_amount: roundMoney(pair.worker2_earnings) }
+      { employee_id: pair.worker1_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 1' : 'Sewer', share_percentage: pair.worker1_share, share_amount: worker1Amount },
+      { employee_id: pair.worker2_employee_id, partner_role: pairingType === 'Substitute Sewer-Sewer' ? 'Sewer 2' : 'Fixer', share_percentage: pair.worker2_share, share_amount: worker2Amount }
     ]
   };
 }
@@ -6478,7 +6523,8 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
   if (!wageTypes[0]) throw new Error('Piece Rate wage type is not configured.');
   for (const employeeId of uniqueIds) {
     const [totals] = await pool.execute(`
-      SELECT COALESCE(SUM(s.share_amount), 0) AS gross_pay,
+      SELECT o.output_mode, o.split_rule, s.partner_role, s.share_percentage,
+             COALESCE(SUM(o.quantity_produced * o.rate_per_piece), 0) AS full_production,
              COALESCE(SUM(o.quantity_produced), 0) AS total_output,
              MAX(o.output_date) AS latest_output_date
         FROM piece_rate_output_shares s
@@ -6487,9 +6533,17 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
          AND o.status NOT IN ('Voided', 'Rejected')
          AND o.payroll_run_id IS NULL
          AND o.paid_at IS NULL
+       GROUP BY o.output_mode, o.split_rule, s.partner_role, s.share_percentage
     `, [employeeId, payrollPeriod]);
-    const outputGrossPay = roundMoney(totals[0]?.gross_pay || 0);
-    const outputTotal = Number(totals[0]?.total_output || 0);
+    const outputGrossPay = roundMoney(totals.reduce((sum, row) => (
+      sum + roundedPieceShareFromFull(row.full_production, row.share_percentage, row.partner_role)
+    ), 0));
+    const outputTotal = totals.reduce((sum, row) => sum + Number(row.total_output || 0), 0);
+    const latestOutputDate = totals
+      .map(row => payrollDateKey(row.latest_output_date))
+      .filter(Boolean)
+      .sort()
+      .at(-1) || `${payrollPeriod}-01`;
     const [existing] = await pool.execute(`
       SELECT id, status, source_record_ids, total_deductions FROM salary_calculations
        WHERE employee_id = ? AND payroll_period = ? AND wage_type_id = ?
@@ -6530,7 +6584,7 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
         0,
         0,
         0,
-        payrollDateKey(totals[0]?.latest_output_date) || `${payrollPeriod}-01`,
+        latestOutputDate,
         userId || null,
         JSON.stringify({ legacy_baseline: baseline }),
         JSON.stringify(snapshot),
@@ -6566,7 +6620,7 @@ async function recomputePieceRateCalculations(pool, employeeIds, payrollPeriod, 
         0,
         0,
         outputGrossPay,
-        payrollDateKey(totals[0]?.latest_output_date) || `${payrollPeriod}-01`,
+        latestOutputDate,
         payrollPeriod,
         requestedStatus,
         userId || null,
@@ -7909,9 +7963,15 @@ async function payrollGenerationSourceEmployeeSets(pool, period) {
       SELECT DISTINCT s.employee_id
         FROM piece_rate_outputs o
         JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+        LEFT JOIN salary_calculations sc
+          ON sc.payroll_run_id = o.payroll_run_id
+         AND sc.employee_id = s.employee_id
+         AND sc.status <> 'Superseded'
        WHERE o.output_date BETWEEN ? AND ?
-         AND o.status IN (?, ?)
-         AND o.payroll_run_id IS NULL
+         AND (
+           (o.status IN (?, ?) AND o.payroll_run_id IS NULL)
+           OR (o.status = 'Paid' AND o.payroll_run_id IS NOT NULL AND sc.id IS NULL)
+         )
     `, [period.start, period.end, ...readyStatuses]);
     rows.forEach(row => piece.add(Number(row.employee_id)));
   }
@@ -8011,7 +8071,7 @@ function addPiecePreviewSource(sourceMap, employeeId, grossPay, quantity, pieceR
   sourceMap.set(id, current);
 }
 
-async function loadPerPiecePreviewSources(pool, employeeIds, period) {
+async function loadPerPiecePreviewSources(pool, employeeIds, period, payrollRunId = null) {
   const sourceMap = new Map();
   if (!employeeIds.length) return sourceMap;
   const placeholders = payrollInPlaceholders(employeeIds);
@@ -8034,9 +8094,11 @@ async function loadPerPiecePreviewSources(pool, employeeIds, period) {
       FROM payroll_production_pairs
      WHERE (worker1_employee_id IN (${placeholders}) OR worker2_employee_id IN (${placeholders}))
        AND production_date BETWEEN ? AND ?
-       AND status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
-       AND payroll_run_id IS NULL
-  `, [...employeeIds, ...employeeIds, period.start, period.end]);
+       AND (
+         (status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted') AND payroll_run_id IS NULL)
+         OR (status = 'Paid' AND payroll_run_id = ?)
+       )
+  `, [...employeeIds, ...employeeIds, period.start, period.end, payrollRunId]);
   for (const row of pairs) {
     if (employeeIds.includes(Number(row.worker1_employee_id))) {
       addPiecePreviewSource(sourceMap, row.worker1_employee_id, row.worker1_earnings, row.quantity_produced, row.piece_rate);
@@ -8047,16 +8109,38 @@ async function loadPerPiecePreviewSources(pool, employeeIds, period) {
   }
 
   const [dailyOutputs] = await pool.execute(`
-    SELECT s.employee_id, o.quantity_produced, o.rate_per_piece, s.share_amount
+    SELECT s.employee_id, o.quantity_produced, o.rate_per_piece,
+           o.output_mode, o.split_rule, s.partner_role,
+           s.share_percentage, s.share_amount
       FROM piece_rate_outputs o
       JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
      WHERE s.employee_id IN (${placeholders})
        AND o.output_date BETWEEN ? AND ?
-       AND o.status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted')
-       AND o.payroll_run_id IS NULL
-  `, [...employeeIds, period.start, period.end]);
+       AND (
+         (o.status IN ('Approved', 'Payroll Ready', 'For Validation', 'Submitted') AND o.payroll_run_id IS NULL)
+         OR (o.status = 'Paid' AND o.payroll_run_id = ?)
+       )
+  `, [...employeeIds, period.start, period.end, payrollRunId]);
+  const dailyGroups = new Map();
   for (const row of dailyOutputs) {
-    addPiecePreviewSource(sourceMap, row.employee_id, row.share_amount, row.quantity_produced, row.rate_per_piece);
+    const key = [row.employee_id, row.output_mode || '', row.split_rule || '', row.partner_role || '', numeric(row.share_percentage)].join('|');
+    const current = dailyGroups.get(key) || {
+      employee_id: row.employee_id,
+      percentage: numeric(row.share_percentage),
+      partnerRole: row.partner_role,
+      fullProduction: 0,
+      quantity: 0,
+      calculationRows: []
+    };
+    current.fullProduction += numeric(row.quantity_produced) * numeric(row.rate_per_piece);
+    current.quantity += numeric(row.quantity_produced);
+    current.calculationRows.push(row);
+    dailyGroups.set(key, current);
+  }
+  for (const group of dailyGroups.values()) {
+    const grossPay = calculatePieceShareTotal(group.calculationRows);
+    const averageRate = group.quantity > 0 ? group.fullProduction / group.quantity : 0;
+    addPiecePreviewSource(sourceMap, group.employee_id, grossPay, group.quantity, averageRate);
   }
 
   for (const value of sourceMap.values()) {
@@ -8138,7 +8222,7 @@ async function buildPerPiecePayrollGenerationPreview(pool, {
     selectedEmployeeDeductionSettings
   ] = await Promise.all([
     loadPreviewDuplicateMap(pool, payrollRunId, payrollRunStatus, employeeIds),
-    loadPerPiecePreviewSources(pool, employeeIds, period),
+    loadPerPiecePreviewSources(pool, employeeIds, period, payrollRunId),
     loadEmployeesWithActiveDeductions(pool, employeeIds, deductionContext.calculation_date || period.end),
     hasSelectedEmployeeDeductionSettings(pool, deductionContext.calculation_date || period.end)
   ]);
@@ -8344,7 +8428,7 @@ async function buildPayrollGenerationPreview(pool, body = {}) {
       daysWorked = validation.days_worked;
       hoursWorked = validation.hours_worked;
     } else if (normalizedWageType === 'Per-Piece') {
-      const piecePayroll = await getApprovedPieceRatePayroll(pool, emp.id, period);
+      const piecePayroll = await getApprovedPieceRatePayroll(pool, emp.id, period, payrollRunId);
       if (!piecePayroll.records.length) {
         skipEmployee(await describePieceRatePayrollSkip(pool, emp.id, period));
         continue;
@@ -8712,7 +8796,7 @@ router.post('/generate', requireAuth, requireRole(ROLES.payroll_any), PAYROLL_CO
           };
           finalizeSourceRecords = async () => markAttendanceRowsPaid(connection, validation.attendance_rows || [], payrollRunId);
         } else if (normalizedWageType === 'Per-Piece') {
-          const piecePayroll = await getApprovedPieceRatePayroll(connection, emp.id, period);
+          const piecePayroll = await getApprovedPieceRatePayroll(connection, emp.id, period, payrollRunId);
           if (!piecePayroll.records.length) {
             skipEmployee(await describePieceRatePayrollSkip(connection, emp.id, period));
             continue;
@@ -9315,7 +9399,7 @@ router.post('/salary-calculations/:id/recalculate', requireAuth, requireRole(ROL
       hourlyRate = validation.hourly_rate;
       snapshot = { ...validation, base_rate: baseRate, attendance_rows: validation.attendance_rows, allowances: allowances.applied };
     } else if (normalizedWageType === 'Per-Piece') {
-      const piecePayroll = await getApprovedPieceRatePayroll(connection, record.employee_id, period);
+      const piecePayroll = await getApprovedPieceRatePayroll(connection, record.employee_id, period, record.payroll_run_id);
       if (!piecePayroll.records.length) throw new Error('No approved payroll-ready piece output exists for this period.');
       allowances = await computeConfiguredAllowances(connection, record.employee_id, piecePayroll.total, period.end);
       totalEarning = piecePayroll.total + allowances.total;
@@ -11396,21 +11480,33 @@ async function buildPiecePayrollRegister(pool, monthYear) {
   };
 }
 
+function sewingRegistryOperation(value) {
+  const operation = String(value || '').trim().toUpperCase();
+  return operation === 'MS' ? 'HT' : operation;
+}
+
 async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
   await ensurePieceRatePayrollSchema(pool);
   if (!/^\d{4}-\d{2}$/.test(String(payrollPeriod || ''))) throw new Error('A valid payroll period is required.');
-  const registryDateKey = value => {
-    if (!value) return '';
-    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-    const text = String(value).trim();
-    const mysqlDate = text.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (mysqlDate) return mysqlDate[1];
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
-  };
-  const shareFilter = kind === '55' ? 'AND s.share_percentage = 55.00' : kind === '45' ? 'AND s.share_percentage = 45.00' : '';
+  const registryDateKey = payrollDateKey;
+  const shareFilter = kind === '55'
+    ? 'AND s.share_percentage = 55.00'
+    : kind === '45'
+      ? 'AND s.share_percentage = 45.00'
+      : `AND s.id = (
+          SELECT s2.id
+            FROM piece_rate_output_shares s2
+           WHERE s2.piece_rate_output_id = o.id
+           ORDER BY CASE
+             WHEN s2.partner_role IN ('Solo', 'Sewer', 'Sewer 1') THEN 0
+             WHEN s2.partner_role = 'Fixer' THEN 1
+             ELSE 2
+           END, s2.id
+           LIMIT 1
+        )`;
   const [rows] = await pool.execute(`
-    SELECT o.id, o.output_date, o.operation_type, o.size_range, o.quantity_produced,
+    SELECT o.id, DATE_FORMAT(o.output_date, '%Y-%m-%d') AS output_date,
+           o.operation_type, o.size_range, o.quantity_produced,
            o.rate_per_piece, o.full_amount, o.output_mode, o.split_rule,
            s.employee_id, s.partner_role, s.share_percentage, s.share_amount,
            e.employee_code, e.first_name, e.middle_name, e.last_name,
@@ -11423,23 +11519,37 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
   `, [payrollPeriod]);
   const dates = [...new Set(rows.map(row => registryDateKey(row.output_date)).filter(Boolean))].sort();
   const grouped = new Map();
+  const calculationRowsByEmployee = new Map();
   for (const row of rows) {
     const outputDate = registryDateKey(row.output_date);
     if (!outputDate) continue;
-    const key = [row.employee_id, row.operation_type, row.size_range || '', row.rate_per_piece].join('|');
+    const operationType = sewingRegistryOperation(row.operation_type);
+    const key = [row.employee_id, operationType, row.size_range || '', row.rate_per_piece].join('|');
     const current = grouped.get(key) || {
       employee_id: row.employee_id, employee_name: payrollEmployeeDisplayName(row, { order: 'lastFirst' }), employee_code: row.employee_code,
-      agency: row.agency, operation_type: row.operation_type, size_range: row.size_range,
-      rate_per_piece: Number(row.rate_per_piece), partner_roles: new Set(), daily: {}, total_output: 0, amount: 0
+      agency: row.agency, operation_type: operationType, size_range: row.size_range,
+      rate_per_piece: Number(row.rate_per_piece), partner_roles: new Set(), daily: {}, total_output: 0, amount: 0,
+      calculationRows: []
     };
-    const dayValue = kind === 'main' ? Number(row.quantity_produced) : Number(row.share_amount);
-    current.daily[outputDate] = roundMoney((current.daily[outputDate] || 0) + dayValue);
-    current.total_output += Number(row.quantity_produced);
-    current.amount += kind === 'main' ? Number(row.full_amount) : Number(row.share_amount);
+    const quantity = Number(row.quantity_produced);
+    const productionValue = quantity * Number(row.rate_per_piece);
+    const dayValue = kind === 'main'
+      ? quantity
+      : productionValue;
+    current.daily[outputDate] = (current.daily[outputDate] || 0) + dayValue;
+    current.total_output += kind === 'main' ? quantity : productionValue;
+    current.amount += kind === 'main'
+      ? productionValue
+      : productionValue * (Number(row.share_percentage) / 100);
+    current.calculationRows.push(row);
+    const employeeRows = calculationRowsByEmployee.get(row.employee_id) || [];
+    employeeRows.push(row);
+    calculationRowsByEmployee.set(row.employee_id, employeeRows);
     current.partner_roles.add(row.partner_role);
     grouped.set(key, current);
   }
   const employees = new Map();
+  let rawGrandOutput = 0;
   for (const row of grouped.values()) {
     const employee = employees.get(row.employee_id) || {
       employee_id: row.employee_id,
@@ -11451,28 +11561,63 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
       total_output: 0,
       total_amount: 0
     };
+    const rawDaily = { ...row.daily };
+    const rawAmount = calculatePieceShareTotal(row.calculationRows.map(calculationRow => ({
+      ...calculationRow,
+      share_percentage: kind === 'main' ? 100 : calculationRow.share_percentage
+    })));
     row.partner_roles = [...row.partner_roles].join(', ');
     row.total_output = roundMoney(row.total_output);
-    row.amount = roundMoney(row.amount);
+    row.amount = roundMoney(rawAmount);
+    delete row.calculationRows;
+    row.daily = Object.fromEntries(dates.map(date => [date, roundMoney(rawDaily[date] || 0)]));
     employee.rows.push(row);
-    dates.forEach(date => {
-      employee.daily_totals[date] = roundMoney((employee.daily_totals[date] || 0) + Number(row.daily[date] || 0));
-    });
+    if (kind === 'main') {
+      dates.forEach(date => {
+        employee.daily_totals[date] = (employee.daily_totals[date] || 0) + Number(rawDaily[date] || 0);
+      });
+    }
     employee.total_output += row.total_output;
-    employee.total_amount += row.amount;
+    employee.total_amount += rawAmount;
+    rawGrandOutput += row.total_output;
     employees.set(row.employee_id, employee);
   }
-  const employeeRows = [...employees.values()].map(employee => ({ ...employee, total_output: roundMoney(employee.total_output), total_amount: roundMoney(employee.total_amount) }));
-  const dailyTotals = dates.reduce((totals, date) => {
-    totals[date] = roundMoney(employeeRows.reduce((sum, employee) => sum + Number(employee.daily_totals?.[date] || 0), 0));
-    return totals;
-  }, {});
+  const employeeRows = [...employees.values()].map(employee => {
+    const employeeCalculationRows = calculationRowsByEmployee.get(employee.employee_id) || [];
+    const exactEmployeeAmount = calculatePieceShareTotal(employeeCalculationRows.map(calculationRow => ({
+      ...calculationRow,
+      share_percentage: kind === 'main' ? 100 : calculationRow.share_percentage
+    })));
+    return {
+      ...employee,
+      daily_totals: Object.fromEntries(dates.map(date => [date, kind === 'main'
+        ? roundMoney(employee.daily_totals[date] || 0)
+        : calculatePieceShareTotal(employeeCalculationRows.filter(row => registryDateKey(row.output_date) === date))
+      ])),
+      total_output: kind === 'main' ? roundMoney(employee.total_output) : exactEmployeeAmount,
+      total_amount: exactEmployeeAmount
+    };
+  });
+  const dailyTotals = Object.fromEntries(dates.map(date => [date, kind === 'main'
+    ? roundMoney(employeeRows.reduce((sum, employee) => sum + Number(employee.daily_totals[date] || 0), 0))
+    : calculatePieceShareTotal(rows.filter(row => registryDateKey(row.output_date) === date))
+  ]));
+  const exactGrandAmount = calculatePieceShareTotal(rows.map(row => ({
+    ...row,
+    share_percentage: kind === 'main' ? 100 : row.share_percentage
+  })));
   return {
-    payroll_period: payrollPeriod, kind, dates, employees: employeeRows,
+    payroll_period: payrollPeriod,
+    kind,
+    dates,
+    daily_value_label: kind === 'main' ? 'Daily Output' : 'Daily Production Value',
+    total_value_label: kind === 'main' ? 'Total Output' : 'Total Value',
+    earnings_label: kind === 'main' ? 'Employee Daily Total' : `${kind}% Daily Earnings`,
+    employees: employeeRows,
     totals: {
       daily_totals: dailyTotals,
-      total_output: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_output, 0)),
-      total_amount: roundMoney(employeeRows.reduce((sum, row) => sum + row.total_amount, 0))
+      total_output: kind === 'main' ? roundMoney(rawGrandOutput) : exactGrandAmount,
+      total_amount: exactGrandAmount
     }
   };
 }
@@ -11480,13 +11625,14 @@ async function buildSewingRegistry(pool, payrollPeriod, kind = 'main') {
 async function buildSwrFxrSummary(pool, payrollPeriod) {
   await ensurePieceRatePayrollSchema(pool);
   const [rows] = await pool.execute(`
-    SELECT o.id, o.output_date, o.split_rule, o.full_amount,
-           sewer.employee_id AS sewer_id, sewer.share_amount AS sewer_amount,
+    SELECT o.id, DATE_FORMAT(o.output_date, '%Y-%m-%d') AS output_date,
+           o.split_rule, o.full_amount, o.quantity_produced, o.rate_per_piece,
+           sewer.employee_id AS sewer_id, sewer.share_percentage AS sewer_percentage,
            es.first_name AS sewer_first_name,
            es.middle_name AS sewer_middle_name,
            es.last_name AS sewer_last_name,
            COALESCE(NULLIF(es.agency_name, ''), 'Direct') AS agency,
-           fixer.employee_id AS fixer_id, fixer.share_amount AS fixer_amount,
+           fixer.employee_id AS fixer_id, fixer.share_percentage AS fixer_percentage,
            ef.first_name AS fixer_first_name,
            ef.middle_name AS fixer_middle_name,
            ef.last_name AS fixer_last_name
@@ -11511,29 +11657,69 @@ async function buildSwrFxrSummary(pool, payrollPeriod) {
         lastKey: 'sewer_last_name',
         order: 'lastFirst'
       }),
-      sewer_amount: 0,
+      sewer_calculation_rows: [],
       fixer_employee: payrollEmployeeDisplayName(row, {
         firstKey: 'fixer_first_name',
         middleKey: 'fixer_middle_name',
         lastKey: 'fixer_last_name',
         order: 'lastFirst'
       }),
-      fixer_amount: 0,
+      fixer_calculation_rows: [],
       partner_information: 'Sewer + Fixer (55% / 45%)'
     };
     current.no_of_days.add(String(row.output_date).slice(0, 10));
-    current.sewer_amount += Number(row.sewer_amount);
-    current.fixer_amount += Number(row.fixer_amount);
+    current.sewer_calculation_rows.push({
+      quantity_produced: row.quantity_produced,
+      rate_per_piece: row.rate_per_piece,
+      share_percentage: row.sewer_percentage
+    });
+    current.fixer_calculation_rows.push({
+      quantity_produced: row.quantity_produced,
+      rate_per_piece: row.rate_per_piece,
+      share_percentage: row.fixer_percentage
+    });
     pairs.set(key, current);
   }
-  const summaryRows = [...pairs.values()].map(row => ({ ...row, no_of_days: row.no_of_days.size, sewer_amount: roundMoney(row.sewer_amount), fixer_amount: roundMoney(row.fixer_amount), combined_total: roundMoney(row.sewer_amount + row.fixer_amount) }));
-  return { payroll_period: payrollPeriod, rows: summaryRows, totals: { sewer_amount: roundMoney(summaryRows.reduce((sum, row) => sum + row.sewer_amount, 0)), fixer_amount: roundMoney(summaryRows.reduce((sum, row) => sum + row.fixer_amount, 0)), combined_total: roundMoney(summaryRows.reduce((sum, row) => sum + row.combined_total, 0)) } };
+  const summaryRows = [...pairs.values()].map(row => {
+    const sewerAmount = calculatePieceShareTotal(row.sewer_calculation_rows);
+    const fixerAmount = calculatePieceShareTotal(row.fixer_calculation_rows);
+    const { sewer_calculation_rows, fixer_calculation_rows, ...publicRow } = row;
+    return {
+      ...publicRow,
+      no_of_days: row.no_of_days.size,
+      sewer_amount: sewerAmount,
+      fixer_amount: fixerAmount,
+      combined_total: roundMoney(sewerAmount + fixerAmount)
+    };
+  });
+  const sewerGrandRows = rows.map(row => ({
+    quantity_produced: row.quantity_produced,
+    rate_per_piece: row.rate_per_piece,
+    share_percentage: row.sewer_percentage
+  }));
+  const fixerGrandRows = rows.map(row => ({
+    quantity_produced: row.quantity_produced,
+    rate_per_piece: row.rate_per_piece,
+    share_percentage: row.fixer_percentage
+  }));
+  const sewerGrandTotal = calculatePieceShareTotal(sewerGrandRows);
+  const fixerGrandTotal = calculatePieceShareTotal(fixerGrandRows);
+  return {
+    payroll_period: payrollPeriod,
+    rows: summaryRows,
+    totals: {
+      sewer_amount: sewerGrandTotal,
+      fixer_amount: fixerGrandTotal,
+      combined_total: roundMoney(sewerGrandTotal + fixerGrandTotal)
+    }
+  };
 }
 
 router.get('/sewing-registries', requireAuth, requireRole(PAYROLL_PERMISSIONS.view), async (req, res) => {
   try {
     const kind = String(req.query.kind || 'main');
     if (!['main', '55', '45'].includes(kind)) return res.status(400).json({ error: 'Registry kind must be main, 55, or 45.' });
+    res.set('Cache-Control', 'no-store');
     res.json(await buildSewingRegistry(require('../config/db'), req.query.month_year, kind));
   } catch (err) { res.status(400).json({ error: safePayrollError(err, 'Failed to build sewing registry.') }); }
 });
@@ -11976,7 +12162,7 @@ function sewingRegistryReportRows(registry) {
         ...baseRow(),
         'Sew Type': row.operation_type || '',
         Size: row.size_range || '',
-        'Rate/Piece': peso(row.rate_per_piece),
+        'Rate/Piece': pieceRatePeso(row.rate_per_piece),
         ...Object.fromEntries(dateHeaders.map(([date, header]) => [header, sewingRegistryNumber(row.daily?.[date] || 0)])),
         'Total Output': sewingRegistryNumber(row.total_output),
         Amount: peso(row.amount),

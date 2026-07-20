@@ -190,7 +190,8 @@ function updatePieceDetailView() {
     if (el) el.textContent = value;
   };
   const peso = value => `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  set('salary-piece-rate-view', peso(preview?.piece_rate));
+  const pieceRate = value => `PHP ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+  set('salary-piece-rate-view', pieceRate(preview?.piece_rate));
   set('salary-share-view', preview ? `${Number(preview.share_percentage || 0)}%` : '0%');
   set('salary-quota-view', peso(preview?.quota_incentive));
   set('salary-sunday-view', peso(preview?.sunday_incentive));

@@ -3324,6 +3324,7 @@ function renderPieceRateConfig(config) {
     ['sew', 'Type of Sew'],
     ['sizes', 'Size Ranges'],
     ['incentives', 'Incentive Rules'],
+    ['daily', 'Daily Output Records'],
     ['production', 'Production Encodings'],
     ['register', 'SWR-FXR-SUM Register'],
     ['entries', 'Incentive Encodings']
@@ -3436,6 +3437,15 @@ function renderPieceRateRecordTable(config, view) {
     const page = pieceRecordPageRows(activeSetupRows(config.incentives));
     return pieceRecordTable(['Name', 'Category', 'Amount', 'Effective', 'Status', 'Action'], page.rows, row => `<tr><td>${payrollEscape(row.incentive_name)}</td><td>${payrollEscape(row.incentive_category)}</td><td>${money(row.amount)}</td><td>${payrollEscape((row.effective_date || '').slice(0, 10))}</td><td>${payrollBadge(row.is_active ? 'Active' : 'Inactive')}</td><td>${pieceRecordActions(view, row)}</td></tr>`, 'No incentive rules configured.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
   }
+  if (view === 'daily') {
+    const page = pieceRecordPageRows(config.daily_outputs || []);
+    return pieceRecordTable(
+      ['Output', 'Date', 'Employee', 'Role / Share', 'Sew / Size', 'Quantity', 'Rate', 'Full Amount', 'Employee Amount', 'Status'],
+      page.rows,
+      row => `<tr><td>#${payrollEscape(row.id)}</td><td>${payrollEscape((row.output_date || '').slice(0, 10))}</td><td>${payrollEscape(row.employee_name || row.employee_code || row.employee_id)}</td><td>${payrollEscape(row.partner_role || row.output_mode)} / ${payrollEscape(row.share_percentage)}%</td><td>${payrollEscape(row.operation_type)} / ${payrollEscape(row.size_range || '-')}</td><td>${payrollEscape(row.quantity_produced)}</td><td>${pieceRateMoney(row.rate_per_piece)}</td><td>${money(row.full_amount)}</td><td>${money(row.share_amount)}</td><td>${payrollBadge(row.status || 'Draft')}</td></tr>`,
+      'No daily output records yet.'
+    ) + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
+  }
   if (view === 'production') {
     const page = pieceRecordPageRows(config.production_pairs || []);
     return pieceRecordTable(['Date', 'Pairing', 'Sewer', 'Partner', 'Sew / Size', 'Qty', 'Raw Earnings'], page.rows, row => `<tr><td>${payrollEscape((row.production_date || '').slice(0, 10))}</td><td>${payrollEscape(row.pairing_type)}</td><td>${payrollEscape(row.worker1_name || row.worker1_employee_id)}</td><td>${payrollEscape(row.worker2_name || row.worker2_employee_id)}</td><td>${payrollEscape(row.sew_type_code || row.product_type)} / ${payrollEscape(row.size_range || row.product_category || '-')}</td><td>${payrollEscape(row.quantity_produced)}</td><td>${money(row.production_value)}</td></tr>`, 'No production encodings yet.') + pieceRecordPagination(page.totalRows, page.startIndex, page.currentPage, page.totalPages);
@@ -3472,6 +3482,7 @@ function changePieceRateRecordsPage(direction) {
     rules: activeSetupRows(pieceRateConfig.production_share_rules),
     splits: activeSetupRows(pieceRateConfig.production_split_configs),
     incentives: activeSetupRows(pieceRateConfig.incentives),
+    daily: pieceRateConfig.daily_outputs || [],
     production: pieceRateConfig.production_pairs || [],
     register: [],
     entries: pieceRateConfig.incentive_entries || [],
@@ -3497,7 +3508,8 @@ function editPieceRate(row) {
   setFormValues('piece-rate-form', {
     ...row,
     sew_type_code: row.sew_type_code || row.product_type,
-    size_range: row.size_range || row.product_category
+    size_range: row.size_range || row.product_category,
+    piece_rate: Number(row.piece_rate || 0).toFixed(4)
   });
   document.getElementById('piece-rate-form')?.scrollIntoView({ block: 'nearest' });
 }
@@ -3647,7 +3659,7 @@ function updateProductionPairSummary() {
   const worker1Share = outputMode === 'solo' ? 100 : Number(rule?.worker1_share || 0);
   const worker2Share = outputMode === 'solo' ? 0 : Number(rule?.worker2_share || 0);
   const rateInput = document.getElementById('pair-piece-rate-preview');
-  if (rateInput) rateInput.value = money(pieceRate);
+  if (rateInput) rateInput.value = pieceRateMoney(pieceRate);
   setPairSummary('pair-raw-earnings', money(raw));
   setPairSummary('pair-worker1-share', `${worker1Share}%`);
   setPairSummary('pair-worker1-earnings', money(raw * (worker1Share / 100)));
