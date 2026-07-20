@@ -9216,6 +9216,26 @@ function calculateManualPayrollCorrection(record, submittedCorrections) {
   return { wageType, snapshot: nextSnapshot, entries: correctedEntries, sourceGross, correctedTotal };
 }
 
+// This deterministic helper shares the payroll module's numeric and money
+// normalisation rules. It is intentionally in-memory only so System Health
+// can validate core arithmetic without creating, approving, or finalizing a
+// payroll record.
+function calculatePayrollHealthCanary({ basicPay, allowances, deductions } = {}) {
+  const normalizedBasicPay = roundMoney(numeric(basicPay));
+  const normalizedAllowances = roundMoney(numeric(allowances));
+  const normalizedDeductions = roundMoney(numeric(deductions));
+  if ([normalizedBasicPay, normalizedAllowances, normalizedDeductions].some(value => !Number.isFinite(value) || value < 0)) {
+    throw new Error('Payroll health canary inputs are invalid.');
+  }
+  const grossPay = roundMoney(normalizedBasicPay + normalizedAllowances);
+  return {
+    gross_pay: grossPay,
+    total_allowances: normalizedAllowances,
+    total_deductions: normalizedDeductions,
+    net_pay: roundMoney(grossPay - normalizedDeductions),
+  };
+}
+
 router.get('/salary-calculations/:id/recalculation-preview', requireAuth, requireRole(ROLES.payroll_any), async (req, res) => {
   try {
     const pool = require('../config/db');
@@ -12189,5 +12209,9 @@ function sewingRegistryReportRows(registry) {
 
   return rows;
 }
+
+router._systemHealth = {
+  calculateCanary: calculatePayrollHealthCanary,
+};
 
 module.exports = router;

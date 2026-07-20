@@ -415,6 +415,7 @@ const SYS_HEALTH_FALLBACK_MODULES = [
   ['blockchain', 'Blockchain Support', '/api/admin/blockchain-support/status'],
   ['support_center', 'Support Center', '/api/admin/support-tickets'],
   ['backup_restore', 'Backup and Restore', '/api/admin/backups'],
+  ['file_storage', 'File Upload / Document Storage', '/api/employees/:id/documents'],
   ['aws_readiness', 'AWS Deployment Readiness', 'Environment / EC2-RDS-S3 readiness'],
   ['database', 'Database', 'MySQL SELECT 1'],
 ];
@@ -442,6 +443,7 @@ const SYS_HEALTH_AUDIT_MODULES = {
   blockchain: 'BLOCKCHAIN',
   support_center: 'SYSTEM_HEALTH',
   backup_restore: 'SYSTEM',
+  file_storage: '201_FILE',
   aws_readiness: 'SYSTEM_HEALTH',
   database: 'SYSTEM_HEALTH',
 };
@@ -459,6 +461,7 @@ const SYS_HEALTH_SUPPORT_CATEGORIES = {
   payslip: 'PAYROLL_PROCESS',
   reports: 'REPORTING',
   blockchain: 'BLOCKCHAIN',
+  file_storage: 'SYSTEM',
   aws_readiness: 'SYSTEM',
   database: 'SYSTEM',
 };
@@ -492,6 +495,7 @@ const SYS_HEALTH_RELATED_NAV = {
   blockchain: [{ id: 'open-blockchain-support', label: 'Open Blockchain Support', icon: 'bi-shield-check', page: 'blockchain', params: { blockchainView: 'support' } }],
   support_center: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-inbox', page: 'system-admin', params: { sysAdminTab: 'support' } }],
   backup_restore: [{ id: 'open-backups', label: 'Open Backups', icon: 'bi-archive', page: 'system-admin', params: { sysAdminTab: 'backups' } }],
+  file_storage: [{ id: 'open-employees', label: 'Open Employees', icon: 'bi-folder2-open', page: 'employees' }],
   aws_readiness: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-inbox', page: 'system-admin', params: { sysAdminTab: 'support' } }],
   database: [{ id: 'open-support', label: 'Open Support Center', icon: 'bi-database', page: 'system-admin', params: { sysAdminTab: 'support' } }],
 };
@@ -1811,6 +1815,12 @@ function buildSystemHealthFallbackModules(reason = '') {
     remarks,
     response_time_ms: null,
     endpoint_checked: endpoint,
+    probe_type: 'DATABASE',
+    probe_target: endpoint,
+    http_status: null,
+    validation_passed: false,
+    checks: {},
+    failure_code: 'SYSTEM_HEALTH_BACKEND_STALE',
     dependency_status: {
       backend_route: {
         label: 'Health-check API route',
@@ -1959,6 +1969,11 @@ function healthDependencyValue(value) {
   if (value.source) parts.push(`Source: ${value.source}`);
   if (value.mode) parts.push(`Mode: ${value.mode}`);
   if (value.classification) parts.push(`Type: ${value.classification}`);
+  if (value.type) parts.push(`Probe: ${value.type}`);
+  if (Object.prototype.hasOwnProperty.call(value, 'validation_passed')) parts.push(value.validation_passed ? 'Validated' : 'Validation pending');
+  if (value.http_status) parts.push(`HTTP: ${value.http_status}`);
+  if (value.age_minutes !== undefined && value.age_minutes !== null) parts.push(`Age: ${value.age_minutes} min`);
+  if (value.age_hours !== undefined && value.age_hours !== null) parts.push(`Age: ${value.age_hours} hr`);
   if (value.reference) parts.push(`Ref: ${value.reference}`);
   if (value.target) parts.push(`Target: ${value.target}`);
   if (value.value) parts.push(sysFormatDateTime(value.value));
@@ -2065,7 +2080,7 @@ function renderSystemHealthModules() {
         <div class="health-module-card-head">
           <div>
             <h4>${sysEsc(module.module_name)}</h4>
-            <span>${sysEsc(module.endpoint_checked || '-')}</span>
+            <span>${sysEsc(module.probe_type || 'DATABASE')} &middot; ${sysEsc(module.probe_target || module.endpoint_checked || '-')}</span>
           </div>
           ${sysHealthStatusBadge(module.status)}
         </div>
@@ -2310,6 +2325,11 @@ function openSystemHealthDetails(moduleKey) {
   sysSetText('health-detail-last-failure', sysFormatDateTime(module.last_failure_at));
   sysSetText('health-detail-response', module.response_time_ms === null || module.response_time_ms === undefined ? '-' : `${Number(module.response_time_ms)} ms`);
   sysSetText('health-detail-endpoint', module.endpoint_checked || '-');
+  sysSetText('health-detail-probe-type', module.probe_type || 'DATABASE');
+  sysSetText('health-detail-probe-target', module.probe_target || module.endpoint_checked || '-');
+  sysSetText('health-detail-http-status', module.http_status || '-');
+  sysSetText('health-detail-validation', module.validation_passed === true ? 'Passed' : module.validation_passed === false ? 'Not passed' : '-');
+  sysSetText('health-detail-failure-code', module.failure_code || '-');
   sysSetText('health-detail-error', module.error_message || '-');
   sysSetText('health-detail-action', module.recommended_action || '-');
   sysSetText('health-detail-affected-area', module.affected_area || '-');
@@ -2322,7 +2342,7 @@ function openSystemHealthDetails(moduleKey) {
   const dependencies = module.dependency_status || {};
   const depTarget = document.getElementById('health-detail-dependencies');
   if (depTarget) {
-    const entries = Object.entries(dependencies);
+    const entries = Object.entries(dependencies).filter(([key]) => key !== 'probe_checks');
     depTarget.innerHTML = entries.length
       ? entries.map(([key, value]) => `
           <div class="health-dependency-row">
@@ -2331,6 +2351,19 @@ function openSystemHealthDetails(moduleKey) {
           </div>
         `).join('')
       : '<div class="table-empty">No dependency details available.</div>';
+  }
+
+  const checksTarget = document.getElementById('health-detail-checks');
+  if (checksTarget) {
+    const checks = Object.entries(module.checks || {});
+    checksTarget.innerHTML = checks.length
+      ? checks.map(([key, value]) => `
+          <div class="health-dependency-row">
+            <span>${sysEsc(key.replace(/_/g, ' '))}</span>
+            <strong>${sysEsc(value?.passed ? 'Passed' : 'Needs review')}${value?.message ? ` — ${sysEsc(value.message)}` : ''}</strong>
+          </div>
+        `).join('')
+      : '<div class="table-empty">No individual probe checks available.</div>';
   }
 
   const runbookTarget = document.getElementById('health-detail-runbook');

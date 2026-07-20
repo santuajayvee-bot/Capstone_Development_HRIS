@@ -7,6 +7,10 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 const envExample = read('.env.example');
 const admin = read('server/admin-rbac.js');
+const server = read('server.js');
+const probeRunner = read('services/system-health/probeRunner.js');
+const probeResult = read('services/system-health/probeResult.js');
+const healthProbeIndex = read('services/system-health/index.js');
 const migration = read('migrations/sqls/20260705130000_system_admin_support_tools-up.sql');
 const downMigration = read('migrations/sqls/20260705130000_system_admin_support_tools-down.sql');
 const healthMigration = read('migrations/sqls/20260705143000_system_health_checks-up.sql');
@@ -140,6 +144,7 @@ for (const key of [
   'blockchain',
   'support_center',
   'backup_restore',
+  'file_storage',
   'aws_readiness',
   'database',
 ]) {
@@ -147,6 +152,14 @@ for (const key of [
   assert(systemAdminScript.includes(`['${key}'`), `Missing stale-backend health fallback module: ${key}`);
 }
 assert(admin.includes('checkAwsReadinessHealth'), 'System Health must include an AWS deployment readiness check.');
+assert(admin.includes('systemHealthProbes'), 'System Health must use the reusable probe framework.');
+assert(admin.includes('probe_type') && admin.includes('probe_target') && admin.includes('validation_passed'), 'Health API must expose honest probe metadata.');
+assert(admin.includes('SYSTEM_HEALTH_CHECK_RATE_LIMIT'), 'Manual System Health checks must be rate-limited.');
+assert(probeRunner.includes('this.inFlight') && probeRunner.includes('this.cache'), 'Probe runner must prevent duplicate simultaneous probes and support a bounded cache.');
+assert(probeResult.includes('PROBE_TYPES') && probeResult.includes('safeText'), 'Probe results must use safe standardized metadata.');
+assert(healthProbeIndex.includes('probeBackup') && healthProbeIndex.includes('probePayroll') && healthProbeIndex.includes('probeAttendance'), 'Critical health probes must be registered through the shared framework.');
+assert(server.includes("app.get('/health/live'"), 'Public liveness endpoint must exist.');
+assert(server.includes("app.get('/health/ready'"), 'Public readiness endpoint must exist.');
 assert(admin.includes('DB_SSL'), 'AWS readiness check must verify RDS TLS readiness.');
 assert(admin.includes('AES_ENCRYPTION_KEY'), 'AWS readiness check must verify AES key readiness.');
 assert(admin.includes('AWS_S3_BUCKET'), 'AWS readiness check must verify S3 backup bucket readiness.');
@@ -181,6 +194,10 @@ assert(admin.includes('SYSTEM_HEALTH_INTERVAL_MINUTES'), 'System Health schedule
 assert(envExample.includes('SYSTEM_HEALTH_MODULE_TIMEOUT_MS=5000'), 'Env example must document System Health module timeout.');
 assert(envExample.includes('SYSTEM_HEALTH_SLOW_WARNING_MS=3000'), 'Env example must document System Health slow-check threshold.');
 assert(envExample.includes('SYSTEM_HEALTH_CHECK_CONCURRENCY=4'), 'Env example must document System Health concurrency.');
+assert(envExample.includes('SYSTEM_HEALTH_ATTENDANCE_MAX_STALE_MINUTES=60'), 'Env example must document attendance freshness.');
+assert(envExample.includes('SYSTEM_HEALTH_BIOMETRIC_MAX_SYNC_AGE_MINUTES=30'), 'Env example must document biometric sync freshness.');
+assert(envExample.includes('SYSTEM_HEALTH_BACKUP_MAX_AGE_HOURS=24'), 'Env example must document backup RPO freshness.');
+assert(envExample.includes('SYSTEM_HEALTH_RESTORE_DRILL_MAX_AGE_DAYS=90'), 'Env example must document restore drill freshness.');
 assert(admin.includes("triggerType: 'SCHEDULED'"), 'Scheduled System Health checks must persist as scheduled history.');
 assert(admin.includes('SYSTEM_HEALTH_REMEDIATION'), 'System Health modules must include remediation metadata.');
 assert(admin.includes('probable_cause'), 'System Health response must include probable cause.');
@@ -202,6 +219,11 @@ assert(admin.includes('RESTORE_JOB_TRANSITIONS'), 'Restore jobs must enforce lif
 assert(admin.includes('RESTORE_JOB_UPDATED'), 'Restore job updates must be audit logged.');
 assert(admin.includes('Deployment version backups use rollback requests'), 'Deployment version backups must not create restore jobs.');
 assert(systemAdminScript.includes('health-detail-probable-cause'), 'System Health UI must render probable cause.');
+assert(systemAdminPage.includes('id="health-detail-probe-type"'), 'System Health UI must render the probe type.');
+assert(systemAdminPage.includes('id="health-detail-probe-target"'), 'System Health UI must render the actual probe target.');
+assert(systemAdminPage.includes('id="health-detail-checks"'), 'System Health UI must render individual probe checks.');
+assert(systemAdminScript.includes('health-detail-validation'), 'System Health UI must render validation result.');
+assert(systemAdminScript.includes('health-detail-failure-code'), 'System Health UI must render a safe failure code.');
 assert(systemAdminScript.includes('health-detail-runbook'), 'System Health UI must render runbook steps.');
 assert(systemAdminScript.includes('applySystemHealthHistory'), 'System Health UI must preserve current-run history when stored history is empty.');
 assert(systemAdminScript.includes('healthHistoryRowsFromModules'), 'System Health UI must create fallback history rows from completed module results.');

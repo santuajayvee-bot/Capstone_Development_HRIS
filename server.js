@@ -65,6 +65,7 @@ const {
 }                                             = require('./server/security-controls');
 const { createAttendanceRouteRateLimiter }    = require('./server/attendance-rate-limits');
 const { createPayrollRouteRateLimiter }       = require('./server/payroll-rate-limits');
+const { createHealthHandlers }                 = require('./server/health-endpoints');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -957,7 +958,21 @@ app.get('/attendance/station', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'attendance-station.html'));
 });
 
+const healthHandlers = createHealthHandlers({
+  poolProvider: () => require('./config/db'),
+  encryptColumnValue,
+  isEncryptedValue,
+});
+
+// Public load-balancer probes. They remain minimal; protected Level 4 System
+// Health contains all dependency details and remediation guidance.
+app.get('/health/live', healthHandlers.live);
+app.get('/health/ready', healthHandlers.ready);
+
+// Retained for backward compatibility with existing local deployment checks.
 app.get('/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
   res.type('text/plain').send('Server is running');
 });
 

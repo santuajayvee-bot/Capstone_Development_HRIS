@@ -61,6 +61,8 @@ let PERFORMANCE_STATE = {
   currentReview: null,
   stepUpResolve: null,
   initialized: false,
+  initializationPromise: null,
+  photoRequestId: 0,
 };
 
 function performanceUser() {
@@ -101,6 +103,11 @@ function revokePerformancePhoto() {
   PERFORMANCE_STATE.photoObjectUrl = null;
 }
 
+function performancePageIsActive() {
+  return document.body?.dataset?.activePage === 'performance'
+    || document.getElementById('page-performance')?.classList?.contains('active');
+}
+
 async function hydratePerformanceEmployeePhoto(review) {
   const target = document.getElementById('performance-review-photo');
   if (!target) return;
@@ -108,14 +115,19 @@ async function hydratePerformanceEmployeePhoto(review) {
   target.replaceChildren(document.createTextNode(performanceInitials(review.employee_name)));
   const employeeRecordId = Number(review.employee_record_id);
   if (!Number.isSafeInteger(employeeRecordId) || employeeRecordId <= 0) return;
+  const photoRequestId = ++PERFORMANCE_STATE.photoRequestId;
   try {
-    const response = await fetch(`/api/employees/${employeeRecordId}/photo`, {
-      headers: { Authorization: `Bearer ${typeof getToken === 'function' ? getToken() : ''}` },
-    });
+    if (typeof apiFetch !== 'function') return;
+    const response = await apiFetch(`/api/employees/${employeeRecordId}/photo`, { cache: 'no-store' });
     if (!response.ok) return;
     const blob = await response.blob();
     if (!String(blob.type || '').startsWith('image/')) return;
-    PERFORMANCE_STATE.photoObjectUrl = URL.createObjectURL(blob);
+    const photoObjectUrl = URL.createObjectURL(blob);
+    if (photoRequestId !== PERFORMANCE_STATE.photoRequestId || !performancePageIsActive()) {
+      URL.revokeObjectURL(photoObjectUrl);
+      return;
+    }
+    PERFORMANCE_STATE.photoObjectUrl = photoObjectUrl;
     const image = document.createElement('img');
     image.src = PERFORMANCE_STATE.photoObjectUrl;
     image.alt = `${review.employee_name} profile picture`;
@@ -136,19 +148,13 @@ async function performanceConfirm(message, title = 'Confirm Action', confirmText
 }
 
 async function performanceApi(path, options = {}) {
-  const token = typeof getToken === 'function' ? getToken() : null;
-  const response = await fetch(`/api/performance${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  if (typeof apiFetch !== 'function') throw new Error('Authenticated API helper is unavailable.');
+  const response = await apiFetch(`/api/performance${path}`, { cache: 'no-store', ...options });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error || 'Performance Management request failed.');
-    error.code = payload.code;
+    error.code = payload.code || 'PERFORMANCE_REQUEST_FAILED';
+    error.status = response.status;
     throw error;
   }
   return payload;
@@ -183,6 +189,7 @@ function performanceOutcomeNotice(outcome) {
 }
 
 async function initPerformanceManagement() {
+  if (PERFORMANCE_STATE.initializationPromise) return PERFORMANCE_STATE.initializationPromise;
   const manager = performanceCanManage();
   document.getElementById('performance-manager-actions')?.toggleAttribute('hidden', !manager);
   const search = document.getElementById('performance-search');
@@ -197,17 +204,24 @@ async function initPerformanceManagement() {
   if (copy) copy.textContent = manager ? 'Appraisal records by cycle and workflow status' : 'Your current and previous appraisal records';
   document.getElementById('performance-cycle-actions-heading')?.toggleAttribute('hidden', !manager);
   PERFORMANCE_STATE.initialized = true;
-  await Promise.all([
+  const initialization = Promise.all([
     loadPerformanceOverview(),
     loadPerformanceReviews(),
     manager ? loadPerformanceEmployees() : Promise.resolve(),
     manager ? loadPerformanceDepartments() : Promise.resolve(),
-  ]);
+  ]).finally(() => {
+    if (PERFORMANCE_STATE.initializationPromise === initialization) {
+      PERFORMANCE_STATE.initializationPromise = null;
+    }
+  });
+  PERFORMANCE_STATE.initializationPromise = initialization;
+  return initialization;
 }
 
 async function loadPerformanceOverview() {
   try {
     const overview = await performanceApi('/overview');
+    if (!performancePageIsActive()) return;
     PERFORMANCE_STATE.overview = overview;
     const summary = overview.summary || {};
     const values = {
@@ -267,6 +281,7 @@ function renderPerformanceCycles(cycles) {
 async function loadPerformanceEmployees() {
   try {
     PERFORMANCE_STATE.employees = await performanceApi('/eligible-employees');
+    if (!performancePageIsActive()) return;
     renderPerformanceAssignmentDepartments();
     filterPerformanceAssignmentEmployees();
   } catch (error) {
@@ -304,6 +319,7 @@ function filterPerformanceAssignmentEmployees() {
 async function loadPerformanceDepartments() {
   try {
     PERFORMANCE_STATE.departments = await performanceApi('/departments');
+    if (!performancePageIsActive()) return;
     const select = document.getElementById('performance-department-filter');
     if (!select) return;
     const selected = select.value;
@@ -334,6 +350,7 @@ async function loadPerformanceReviews() {
   if (body) body.innerHTML = '<tr><td colspan="8" class="performance-empty">Loading reviews...</td></tr>';
   try {
     const payload = await performanceApi(`/reviews?${params}`);
+    if (!performancePageIsActive()) return;
     PERFORMANCE_STATE.reviews = Array.isArray(payload) ? payload : (payload.items || []);
     PERFORMANCE_STATE.pagination = payload.pagination || { page: 1, page_size: pageSize, total_items: PERFORMANCE_STATE.reviews.length, total_pages: 1 };
     renderPerformanceReviews();

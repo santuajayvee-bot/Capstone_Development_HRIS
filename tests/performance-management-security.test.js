@@ -59,6 +59,9 @@ assert(api.includes('encryptColumnValue') && api.includes('decryptColumnValue'))
 assert(api.includes("crypto.createHash('sha256')"));
 assert(api.includes("integrity_status: integrityStatus(row)"));
 assert(api.includes('FOR UPDATE'));
+assert(api.includes('function performanceStepUpFailure()'));
+assert(api.includes("throw performanceStepUpFailure();"));
+assert(!api.includes("new PerformanceError('Current password verification failed.', 401"));
 
 assert(server.includes("app.use('/api/performance', PERFORMANCE_ROUTE_RATE_LIMIT)"));
 assert(server.includes("app.use('/api/performance', performanceManagementRoutes)"));
@@ -80,6 +83,12 @@ assert(page.includes('id="performance-review-photo"'));
 assert(page.includes('id="performance-assignment-department"'));
 assert(api.includes('e.id AS employee_record_id') && api.includes('employee_record_id: Number(row.employee_record_id)'));
 assert(ui.includes('hydratePerformanceEmployeePhoto') && ui.includes('/photo`'));
+assert(ui.includes("apiFetch(`/api/performance${path}`, { cache: 'no-store', ...options })"));
+assert(ui.includes("apiFetch(`/api/employees/${employeeRecordId}/photo`, { cache: 'no-store' })"));
+assert(!ui.includes('await fetch('), 'Performance must use the shared authenticated API helper for protected requests.');
+assert(!ui.includes('Authorization: `Bearer'), 'Performance must not construct bearer headers itself.');
+assert(ui.includes('error.status = response.status') && ui.includes("error.code = payload.code || 'PERFORMANCE_REQUEST_FAILED'"));
+assert(ui.includes('initializationPromise'), 'Performance initialization must collapse concurrent navigation calls.');
 assert(ui.includes('filterPerformanceAssignmentEmployees'));
 assert(indexPage.includes('sidebar-collapse-toggle-icon') && indexPage.includes('&#8249;'));
 assert(authUi.includes("icon.textContent = isCollapsed ? '\\u203a' : '\\u2039'"));
@@ -96,6 +105,7 @@ const {
   calculateEvaluationScore,
   PERFORMANCE_CRITERIA,
   performanceOutcome,
+  performanceStepUpFailure,
   parseIndicatorRatings,
 } = require('../server/performance-management');
 const indicatorRatings = Object.fromEntries(PERFORMANCE_CRITERIA.map((criterion, criterionIndex) => [
@@ -133,5 +143,8 @@ assert.strictEqual(performanceOutcome(2.00, '2026-07-01').requires_reassessment,
 assert.strictEqual(performanceOutcome(1.25).hr_case_review_required, true);
 assert.strictEqual(performanceOutcome(2.49).passed, false);
 assert.strictEqual(performanceOutcome(2.50).passed, true);
+const stepUpFailure = performanceStepUpFailure();
+assert.strictEqual(stepUpFailure.statusCode, 403);
+assert.strictEqual(stepUpFailure.code, 'PERFORMANCE_STEP_UP_FAILED');
 
 console.log('Performance Management STRIDE and security controls: PASS');

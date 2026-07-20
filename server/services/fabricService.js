@@ -245,10 +245,23 @@ async function getDTRHistory(dtrId) {
   });
 }
 
+/**
+ * Read-only Fabric health transaction. Chaincode deployments must expose this
+ * operation without mutating ledger state; it is deliberately separate from
+ * payroll and DTR transactions so System Health never submits business data.
+ */
+async function evaluateHealthCheck() {
+  return withContract(async contract => {
+    const result = await contract.evaluateTransaction('HealthCheck');
+    return { available: true, hasResponse: Boolean(result?.length) };
+  });
+}
+
 module.exports = {
   FabricUnavailableError,
   connectToFabricNetwork,
   createPayrollAdjustmentRecord,
+  evaluateHealthCheck,
   fabricConfig,
   getFabricConfigStatus,
   getDTRHistory,

@@ -19,10 +19,20 @@ const { requireAuth, requirePermission } = require('./middleware');
 const accountController = require('../controllers/accountController');
 const { decryptColumnValue, encryptColumnValue, nullableText } = require('./data-protection');
 const { getFabricConfigStatus } = require('./services/fabricService');
+const systemHealthProbes = require('../services/system-health');
+const { createRateLimiter } = require('./security-controls');
 const {
   hashTemporaryPassword,
   validateTemporaryPassword,
 } = require('../services/passwordService');
+
+const SYSTEM_HEALTH_CHECK_RATE_LIMIT = createRateLimiter({
+  windowMs: Number(process.env.SYSTEM_HEALTH_CHECK_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.SYSTEM_HEALTH_CHECK_RATE_LIMIT_MAX || 12),
+  keyGenerator: req => `system-health:${req.user?.id || req.ip || 'unknown'}`,
+  auditAction: 'blocked_system_health_check_rate_limit',
+  module: 'SYSTEM_HEALTH',
+});
 
 const auditSchemaCache = {
   tables: new Map(),
@@ -2453,7 +2463,7 @@ async function checkPayrollApprovalHealth() {
   );
 }
 
-const SYSTEM_HEALTH_MODULES = [
+const SYSTEM_HEALTH_MODULE_DEFINITIONS = [
   {
     key: 'dashboard',
     name: 'Dashboard',
@@ -2468,7 +2478,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/auth/login',
     dependencies: ['users', 'USER_SESSION', 'system_audit_log'],
     recommended_action: 'Review failed login, MFA, and lockout audit events before resetting credentials.',
-    check: checkAuthenticationHealth,
+    probeType: 'SERVICE',
+    probeTarget: 'auth controller + passwordService + tokenService',
+    critical: true,
+    check: () => systemHealthProbes.authentication({ pool }),
   },
   {
     key: 'dpa_privacy',
@@ -2500,7 +2513,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/employees',
     dependencies: ['employees', 'employee_lifecycle_event', 'employee_201_file_access_audit'],
     recommended_action: 'Check employee lifecycle records and 201-file access audit entries for missing links.',
-    check: checkEmployeeHealth,
+    probeType: 'SERVICE',
+    probeTarget: 'employee/201-file controller + limited employee query',
+    critical: true,
+    check: () => systemHealthProbes.employee({ pool }),
   },
   {
     key: 'organization_setup',
@@ -2524,7 +2540,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/attendance/all',
     dependencies: ['attendance_log', 'attendance_summary', 'attendance_adjustment'],
     recommended_action: 'Validate pending attendance records and keep corrections audit-logged.',
-    check: checkAttendanceHealth,
+    probeType: 'SERVICE',
+    probeTarget: 'attendance controller + attendance-policy-engine + attendance summary query',
+    critical: true,
+    check: () => systemHealthProbes.attendance({ pool }),
   },
   {
     key: 'attendance_sync',
@@ -2532,7 +2551,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/biometric/status',
     dependencies: ['biometric_device', 'biometric_employee_mapping', 'biometric_sync_log'],
     recommended_action: 'Check biometric device activity, sync logs, and employee-device mappings.',
-    check: checkAttendanceSyncHealth,
+    probeType: 'EXTERNAL_DEPENDENCY',
+    probeTarget: 'attendance-service + biometric device/sync status',
+    critical: false,
+    check: () => systemHealthProbes.attendanceSync({ pool }),
   },
   {
     key: 'leave',
@@ -2564,7 +2586,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/payroll/salary-calculations',
     dependencies: ['PAYROLL_RECORD', 'payroll_runs', 'payroll_policy_settings'],
     recommended_action: 'Review draft payroll runs, policy settings, and payroll audit trail before final approval.',
-    check: checkPayrollHealth,
+    probeType: 'SERVICE',
+    probeTarget: 'payroll controller._systemHealth.calculateCanary',
+    critical: true,
+    check: () => systemHealthProbes.payroll({ pool }),
   },
   {
     key: 'payroll_approval',
@@ -2580,7 +2605,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/payroll/payslips',
     dependencies: ['payslips', 'PAYROLL_RECORD'],
     recommended_action: 'Verify payslip encryption columns and only release finalized payslips.',
-    check: checkPayslipHealth,
+    probeType: 'INTEGRITY',
+    probeTarget: 'payslip controller + data-protection AES-256-GCM round trip',
+    critical: true,
+    check: () => systemHealthProbes.payslip({ pool }),
   },
   {
     key: 'reports',
@@ -2604,7 +2632,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/admin/audit-log',
     dependencies: ['system_audit_log'],
     recommended_action: 'Investigate unusual failed, denied, blocked, or tamper-related audit events.',
-    check: checkAuditTrailHealth,
+    probeType: 'SERVICE',
+    probeTarget: 'security-controls audit writer + system_audit_log read',
+    critical: true,
+    check: () => systemHealthProbes.audit({ pool }),
   },
   {
     key: 'blockchain',
@@ -2612,7 +2643,10 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/admin/blockchain-support/status',
     dependencies: ['PAYROLL_RECORD', 'BLOCKCHAIN_AUDIT_LOG', 'Hyperledger Fabric env'],
     recommended_action: 'Verify Fabric settings and anchor only finalized payroll integrity records.',
-    check: checkBlockchainHealth,
+    probeType: 'EXTERNAL_DEPENDENCY',
+    probeTarget: 'fabricService.evaluateHealthCheck',
+    critical: false,
+    check: () => systemHealthProbes.blockchain({ pool }),
   },
   {
     key: 'support_center',
@@ -2628,7 +2662,21 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: '/api/admin/backups',
     dependencies: ['backup_sets', 'module_recovery_points', 'restore_jobs', 'module_rollback_requests', 'AWS S3 / RDS snapshot target'],
     recommended_action: 'Confirm the latest backup completed, recovery points exist, and rollback requests stay controlled.',
-    check: checkBackupHealth,
+    probeType: 'INTEGRITY',
+    probeTarget: 'backup runtime.verifyBackup + restore-drill freshness',
+    critical: true,
+    check: () => systemHealthProbes.backup({ pool }),
+  },
+  {
+    key: 'file_storage',
+    name: 'File Upload / Document Storage',
+    endpoint: '/api/employees/:id/documents',
+    dependencies: ['encrypted file vault', 'SECURE_UPLOAD_ROOT'],
+    recommended_action: 'Verify encrypted document storage can safely write, read, validate, and remove a dedicated health canary.',
+    probeType: 'INTEGRITY',
+    probeTarget: 'encrypted-file-vault system-health temporary scope',
+    critical: false,
+    check: () => systemHealthProbes.fileStorage(),
   },
   {
     key: 'aws_readiness',
@@ -2644,9 +2692,19 @@ const SYSTEM_HEALTH_MODULES = [
     endpoint: 'MySQL SELECT 1',
     dependencies: ['MySQL / Amazon RDS MySQL'],
     recommended_action: 'Check RDS connectivity, credentials, TLS, and slow-query indicators if latency is high.',
-    check: checkDatabaseHealth,
+    probeType: 'DATABASE',
+    probeTarget: 'mysql2 pool.getConnection + SELECT 1',
+    critical: true,
+    check: () => systemHealthProbes.database({ pool }),
   },
 ];
+
+const SYSTEM_HEALTH_MODULES = SYSTEM_HEALTH_MODULE_DEFINITIONS.map(definition => ({
+  probeType: 'DATABASE',
+  probeTarget: definition.endpoint,
+  critical: false,
+  ...definition,
+}));
 
 const SYSTEM_HEALTH_MODULE_MAP = new Map(SYSTEM_HEALTH_MODULES.map(module => [module.key, module]));
 
@@ -2863,12 +2921,23 @@ const SYSTEM_HEALTH_REMEDIATION = {
   },
   backup_restore: {
     affected_area: 'Backup request records, verification hashes, storage target references, and restore readiness.',
-    probable_cause: 'No recent backup, latest backup failed, missing manifest hash, or storage target not recorded.',
-    admin_action: 'Request or verify a backup before any risky maintenance, migration, or restore operation.',
+    probable_cause: 'No recent verified artifact, an artifact integrity/read failure, a missed recovery-point objective, or an overdue restore drill.',
+    admin_action: 'Request and MFA-verify a fresh backup before risky maintenance; investigate failed artifact checks without starting an unapproved restore.',
     runbook_steps: [
       'Open Backup and Restore.',
-      'Check latest backup status and verification hash.',
-      'Record backup location securely; do not expose secrets in notes.',
+      'Check the latest artifact status, checksum verification, recovery-point age, and restore-drill date.',
+      'Use the protected restore workflow only after a fresh MFA approval and isolated dry-run.',
+      'Do not expose backup locations, credentials, or recovery details in notes.',
+    ],
+  },
+  file_storage: {
+    affected_area: 'Encrypted employee documents, uploads, reads, integrity validation, and secure cleanup.',
+    probable_cause: 'Vault permissions, at-rest encryption initialization, disk/storage availability, or cleanup failure.',
+    admin_action: 'Review protected server logs and storage permissions; do not test against employee document paths.',
+    runbook_steps: [
+      'Open the related Employee / 201-file module and confirm normal authorized document access.',
+      'Review the safe health-check result and its cleanup status.',
+      'Check protected storage configuration without putting paths, credentials, or document data in tickets.',
     ],
   },
   aws_readiness: {
@@ -2974,6 +3043,18 @@ async function runWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+// This is intentionally separate from the probe framework's per-probe
+// single-flight cache. It also protects the remaining legacy module checks
+// while a manual and scheduled full check overlap.
+const systemHealthModuleInFlight = new Map();
+
+function cloneSystemHealthModuleResult(value) {
+  // Health results contain only JSON-safe, sanitized diagnostic metadata.
+  // Return a fresh copy so simultaneous callers cannot alter each other's
+  // history, last-healthy, or recent-log presentation fields.
+  return JSON.parse(JSON.stringify(value));
+}
+
 function healthModuleResponse(definition, rowOrResult = {}) {
   const status = normalizeHealthStatus(rowOrResult.status);
   const remediation = SYSTEM_HEALTH_REMEDIATION[definition.key] || {};
@@ -2983,7 +3064,15 @@ function healthModuleResponse(definition, rowOrResult = {}) {
     status,
     remarks: rowOrResult.remarks || 'No health check has been run yet.',
     response_time_ms: rowOrResult.response_time_ms ?? null,
-    endpoint_checked: rowOrResult.endpoint_checked || definition.endpoint,
+    endpoint_checked: rowOrResult.endpoint_checked || rowOrResult.probe_target || definition.probeTarget || definition.endpoint,
+    probe_type: rowOrResult.probe_type || definition.probeType || 'DATABASE',
+    probe_target: rowOrResult.probe_target || definition.probeTarget || definition.endpoint,
+    http_status: rowOrResult.http_status ?? null,
+    validation_passed: typeof rowOrResult.validation_passed === 'boolean'
+      ? rowOrResult.validation_passed
+      : status !== 'OFFLINE',
+    checks: rowOrResult.checks && typeof rowOrResult.checks === 'object' ? rowOrResult.checks : {},
+    failure_code: rowOrResult.failure_code || null,
     dependency_status: parseDependencyStatus(rowOrResult.dependency_status || rowOrResult.dependencies),
     dependencies: definition.dependencies,
     error_message: rowOrResult.error_message || null,
@@ -2999,17 +3088,27 @@ function healthModuleResponse(definition, rowOrResult = {}) {
   };
 }
 
-async function runSystemHealthModule(definition, { timeoutMs = systemHealthModuleTimeoutMs() } = {}) {
+async function runSystemHealthModuleOnce(definition, { timeoutMs = systemHealthModuleTimeoutMs() } = {}) {
   const started = Date.now();
   const timestamp = checkedTimestamp();
   try {
-    const check = await withSystemHealthTimeout(() => definition.check(), timeoutMs);
+    const check = await withSystemHealthTimeout(() => definition.check({ pool, definition, timeoutMs }), timeoutMs);
     const responseTimeMs = Date.now() - started;
     const slowWarningMs = systemHealthSlowWarningMs();
     const baseStatus = normalizeHealthStatus(check.status);
     const slowDiagnostic = baseStatus === 'ONLINE' && responseTimeMs > slowWarningMs;
     const status = slowDiagnostic ? 'WARNING' : baseStatus;
-    const dependencies = { ...(check.dependencies || {}) };
+    const dependencies = {
+      ...(check.dependencies || {}),
+      probe_metadata: {
+        label: 'Probe metadata',
+        type: check.probe_type || definition.probeType || 'DATABASE',
+        target: check.probe_target || definition.probeTarget || definition.endpoint,
+        validation_passed: typeof check.validation_passed === 'boolean' ? check.validation_passed : baseStatus !== 'OFFLINE',
+        http_status: check.http_status || null,
+      },
+      probe_checks: check.checks || {},
+    };
     if (slowDiagnostic) {
       dependencies.diagnostic_performance = dependencySetting(
         'Health check response time',
@@ -3024,12 +3123,20 @@ async function runSystemHealthModule(definition, { timeoutMs = systemHealthModul
         ? `Slow diagnostic response (${responseTimeMs} ms). ${check.remarks}`
         : check.remarks,
       response_time_ms: responseTimeMs,
-      endpoint_checked: definition.endpoint,
+      endpoint_checked: check.probe_target || definition.probeTarget || definition.endpoint,
+      probe_type: check.probe_type || definition.probeType,
+      probe_target: check.probe_target || definition.probeTarget || definition.endpoint,
+      http_status: check.http_status ?? null,
+      validation_passed: typeof check.validation_passed === 'boolean' ? check.validation_passed : status !== 'OFFLINE',
+      checks: check.checks || {},
+      failure_code: check.failure_code || null,
       dependencies,
       error_message: check.error_message || null,
       checked_at: timestamp,
-      last_success_at: status === 'OFFLINE' ? null : timestamp,
-      last_failure_at: status === 'OFFLINE' ? timestamp : null,
+      // "Last Healthy" means a fully ONLINE probe, not merely a diagnostic
+      // that completed with a warning or controlled-maintenance condition.
+      last_success_at: status === 'ONLINE' ? timestamp : null,
+      last_failure_at: status === 'ONLINE' ? null : timestamp,
     });
   } catch (error) {
     const timedOut = isSystemHealthTimeout(error);
@@ -3043,7 +3150,12 @@ async function runSystemHealthModule(definition, { timeoutMs = systemHealthModul
         ? `This module did not respond within the configured ${timeoutMs} ms diagnostic timeout.`
         : safeHealthError(),
       response_time_ms: Date.now() - started,
-      endpoint_checked: definition.endpoint,
+      endpoint_checked: definition.probeTarget || definition.endpoint,
+      probe_type: definition.probeType || 'DATABASE',
+      probe_target: definition.probeTarget || definition.endpoint,
+      validation_passed: false,
+      checks: { probe_execution: { passed: false, message: safeMessage } },
+      failure_code: timedOut ? 'SYSTEM_HEALTH_TIMEOUT' : 'SYSTEM_HEALTH_PROBE_FAILED',
       dependencies: timedOut ? {
         diagnostic_timeout: dependencySetting('Health check timeout', false, `Exceeded ${timeoutMs} ms`, { timeout_ms: timeoutMs }),
       } : {},
@@ -3053,6 +3165,17 @@ async function runSystemHealthModule(definition, { timeoutMs = systemHealthModul
       last_failure_at: timestamp,
     });
   }
+}
+
+async function runSystemHealthModule(definition, options = {}) {
+  const moduleKey = String(definition?.key || 'unknown').slice(0, 100);
+  let execution = systemHealthModuleInFlight.get(moduleKey);
+  if (!execution) {
+    execution = runSystemHealthModuleOnce(definition, options)
+      .finally(() => systemHealthModuleInFlight.delete(moduleKey));
+    systemHealthModuleInFlight.set(moduleKey, execution);
+  }
+  return cloneSystemHealthModuleResult(await execution);
 }
 
 async function persistSystemHealthModule(moduleResult, checkedByUserId = null) {
@@ -3426,7 +3549,7 @@ router.get('/system-health/history', async (req, res) => {
   }
 });
 
-router.post('/system-health/check', async (req, res) => {
+router.post('/system-health/check', SYSTEM_HEALTH_CHECK_RATE_LIMIT, async (req, res) => {
   try {
     const historyRunId = makeSystemHealthRunId();
     const checkedByUserId = req.user?.id || null;
@@ -3460,7 +3583,7 @@ router.post('/system-health/check', async (req, res) => {
   }
 });
 
-router.post('/system-health/check/:moduleKey', async (req, res) => {
+router.post('/system-health/check/:moduleKey', SYSTEM_HEALTH_CHECK_RATE_LIMIT, async (req, res) => {
   try {
     const moduleKey = cleanText(req.params.moduleKey, 80).toLowerCase();
     if (!SYSTEM_HEALTH_MODULE_MAP.has(moduleKey)) {

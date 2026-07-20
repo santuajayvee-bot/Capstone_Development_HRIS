@@ -76,6 +76,13 @@ class PerformanceError extends Error {
   }
 }
 
+function performanceStepUpFailure() {
+  // A failed current-password proof blocks only this protected operation. It
+  // is not proof that the primary JWT session is invalid, so it must not use
+  // the 401 status that apiFetch correctly handles by clearing authentication.
+  return new PerformanceError('Current password verification failed.', 403, 'PERFORMANCE_STEP_UP_FAILED');
+}
+
 function cleanText(value, maxLength, field, { required = false } = {}) {
   const text = String(value ?? '').trim();
   if (required && !text) throw new PerformanceError(`${field} is required.`);
@@ -697,7 +704,7 @@ router.post('/reviews/:reviewId/finalize', requirePerformanceManager, async (req
     const verified = await verifyStepUpPassword(req);
     if (!verified) {
       await auditSecurityEvent(req, { action: 'performance_step_up_authentication_failed', module: 'PERFORMANCE_SECURITY', targetTable: 'performance_reviews', targetRecord: req.params.reviewId, result: 'blocked' });
-      throw new PerformanceError('Current password verification failed.', 401, 'PERFORMANCE_STEP_UP_FAILED');
+      throw performanceStepUpFailure();
     }
     const reviewId = positiveId(req.params.reviewId, 'Review ID');
     const version = positiveId(req.body.version, 'Review version');
@@ -741,7 +748,7 @@ router.post('/reviews/:reviewId/reopen', requirePerformanceManager, async (req, 
     const verified = await verifyStepUpPassword(req);
     if (!verified) {
       await auditSecurityEvent(req, { action: 'performance_reopen_step_up_authentication_failed', module: 'PERFORMANCE_SECURITY', targetTable: 'performance_reviews', targetRecord: req.params.reviewId, result: 'blocked' });
-      throw new PerformanceError('Current password verification failed.', 401, 'PERFORMANCE_STEP_UP_FAILED');
+      throw performanceStepUpFailure();
     }
     const reviewId = positiveId(req.params.reviewId, 'Review ID');
     const version = positiveId(req.body.version, 'Review version');
@@ -776,3 +783,4 @@ module.exports.PERFORMANCE_CRITERIA = PERFORMANCE_CRITERIA;
 module.exports.calculateEvaluationScore = calculateEvaluationScore;
 module.exports.performanceOutcome = performanceOutcome;
 module.exports.parseIndicatorRatings = parseIndicatorRatings;
+module.exports.performanceStepUpFailure = performanceStepUpFailure;
