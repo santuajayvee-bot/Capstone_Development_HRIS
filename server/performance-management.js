@@ -16,6 +16,20 @@ const {
 const router = express.Router();
 const REVIEW_STATUSES = new Set(['ASSIGNED', 'FINALIZED']);
 const CYCLE_STATUSES = new Set(['DRAFT', 'ACTIVE', 'CLOSED']);
+// Supporting records are evidence only after they have passed the operational
+// log workflow. Draft, submitted, rejected, or voided entries must never be
+// presented to an evaluator as verified performance evidence.
+const VERIFIED_OPERATIONAL_STATUSES = ['Approved', 'Payroll Ready', 'Included in Payroll', 'Paid'];
+const PROCESSED_OPERATIONAL_STATUSES = ['Included in Payroll', 'Paid'];
+const EXCEPTION_OPERATIONAL_STATUSES = ['Rejected', 'Cancelled', 'Voided'];
+const SUPPORTING_DATA_TABLES = [
+  'attendance_log',
+  'delivery_trips',
+  'payroll_production_outputs',
+  'payroll_production_pairs',
+  'piece_rate_outputs',
+  'piece_rate_output_shares',
+];
 class PerformanceError extends Error {
   constructor(message, statusCode = 400, code = 'PERFORMANCE_REQUEST_INVALID') {
     super(message);
@@ -127,6 +141,29 @@ function parseIndicatorRating(value, field) {
     throw new PerformanceError(`${field} must be a whole-number rating from 1 to 4 or N/A.`);
   }
   return rating;
+}
+
+function supportingNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function combineSupportingRows(rows, fields) {
+  return rows.reduce((total, row) => {
+    for (const field of fields) total[field] += supportingNumber(row?.[field]);
+    return total;
+  }, Object.fromEntries(fields.map(field => [field, 0])));
+}
+
+async function availableSupportingDataTables(executor) {
+  const [rows] = await executor.execute(
+    `SELECT table_name
+       FROM information_schema.tables
+      WHERE table_schema = DATABASE()
+        AND table_name IN (${SUPPORTING_DATA_TABLES.map(() => '?').join(', ')})`,
+    SUPPORTING_DATA_TABLES
+  );
+  return new Set(rows.map(row => String(row.table_name || '').toLowerCase()));
 }
 
 function questionnaireCriteria(questionnaire) {
@@ -972,33 +1009,86 @@ router.get('/reviews/:reviewId/supporting-summary', requirePerformanceManager, a
   try {
     const row = await loadReview(pool, positiveId(req.params.reviewId, 'Review ID'));
     const params = [row.employee_record_id, row.review_period_start, row.review_period_end];
-    const [attendanceRows] = await pool.execute(
-      `SELECT COUNT(*) AS recorded_days,
-              SUM(time_in IS NOT NULL) AS days_present,
-              SUM(COALESCE(status, '') = 'Absent') AS absences,
-              SUM(COALESCE(late_minutes, 0) > 0) AS tardiness_count,
-              SUM(COALESCE(late_minutes, 0)) AS tardiness_minutes,
-              SUM(COALESCE(integrity_hash, '') <> '') AS integrity_recorded
-         FROM attendance_log
-        WHERE employee_id = ? AND date BETWEEN ? AND ?`,
-      params
+    const tables = await availableSupportingDataTables(pool);
+    const productionSources = {
+      direct: tables.has('payroll_production_outputs'),
+      paired: tables.has('payroll_production_pairs'),
+      daily: tables.has('piece_rate_outputs') && tables.has('piece_rate_output_shares'),
+    };
+    const sourceStatus = {
+      attendance: tables.has('attendance_log'),
+      production: Object.values(productionSources).some(Boolean),
+      logistics: tables.has('delivery_trips'),
+    };
+
+    // Use the source tables that power the current Operational Logs workflow.
+    // The legacy production_transactions table has no verification status, so
+    // it is intentionally excluded from verified performance evidence.
+    const [attendanceResult, directProductionResult, pairedProductionResult, dailyProductionResult, logisticsResult] = await Promise.all([
+      sourceStatus.attendance
+        ? pool.execute(
+          `SELECT COUNT(*) AS recorded_days,
+                  COALESCE(SUM(time_in IS NOT NULL), 0) AS days_present,
+                  COALESCE(SUM(COALESCE(status, '') = 'Absent'), 0) AS absences,
+                  COALESCE(SUM(COALESCE(late_minutes, 0) > 0), 0) AS tardiness_count,
+                  COALESCE(SUM(COALESCE(late_minutes, 0)), 0) AS tardiness_minutes
+             FROM attendance_log
+            WHERE employee_id = ? AND date BETWEEN ? AND ?`,
+          params
+        )
+        : Promise.resolve([[{}]]),
+      productionSources.direct
+        ? pool.execute(
+          `SELECT COUNT(*) AS verified_records,
+                  COALESCE(SUM(quantity_produced), 0) AS output_quantity,
+                  COALESCE(SUM(final_gross_pay), 0) AS verified_amount
+             FROM payroll_production_outputs
+            WHERE employee_id = ? AND output_date BETWEEN ? AND ?
+              AND status IN (${VERIFIED_OPERATIONAL_STATUSES.map(() => '?').join(', ')})`,
+          [...params, ...VERIFIED_OPERATIONAL_STATUSES]
+        )
+        : Promise.resolve([[{}]]),
+      productionSources.paired
+        ? pool.execute(
+          `SELECT COUNT(*) AS verified_records,
+                  COALESCE(SUM(quantity_produced), 0) AS output_quantity,
+                  COALESCE(SUM(CASE WHEN worker1_employee_id = ? THEN worker1_earnings ELSE worker2_earnings END), 0) AS verified_amount
+             FROM payroll_production_pairs
+            WHERE (worker1_employee_id = ? OR worker2_employee_id = ?)
+              AND production_date BETWEEN ? AND ?
+              AND status IN (${VERIFIED_OPERATIONAL_STATUSES.map(() => '?').join(', ')})`,
+          [row.employee_record_id, row.employee_record_id, row.employee_record_id, row.review_period_start, row.review_period_end, ...VERIFIED_OPERATIONAL_STATUSES]
+        )
+        : Promise.resolve([[{}]]),
+      productionSources.daily
+        ? pool.execute(
+          `SELECT COUNT(DISTINCT o.id) AS verified_records,
+                  COALESCE(SUM(o.quantity_produced), 0) AS output_quantity,
+                  COALESCE(SUM(s.share_amount), 0) AS verified_amount
+             FROM piece_rate_outputs o
+             JOIN piece_rate_output_shares s ON s.piece_rate_output_id = o.id
+            WHERE s.employee_id = ? AND o.output_date BETWEEN ? AND ?
+              AND o.status IN (${VERIFIED_OPERATIONAL_STATUSES.map(() => '?').join(', ')})`,
+          [...params, ...VERIFIED_OPERATIONAL_STATUSES]
+        )
+        : Promise.resolve([[{}]]),
+      sourceStatus.logistics
+        ? pool.execute(
+          `SELECT COALESCE(SUM(COALESCE(status, '') IN (${VERIFIED_OPERATIONAL_STATUSES.map(() => '?').join(', ')})), 0) AS verified_trips,
+                  COALESCE(SUM(COALESCE(status, '') IN (${PROCESSED_OPERATIONAL_STATUSES.map(() => '?').join(', ')})), 0) AS processed_trips,
+                  COALESCE(SUM(COALESCE(status, '') IN (${EXCEPTION_OPERATIONAL_STATUSES.map(() => '?').join(', ')})), 0) AS documented_exceptions
+             FROM delivery_trips
+            WHERE employee_id = ? AND trip_date BETWEEN ? AND ?`,
+          [...VERIFIED_OPERATIONAL_STATUSES, ...PROCESSED_OPERATIONAL_STATUSES, ...EXCEPTION_OPERATIONAL_STATUSES, ...params]
+        )
+        : Promise.resolve([[{}]]),
+    ]);
+    const attendance = combineSupportingRows([attendanceResult[0][0]], ['recorded_days', 'days_present', 'absences', 'tardiness_count', 'tardiness_minutes']);
+    const production = combineSupportingRows(
+      [directProductionResult[0][0], pairedProductionResult[0][0], dailyProductionResult[0][0]],
+      ['verified_records', 'output_quantity', 'verified_amount']
     );
-    const [productionRows] = await pool.execute(
-      `SELECT COUNT(*) AS approved_records, COALESCE(SUM(quantity), 0) AS output_quantity,
-              COALESCE(SUM(amount), 0) AS approved_amount
-         FROM production_transactions
-        WHERE employee_id = ? AND transaction_date BETWEEN ? AND ?`,
-      params
-    ).catch(() => [[{}]]);
-    const [logisticsRows] = await pool.execute(
-      `SELECT COUNT(*) AS verified_trips,
-              SUM(COALESCE(status, '') NOT IN ('Rejected', 'Cancelled', 'Deleted')) AS completed_or_approved,
-              SUM(COALESCE(status, '') IN ('Rejected', 'Cancelled')) AS documented_exceptions
-         FROM delivery_trips
-        WHERE employee_id = ? AND trip_date BETWEEN ? AND ?`,
-      params
-    ).catch(() => [[{}]]);
-    const normalize = source => Object.fromEntries(Object.entries(source || {}).map(([key, value]) => [key, Number(value || 0)]));
+    const logistics = combineSupportingRows([logisticsResult[0][0]], ['verified_trips', 'processed_trips', 'documented_exceptions']);
     return res.json({
       as_of: new Date().toISOString(),
       employee: {
@@ -1008,9 +1098,10 @@ router.get('/reviews/:reviewId/supporting-summary', requirePerformanceManager, a
         employee_level: safeDecrypt(row.employee_level) || row.employee_level || '',
         wage_type: row.wage_type || '',
       },
-      attendance: normalize(attendanceRows[0]),
-      production: normalize(productionRows[0]),
-      logistics: normalize(logisticsRows[0]),
+      source_status: sourceStatus,
+      attendance,
+      production,
+      logistics,
     });
   } catch (error) {
     return errorResponse(res, error);
@@ -1214,3 +1305,5 @@ module.exports.suggestedGoalAchievement = suggestedGoalAchievement;
 module.exports.parseScoreWeights = parseScoreWeights;
 module.exports.validateGoalsForFinalization = validateGoalsForFinalization;
 module.exports.performanceStepUpFailure = performanceStepUpFailure;
+module.exports.combineSupportingRows = combineSupportingRows;
+module.exports.VERIFIED_OPERATIONAL_STATUSES = VERIFIED_OPERATIONAL_STATUSES;

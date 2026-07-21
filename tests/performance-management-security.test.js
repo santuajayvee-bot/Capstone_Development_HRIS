@@ -69,6 +69,10 @@ assert(api.includes('FOR UPDATE'));
 assert(api.includes('function performanceStepUpFailure()'));
 assert(api.includes("throw performanceStepUpFailure();"));
 assert(!api.includes("new PerformanceError('Current password verification failed.', 401"));
+assert(api.includes('availableSupportingDataTables') && api.includes('source_status: sourceStatus'));
+assert(api.includes('payroll_production_outputs') && api.includes('payroll_production_pairs') && api.includes('piece_rate_output_shares'));
+assert(api.includes('VERIFIED_OPERATIONAL_STATUSES') && api.includes('PROCESSED_OPERATIONAL_STATUSES'));
+assert(!api.includes("FROM production_transactions\n        WHERE employee_id = ? AND transaction_date BETWEEN ? AND ?`"), 'Unverifiable legacy production rows must not be presented as verified evidence.');
 
 assert(server.includes("app.use('/api/performance', PERFORMANCE_ROUTE_RATE_LIMIT)"));
 assert(server.includes("app.use('/api/performance', performanceManagementRoutes)"));
@@ -93,6 +97,8 @@ assert(ui.includes('loadPerformanceDepartments') && ui.includes('renderPerforman
 assert(page.includes('id="performance-department-filter"') && page.includes('id="performance-pagination"'));
 assert(page.includes('id="performance-review-photo"'));
 assert(page.includes('id="performance-assignment-department"'));
+assert(ui.includes('Verified / approved trips') && ui.includes('Paid / included in payroll'));
+assert(ui.includes('Operational source is not configured. No value is shown.'));
 assert(api.includes('e.id AS employee_record_id') && api.includes('employee_record_id: Number(row.employee_record_id)'));
 assert(ui.includes('hydratePerformanceEmployeePhoto') && ui.includes('/photo`'));
 assert(ui.includes("apiFetch(`/api/performance${path}`, { cache: 'no-store', ...options })"));
@@ -124,7 +130,14 @@ const {
   performanceOutcome,
   performanceStepUpFailure,
   parseIndicatorRatings,
+  combineSupportingRows,
+  VERIFIED_OPERATIONAL_STATUSES,
 } = require('../server/performance-management');
+assert.deepStrictEqual(VERIFIED_OPERATIONAL_STATUSES, ['Approved', 'Payroll Ready', 'Included in Payroll', 'Paid']);
+assert.deepStrictEqual(
+  combineSupportingRows([{ verified_records: '2', output_quantity: '15', verified_amount: '120.50' }, { verified_records: 1, output_quantity: null, verified_amount: 40 }], ['verified_records', 'output_quantity', 'verified_amount']),
+  { verified_records: 3, output_quantity: 15, verified_amount: 160.5 }
+);
 const indicatorRatings = Object.fromEntries(PERFORMANCE_CRITERIA.map((criterion, criterionIndex) => [
   criterion.key,
   Object.fromEntries(criterion.indicators.map(indicator => [indicator.key, [4, 3, 4, 3, 3][criterionIndex]])),

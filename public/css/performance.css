@@ -133,6 +133,7 @@
 .performance-supporting-grid h5 { margin: 0; color: #344054; font-size: 12px; }
 .performance-supporting-grid span { display: flex; justify-content: space-between; gap: 8px; color: #667085; font-size: 11px; }
 .performance-supporting-grid strong { color: #344054; }
+.performance-supporting-unavailable { margin: 0; color: #b54708; font-size: 11px; line-height: 1.45; }
 .performance-rating-summary { display: grid; gap: 10px; padding: 13px 0; border-bottom: 1px solid #dfe4ea; }
 .performance-rating-summary > div { display: flex; flex-wrap: wrap; gap: 7px 16px; color: #667085; font-size: 11px; }
 .performance-rating-summary > div strong { color: #344054; }

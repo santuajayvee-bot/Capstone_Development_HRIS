@@ -751,10 +751,12 @@ async function loadPerformanceSupportingSummary(reviewId) {
     const summary = await performanceApi(`/reviews/${reviewId}/supporting-summary`);
     if (Number(PERFORMANCE_STATE.currentReview?.id) !== Number(reviewId)) return;
     const stat = (label, value) => `<span><small>${performanceEscape(label)}</small><strong>${performanceEscape(value)}</strong></span>`;
+    const unavailable = '<p class="performance-supporting-unavailable">Operational source is not configured. No value is shown.</p>';
+    const section = (title, available, content) => `<section><h5>${performanceEscape(title)}</h5>${available === false ? unavailable : content}</section>`;
     target.innerHTML = `<div class="performance-supporting-heading"><strong>Supporting data (read-only)</strong><small>As of ${performanceEscape(performanceDate(summary.as_of))}</small></div>
-      <div class="performance-supporting-grid"><section><h5>Attendance</h5>${stat('Recorded days', summary.attendance?.recorded_days || 0)}${stat('Days present', summary.attendance?.days_present || 0)}${stat('Absences', summary.attendance?.absences || 0)}${stat('Tardiness', `${summary.attendance?.tardiness_count || 0} (${summary.attendance?.tardiness_minutes || 0} min)`)}</section>
-      <section><h5>Production</h5>${stat('Verified records', summary.production?.approved_records || 0)}${stat('Output quantity', summary.production?.output_quantity || 0)}${stat('Approved amount', summary.production?.approved_amount || 0)}</section>
-      <section><h5>Logistics</h5>${stat('Verified trips', summary.logistics?.verified_trips || 0)}${stat('Completed / approved', summary.logistics?.completed_or_approved || 0)}${stat('Documented exceptions', summary.logistics?.documented_exceptions || 0)}</section></div>`;
+      <div class="performance-supporting-grid">${section('Attendance', summary.source_status?.attendance, `${stat('Recorded days', summary.attendance?.recorded_days || 0)}${stat('Days present', summary.attendance?.days_present || 0)}${stat('Absences', summary.attendance?.absences || 0)}${stat('Tardiness', `${summary.attendance?.tardiness_count || 0} (${summary.attendance?.tardiness_minutes || 0} min)`)}`)}
+      ${section('Production', summary.source_status?.production, `${stat('Verified records', summary.production?.verified_records || 0)}${stat('Output quantity', summary.production?.output_quantity || 0)}${stat('Verified value', summary.production?.verified_amount || 0)}`)}
+      ${section('Logistics', summary.source_status?.logistics, `${stat('Verified / approved trips', summary.logistics?.verified_trips || 0)}${stat('Paid / included in payroll', summary.logistics?.processed_trips || 0)}${stat('Documented exceptions', summary.logistics?.documented_exceptions || 0)}`)}</div>`;
   } catch (error) {
     target.innerHTML = `<p>${performanceEscape(error.message)}</p>`;
   }
