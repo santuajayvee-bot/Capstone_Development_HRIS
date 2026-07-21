@@ -6,68 +6,16 @@ const { verifyPassword } = require('../services/passwordService');
 const { requireAuth } = require('./middleware');
 const { decryptColumnValue, encryptColumnValue } = require('./data-protection');
 const { auditSecurityEvent } = require('./security-controls');
+const {
+  PERFORMANCE_V1_CRITERIA: PERFORMANCE_CRITERIA,
+  PERFORMANCE_RATING_SCALE,
+  resolvePerformanceQuestionnaire,
+  validatePerformanceQuestionnaire,
+} = require('./config/performance-questionnaire');
 
 const router = express.Router();
 const REVIEW_STATUSES = new Set(['ASSIGNED', 'FINALIZED']);
 const CYCLE_STATUSES = new Set(['DRAFT', 'ACTIVE', 'CLOSED']);
-const PERFORMANCE_CRITERIA = Object.freeze([
-  {
-    key: 'attendance_punctuality',
-    label: 'Attendance and Punctuality',
-    basis: 'Validated biometric attendance, tardiness, unexcused absences, and approved leave records.',
-    indicators: [
-      { key: 'reports_on_time', text: 'The employee regularly reports to work on time.' },
-      { key: 'minimal_unexcused_absences', text: 'The employee has minimal unexcused absences.' },
-      { key: 'proper_leave_filing', text: 'The employee properly files leave requests when needed.' },
-      { key: 'follows_working_hours', text: 'The employee follows assigned working hours and attendance policies.' },
-    ],
-  },
-  {
-    key: 'work_output_productivity',
-    label: 'Work Output / Productivity',
-    basis: 'Verified task completion, production piece-rate logs, logistics trip logs, and approved output targets.',
-    indicators: [
-      { key: 'completes_work_on_time', text: 'The employee completes assigned work within the expected period.' },
-      { key: 'meets_output_requirements', text: 'The employee meets expected production output or task requirements.' },
-      { key: 'consistent_performance', text: 'The employee maintains consistent work performance during the evaluation period.' },
-      { key: 'contributes_to_operations', text: 'The employee contributes effectively to assigned operational tasks.' },
-    ],
-  },
-  {
-    key: 'work_quality_accuracy',
-    label: 'Work Quality / Accuracy',
-    basis: 'Accepted output, documented errors, rework, supervisor reports, and approved quality standards.',
-    indicators: [
-      { key: 'minimal_errors', text: 'The employee performs tasks with minimal errors.' },
-      { key: 'follows_procedures', text: 'The employee follows proper work procedures.' },
-      { key: 'accurate_output', text: 'The employee produces accurate and acceptable work output.' },
-      { key: 'minimal_rework', text: 'The employee requires minimal correction or rework.' },
-    ],
-  },
-  {
-    key: 'compliance_conduct',
-    label: 'Compliance and Conduct',
-    basis: 'Applicable 201-file records, incident notes, policy compliance, and documented HR observations.',
-    indicators: [
-      { key: 'follows_company_rules', text: 'The employee follows company rules and policies.' },
-      { key: 'proper_workplace_behavior', text: 'The employee observes proper workplace behavior.' },
-      { key: 'follows_safety_procedures', text: 'The employee complies with safety and operational procedures.' },
-      { key: 'no_major_conduct_issues', text: 'The employee has no major disciplinary or conduct-related issues.' },
-    ],
-  },
-  {
-    key: 'reliability_responsibility',
-    label: 'Reliability and Responsibility',
-    basis: 'Task completion, attendance consistency, documented instructions, and HR or supervisor observations.',
-    indicators: [
-      { key: 'completes_assigned_tasks', text: 'The employee can be trusted to complete assigned tasks.' },
-      { key: 'handles_duties_responsibly', text: 'The employee shows responsibility in handling work duties.' },
-      { key: 'dependable_during_shifts', text: 'The employee is dependable during assigned shifts or work periods.' },
-      { key: 'responds_to_instructions', text: 'The employee responds properly to instructions and work requirements.' },
-    ],
-  },
-]);
-
 class PerformanceError extends Error {
   constructor(message, statusCode = 400, code = 'PERFORMANCE_REQUEST_INVALID') {
     super(message);
@@ -173,22 +121,28 @@ function employeeDisplayName(row) {
 
 function parseIndicatorRating(value, field) {
   if (value === null || value === undefined || value === '') return null;
+  if (String(value).trim().toUpperCase() === 'NA') return 'NA';
   const rating = Number(value);
   if (!Number.isInteger(rating) || rating < 1 || rating > 4) {
-    throw new PerformanceError(`${field} must be a whole-number rating from 1 to 4.`);
+    throw new PerformanceError(`${field} must be a whole-number rating from 1 to 4 or N/A.`);
   }
   return rating;
 }
 
-function parseIndicatorRatings(value) {
+function questionnaireCriteria(questionnaire) {
+  return Array.isArray(questionnaire?.criteria) ? questionnaire.criteria : PERFORMANCE_CRITERIA;
+}
+
+function parseIndicatorRatings(value, questionnaire = null) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new PerformanceError('Indicator ratings must be provided as an object.');
   }
-  const allowedCriteria = new Set(PERFORMANCE_CRITERIA.map(criterion => criterion.key));
+  const criteria = questionnaireCriteria(questionnaire);
+  const allowedCriteria = new Set(criteria.map(criterion => criterion.key));
   if (Object.keys(value).some(key => !allowedCriteria.has(key))) {
     throw new PerformanceError('Indicator ratings contain unsupported criteria.', 403, 'PERFORMANCE_PARAMETER_TAMPERING');
   }
-  return Object.fromEntries(PERFORMANCE_CRITERIA.map(criterion => {
+  return Object.fromEntries(criteria.map(criterion => {
     const source = value[criterion.key] || {};
     if (typeof source !== 'object' || Array.isArray(source)) {
       throw new PerformanceError(`${criterion.label} ratings are invalid.`);
@@ -204,33 +158,97 @@ function parseIndicatorRatings(value) {
   }));
 }
 
-function decryptIndicatorRatings(value) {
+function parseCriterionTextMap(value, questionnaire, field, maxLength) {
+  if (value === undefined || value === null || value === '') return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new PerformanceError(`${field} must be an object.`);
+  const criteria = questionnaireCriteria(questionnaire);
+  const allowed = new Set(criteria.map(criterion => criterion.key));
+  if (Object.keys(value).some(key => !allowed.has(key))) {
+    throw new PerformanceError(`${field} contains unsupported criteria.`, 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+  }
+  return Object.fromEntries(criteria.map(criterion => [
+    criterion.key,
+    cleanText(value[criterion.key], maxLength, `${criterion.label} ${field}`),
+  ]).filter(([, text]) => text));
+}
+
+function parseNaReasons(value, ratings, questionnaire) {
+  if (value === undefined || value === null || value === '') value = {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new PerformanceError('N/A reasons must be an object.');
+  const criteria = questionnaireCriteria(questionnaire);
+  const allowedCriteria = new Set(criteria.map(criterion => criterion.key));
+  if (Object.keys(value).some(key => !allowedCriteria.has(key))) {
+    throw new PerformanceError('N/A reasons contain unsupported criteria.', 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+  }
+  const result = {};
+  for (const criterion of criteria) {
+    const source = value[criterion.key] || {};
+    if (typeof source !== 'object' || Array.isArray(source)) throw new PerformanceError(`${criterion.label} N/A reasons are invalid.`);
+    const indicatorKeys = new Set(criterion.indicators.map(indicator => indicator.key));
+    if (Object.keys(source).some(key => !indicatorKeys.has(key))) {
+      throw new PerformanceError(`${criterion.label} N/A reasons contain unsupported indicators.`, 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+    }
+    for (const question of criterion.indicators) {
+      const rating = ratings?.[criterion.key]?.[question.key];
+      const reason = cleanText(source[question.key], 500, `${criterion.label}: ${question.text} N/A reason`);
+      if (rating === 'NA' && !reason) throw new PerformanceError(`An N/A reason is required for ${criterion.label}: ${question.text}.`);
+      if (reason && rating !== 'NA') throw new PerformanceError(`N/A reason is not allowed unless ${criterion.label}: ${question.text} is N/A.`, 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+      if (reason) {
+        result[criterion.key] ||= {};
+        result[criterion.key][question.key] = reason;
+      }
+    }
+  }
+  return result;
+}
+
+function decryptJson(value, fallback = {}) {
   const plaintext = safeDecrypt(value);
-  if (!plaintext || plaintext.startsWith('[Protected')) return {};
+  if (!plaintext || plaintext.startsWith('[Protected')) return fallback;
   try {
-    return parseIndicatorRatings(JSON.parse(plaintext));
+    return JSON.parse(plaintext);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function decryptIndicatorRatings(value, questionnaire = null) {
+  try {
+    return parseIndicatorRatings(decryptJson(value, {}), questionnaire);
   } catch (_error) {
     return {};
   }
 }
 
-function calculateEvaluationScore(ratings) {
+function calculateEvaluationScore(ratings, questionnaire = null) {
+  const criteria = questionnaireCriteria(questionnaire);
+  const applicability = questionnaire?.applicability || { minimum_numeric_coverage: 1, minimum_numeric_ratings_per_criterion: 4 };
   const criteriaAverages = {};
   let complete = true;
-  for (const criterion of PERFORMANCE_CRITERIA) {
-    const values = criterion.indicators.map(indicator => Number(ratings?.[criterion.key]?.[indicator.key]));
-    if (values.some(value => !Number.isInteger(value) || value < 1 || value > 4)) {
+  let totalIndicators = 0;
+  let numericIndicators = 0;
+  let naIndicators = 0;
+  let weightedScore = 0;
+  for (const criterion of criteria) {
+    const values = criterion.indicators.map(indicator => ratings?.[criterion.key]?.[indicator.key]);
+    const numeric = values.filter(value => Number.isInteger(value) && value >= 1 && value <= 4);
+    totalIndicators += values.length;
+    numericIndicators += numeric.length;
+    naIndicators += values.filter(value => value === 'NA').length;
+    if (numeric.length < Number(applicability.minimum_numeric_ratings_per_criterion || 1)) {
       criteriaAverages[criterion.key] = null;
       complete = false;
       continue;
     }
-    criteriaAverages[criterion.key] = Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
+    const average = Number((numeric.reduce((sum, value) => sum + value, 0) / numeric.length).toFixed(2));
+    criteriaAverages[criterion.key] = average;
+    const criterionWeight = Number.isFinite(Number(criterion.weight)) ? Number(criterion.weight) : (100 / criteria.length);
+    weightedScore += average * (criterionWeight / 100);
   }
-  const averages = Object.values(criteriaAverages);
-  const overall = complete
-    ? Number((averages.reduce((sum, value) => sum + value, 0) / averages.length).toFixed(2))
-    : null;
-  return { criteria_averages: criteriaAverages, overall_score: overall, complete };
+  const coverage = totalIndicators ? numericIndicators / totalIndicators : 0;
+  if (coverage < Number(applicability.minimum_numeric_coverage || 1)) complete = false;
+  const overall = complete ? Number(weightedScore.toFixed(2)) : null;
+  return { criteria_averages: criteriaAverages, overall_score: overall, complete, total_indicators: totalIndicators, numeric_indicators: numericIndicators, na_indicators: naIndicators, numeric_coverage: Number(coverage.toFixed(4)) };
 }
 
 function reassessmentDate(finalizedAt, days) {
@@ -284,14 +302,80 @@ function performanceOutcome(score, finalizedAt = null) {
   };
 }
 
-function parseGoals(value) {
+const GOAL_STATUSES = new Set(['NOT_STARTED', 'IN_PROGRESS', 'PARTIALLY_ACHIEVED', 'ACHIEVED', 'EXCEEDED', 'NOT_APPLICABLE']);
+const GOAL_DIRECTIONS = new Set(['HIGHER_IS_BETTER', 'LOWER_IS_BETTER', 'BINARY', 'MANUAL']);
+const GOAL_MEASUREMENT_TYPES = new Set(['COUNT', 'PERCENTAGE', 'CURRENCY', 'HOURS', 'DAYS', 'BINARY', 'MANUAL', 'OTHER']);
+
+function decimalText(value, field, { required = false } = {}) {
+  const text = cleanText(value, 40, field, { required });
+  if (!text) return null;
+  if (!/^-?\d+(?:\.\d{1,4})?$/.test(text)) throw new PerformanceError(`${field} must be a valid number.`);
+  return text;
+}
+
+function parseScoreWeights(competencyWeight = 70, goalWeight = 30) {
+  const competency = Number(competencyWeight);
+  const goals = Number(goalWeight);
+  if (!Number.isFinite(competency) || !Number.isFinite(goals) || competency < 0 || goals < 0 || competency > 100 || goals > 100 || Math.abs((competency + goals) - 100) > 0.001) {
+    throw new PerformanceError('Competency and goal weights must be valid and total 100.');
+  }
+  return { competency_weight: Number(competency.toFixed(2)), goal_weight: Number(goals.toFixed(2)) };
+}
+
+function parseGoals(value, { version = 'v1', goalWeight = 0, finalization = false } = {}) {
   if (value === undefined || value === null || value === '') return null;
   if (!Array.isArray(value)) throw new PerformanceError('Goals must be a list.');
   if (value.length > 8) throw new PerformanceError('A review can contain at most 8 goals.');
-  const goals = value.map((goal, index) => ({
-    title: cleanText(goal?.title, 160, `Goal ${index + 1} title`, { required: true }),
-    target: cleanText(goal?.target, 500, `Goal ${index + 1} target`, { required: true }),
-  }));
+  if (version === 'v2' && finalization && Number(goalWeight) > 0 && !value.length) {
+    throw new PerformanceError('At least one measurable goal is required for this review.');
+  }
+  const goals = value.map((goal, index) => {
+    if (version === 'v1') return {
+      title: cleanText(goal?.title, 160, `Goal ${index + 1} title`, { required: true }),
+      target: cleanText(goal?.target, 500, `Goal ${index + 1} target`, { required: true }),
+    };
+    const allowedFields = new Set(['title', 'target', 'target_unit', 'measurement_type', 'measurement_direction', 'target_value', 'actual_value', 'achievement_percentage', 'status', 'rating', 'weight', 'evidence', 'na_reason', 'evaluator_confirmed']);
+    if (!goal || typeof goal !== 'object' || Array.isArray(goal) || Object.keys(goal).some(key => !allowedFields.has(key))) {
+      throw new PerformanceError(`Goal ${index + 1} contains unsupported fields.`, 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+    }
+    const measurementType = String(goal?.measurement_type || 'MANUAL').trim().toUpperCase();
+    const direction = String(goal?.measurement_direction || 'MANUAL').trim().toUpperCase();
+    const status = String(goal?.status || 'NOT_STARTED').trim().toUpperCase();
+    if (!GOAL_MEASUREMENT_TYPES.has(measurementType) || !GOAL_DIRECTIONS.has(direction) || !GOAL_STATUSES.has(status)) {
+      throw new PerformanceError(`Goal ${index + 1} has an invalid measurement or status.`);
+    }
+    const rating = parseIndicatorRating(goal?.rating, `Goal ${index + 1} rating`);
+    const weight = Number(goal?.weight);
+    if (!Number.isFinite(weight) || weight <= 0 || weight > 100) throw new PerformanceError(`Goal ${index + 1} weight must be greater than 0 and no more than 100.`);
+    const naReason = cleanText(goal?.na_reason, 500, `Goal ${index + 1} N/A reason`);
+    if (status === 'NOT_APPLICABLE' || rating === 'NA') {
+      if (!naReason) throw new PerformanceError(`Goal ${index + 1} requires an N/A reason.`);
+    } else if (naReason) {
+      throw new PerformanceError(`Goal ${index + 1} N/A reason is only allowed for Not Applicable goals.`, 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+    }
+    const targetValue = decimalText(goal?.target_value, `Goal ${index + 1} target value`);
+    const actualValue = decimalText(goal?.actual_value, `Goal ${index + 1} actual value`);
+    const percentage = goal?.achievement_percentage === '' || goal?.achievement_percentage === null || goal?.achievement_percentage === undefined
+      ? null : Number(goal.achievement_percentage);
+    if (percentage !== null && (!Number.isFinite(percentage) || percentage < 0 || percentage > 1000)) throw new PerformanceError(`Goal ${index + 1} achievement percentage is invalid.`);
+    const measured = targetValue !== null && actualValue !== null && direction !== 'MANUAL';
+    if (finalization && measured && !Boolean(goal?.evaluator_confirmed)) throw new PerformanceError(`Goal ${index + 1} numeric result must be confirmed by the evaluator.`);
+    return {
+      title: cleanText(goal?.title, 160, `Goal ${index + 1} title`, { required: true }),
+      target: cleanText(goal?.target, 500, `Goal ${index + 1} measurable target`, { required: true }),
+      target_unit: cleanText(goal?.target_unit, 80, `Goal ${index + 1} target unit`),
+      measurement_type: measurementType, measurement_direction: direction,
+      target_value: targetValue, actual_value: actualValue,
+      achievement_percentage: percentage === null ? null : Number(percentage.toFixed(2)),
+      status, rating, weight: Number(weight.toFixed(2)),
+      evidence: cleanText(goal?.evidence, 2000, `Goal ${index + 1} evidence`),
+      na_reason: naReason || null, evaluator_confirmed: Boolean(goal?.evaluator_confirmed),
+    };
+  });
+  if (version === 'v2' && goals.length) {
+    const totalWeight = goals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0);
+    if (Math.abs(totalWeight - 100) > 0.01) throw new PerformanceError('Goal weights must total 100.');
+  }
   return goals.length ? encryptColumnValue(JSON.stringify(goals)) : null;
 }
 
@@ -303,6 +387,41 @@ function decryptGoals(value) {
     return Array.isArray(goals) ? goals : [];
   } catch (_error) {
     return [];
+  }
+}
+
+function suggestedGoalAchievement(goal) {
+  const target = Number(goal?.target_value);
+  const actual = Number(goal?.actual_value);
+  if (!Number.isFinite(target) || !Number.isFinite(actual) || target <= 0) return null;
+  if (goal.measurement_direction === 'HIGHER_IS_BETTER') return Number(((actual / target) * 100).toFixed(2));
+  if (goal.measurement_direction === 'LOWER_IS_BETTER') return actual <= 0 ? null : Number(((target / actual) * 100).toFixed(2));
+  return null;
+}
+
+function calculateGoalScore(goals, goalWeight = 0) {
+  if (Number(goalWeight) === 0) return { score: null, complete: true, applicable_weight: 0, rated_goals: 0 };
+  if (!Array.isArray(goals) || !goals.length) return { score: null, complete: false, applicable_weight: 0, rated_goals: 0 };
+  const applicable = goals.filter(goal => goal.rating !== 'NA' && goal.status !== 'NOT_APPLICABLE');
+  if (!applicable.length) return { score: null, complete: false, applicable_weight: 0, rated_goals: 0 };
+  if (applicable.some(goal => !Number.isInteger(goal.rating) || goal.rating < 1 || goal.rating > 4)) return { score: null, complete: false, applicable_weight: 0, rated_goals: 0 };
+  const applicableWeight = applicable.reduce((sum, goal) => sum + Number(goal.weight || 0), 0);
+  if (applicableWeight <= 0) return { score: null, complete: false, applicable_weight: 0, rated_goals: 0 };
+  const score = applicable.reduce((sum, goal) => sum + (Number(goal.rating) * Number(goal.weight || 0)), 0) / applicableWeight;
+  return { score: Number(score.toFixed(2)), complete: true, applicable_weight: Number(applicableWeight.toFixed(2)), rated_goals: applicable.length };
+}
+
+function validateGoalsForFinalization(goals, goalWeight = 0) {
+  if (Number(goalWeight) === 0) return;
+  if (!Array.isArray(goals) || !goals.length) throw new PerformanceError('At least one measurable goal is required for this review.');
+  for (const [index, goal] of goals.entries()) {
+    const measured = goal?.target_value !== null && goal?.target_value !== undefined && goal?.target_value !== ''
+      && goal?.actual_value !== null && goal?.actual_value !== undefined && goal?.actual_value !== ''
+      && goal?.measurement_direction !== 'MANUAL';
+    if (measured && !goal.evaluator_confirmed) throw new PerformanceError(`Goal ${index + 1} numeric result must be confirmed by the evaluator.`);
+    if ((goal.status === 'NOT_APPLICABLE' || goal.rating === 'NA') && !String(goal.na_reason || '').trim()) {
+      throw new PerformanceError(`Goal ${index + 1} requires an N/A reason.`);
+    }
   }
 }
 
@@ -343,8 +462,103 @@ async function verifyStepUpPassword(req) {
   return rows.length ? verifyPassword(rows[0].password_hash, password) : false;
 }
 
+function encryptedJson(value) {
+  return value && Object.keys(value).length ? encryptColumnValue(JSON.stringify(value)) : null;
+}
+
+function reviewQuestionnaire(row) {
+  if (String(row.questionnaire_version || 'v1').toLowerCase() !== 'v2') {
+    return resolvePerformanceQuestionnaire({ cycle: { questionnaire_version: 'v1' } });
+  }
+  const snapshot = decryptJson(row.questionnaire_snapshot_encrypted, null);
+  try {
+    validatePerformanceQuestionnaire(snapshot);
+  } catch (_error) {
+    throw new PerformanceError('The assigned questionnaire snapshot is unavailable.', 409, 'PERFORMANCE_QUESTIONNAIRE_SNAPSHOT_INVALID');
+  }
+  return snapshot;
+}
+
+function parseDevelopmentPlan(value, questionnaireVersion) {
+  if (String(questionnaireVersion || 'v1') !== 'v2') return encryptedOptional(value, 5000, 'Recommendation');
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new PerformanceError('Development plan must be structured.');
+  const allowed = new Set(['summary', 'performance_gap', 'required_action', 'responsible_person', 'target_date', 'follow_up_date', 'expected_outcome']);
+  if (Object.keys(value).some(key => !allowed.has(key))) throw new PerformanceError('Development plan contains unsupported fields.', 403, 'PERFORMANCE_PARAMETER_TAMPERING');
+  const targetDate = value.target_date ? dateOnly(value.target_date, 'Development plan target date') : '';
+  const followUpDate = value.follow_up_date ? dateOnly(value.follow_up_date, 'Development plan follow-up date') : '';
+  if (targetDate && followUpDate && followUpDate < targetDate) throw new PerformanceError('Development plan follow-up date must be on or after the target date.');
+  const plan = {
+    summary: cleanText(value.summary, 2000, 'Development recommendation'),
+    performance_gap: cleanText(value.performance_gap, 1500, 'Performance gap'),
+    required_action: cleanText(value.required_action, 1500, 'Required action'),
+    responsible_person: cleanText(value.responsible_person, 160, 'Responsible person'),
+    target_date: targetDate || null,
+    follow_up_date: followUpDate || null,
+    expected_outcome: cleanText(value.expected_outcome, 1500, 'Expected outcome'),
+  };
+  return Object.values(plan).some(Boolean) ? encryptColumnValue(JSON.stringify(plan)) : null;
+}
+
+function decryptDevelopmentPlan(value, questionnaireVersion) {
+  const plaintext = safeDecrypt(value);
+  if (!plaintext || plaintext.startsWith('[Protected')) return String(questionnaireVersion || 'v1') === 'v2' ? {} : '';
+  if (String(questionnaireVersion || 'v1') !== 'v2') return plaintext;
+  try {
+    const plan = JSON.parse(plaintext);
+    return plan && typeof plan === 'object' && !Array.isArray(plan) ? plan : { summary: plaintext };
+  } catch (_error) {
+    return { summary: plaintext };
+  }
+}
+
+function requireStructuredDevelopmentPlan(plan) {
+  const required = ['performance_gap', 'required_action', 'responsible_person', 'target_date', 'follow_up_date', 'expected_outcome'];
+  if (!plan || typeof plan !== 'object' || required.some(key => !String(plan[key] || '').trim())) {
+    throw new PerformanceError('A structured development plan is required for a below-standard performance result.');
+  }
+}
+
+function validateFinalizationEvidence(row, questionnaire, evaluation) {
+  if (questionnaire.version !== 'v2') return;
+  const naReasons = decryptJson(row.criteria_evidence_encrypted, {}).__na_reasons || {};
+  const evidence = decryptJson(row.criteria_evidence_encrypted, {}).__evidence || {};
+  const remarks = decryptJson(row.criteria_remarks_encrypted, {});
+  for (const criterion of questionnaireCriteria(questionnaire)) {
+    const ratings = criterion.indicators.map(indicator => row.__ratings?.[criterion.key]?.[indicator.key]);
+    const hasNa = ratings.includes('NA');
+    const hasLowRating = ratings.some(value => Number(value) === 1 || Number(value) === 2);
+    const allExceeds = ratings.length > 0 && ratings.every(value => Number(value) === 4);
+    if (hasNa) {
+      for (const indicator of criterion.indicators) {
+        if (row.__ratings?.[criterion.key]?.[indicator.key] === 'NA' && !String(naReasons?.[criterion.key]?.[indicator.key] || '').trim()) {
+          throw new PerformanceError(`An N/A reason is required for ${criterion.label}.`);
+        }
+      }
+    }
+    if ((hasNa || hasLowRating || Number(evaluation.criteria_averages?.[criterion.key]) < 2.5) && !String(remarks?.[criterion.key] || '').trim()) {
+      throw new PerformanceError(`Evaluator remarks are required for ${criterion.label}.`);
+    }
+    if (allExceeds && !String(evidence?.[criterion.key] || '').trim()) {
+      throw new PerformanceError(`Evidence is required when all ${criterion.label} indicators exceed expectations.`);
+    }
+  }
+}
+
+function calculateFinalWeightedScore(competencyScore, goalScore, questionnaire) {
+  const competencyWeight = Number(questionnaire.score_weights?.competency_weight || 0);
+  const goalWeight = Number(questionnaire.score_weights?.goal_weight || 0);
+  if (!Number.isFinite(competencyScore)) throw new PerformanceError('Complete the competency evaluation before finalization.');
+  if (goalWeight === 0) return Number(competencyScore.toFixed(2));
+  if (!Number.isFinite(goalScore)) throw new PerformanceError('Complete the goal evaluation before finalization.');
+  return Number(((competencyScore * (competencyWeight / 100)) + (goalScore * (goalWeight / 100))).toFixed(2));
+}
+
 function integrityPayload(row) {
-  return {
+  // Preserve the exact v1 field set and order. Existing finalized reviews were
+  // hashed before v2 columns existed; adding null fields would falsely mark
+  // those historical records as altered after this migration.
+  const v1Payload = {
     review_id: String(row.id),
     cycle_id: String(row.cycle_id),
     employee_id: String(row.employee_id),
@@ -354,6 +568,17 @@ function integrityPayload(row) {
     goals_encrypted: row.goals_encrypted || null,
     reviewer_feedback_encrypted: row.reviewer_feedback_encrypted || null,
     development_plan_encrypted: row.development_plan_encrypted || null,
+  };
+  if (String(row.questionnaire_version || 'v1').toLowerCase() !== 'v2') return v1Payload;
+  return {
+    ...v1Payload,
+    questionnaire_version: 'v2',
+    questionnaire_snapshot_encrypted: row.questionnaire_snapshot_encrypted || null,
+    criteria_evidence_encrypted: row.criteria_evidence_encrypted || null,
+    criteria_remarks_encrypted: row.criteria_remarks_encrypted || null,
+    competency_score: row.competency_score === null ? null : Number(row.competency_score).toFixed(2),
+    goal_score: row.goal_score === null ? null : Number(row.goal_score).toFixed(2),
+    scoring_snapshot_encrypted: row.scoring_snapshot_encrypted || null,
   };
 }
 
@@ -371,8 +596,11 @@ function integrityStatus(row) {
 }
 
 function reviewResponse(row, { includeNarratives = true } = {}) {
-  const ratings = includeNarratives ? decryptIndicatorRatings(row.indicator_ratings_encrypted) : null;
-  const evaluation = ratings ? calculateEvaluationScore(ratings) : null;
+  const questionnaire = reviewQuestionnaire(row);
+  const ratings = includeNarratives ? decryptIndicatorRatings(row.indicator_ratings_encrypted, questionnaire) : null;
+  const evaluation = ratings ? calculateEvaluationScore(ratings, questionnaire) : null;
+  const goals = includeNarratives ? decryptGoals(row.goals_encrypted) : [];
+  const goalEvaluation = includeNarratives ? calculateGoalScore(goals, questionnaire.score_weights?.goal_weight) : null;
   const computedFinalScore = row.status === 'FINALIZED' && row.final_score !== null
     ? Number(row.final_score)
     : null;
@@ -394,19 +622,41 @@ function reviewResponse(row, { includeNarratives = true } = {}) {
     reviewer_user_id: row.reviewer_user_id,
     reviewer_name: row.reviewer_name || 'HR Reviewer',
     status: row.status,
+    questionnaire_version: questionnaire.version,
+    questionnaire,
+    rating_scale: questionnaire.rating_scale || PERFORMANCE_RATING_SCALE,
     final_score: computedFinalScore,
+    competency_score: row.competency_score === null || row.competency_score === undefined ? null : Number(row.competency_score),
+    goal_score: row.goal_score === null || row.goal_score === undefined ? null : Number(row.goal_score),
     outcome: performanceOutcome(computedFinalScore, row.finalized_at),
-    criteria: PERFORMANCE_CRITERIA,
+    criteria: questionnaire.criteria,
     criteria_averages: evaluation?.criteria_averages || {},
+    score_preview: evaluation ? {
+      competency_score: evaluation.overall_score,
+      goal_score: goalEvaluation?.score ?? null,
+      competency_weight: Number(questionnaire.score_weights?.competency_weight || 0),
+      goal_weight: Number(questionnaire.score_weights?.goal_weight || 0),
+      final_score: evaluation.complete && goalEvaluation?.complete
+        ? calculateFinalWeightedScore(evaluation.overall_score, goalEvaluation.score, questionnaire)
+        : null,
+      numeric_coverage: evaluation.numeric_coverage,
+      numeric_indicators: evaluation.numeric_indicators,
+      total_indicators: evaluation.total_indicators,
+      na_indicators: evaluation.na_indicators,
+    } : null,
     version: row.version,
     finalized_at: row.finalized_at,
     integrity_status: integrityStatus(row),
   };
   if (includeNarratives) {
+    const narrativeEnvelope = decryptJson(row.criteria_evidence_encrypted, {});
     response.indicator_ratings = ratings;
-    response.goals = decryptGoals(row.goals_encrypted);
+    response.na_reasons = narrativeEnvelope.__na_reasons || {};
+    response.criteria_evidence = narrativeEnvelope.__evidence || {};
+    response.criteria_remarks = decryptJson(row.criteria_remarks_encrypted, {});
+    response.goals = goals.map(goal => ({ ...goal, suggested_achievement_percentage: suggestedGoalAchievement(goal) }));
     response.reviewer_feedback = safeDecrypt(row.reviewer_feedback_encrypted);
-    response.development_plan = safeDecrypt(row.development_plan_encrypted);
+    response.development_plan = decryptDevelopmentPlan(row.development_plan_encrypted, questionnaire.version);
   }
   return response;
 }
@@ -418,12 +668,13 @@ const REVIEW_SELECT = `
          DATE_FORMAT(pc.due_date, '%Y-%m-%d') AS due_date,
          e.id AS employee_record_id, e.employee_code, e.first_name,
          e.middle_name, e.last_name, e.suffix, e.position, d.name AS department_name,
-         d.id AS department_id,
+         d.id AS department_id, e.employee_level, wt.name AS wage_type,
          u.username AS reviewer_name
     FROM performance_reviews pr
     JOIN performance_cycles pc ON pc.id = pr.cycle_id
     JOIN employees e ON e.Employee_ID = pr.employee_id
     LEFT JOIN departments d ON d.id = e.department_id
+    LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
     LEFT JOIN users u ON u.id = pr.reviewer_user_id`;
 
 async function loadReview(executor, reviewId, { forUpdate = false } = {}) {
@@ -501,13 +752,47 @@ router.get('/overview', async (req, res) => {
   }
 });
 
+router.get('/questionnaire', requirePerformanceManager, async (req, res) => {
+  try {
+    const employeeId = positiveId(req.query.employee_id, 'Employee ID');
+    const cycleId = req.query.cycle_id ? positiveId(req.query.cycle_id, 'Cycle ID') : null;
+    const [employees] = await pool.execute(
+      `SELECT e.Employee_ID, e.position, e.employee_level, d.name AS department_name, wt.name AS wage_type
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+        WHERE e.Employee_ID = ? AND LOWER(COALESCE(e.status, 'active')) = 'active' LIMIT 1`,
+      [employeeId]
+    );
+    if (!employees.length) throw new PerformanceError('Active employee not found.', 404);
+    let cycle = { questionnaire_version: 'v2', competency_weight: 70, goal_weight: 30 };
+    if (cycleId) {
+      const [cycles] = await pool.execute('SELECT id, questionnaire_version, competency_weight, goal_weight FROM performance_cycles WHERE id = ? LIMIT 1', [cycleId]);
+      if (!cycles.length) throw new PerformanceError('Performance cycle not found.', 404);
+      cycle = cycles[0];
+    }
+    const questionnaire = resolvePerformanceQuestionnaire({
+      employee: {
+        ...employees[0],
+        position: safeDecrypt(employees[0].position) || employees[0].position,
+        employee_level: safeDecrypt(employees[0].employee_level) || employees[0].employee_level,
+      },
+      cycle,
+    });
+    return res.json({ questionnaire });
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
+
 router.get('/eligible-employees', requirePerformanceManager, async (_req, res) => {
   try {
     const [rows] = await pool.execute(
       `SELECT e.id AS employee_record_id, e.Employee_ID AS employee_id, e.employee_code, e.first_name, e.middle_name,
-              e.last_name, e.suffix, e.position, d.id AS department_id, d.name AS department_name
+              e.last_name, e.suffix, e.position, e.employee_level, wt.name AS wage_type, d.id AS department_id, d.name AS department_name
          FROM employees e
          LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
         WHERE LOWER(COALESCE(e.status, 'active')) = 'active'
         ORDER BY e.employee_code ASC
         LIMIT 1000`
@@ -520,6 +805,8 @@ router.get('/eligible-employees', requirePerformanceManager, async (_req, res) =
       department_id: row.department_id ? Number(row.department_id) : null,
       department_name: row.department_name || 'Unassigned',
       position: safeDecrypt(row.position) || row.position || 'Unassigned',
+      employee_level: safeDecrypt(row.employee_level) || row.employee_level || '',
+      wage_type: row.wage_type || '',
     })));
   } catch (error) {
     return errorResponse(res, error);
@@ -544,20 +831,21 @@ router.get('/departments', requirePerformanceManager, async (_req, res) => {
 
 router.post('/cycles', requirePerformanceManager, async (req, res) => {
   try {
-    rejectUnexpectedFields(req, new Set(['cycle_name', 'review_period_start', 'review_period_end', 'due_date', 'description']));
+    rejectUnexpectedFields(req, new Set(['cycle_name', 'review_period_start', 'review_period_end', 'due_date', 'description', 'competency_weight', 'goal_weight']));
     const cycleName = cleanText(req.body.cycle_name, 160, 'Cycle name', { required: true });
     const start = dateOnly(req.body.review_period_start, 'Review period start');
     const end = dateOnly(req.body.review_period_end, 'Review period end');
     const due = dateOnly(req.body.due_date, 'Due date');
     if (start > end) throw new PerformanceError('Review period end must be on or after the start date.');
     if (due < end) throw new PerformanceError('Due date must be on or after the review period end.');
+    const weights = parseScoreWeights(req.body.competency_weight ?? 70, req.body.goal_weight ?? 30);
     const [result] = await pool.execute(
       `INSERT INTO performance_cycles
-         (cycle_name, review_period_start, review_period_end, due_date, description_encrypted, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [cycleName, start, end, due, encryptedOptional(req.body.description, 2000, 'Description'), req.user.id, req.user.id]
+         (cycle_name, review_period_start, review_period_end, due_date, description_encrypted, questionnaire_version, competency_weight, goal_weight, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, 'v2', ?, ?, ?, ?)`,
+      [cycleName, start, end, due, encryptedOptional(req.body.description, 2000, 'Description'), weights.competency_weight, weights.goal_weight, req.user.id, req.user.id]
     );
-    await audit(pool, req, 'CREATE_PERFORMANCE_CYCLE', null, null, { cycle_id: result.insertId, status: 'DRAFT' });
+    await audit(pool, req, 'CREATE_PERFORMANCE_CYCLE', null, null, { cycle_id: result.insertId, status: 'DRAFT', questionnaire_version: 'v2', ...weights });
     return res.status(201).json({ id: result.insertId, message: 'Performance cycle created as draft.' });
   } catch (error) {
     return errorResponse(res, error);
@@ -584,17 +872,42 @@ router.post('/reviews', requirePerformanceManager, async (req, res) => {
     rejectUnexpectedFields(req, new Set(['cycle_id', 'employee_id', 'goals']));
     const cycleId = positiveId(req.body.cycle_id, 'Cycle ID');
     const employeeId = positiveId(req.body.employee_id, 'Employee ID');
-    const [cycles] = await pool.execute("SELECT id, status FROM performance_cycles WHERE id = ? AND status IN ('DRAFT','ACTIVE') LIMIT 1", [cycleId]);
+    const [cycles] = await pool.execute("SELECT id, status, questionnaire_version, competency_weight, goal_weight FROM performance_cycles WHERE id = ? AND status IN ('DRAFT','ACTIVE') LIMIT 1", [cycleId]);
     if (!cycles.length) throw new PerformanceError('Select an available draft or active cycle.', 409);
-    const [employees] = await pool.execute("SELECT Employee_ID FROM employees WHERE Employee_ID = ? AND LOWER(COALESCE(status, 'active')) = 'active' LIMIT 1", [employeeId]);
+    const [employees] = await pool.execute(
+      `SELECT e.Employee_ID, e.position, e.employee_level, d.name AS department_name, wt.name AS wage_type
+         FROM employees e
+         LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN wage_types wt ON wt.id = e.wage_type_id
+        WHERE e.Employee_ID = ? AND LOWER(COALESCE(e.status, 'active')) = 'active' LIMIT 1`,
+      [employeeId]
+    );
     if (!employees.length) throw new PerformanceError('Active employee not found.', 404);
+    const cycle = cycles[0];
+    const questionnaire = resolvePerformanceQuestionnaire({
+      employee: {
+        ...employees[0],
+        position: safeDecrypt(employees[0].position) || employees[0].position,
+        employee_level: safeDecrypt(employees[0].employee_level) || employees[0].employee_level,
+      },
+      cycle,
+    });
+    const questionnaireVersion = questionnaire.version;
     const [result] = await pool.execute(
       `INSERT INTO performance_reviews
-         (cycle_id, employee_id, reviewer_user_id, goals_encrypted, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [cycleId, employeeId, req.user.id, parseGoals(req.body.goals), req.user.id, req.user.id]
+         (cycle_id, employee_id, reviewer_user_id, questionnaire_version, questionnaire_snapshot_encrypted, goals_encrypted, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cycleId, employeeId, req.user.id, questionnaireVersion,
+        questionnaireVersion === 'v2' ? encryptColumnValue(JSON.stringify(questionnaire)) : null,
+        parseGoals(req.body.goals, { version: questionnaireVersion, goalWeight: questionnaire.score_weights.goal_weight }), req.user.id, req.user.id]
     );
-    await audit(pool, req, 'ASSIGN_PERFORMANCE_REVIEW', result.insertId, employeeId, { cycle_id: cycleId, status: 'ASSIGNED' });
+    await audit(pool, req, 'QUESTIONNAIRE_ASSIGNED', result.insertId, employeeId, {
+      cycle_id: cycleId, questionnaire_version: questionnaireVersion,
+      role_section: questionnaire.classification?.role_section || null,
+      leadership: Boolean(questionnaire.classification?.supervisory_responsibility),
+    });
+    await audit(pool, req, 'PERFORMANCE_QUESTIONNAIRE_VERSION_SELECTED', result.insertId, employeeId, { questionnaire_version: questionnaireVersion });
+    await audit(pool, req, 'ASSIGN_PERFORMANCE_REVIEW', result.insertId, employeeId, { cycle_id: cycleId, status: 'ASSIGNED', questionnaire_version: questionnaireVersion });
     return res.status(201).json({ id: result.insertId, message: 'Employee assigned to the performance cycle.' });
   } catch (error) {
     if (error?.code === 'ER_DUP_ENTRY') return errorResponse(res, new PerformanceError('This employee is already assigned to the cycle.', 409));
@@ -655,6 +968,55 @@ router.get('/reviews', async (req, res) => {
   }
 });
 
+router.get('/reviews/:reviewId/supporting-summary', requirePerformanceManager, async (req, res) => {
+  try {
+    const row = await loadReview(pool, positiveId(req.params.reviewId, 'Review ID'));
+    const params = [row.employee_record_id, row.review_period_start, row.review_period_end];
+    const [attendanceRows] = await pool.execute(
+      `SELECT COUNT(*) AS recorded_days,
+              SUM(time_in IS NOT NULL) AS days_present,
+              SUM(COALESCE(status, '') = 'Absent') AS absences,
+              SUM(COALESCE(late_minutes, 0) > 0) AS tardiness_count,
+              SUM(COALESCE(late_minutes, 0)) AS tardiness_minutes,
+              SUM(COALESCE(integrity_hash, '') <> '') AS integrity_recorded
+         FROM attendance_log
+        WHERE employee_id = ? AND date BETWEEN ? AND ?`,
+      params
+    );
+    const [productionRows] = await pool.execute(
+      `SELECT COUNT(*) AS approved_records, COALESCE(SUM(quantity), 0) AS output_quantity,
+              COALESCE(SUM(amount), 0) AS approved_amount
+         FROM production_transactions
+        WHERE employee_id = ? AND transaction_date BETWEEN ? AND ?`,
+      params
+    ).catch(() => [[{}]]);
+    const [logisticsRows] = await pool.execute(
+      `SELECT COUNT(*) AS verified_trips,
+              SUM(COALESCE(status, '') NOT IN ('Rejected', 'Cancelled', 'Deleted')) AS completed_or_approved,
+              SUM(COALESCE(status, '') IN ('Rejected', 'Cancelled')) AS documented_exceptions
+         FROM delivery_trips
+        WHERE employee_id = ? AND trip_date BETWEEN ? AND ?`,
+      params
+    ).catch(() => [[{}]]);
+    const normalize = source => Object.fromEntries(Object.entries(source || {}).map(([key, value]) => [key, Number(value || 0)]));
+    return res.json({
+      as_of: new Date().toISOString(),
+      employee: {
+        employee_id: row.employee_id,
+        department: row.department_name || 'Unassigned',
+        position: safeDecrypt(row.position) || row.position || 'Unassigned',
+        employee_level: safeDecrypt(row.employee_level) || row.employee_level || '',
+        wage_type: row.wage_type || '',
+      },
+      attendance: normalize(attendanceRows[0]),
+      production: normalize(productionRows[0]),
+      logistics: normalize(logisticsRows[0]),
+    });
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
+
 router.get('/reviews/:reviewId', async (req, res) => {
   try {
     const row = await loadReview(pool, positiveId(req.params.reviewId, 'Review ID'));
@@ -668,25 +1030,51 @@ router.get('/reviews/:reviewId', async (req, res) => {
 router.put('/reviews/:reviewId/evaluation', requirePerformanceManager, async (req, res) => {
   let connection;
   try {
-    rejectUnexpectedFields(req, new Set(['ratings', 'feedback', 'development_plan', 'goals', 'version']));
+    rejectUnexpectedFields(req, new Set(['ratings', 'na_reasons', 'criteria_evidence', 'criteria_remarks', 'feedback', 'development_plan', 'goals', 'version']));
     const reviewId = positiveId(req.params.reviewId, 'Review ID');
     const version = positiveId(req.body.version, 'Review version');
-    const ratings = parseIndicatorRatings(req.body.ratings);
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const row = await loadReview(connection, reviewId, { forUpdate: true });
     if (row.status !== 'ASSIGNED') throw new PerformanceError('Finalized reviews cannot be edited.', 409);
     if (Number(row.version) !== version) throw new PerformanceError('This review was updated elsewhere. Refresh and try again.', 409, 'PERFORMANCE_VERSION_CONFLICT');
-    const goalsEncrypted = req.body.goals === undefined ? row.goals_encrypted : parseGoals(req.body.goals);
+    const questionnaire = reviewQuestionnaire(row);
+    const ratings = parseIndicatorRatings(req.body.ratings, questionnaire);
+    const naReasons = parseNaReasons(req.body.na_reasons, ratings, questionnaire);
+    const criteriaEvidence = parseCriterionTextMap(req.body.criteria_evidence, questionnaire, 'Evidence or reference', 2000);
+    const criteriaRemarks = parseCriterionTextMap(req.body.criteria_remarks, questionnaire, 'Evaluator remarks', 2000);
+    const goalsEncrypted = req.body.goals === undefined
+      ? row.goals_encrypted
+      : parseGoals(req.body.goals, { version: questionnaire.version, goalWeight: questionnaire.score_weights.goal_weight });
+    const developmentPlan = parseDevelopmentPlan(req.body.development_plan, questionnaire.version);
+    const narrativeEnvelope = questionnaire.version === 'v2'
+      ? encryptedJson({ __na_reasons: naReasons, __evidence: criteriaEvidence })
+      : null;
     await connection.execute(
       `UPDATE performance_reviews
-          SET indicator_ratings_encrypted=?, reviewer_feedback_encrypted=?, development_plan_encrypted=?,
-              goals_encrypted=?, reviewer_user_id=?,
+          SET indicator_ratings_encrypted=?, criteria_evidence_encrypted=?, criteria_remarks_encrypted=?,
+              reviewer_feedback_encrypted=?, development_plan_encrypted=?, goals_encrypted=?, reviewer_user_id=?,
               version=version+1, updated_by=?
         WHERE id=? AND version=?`,
-      [encryptColumnValue(JSON.stringify(ratings)), encryptedOptional(req.body.feedback, 5000, 'HR remarks'), encryptedOptional(req.body.development_plan, 5000, 'Recommendation'), goalsEncrypted, req.user.id, req.user.id, reviewId, version]
+      [encryptColumnValue(JSON.stringify(ratings)), narrativeEnvelope,
+        questionnaire.version === 'v2' ? encryptedJson(criteriaRemarks) : null,
+        encryptedOptional(req.body.feedback, 5000, 'HR remarks'), developmentPlan, goalsEncrypted,
+        req.user.id, req.user.id, reviewId, version]
     );
-    await audit(connection, req, 'SAVE_PERFORMANCE_EVALUATION', reviewId, row.employee_id, { status: row.status });
+    await audit(connection, req, 'PERFORMANCE_RATINGS_UPDATED', reviewId, row.employee_id, {
+      questionnaire_version: questionnaire.version,
+      numeric_ratings: Object.values(ratings).reduce((total, criterion) => total + Object.values(criterion).filter(Number.isInteger).length, 0),
+      na_ratings: Object.values(ratings).reduce((total, criterion) => total + Object.values(criterion).filter(value => value === 'NA').length, 0),
+    });
+    if (Object.keys(criteriaEvidence).length || Object.keys(criteriaRemarks).length || Object.keys(naReasons).length) {
+      await audit(connection, req, 'PERFORMANCE_CRITERION_EVIDENCE_UPDATED', reviewId, row.employee_id, {
+        evidence_criteria: Object.keys(criteriaEvidence).length,
+        remarks_criteria: Object.keys(criteriaRemarks).length,
+        na_reasons_recorded: Object.values(naReasons).reduce((total, group) => total + Object.keys(group).length, 0),
+      });
+    }
+    if (req.body.goals !== undefined) await audit(connection, req, 'PERFORMANCE_GOALS_UPDATED', reviewId, row.employee_id, { goal_count: decryptGoals(goalsEncrypted).length });
+    await audit(connection, req, 'SAVE_PERFORMANCE_EVALUATION', reviewId, row.employee_id, { status: row.status, questionnaire_version: questionnaire.version });
     await connection.commit();
     return res.json({ message: 'Evaluation saved.', version: version + 1 });
   } catch (error) {
@@ -713,22 +1101,56 @@ router.post('/reviews/:reviewId/finalize', requirePerformanceManager, async (req
     let row = await loadReview(connection, reviewId, { forUpdate: true });
     if (row.status !== 'ASSIGNED') throw new PerformanceError('Only an in-progress evaluation can be finalized.', 409);
     if (Number(row.version) !== version) throw new PerformanceError('This review was updated elsewhere. Refresh and try again.', 409, 'PERFORMANCE_VERSION_CONFLICT');
-    const evaluation = calculateEvaluationScore(decryptIndicatorRatings(row.indicator_ratings_encrypted));
-    if (!evaluation.complete) throw new PerformanceError('Complete all indicator ratings before finalization.');
-    if (!row.reviewer_feedback_encrypted || !row.development_plan_encrypted) {
-      throw new PerformanceError('Reviewer feedback and development plan are required before finalization.');
+    const questionnaire = reviewQuestionnaire(row);
+    const ratings = decryptIndicatorRatings(row.indicator_ratings_encrypted, questionnaire);
+    const evaluation = calculateEvaluationScore(ratings, questionnaire);
+    if (!evaluation.complete) {
+      throw new PerformanceError(questionnaire.version === 'v2'
+        ? 'Complete the required applicable ratings and minimum coverage before finalization.'
+        : 'Complete all indicator ratings before finalization.');
     }
-    const finalScore = evaluation.overall_score.toFixed(2);
+    row.__ratings = ratings;
+    validateFinalizationEvidence(row, questionnaire, evaluation);
+    if (!row.reviewer_feedback_encrypted || !row.development_plan_encrypted) {
+      throw new PerformanceError('Reviewer feedback and recommendation or development plan are required before finalization.');
+    }
+    const developmentPlan = decryptDevelopmentPlan(row.development_plan_encrypted, questionnaire.version);
+    if (questionnaire.version === 'v2' && !String(developmentPlan?.summary || '').trim()) {
+      throw new PerformanceError('A development recommendation is required before finalization.');
+    }
+    const goals = decryptGoals(row.goals_encrypted);
+    validateGoalsForFinalization(goals, questionnaire.score_weights?.goal_weight);
+    const goalEvaluation = calculateGoalScore(goals, questionnaire.score_weights?.goal_weight);
+    if (!goalEvaluation.complete) throw new PerformanceError('Complete the required goal ratings before finalization.');
+    const finalScoreValue = calculateFinalWeightedScore(evaluation.overall_score, goalEvaluation.score, questionnaire);
+    if (finalScoreValue < 2.5) requireStructuredDevelopmentPlan(developmentPlan);
+    const finalScore = finalScoreValue.toFixed(2);
+    const scoringSnapshot = encryptColumnValue(JSON.stringify({
+      questionnaire_version: questionnaire.version,
+      competency_score: evaluation.overall_score,
+      goal_score: goalEvaluation.score,
+      final_score: finalScoreValue,
+      competency_weight: Number(questionnaire.score_weights?.competency_weight || 0),
+      goal_weight: Number(questionnaire.score_weights?.goal_weight || 0),
+      criteria_averages: evaluation.criteria_averages,
+      numeric_coverage: evaluation.numeric_coverage,
+      goal_applicable_weight: goalEvaluation.applicable_weight,
+    }));
     await connection.execute(
       `UPDATE performance_reviews
-          SET final_score=?, status='FINALIZED', finalized_at=NOW(), integrity_hash=NULL,
+          SET competency_score=?, goal_score=?, final_score=?, scoring_snapshot_encrypted=?,
+              status='FINALIZED', finalized_at=NOW(), integrity_hash=NULL,
               version=version+1, updated_by=?
         WHERE id=? AND version=?`,
-      [finalScore, req.user.id, reviewId, version]
+      [evaluation.overall_score, goalEvaluation.score, finalScore, scoringSnapshot, req.user.id, reviewId, version]
     );
     row = await loadReview(connection, reviewId, { forUpdate: true });
     const integrityHash = calculateIntegrityHash(row);
     await connection.execute('UPDATE performance_reviews SET integrity_hash = ? WHERE id = ?', [integrityHash, reviewId]);
+    await audit(connection, req, 'PERFORMANCE_REVIEW_FINALIZED', reviewId, row.employee_id, {
+      questionnaire_version: questionnaire.version, competency_score: evaluation.overall_score,
+      goal_score: goalEvaluation.score, final_score: finalScore, integrity_hash: integrityHash, step_up_verified: true,
+    });
     await audit(connection, req, 'FINALIZE_PERFORMANCE_REVIEW', reviewId, row.employee_id, { final_score: finalScore, integrity_hash: integrityHash, step_up_verified: true });
     await connection.commit();
     return res.json({ message: 'Performance review finalized and integrity-protected.', final_score: Number(finalScore), integrity_status: 'VERIFIED', version: version + 1 });
@@ -759,12 +1181,13 @@ router.post('/reviews/:reviewId/reopen', requirePerformanceManager, async (req, 
     if (Number(row.version) !== version) throw new PerformanceError('This review was updated elsewhere. Refresh and try again.', 409, 'PERFORMANCE_VERSION_CONFLICT');
     await connection.execute(
       `UPDATE performance_reviews
-          SET status='ASSIGNED', final_score=NULL,
+          SET status='ASSIGNED', competency_score=NULL, goal_score=NULL, final_score=NULL, scoring_snapshot_encrypted=NULL,
               integrity_hash=NULL, finalized_at=NULL, reopened_at=NOW(), reopened_by=?,
               reopen_reason_encrypted=?, version=version+1, updated_by=?
         WHERE id=? AND version=?`,
       [req.user.id, encryptColumnValue(reason), req.user.id, reviewId, version]
     );
+    await audit(connection, req, 'PERFORMANCE_REVIEW_REOPENED', reviewId, row.employee_id, { questionnaire_version: row.questionnaire_version || 'v1', previous_status: row.status, reason_recorded: true, step_up_verified: true });
     await audit(connection, req, 'REOPEN_PERFORMANCE_REVIEW', reviewId, row.employee_id, { previous_status: row.status, reason_recorded: true, step_up_verified: true });
     await connection.commit();
     return res.json({ message: 'Performance review reopened with an audit trail.', version: version + 1 });
@@ -781,6 +1204,13 @@ module.exports.calculateIntegrityHash = calculateIntegrityHash;
 module.exports.integrityPayload = integrityPayload;
 module.exports.PERFORMANCE_CRITERIA = PERFORMANCE_CRITERIA;
 module.exports.calculateEvaluationScore = calculateEvaluationScore;
+module.exports.calculateGoalScore = calculateGoalScore;
+module.exports.calculateFinalWeightedScore = calculateFinalWeightedScore;
 module.exports.performanceOutcome = performanceOutcome;
 module.exports.parseIndicatorRatings = parseIndicatorRatings;
+module.exports.parseNaReasons = parseNaReasons;
+module.exports.parseGoals = parseGoals;
+module.exports.suggestedGoalAchievement = suggestedGoalAchievement;
+module.exports.parseScoreWeights = parseScoreWeights;
+module.exports.validateGoalsForFinalization = validateGoalsForFinalization;
 module.exports.performanceStepUpFailure = performanceStepUpFailure;

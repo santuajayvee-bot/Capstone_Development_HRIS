@@ -1,4 +1,4 @@
-/* ============================================================
+f/* ============================================================
    Repeatable biometric attendance integration test.
    Creates temporary device data and removes it after verification.
    Requires the local server to be running.

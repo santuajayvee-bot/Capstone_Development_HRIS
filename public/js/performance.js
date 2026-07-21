@@ -1,56 +1,3 @@
-const PERFORMANCE_CRITERIA = [
-  {
-    key: 'attendance_punctuality', label: 'Attendance and Punctuality',
-    basis: 'Biometric attendance, tardiness, unexcused absences, and approved leave records.',
-    indicators: [
-      ['reports_on_time', 'The employee regularly reports to work on time.'],
-      ['minimal_unexcused_absences', 'The employee has minimal unexcused absences.'],
-      ['proper_leave_filing', 'The employee properly files leave requests when needed.'],
-      ['follows_working_hours', 'The employee follows assigned working hours and attendance policies.'],
-    ],
-  },
-  {
-    key: 'work_output_productivity', label: 'Work Output / Productivity',
-    basis: 'Verified task completion, production piece-rate logs, logistics trip logs, and approved output targets.',
-    indicators: [
-      ['completes_work_on_time', 'The employee completes assigned work within the expected period.'],
-      ['meets_output_requirements', 'The employee meets expected production output or task requirements.'],
-      ['consistent_performance', 'The employee maintains consistent work performance during the evaluation period.'],
-      ['contributes_to_operations', 'The employee contributes effectively to assigned operational tasks.'],
-    ],
-  },
-  {
-    key: 'work_quality_accuracy', label: 'Work Quality / Accuracy',
-    basis: 'Accepted output, documented errors, rework, supervisor reports, and approved quality standards.',
-    indicators: [
-      ['minimal_errors', 'The employee performs tasks with minimal errors.'],
-      ['follows_procedures', 'The employee follows proper work procedures.'],
-      ['accurate_output', 'The employee produces accurate and acceptable work output.'],
-      ['minimal_rework', 'The employee requires minimal correction or rework.'],
-    ],
-  },
-  {
-    key: 'compliance_conduct', label: 'Compliance and Conduct',
-    basis: 'Applicable 201-file records, incident notes, policy compliance, and documented HR observations.',
-    indicators: [
-      ['follows_company_rules', 'The employee follows company rules and policies.'],
-      ['proper_workplace_behavior', 'The employee observes proper workplace behavior.'],
-      ['follows_safety_procedures', 'The employee complies with safety and operational procedures.'],
-      ['no_major_conduct_issues', 'The employee has no major disciplinary or conduct-related issues.'],
-    ],
-  },
-  {
-    key: 'reliability_responsibility', label: 'Reliability and Responsibility',
-    basis: 'Task completion, attendance consistency, documented instructions, and HR or supervisor observations.',
-    indicators: [
-      ['completes_assigned_tasks', 'The employee can be trusted to complete assigned tasks.'],
-      ['handles_duties_responsibly', 'The employee shows responsibility in handling work duties.'],
-      ['dependable_during_shifts', 'The employee is dependable during assigned shifts or work periods.'],
-      ['responds_to_instructions', 'The employee responds properly to instructions and work requirements.'],
-    ],
-  },
-];
-
 let PERFORMANCE_STATE = {
   overview: null,
   reviews: [],
@@ -437,11 +384,30 @@ function addPerformanceGoalRow(containerId = 'performance-assignment-goals', goa
   if (!container || container.children.length >= 8) return;
   const row = document.createElement('div');
   row.className = 'performance-goal-row';
-  row.innerHTML = `<input data-goal-title maxlength="160" placeholder="Goal" value="${performanceEscape(goal.title || '')}" ${editable ? '' : 'readonly'} />
-    <input data-goal-target maxlength="500" placeholder="Measurable target" value="${performanceEscape(goal.target || '')}" ${editable ? '' : 'readonly'} />
-    ${editable ? '<button type="button" class="performance-goal-remove" aria-label="Remove goal" title="Remove goal">&times;</button>' : '<span></span>'}`;
-  row.querySelector('.performance-goal-remove')?.addEventListener('click', () => row.remove());
+  const disabled = editable ? '' : 'disabled';
+  const option = (value, label, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
+  row.innerHTML = `<div class="performance-goal-title"><input data-goal-title maxlength="160" placeholder="Goal title" value="${performanceEscape(goal.title || '')}" ${editable ? '' : 'readonly'} />
+      <input data-goal-target maxlength="500" placeholder="Measurable target" value="${performanceEscape(goal.target || '')}" ${editable ? '' : 'readonly'} /></div>
+    <div class="performance-goal-fields">
+      <label>Unit<input data-goal-unit maxlength="80" value="${performanceEscape(goal.target_unit || '')}" ${editable ? '' : 'readonly'} /></label>
+      <label>Measurement<select data-goal-measurement ${disabled}>${option('MANUAL', 'Manual', goal.measurement_type || 'MANUAL')}${option('COUNT', 'Count', goal.measurement_type)}${option('PERCENTAGE', 'Percentage', goal.measurement_type)}${option('CURRENCY', 'Currency', goal.measurement_type)}${option('HOURS', 'Hours', goal.measurement_type)}${option('DAYS', 'Days', goal.measurement_type)}${option('BINARY', 'Binary', goal.measurement_type)}${option('OTHER', 'Other', goal.measurement_type)}</select></label>
+      <label>Direction<select data-goal-direction ${disabled}>${option('MANUAL', 'Manual', goal.measurement_direction || 'MANUAL')}${option('HIGHER_IS_BETTER', 'Higher is better', goal.measurement_direction)}${option('LOWER_IS_BETTER', 'Lower is better', goal.measurement_direction)}${option('BINARY', 'Binary', goal.measurement_direction)}</select></label>
+      <label>Target value<input data-goal-target-value inputmode="decimal" maxlength="40" value="${performanceEscape(goal.target_value ?? '')}" ${editable ? '' : 'readonly'} /></label>
+      <label>Actual result<input data-goal-actual-value inputmode="decimal" maxlength="40" value="${performanceEscape(goal.actual_value ?? '')}" ${editable ? '' : 'readonly'} /></label>
+      <label>Achievement %<input data-goal-achievement inputmode="decimal" maxlength="8" value="${performanceEscape(goal.achievement_percentage ?? '')}" ${editable ? '' : 'readonly'} /></label>
+      <label>Status<select data-goal-status ${disabled}>${['NOT_STARTED', 'IN_PROGRESS', 'PARTIALLY_ACHIEVED', 'ACHIEVED', 'EXCEEDED', 'NOT_APPLICABLE'].map(status => option(status, status.replace(/_/g, ' '), goal.status || 'NOT_STARTED')).join('')}</select></label>
+      <label>Rating<select data-goal-rating ${disabled}><option value="">Not rated</option>${[4, 3, 2, 1].map(value => option(String(value), `${value} - ${performanceRatingLabel(value)}`, String(goal.rating ?? ''))).join('')}${option('NA', 'N/A', String(goal.rating ?? ''))}</select></label>
+      <label>Weight %<input data-goal-weight inputmode="decimal" maxlength="6" value="${performanceEscape(goal.weight ?? '')}" ${editable ? '' : 'readonly'} /></label>
+    </div>
+    <label class="performance-goal-evidence">Evidence / remarks<textarea data-goal-evidence maxlength="2000" rows="2" ${editable ? '' : 'readonly'}>${performanceEscape(goal.evidence || '')}</textarea></label>
+    <label class="performance-goal-na">N/A reason<textarea data-goal-na-reason maxlength="500" rows="2" ${editable ? '' : 'readonly'}>${performanceEscape(goal.na_reason || '')}</textarea></label>
+    <label class="performance-goal-confirm"><input data-goal-confirmed type="checkbox" ${goal.evaluator_confirmed ? 'checked' : ''} ${disabled} /> Evaluator confirmed measured result</label>
+    ${editable ? '<button type="button" class="performance-goal-remove" aria-label="Remove goal" title="Remove goal">&times;</button>' : ''}`;
+  row.querySelector('.performance-goal-remove')?.addEventListener('click', () => { row.remove(); rebalancePerformanceGoalWeights(containerId); updatePerformanceRatingSummary(); });
+  row.querySelectorAll('input, select, textarea').forEach(field => field.addEventListener('input', updatePerformanceRatingSummary));
+  row.querySelectorAll('select').forEach(field => field.addEventListener('change', updatePerformanceRatingSummary));
   container.appendChild(row);
+  if (editable && !goal.weight) rebalancePerformanceGoalWeights(containerId);
 }
 
 function addPerformanceReviewGoalRow(goal = {}) {
@@ -452,7 +418,29 @@ function collectPerformanceGoals(containerId) {
   return [...document.querySelectorAll(`#${containerId} .performance-goal-row`)].map(row => ({
     title: row.querySelector('[data-goal-title]')?.value.trim() || '',
     target: row.querySelector('[data-goal-target]')?.value.trim() || '',
+    target_unit: row.querySelector('[data-goal-unit]')?.value.trim() || '',
+    measurement_type: row.querySelector('[data-goal-measurement]')?.value || 'MANUAL',
+    measurement_direction: row.querySelector('[data-goal-direction]')?.value || 'MANUAL',
+    target_value: row.querySelector('[data-goal-target-value]')?.value.trim() || '',
+    actual_value: row.querySelector('[data-goal-actual-value]')?.value.trim() || '',
+    achievement_percentage: row.querySelector('[data-goal-achievement]')?.value.trim() || '',
+    status: row.querySelector('[data-goal-status]')?.value || 'NOT_STARTED',
+    rating: row.querySelector('[data-goal-rating]')?.value || null,
+    weight: row.querySelector('[data-goal-weight]')?.value.trim() || '',
+    evidence: row.querySelector('[data-goal-evidence]')?.value.trim() || '',
+    na_reason: row.querySelector('[data-goal-na-reason]')?.value.trim() || '',
+    evaluator_confirmed: Boolean(row.querySelector('[data-goal-confirmed]')?.checked),
   })).filter(goal => goal.title || goal.target);
+}
+
+function rebalancePerformanceGoalWeights(containerId) {
+  const rows = [...document.querySelectorAll(`#${containerId} .performance-goal-row`)];
+  if (!rows.length) return;
+  const weight = (100 / rows.length).toFixed(2);
+  rows.forEach(row => {
+    const field = row.querySelector('[data-goal-weight]');
+    if (field) field.value = weight;
+  });
 }
 
 async function submitPerformanceCycle(event) {
@@ -464,6 +452,8 @@ async function submitPerformanceCycle(event) {
       review_period_end: document.getElementById('performance-cycle-end').value,
       due_date: document.getElementById('performance-cycle-due').value,
       description: document.getElementById('performance-cycle-description').value,
+      competency_weight: document.getElementById('performance-cycle-competency-weight').value,
+      goal_weight: document.getElementById('performance-cycle-goal-weight').value,
     }) });
     closePerformanceModal('performance-cycle-modal');
     await loadPerformanceOverview();
@@ -502,46 +492,104 @@ async function updatePerformanceCycleStatus(cycleId, status) {
 }
 
 function performanceRatingLabel(value) {
-  return ({ 4: 'Excellent', 3: 'Satisfactory', 2: 'Needs Improvement', 1: 'Unsatisfactory' })[Number(value)] || 'Not rated';
+  const scale = PERFORMANCE_STATE.currentReview?.rating_scale || [];
+  return scale.find(item => String(item.value) === String(value))?.label || ({ 4: 'Exceeds Expectations', 3: 'Meets Expectations', 2: 'Partially Meets Expectations', 1: 'Does Not Meet Expectations', NA: 'Not Applicable / Insufficient Evidence' })[value] || 'Not rated';
 }
 
-function performanceRatingControl(criterionKey, indicatorKey, indicatorText, value, editable) {
+function performanceQuestionnaire() {
+  return PERFORMANCE_STATE.currentReview?.questionnaire || { criteria: [], applicability: {}, score_weights: {} };
+}
+
+function performanceRatingControl(criterionKey, indicator, value, naReason, editable) {
+  const indicatorKey = indicator.key;
+  const indicatorText = indicator.text;
   if (!editable) {
-    return `<span class="performance-rating-readonly">${value === null || value === undefined ? '-' : `${Number(value)} - ${performanceEscape(performanceRatingLabel(value))}`}</span>`;
+    const label = value === null || value === undefined ? '-' : `${value === 'NA' ? 'N/A' : Number(value)} - ${performanceEscape(performanceRatingLabel(value))}`;
+    return `<div class="performance-rating-control"><span class="performance-rating-readonly">${label}</span>${value === 'NA' ? `<small>N/A reason: ${performanceEscape(naReason || '-')}</small>` : ''}</div>`;
   }
-  return `<select id="performance-rating-${performanceEscape(criterionKey)}-${performanceEscape(indicatorKey)}" aria-label="${performanceEscape(indicatorText)} rating" onchange="updatePerformanceRatingSummary()">
-    <option value="">Not rated</option>${[4, 3, 2, 1].map(rating => `<option value="${rating}" ${Number(value) === rating ? 'selected' : ''}>${rating} - ${performanceEscape(performanceRatingLabel(rating))}</option>`).join('')}
-  </select>`;
+  const scale = PERFORMANCE_STATE.currentReview?.rating_scale || [{ value: 4 }, { value: 3 }, { value: 2 }, { value: 1 }, { value: 'NA' }];
+  return `<div class="performance-rating-control"><select id="performance-rating-${performanceEscape(criterionKey)}-${performanceEscape(indicatorKey)}" aria-label="${performanceEscape(indicatorText)} rating" onchange="updatePerformanceRatingSummary()">
+    <option value="">Not rated</option>${scale.map(item => `<option value="${performanceEscape(item.value)}" ${String(value) === String(item.value) ? 'selected' : ''}>${performanceEscape(item.value === 'NA' ? 'N/A' : item.value)} - ${performanceEscape(item.label)}</option>`).join('')}
+  </select><label class="performance-na-reason">N/A reason<textarea id="performance-na-${performanceEscape(criterionKey)}-${performanceEscape(indicatorKey)}" maxlength="500" rows="2" aria-label="${performanceEscape(indicatorText)} N/A reason" oninput="updatePerformanceRatingSummary()">${performanceEscape(naReason || '')}</textarea></label></div>`;
 }
 
-function calculateClientPerformanceScore(ratings) {
+function calculateClientPerformanceScore(ratings, questionnaire = performanceQuestionnaire()) {
   const criteriaAverages = {};
+  const criteria = questionnaire.criteria || [];
+  const minPerCriterion = Number(questionnaire.applicability?.minimum_numeric_ratings_per_criterion || 4);
+  const minCoverage = Number(questionnaire.applicability?.minimum_numeric_coverage || 1);
   let complete = true;
-  PERFORMANCE_CRITERIA.forEach(criterion => {
-    const values = criterion.indicators.map(([indicatorKey]) => Number(ratings?.[criterion.key]?.[indicatorKey]));
-    if (values.some(value => !Number.isInteger(value) || value < 1 || value > 4)) {
+  let total = 0;
+  let numericTotal = 0;
+  let naTotal = 0;
+  let weighted = 0;
+  criteria.forEach(criterion => {
+    const values = criterion.indicators.map(indicator => ratings?.[criterion.key]?.[indicator.key]);
+    const numeric = values.map(Number).filter(value => Number.isInteger(value) && value >= 1 && value <= 4);
+    total += values.length;
+    numericTotal += numeric.length;
+    naTotal += values.filter(value => value === 'NA').length;
+    if (numeric.length < minPerCriterion) {
       criteriaAverages[criterion.key] = null;
       complete = false;
       return;
     }
-    criteriaAverages[criterion.key] = Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
+    const average = Number((numeric.reduce((sum, value) => sum + value, 0) / numeric.length).toFixed(2));
+    criteriaAverages[criterion.key] = average;
+    weighted += average * (Number(criterion.weight || 0) / 100);
   });
-  const averages = Object.values(criteriaAverages);
+  const coverage = total ? numericTotal / total : 0;
+  if (coverage < minCoverage) complete = false;
+  const competency = complete ? Number(weighted.toFixed(2)) : null;
+  const goals = collectPerformanceGoals('performance-review-goals');
+  const applicableGoals = goals.filter(goal => goal.rating !== 'NA' && goal.status !== 'NOT_APPLICABLE');
+  const goalWeight = Number(questionnaire.score_weights?.goal_weight || 0);
+  const goalComplete = goalWeight === 0 || (applicableGoals.length > 0 && applicableGoals.every(goal => Number.isInteger(Number(goal.rating)) && Number(goal.rating) >= 1 && Number(goal.rating) <= 4));
+  const applicableWeight = applicableGoals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0);
+  const goalScore = goalComplete && goalWeight > 0 && applicableWeight > 0
+    ? Number((applicableGoals.reduce((sum, goal) => sum + (Number(goal.rating) * Number(goal.weight || 0)), 0) / applicableWeight).toFixed(2))
+    : null;
+  const finalScore = competency !== null && (goalWeight === 0 || goalScore !== null)
+    ? Number(((competency * (Number(questionnaire.score_weights?.competency_weight || 0) / 100)) + ((goalScore || 0) * (goalWeight / 100))).toFixed(2))
+    : null;
   return {
     criteriaAverages,
-    overall: complete ? Number((averages.reduce((sum, value) => sum + value, 0) / averages.length).toFixed(2)) : null,
+    competency,
+    goalScore,
+    finalScore,
+    coverage,
+    numericTotal,
+    total,
+    naTotal,
     complete,
   };
 }
 
 function collectPerformanceRatings() {
-  return Object.fromEntries(PERFORMANCE_CRITERIA.map(criterion => [
+  return Object.fromEntries(performanceQuestionnaire().criteria.map(criterion => [
     criterion.key,
-    Object.fromEntries(criterion.indicators.map(([indicatorKey]) => [
-      indicatorKey,
-      document.getElementById(`performance-rating-${criterion.key}-${indicatorKey}`)?.value || null,
+    Object.fromEntries(criterion.indicators.map(indicator => [
+      indicator.key,
+      document.getElementById(`performance-rating-${criterion.key}-${indicator.key}`)?.value || null,
     ])),
   ]));
+}
+
+function collectPerformanceNaReasons() {
+  return Object.fromEntries(performanceQuestionnaire().criteria.map(criterion => [
+    criterion.key,
+    Object.fromEntries(criterion.indicators.map(indicator => [
+      indicator.key,
+      document.getElementById(`performance-na-${criterion.key}-${indicator.key}`)?.value.trim() || '',
+    ]).filter(([, value]) => value)),
+  ]).filter(([, values]) => Object.keys(values).length));
+}
+
+function collectPerformanceCriterionText(kind) {
+  return Object.fromEntries(performanceQuestionnaire().criteria.map(criterion => [
+    criterion.key,
+    document.getElementById(`performance-${kind}-${criterion.key}`)?.value.trim() || '',
+  ]).filter(([, value]) => value));
 }
 
 function updatePerformanceRatingSummary() {
@@ -550,14 +598,16 @@ function updatePerformanceRatingSummary() {
   const review = PERFORMANCE_STATE.currentReview;
   const editable = performanceCanManage() && review?.status === 'ASSIGNED';
   const ratings = editable ? collectPerformanceRatings() : (review?.indicator_ratings || {});
-  const result = calculateClientPerformanceScore(ratings);
-  PERFORMANCE_CRITERIA.forEach(criterion => {
+  const result = calculateClientPerformanceScore(ratings, review?.questionnaire);
+  (review?.questionnaire?.criteria || []).forEach(criterion => {
     const value = result.criteriaAverages[criterion.key];
     const element = document.querySelector(`[data-criterion-average="${criterion.key}"]`);
     if (element) element.textContent = value === null ? '-' : value.toFixed(2);
   });
-  summary.innerHTML = `<div>${PERFORMANCE_CRITERIA.map(criterion => `<span>${performanceEscape(criterion.label)} <strong>${result.criteriaAverages[criterion.key] === null ? '-' : result.criteriaAverages[criterion.key].toFixed(2)}</strong></span>`).join('')}</div>
-    <p>Overall Performance Rating <strong>${result.overall === null ? 'Incomplete' : result.overall.toFixed(2)}</strong></p>`;
+  const weights = review?.questionnaire?.score_weights || {};
+  summary.innerHTML = `<div class="performance-completion"><span>Rated ${result.numericTotal}/${result.total} (${Math.round(result.coverage * 100)}%)</span><span>N/A: ${result.naTotal}</span><span>Required coverage: ${Math.round(Number(review?.questionnaire?.applicability?.minimum_numeric_coverage || 1) * 100)}%</span></div>
+    <div>${(review?.questionnaire?.criteria || []).map(criterion => `<span>${performanceEscape(criterion.label)} <strong>${result.criteriaAverages[criterion.key] === null ? '-' : result.criteriaAverages[criterion.key].toFixed(2)}</strong></span>`).join('')}</div>
+    <p>Competency <strong>${result.competency === null ? 'Incomplete' : result.competency.toFixed(2)}</strong> <small>(${Number(weights.competency_weight || 0)}%)</small> &nbsp; Goals <strong>${Number(weights.goal_weight || 0) === 0 ? 'N/A' : result.goalScore === null ? 'Incomplete' : result.goalScore.toFixed(2)}</strong> <small>(${Number(weights.goal_weight || 0)}%)</small> &nbsp; Final <strong>${result.finalScore === null ? 'Incomplete' : result.finalScore.toFixed(2)}</strong></p>`;
 }
 
 async function openPerformanceReview(reviewId) {
@@ -592,18 +642,24 @@ function renderPerformanceReviewDialog(review) {
     <div><small>Department</small><strong>${performanceEscape(review.department_name)}</strong></div>
     <div><small>Position</small><strong>${performanceEscape(review.position)}</strong></div>
     <div><small>Due Date</small><strong>${performanceDate(review.due_date)}</strong></div>
-    <div><small>Status</small><strong>${performanceEscape(performanceStatusLabel(review.status))}</strong></div>`;
-  document.getElementById('performance-rating-grid').innerHTML = PERFORMANCE_CRITERIA.map(criterion => {
+    <div><small>Status</small><strong>${performanceEscape(performanceStatusLabel(review.status))}</strong></div>
+    <div><small>Questionnaire</small><strong>${performanceEscape(review.questionnaire_version || 'v1').toUpperCase()}</strong></div>`;
+  document.getElementById('performance-rating-guide').innerHTML = (review.rating_scale || []).map(item =>
+    `<div><strong>${performanceEscape(item.value === 'NA' ? 'N/A' : item.value)} — ${performanceEscape(item.label)}</strong><span>${performanceEscape(item.description || '')}</span></div>`
+  ).join('');
+  document.getElementById('performance-rating-grid').innerHTML = (review.questionnaire?.criteria || []).map(criterion => {
     const average = review.criteria_averages?.[criterion.key];
-    return `<section class="performance-criterion">
-      <div class="performance-criterion-heading"><div><h4>${performanceEscape(criterion.label)}</h4><p>${performanceEscape(criterion.basis)}</p></div><span>Average <strong data-criterion-average="${performanceEscape(criterion.key)}">${average === null || average === undefined ? '-' : Number(average).toFixed(2)}</strong></span></div>
-      ${criterion.indicators.map(([indicatorKey, indicatorText]) => `<div class="performance-rating-row">
-        <span>${performanceEscape(indicatorText)}</span>
-        ${performanceRatingControl(criterion.key, indicatorKey, indicatorText, review.indicator_ratings?.[criterion.key]?.[indicatorKey], reviewerEditable)}
+    const sectionLabel = ({ core: 'Core competency', role: 'Role-specific competency', leadership: 'Leadership competency' })[criterion.section] || 'Competency';
+    return `<details class="performance-criterion" open>
+      <summary class="performance-criterion-heading"><div><span class="performance-section-badge">${performanceEscape(sectionLabel)}</span><h4>${performanceEscape(criterion.label)}</h4><p>${performanceEscape(criterion.basis)}</p></div><span>Weight ${Number(criterion.weight || 0).toFixed(2)}% · Average <strong data-criterion-average="${performanceEscape(criterion.key)}">${average === null || average === undefined ? '-' : Number(average).toFixed(2)}</strong></span></summary>
+      ${criterion.indicators.map(indicator => `<div class="performance-rating-row">
+        <div><span>${performanceEscape(indicator.text)}</span><details class="performance-anchor"><summary>Behavioral guide</summary><ul>${[4, 3, 2, 1].map(rating => `<li><strong>${rating}</strong> ${performanceEscape(indicator.anchors?.[rating] || '')}</li>`).join('')}</ul></details></div>
+        ${performanceRatingControl(criterion.key, indicator, review.indicator_ratings?.[criterion.key]?.[indicator.key], review.na_reasons?.[criterion.key]?.[indicator.key], reviewerEditable)}
       </div>`).join('')}
-    </section>`;
+      <div class="performance-criterion-narratives"><label>Evidence or reference<textarea id="performance-evidence-${performanceEscape(criterion.key)}" maxlength="2000" rows="3" ${reviewerEditable ? '' : 'readonly'}>${performanceEscape(review.criteria_evidence?.[criterion.key] || '')}</textarea></label>
+      <label>Evaluator remarks<textarea id="performance-remarks-${performanceEscape(criterion.key)}" maxlength="2000" rows="3" ${reviewerEditable ? '' : 'readonly'}>${performanceEscape(review.criteria_remarks?.[criterion.key] || '')}</textarea></label></div>
+    </details>`;
   }).join('');
-  updatePerformanceRatingSummary();
   const goals = document.getElementById('performance-review-goals');
   goals.innerHTML = '';
   (review.goals || []).forEach(goal => addPerformanceGoalRow('performance-review-goals', goal, reviewerEditable));
@@ -612,9 +668,22 @@ function renderPerformanceReviewDialog(review) {
   const feedback = document.getElementById('performance-reviewer-feedback');
   feedback.value = review.reviewer_feedback || '';
   feedback.readOnly = !reviewerEditable;
-  const plan = document.getElementById('performance-development-plan');
-  plan.value = review.development_plan || '';
-  plan.readOnly = !reviewerEditable;
+  const plan = typeof review.development_plan === 'object' && review.development_plan ? review.development_plan : { summary: review.development_plan || '' };
+  const planFields = {
+    summary: 'performance-development-summary', performance_gap: 'performance-development-gap', required_action: 'performance-development-action',
+    responsible_person: 'performance-development-owner', target_date: 'performance-development-target-date', follow_up_date: 'performance-development-follow-up-date', expected_outcome: 'performance-development-outcome',
+  };
+  Object.entries(planFields).forEach(([key, id]) => {
+    const field = document.getElementById(id);
+    if (!field) return;
+    field.value = plan[key] || '';
+    field.readOnly = !reviewerEditable;
+    field.disabled = !reviewerEditable && field.tagName === 'SELECT';
+  });
+  document.getElementById('performance-development-structured')?.toggleAttribute('hidden', review.questionnaire_version !== 'v2');
+  document.getElementById('performance-supporting-summary')?.toggleAttribute('hidden', !manager);
+  if (manager) loadPerformanceSupportingSummary(review.id);
+  updatePerformanceRatingSummary();
   renderPerformanceReviewActions(review, { manager, reviewerEditable });
 }
 
@@ -639,14 +708,43 @@ async function refreshCurrentPerformanceReview() {
   await Promise.all([loadPerformanceOverview(), loadPerformanceReviews()]);
 }
 
+function collectPerformanceDevelopmentPlan() {
+  const ids = {
+    summary: 'performance-development-summary', performance_gap: 'performance-development-gap', required_action: 'performance-development-action',
+    responsible_person: 'performance-development-owner', target_date: 'performance-development-target-date', follow_up_date: 'performance-development-follow-up-date', expected_outcome: 'performance-development-outcome',
+  };
+  const plan = Object.fromEntries(Object.entries(ids).map(([key, id]) => [key, document.getElementById(id)?.value.trim() || '']));
+  return PERFORMANCE_STATE.currentReview?.questionnaire_version === 'v2' ? plan : plan.summary;
+}
+
+async function loadPerformanceSupportingSummary(reviewId) {
+  const target = document.getElementById('performance-supporting-summary');
+  if (!target) return;
+  target.innerHTML = '<p>Loading read-only supporting data…</p>';
+  try {
+    const summary = await performanceApi(`/reviews/${reviewId}/supporting-summary`);
+    if (Number(PERFORMANCE_STATE.currentReview?.id) !== Number(reviewId)) return;
+    const stat = (label, value) => `<span><small>${performanceEscape(label)}</small><strong>${performanceEscape(value)}</strong></span>`;
+    target.innerHTML = `<div class="performance-supporting-heading"><strong>Supporting data (read-only)</strong><small>As of ${performanceEscape(performanceDate(summary.as_of))}</small></div>
+      <div class="performance-supporting-grid"><section><h5>Attendance</h5>${stat('Recorded days', summary.attendance?.recorded_days || 0)}${stat('Days present', summary.attendance?.days_present || 0)}${stat('Absences', summary.attendance?.absences || 0)}${stat('Tardiness', `${summary.attendance?.tardiness_count || 0} (${summary.attendance?.tardiness_minutes || 0} min)`)}</section>
+      <section><h5>Production</h5>${stat('Verified records', summary.production?.approved_records || 0)}${stat('Output quantity', summary.production?.output_quantity || 0)}${stat('Approved amount', summary.production?.approved_amount || 0)}</section>
+      <section><h5>Logistics</h5>${stat('Verified trips', summary.logistics?.verified_trips || 0)}${stat('Completed / approved', summary.logistics?.completed_or_approved || 0)}${stat('Documented exceptions', summary.logistics?.documented_exceptions || 0)}</section></div>`;
+  } catch (error) {
+    target.innerHTML = `<p>${performanceEscape(error.message)}</p>`;
+  }
+}
+
 async function savePerformanceEvaluation({ silent = false } = {}) {
   const review = PERFORMANCE_STATE.currentReview;
   if (!review) return false;
   try {
     const result = await performanceApi(`/reviews/${review.id}/evaluation`, { method: 'PUT', body: JSON.stringify({
       ratings: collectPerformanceRatings(),
+      na_reasons: collectPerformanceNaReasons(),
+      criteria_evidence: collectPerformanceCriterionText('evidence'),
+      criteria_remarks: collectPerformanceCriterionText('remarks'),
       feedback: document.getElementById('performance-reviewer-feedback').value,
-      development_plan: document.getElementById('performance-development-plan').value,
+      development_plan: collectPerformanceDevelopmentPlan(),
       goals: collectPerformanceGoals('performance-review-goals'),
       version: review.version,
     }) });
