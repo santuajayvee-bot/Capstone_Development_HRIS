@@ -92,6 +92,12 @@ assert.strictEqual(goalScore.complete, true);
 assert.strictEqual(goalScore.score, 3.4);
 assert.strictEqual(performance.suggestedGoalAchievement(goals[0]), 110);
 assert.strictEqual(performance.suggestedGoalAchievement(goals[1]), 200);
+const canonicalMeasuredGoals = JSON.parse(decryptColumnValue(performance.parseGoals([{
+  title: 'Production target', target: 'Produce 2,000 pieces', target_value: '2000', actual_value: '1800',
+  achievement_percentage: '1', measurement_type: 'COUNT', measurement_direction: 'HIGHER_IS_BETTER',
+  status: 'IN_PROGRESS', rating: 2, weight: 100, evaluator_confirmed: true,
+}], { version: 'v2', goalWeight: 30 })));
+assert.strictEqual(canonicalMeasuredGoals[0].achievement_percentage, 90, 'Measured achievement must be derived from target and actual values.');
 assert.throws(() => performance.validateGoalsForFinalization(goals, 30), /must be confirmed/);
 goals.forEach(goal => { goal.evaluator_confirmed = true; });
 assert.doesNotThrow(() => performance.validateGoalsForFinalization(goals, 30));

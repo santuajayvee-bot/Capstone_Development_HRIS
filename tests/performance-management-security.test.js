@@ -73,6 +73,7 @@ assert(api.includes('availableSupportingDataTables') && api.includes('source_sta
 assert(api.includes('payroll_production_outputs') && api.includes('payroll_production_pairs') && api.includes('piece_rate_output_shares'));
 assert(api.includes('VERIFIED_OPERATIONAL_STATUSES') && api.includes('PROCESSED_OPERATIONAL_STATUSES'));
 assert(!api.includes("FROM production_transactions\n        WHERE employee_id = ? AND transaction_date BETWEEN ? AND ?`"), 'Unverifiable legacy production rows must not be presented as verified evidence.');
+assert(api.includes("pc.status, pc.questionnaire_version, pc.competency_weight, pc.goal_weight"));
 
 assert(server.includes("app.use('/api/performance', PERFORMANCE_ROUTE_RATE_LIMIT)"));
 assert(server.includes("app.use('/api/performance', performanceManagementRoutes)"));
@@ -99,6 +100,8 @@ assert(page.includes('id="performance-review-photo"'));
 assert(page.includes('id="performance-assignment-department"'));
 assert(ui.includes('Verified / approved trips') && ui.includes('Paid / included in payroll'));
 assert(ui.includes('Operational source is not configured. No value is shown.'));
+assert(ui.includes('performanceQuestionnaireBadge') && ui.includes('Incomplete — select a rating'));
+assert(ui.includes('syncPerformanceGoalAchievement') && ui.includes('Calculated from target value and actual result.'));
 assert(api.includes('e.id AS employee_record_id') && api.includes('employee_record_id: Number(row.employee_record_id)'));
 assert(ui.includes('hydratePerformanceEmployeePhoto') && ui.includes('/photo`'));
 assert(ui.includes("apiFetch(`/api/performance${path}`, { cache: 'no-store', ...options })"));

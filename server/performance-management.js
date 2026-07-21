@@ -392,9 +392,17 @@ function parseGoals(value, { version = 'v1', goalWeight = 0, finalization = fals
     }
     const targetValue = decimalText(goal?.target_value, `Goal ${index + 1} target value`);
     const actualValue = decimalText(goal?.actual_value, `Goal ${index + 1} actual value`);
-    const percentage = goal?.achievement_percentage === '' || goal?.achievement_percentage === null || goal?.achievement_percentage === undefined
+    const enteredPercentage = goal?.achievement_percentage === '' || goal?.achievement_percentage === null || goal?.achievement_percentage === undefined
       ? null : Number(goal.achievement_percentage);
-    if (percentage !== null && (!Number.isFinite(percentage) || percentage < 0 || percentage > 1000)) throw new PerformanceError(`Goal ${index + 1} achievement percentage is invalid.`);
+    if (enteredPercentage !== null && (!Number.isFinite(enteredPercentage) || enteredPercentage < 0 || enteredPercentage > 1000)) throw new PerformanceError(`Goal ${index + 1} achievement percentage is invalid.`);
+    // A measurable result is derived from the saved target and actual values,
+    // so a stale or client-altered percentage cannot mislead the evaluator.
+    const calculatedPercentage = suggestedGoalAchievement({
+      target_value: targetValue,
+      actual_value: actualValue,
+      measurement_direction: direction,
+    });
+    const percentage = calculatedPercentage === null ? enteredPercentage : calculatedPercentage;
     const measured = targetValue !== null && actualValue !== null && direction !== 'MANUAL';
     if (finalization && measured && !Boolean(goal?.evaluator_confirmed)) throw new PerformanceError(`Goal ${index + 1} numeric result must be confirmed by the evaluator.`);
     return {
@@ -769,7 +777,7 @@ router.get('/overview', async (req, res) => {
               DATE_FORMAT(pc.review_period_start, '%Y-%m-%d') AS review_period_start,
               DATE_FORMAT(pc.review_period_end, '%Y-%m-%d') AS review_period_end,
               DATE_FORMAT(pc.due_date, '%Y-%m-%d') AS due_date,
-              pc.status, pc.created_at,
+              pc.status, pc.questionnaire_version, pc.competency_weight, pc.goal_weight, pc.created_at,
               COUNT(pr.id) AS review_count,
               SUM(pr.status = 'FINALIZED') AS finalized_count
          FROM performance_cycles pc

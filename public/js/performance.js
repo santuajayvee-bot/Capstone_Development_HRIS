@@ -123,6 +123,11 @@ function performanceIntegrityBadge(status) {
   return `<span class="performance-integrity performance-integrity-${String(status || '').toLowerCase().replace(/_/g, '-')}">${performanceEscape(label)}</span>`;
 }
 
+function performanceQuestionnaireBadge(version) {
+  const label = String(version || 'v1').trim().toUpperCase();
+  return `<small class="performance-questionnaire-badge performance-questionnaire-${label.toLowerCase()}">${performanceEscape(label)}</small>`;
+}
+
 function performanceOutcomeClass(outcome) {
   return String(outcome?.code || 'pending').toLowerCase().replace(/_/g, '-');
 }
@@ -208,13 +213,13 @@ function renderPerformanceCycles(cycles) {
   const assignment = document.getElementById('performance-assignment-cycle');
   if (filter) {
     const selected = filter.value;
-    filter.innerHTML = '<option value="">All Cycles</option>' + cycles.map(cycle => `<option value="${Number(cycle.id)}">${performanceEscape(cycle.cycle_name)}</option>`).join('');
+    filter.innerHTML = '<option value="">All Cycles</option>' + cycles.map(cycle => `<option value="${Number(cycle.id)}">${performanceEscape(cycle.cycle_name)} [${performanceEscape(String(cycle.questionnaire_version || 'v1').toUpperCase())}]</option>`).join('');
     filter.value = selected;
   }
   if (assignment) {
     assignment.innerHTML = '<option value="">Select cycle</option>' + cycles
       .filter(cycle => ['DRAFT', 'ACTIVE'].includes(cycle.status))
-      .map(cycle => `<option value="${Number(cycle.id)}">${performanceEscape(cycle.cycle_name)} (${performanceEscape(cycle.status)})</option>`).join('');
+      .map(cycle => `<option value="${Number(cycle.id)}">${performanceEscape(cycle.cycle_name)} [${performanceEscape(String(cycle.questionnaire_version || 'v1').toUpperCase())}] (${performanceEscape(cycle.status)})</option>`).join('');
   }
   if (!body) return;
   if (!cycles.length) {
@@ -229,7 +234,7 @@ function renderPerformanceCycles(cycles) {
     if (manager && cycle.status === 'DRAFT') action = `<button class="performance-link-button" type="button" onclick="updatePerformanceCycleStatus(${Number(cycle.id)}, 'ACTIVE')">Activate</button>`;
     if (manager && cycle.status === 'ACTIVE') action = `<button class="performance-link-button" type="button" onclick="updatePerformanceCycleStatus(${Number(cycle.id)}, 'CLOSED')">Close</button>`;
     return `<tr>
-      <td><strong>${performanceEscape(cycle.cycle_name)}</strong></td>
+      <td><strong>${performanceEscape(cycle.cycle_name)}</strong><div class="performance-cycle-version">${performanceQuestionnaireBadge(cycle.questionnaire_version)} <span>Competency ${Number(cycle.competency_weight || 100)}% · Goals ${Number(cycle.goal_weight || 0)}%</span></div></td>
       <td>${performanceDate(cycle.review_period_start)} - ${performanceDate(cycle.review_period_end)}</td>
       <td>${performanceDate(cycle.due_date)}</td><td>${progress}</td>
       <td><span class="performance-status performance-status-${String(cycle.status).toLowerCase()}">${performanceEscape(cycle.status)}</span></td>
@@ -362,7 +367,7 @@ function renderPerformanceReviews() {
   }
   body.innerHTML = PERFORMANCE_STATE.reviews.map(review => `<tr class="${['MISMATCH', 'MISSING'].includes(review.integrity_status) ? 'performance-integrity-row' : ''}">
     <td><div class="performance-employee"><strong>${performanceEscape(review.employee_name)}</strong><small>${performanceEscape(review.employee_code)}</small></div></td>
-    <td>${performanceEscape(review.cycle_name)}</td><td>${performanceEscape(review.department_name)}</td>
+    <td>${performanceEscape(review.cycle_name)}<div class="performance-cycle-version">${performanceQuestionnaireBadge(review.questionnaire_version)}</div></td><td>${performanceEscape(review.department_name)}</td>
     <td>${performanceDate(review.due_date)}</td><td>${review.final_score === null ? '-' : `<div class="performance-score"><strong>${Number(review.final_score).toFixed(2)}</strong><small class="performance-outcome-${performanceOutcomeClass(review.outcome)}">${performanceEscape(review.outcome?.label || '')}</small></div>`}</td>
     <td>${performanceIntegrityBadge(review.integrity_status)}</td><td>${performanceStatusBadge(review.status)}</td>
     <td><button class="performance-link-button" type="button" onclick="openPerformanceReview(${Number(review.id)})">Open</button></td>
@@ -430,14 +435,46 @@ function addPerformanceGoalRow(containerId = 'performance-assignment-goals', goa
     <label class="performance-goal-confirm"><input data-goal-confirmed type="checkbox" ${goal.evaluator_confirmed ? 'checked' : ''} ${disabled} /> Evaluator confirmed measured result</label>
     ${editable ? '<button type="button" class="performance-goal-remove" aria-label="Remove goal" title="Remove goal">&times;</button>' : ''}`;
   row.querySelector('.performance-goal-remove')?.addEventListener('click', () => { row.remove(); rebalancePerformanceGoalWeights(containerId); updatePerformanceRatingSummary(); });
+  const syncMeasuredResult = () => {
+    syncPerformanceGoalAchievement(row);
+    updatePerformanceRatingSummary();
+  };
+  row.querySelector('[data-goal-target-value]')?.addEventListener('input', syncMeasuredResult);
+  row.querySelector('[data-goal-actual-value]')?.addEventListener('input', syncMeasuredResult);
+  row.querySelector('[data-goal-direction]')?.addEventListener('change', syncMeasuredResult);
   row.querySelectorAll('input, select, textarea').forEach(field => field.addEventListener('input', updatePerformanceRatingSummary));
   row.querySelectorAll('select').forEach(field => field.addEventListener('change', updatePerformanceRatingSummary));
   container.appendChild(row);
+  syncPerformanceGoalAchievement(row);
   if (editable && !goal.weight) rebalancePerformanceGoalWeights(containerId);
 }
 
 function addPerformanceReviewGoalRow(goal = {}) {
   addPerformanceGoalRow('performance-review-goals', goal, true);
+}
+
+function suggestedPerformanceGoalAchievement(row) {
+  const direction = row.querySelector('[data-goal-direction]')?.value;
+  const target = Number(row.querySelector('[data-goal-target-value]')?.value);
+  const actual = Number(row.querySelector('[data-goal-actual-value]')?.value);
+  if (!Number.isFinite(target) || !Number.isFinite(actual) || target <= 0) return null;
+  if (direction === 'HIGHER_IS_BETTER') return Number(((actual / target) * 100).toFixed(2));
+  if (direction === 'LOWER_IS_BETTER') return actual <= 0 ? null : Number(((target / actual) * 100).toFixed(2));
+  return null;
+}
+
+function syncPerformanceGoalAchievement(row) {
+  const field = row.querySelector('[data-goal-achievement]');
+  if (!field) return;
+  const suggested = suggestedPerformanceGoalAchievement(row);
+  if (suggested === null) {
+    field.readOnly = false;
+    field.removeAttribute('title');
+    return;
+  }
+  field.value = suggested.toFixed(2);
+  field.readOnly = true;
+  field.title = 'Calculated from target value and actual result.';
 }
 
 function collectPerformanceGoals(containerId) {
@@ -483,7 +520,7 @@ async function submitPerformanceCycle(event) {
     }) });
     closePerformanceModal('performance-cycle-modal');
     await loadPerformanceOverview();
-    await performanceNotice('Appraisal cycle created.', 'Cycle Created', 'success');
+    await performanceNotice('Appraisal cycle created as v2. Default weighting is 70% competency and 30% goals unless you changed it.', 'Cycle Created', 'success');
   } catch (error) {
     await performanceNotice(error.message, 'Could Not Create Cycle', 'error');
   }
@@ -631,9 +668,12 @@ function updatePerformanceRatingSummary() {
     if (element) element.textContent = value === null ? '-' : value.toFixed(2);
   });
   const weights = review?.questionnaire?.score_weights || {};
+  const goalHint = Number(weights.goal_weight || 0) > 0
+    ? '<small class="performance-goal-score-hint">Goal score is the weighted average of the 1–4 goal ratings. Achievement % is calculated automatically for Higher/Lower measurable goals; select an HR Rating to include the goal in the score.</small>'
+    : '';
   summary.innerHTML = `<div class="performance-completion"><span>Rated ${result.numericTotal}/${result.total} (${Math.round(result.coverage * 100)}%)</span><span>N/A: ${result.naTotal}</span><span>Required coverage: ${Math.round(Number(review?.questionnaire?.applicability?.minimum_numeric_coverage || 1) * 100)}%</span></div>
     <div>${(review?.questionnaire?.criteria || []).map(criterion => `<span>${performanceEscape(criterion.label)} <strong>${result.criteriaAverages[criterion.key] === null ? '-' : result.criteriaAverages[criterion.key].toFixed(2)}</strong></span>`).join('')}</div>
-    <p>Competency <strong>${result.competency === null ? 'Incomplete' : result.competency.toFixed(2)}</strong> <small>(${Number(weights.competency_weight || 0)}%)</small> &nbsp; Goals <strong>${Number(weights.goal_weight || 0) === 0 ? 'N/A' : result.goalScore === null ? 'Incomplete' : result.goalScore.toFixed(2)}</strong> <small>(${Number(weights.goal_weight || 0)}%)</small> &nbsp; Final <strong>${result.finalScore === null ? 'Incomplete' : result.finalScore.toFixed(2)}</strong></p>`;
+    <p>Competency <strong>${result.competency === null ? 'Incomplete' : result.competency.toFixed(2)}</strong> <small>(${Number(weights.competency_weight || 0)}%)</small> &nbsp; Goals <strong>${Number(weights.goal_weight || 0) === 0 ? 'N/A' : result.goalScore === null ? 'Incomplete — select a rating' : result.goalScore.toFixed(2)}</strong> <small>(${Number(weights.goal_weight || 0)}%)</small> &nbsp; Final <strong>${result.finalScore === null ? 'Incomplete' : result.finalScore.toFixed(2)}</strong></p>${goalHint}`;
 }
 
 async function openPerformanceReview(reviewId) {
