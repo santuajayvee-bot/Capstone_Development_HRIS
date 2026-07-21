@@ -122,10 +122,37 @@ function runAlterStatement(db, statement) {
   }), Promise.resolve());
 }
 
+function runIndexStatement(db, statement) {
+  const executable = stripLeadingComments(statement);
+  const createMatch = executable.match(
+    /^CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s*(\([\s\S]+\))$/i
+  );
+  if (createMatch) {
+    const unique = createMatch[1] ? 'UNIQUE ' : '';
+    const index = normalizeIdentifier(createMatch[2]);
+    const table = normalizeIdentifier(createMatch[3]);
+    const columns = createMatch[4];
+    const condition = `(SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${escapeSqlString(table)}' AND INDEX_NAME = '${escapeSqlString(index)}') = 0`;
+    return runConditionalAlter(db, table, `ADD ${unique}INDEX \`${index}\` ${columns}`, condition);
+  }
+
+  const dropMatch = executable.match(
+    /^DROP\s+INDEX\s+IF\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?$/i
+  );
+  if (dropMatch) {
+    const index = normalizeIdentifier(dropMatch[1]);
+    const table = normalizeIdentifier(dropMatch[2]);
+    const condition = `(SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${escapeSqlString(table)}' AND INDEX_NAME = '${escapeSqlString(index)}') > 0`;
+    return runConditionalAlter(db, table, `DROP INDEX \`${index}\``, condition);
+  }
+
+  return runAlterStatement(db, statement);
+}
+
 function runSqlFile(db, filename) {
   const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations', 'sqls', filename), 'utf8');
   return splitStatements(sql).reduce(
-    (chain, statement) => chain.then(() => runAlterStatement(db, statement)),
+    (chain, statement) => chain.then(() => runIndexStatement(db, statement)),
     Promise.resolve()
   );
 }
