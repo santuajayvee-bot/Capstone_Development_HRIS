@@ -83,6 +83,8 @@
 .performance-inline-heading h4 { font-size: 14px; }
 .performance-goal-row { position: relative; display: grid; gap: 10px; margin-bottom: 12px; padding: 12px; border: 1px solid #dfe4ea; border-radius: 8px; background: #fbfcfe; }
 .performance-goal-title { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding-right: 36px; }
+.performance-goal-row-v1 { background: #f8fafc; }
+.performance-goal-legacy-note { margin: 0; color: #667085; font-size: 11px; line-height: 1.45; }
 .performance-goal-fields { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .performance-goal-fields label, .performance-goal-evidence, .performance-goal-na, .performance-goal-confirm { display: grid; gap: 4px; color: #475467; font-size: 11px; font-weight: 600; }
 .performance-goal-evidence textarea, .performance-goal-na textarea { resize: vertical; }

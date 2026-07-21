@@ -135,10 +135,16 @@ function performanceOutcomeNotice(outcome) {
   return `${outcome.notice || ''}${reassessment}`.trim();
 }
 
-async function initPerformanceManagement() {
-  if (PERFORMANCE_STATE.initializationPromise) return PERFORMANCE_STATE.initializationPromise;
+// Keep the manager-only controls aligned with the verified session role.  The
+// performance page can render its tables after authentication finishes, so this
+// runs both on page initialization and on every manager-only render path.
+function syncPerformanceManagerControls() {
   const manager = performanceCanManage();
-  document.getElementById('performance-manager-actions')?.toggleAttribute('hidden', !manager);
+  const actions = document.getElementById('performance-manager-actions');
+  if (actions) {
+    actions.hidden = !manager;
+    if (manager) actions.removeAttribute('hidden');
+  }
   const search = document.getElementById('performance-search');
   if (search) search.hidden = !manager;
   const departmentFilter = document.getElementById('performance-department-filter');
@@ -149,7 +155,14 @@ async function initPerformanceManagement() {
   if (title) title.textContent = manager ? 'Performance Reviews' : 'My Performance Reviews';
   const copy = document.getElementById('performance-reviews-copy');
   if (copy) copy.textContent = manager ? 'Appraisal records by cycle and workflow status' : 'Your current and previous appraisal records';
-  document.getElementById('performance-cycle-actions-heading')?.toggleAttribute('hidden', !manager);
+  const cycleActionsHeading = document.getElementById('performance-cycle-actions-heading');
+  if (cycleActionsHeading) cycleActionsHeading.hidden = !manager;
+  return manager;
+}
+
+async function initPerformanceManagement() {
+  if (PERFORMANCE_STATE.initializationPromise) return PERFORMANCE_STATE.initializationPromise;
+  const manager = syncPerformanceManagerControls();
   PERFORMANCE_STATE.initialized = true;
   const initialization = Promise.all([
     loadPerformanceOverview(),
@@ -189,7 +202,7 @@ async function loadPerformanceOverview() {
 }
 
 function renderPerformanceCycles(cycles) {
-  const manager = performanceCanManage();
+  const manager = syncPerformanceManagerControls();
   const body = document.getElementById('performance-cycles-body');
   const filter = document.getElementById('performance-cycle-filter');
   const assignment = document.getElementById('performance-assignment-cycle');
@@ -340,6 +353,7 @@ function renderPerformancePagination() {
 }
 
 function renderPerformanceReviews() {
+  syncPerformanceManagerControls();
   const body = document.getElementById('performance-reviews-body');
   if (!body) return;
   if (!PERFORMANCE_STATE.reviews.length) {
@@ -384,6 +398,18 @@ function addPerformanceGoalRow(containerId = 'performance-assignment-goals', goa
   if (!container || container.children.length >= 8) return;
   const row = document.createElement('div');
   row.className = 'performance-goal-row';
+  const reviewVersion = PERFORMANCE_STATE.currentReview?.questionnaire_version;
+  const legacyReview = containerId === 'performance-review-goals' && reviewVersion === 'v1';
+  if (legacyReview) {
+    row.classList.add('performance-goal-row-v1');
+    row.innerHTML = `<div class="performance-goal-title"><input data-goal-title maxlength="160" placeholder="Goal" value="${performanceEscape(goal.title || '')}" ${editable ? '' : 'readonly'} />
+      <input data-goal-target maxlength="500" placeholder="Goal KPI / measurable target" value="${performanceEscape(goal.target || '')}" ${editable ? '' : 'readonly'} /></div>
+      <p class="performance-goal-legacy-note">This is a v1 review. It stores only the goal and measurable target. Create a new v2 cycle/review to use goal scoring, actual results, status, ratings, and evidence.</p>
+      ${editable ? '<button type="button" class="performance-goal-remove" aria-label="Remove goal" title="Remove goal">&times;</button>' : ''}`;
+    row.querySelector('.performance-goal-remove')?.addEventListener('click', () => row.remove());
+    container.appendChild(row);
+    return;
+  }
   const disabled = editable ? '' : 'disabled';
   const option = (value, label, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
   row.innerHTML = `<div class="performance-goal-title"><input data-goal-title maxlength="160" placeholder="Goal title" value="${performanceEscape(goal.title || '')}" ${editable ? '' : 'readonly'} />
@@ -755,6 +781,10 @@ async function savePerformanceEvaluation({ silent = false } = {}) {
     }
     return true;
   } catch (error) {
+    if (error.code === 'PERFORMANCE_VERSION_CONFLICT') {
+      await performanceNotice('This review was updated in another session. Your latest entries were not saved. Close and reopen the review before entering the values again.', 'Reload Review Required', 'warning');
+      return false;
+    }
     await performanceNotice(error.message, 'Could Not Save Evaluation', 'error');
     return false;
   }

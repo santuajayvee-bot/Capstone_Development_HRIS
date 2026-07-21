@@ -31,6 +31,10 @@ const supervisor = questionnaire.resolvePerformanceQuestionnaire({
   employee: { department_name: 'Production', position: 'Production Supervisor', employee_level: 'Supervisor', wage_type: 'Per Piece' },
   cycle,
 });
+const hr = questionnaire.resolvePerformanceQuestionnaire({
+  employee: { department_name: 'HR', position: 'HR Staff', employee_level: 'Rank and File', wage_type: 'Monthly' },
+  cycle,
+});
 const legacy = questionnaire.resolvePerformanceQuestionnaire({ cycle: { questionnaire_version: 'v1' } });
 
 assert.strictEqual(questionnaire.PERFORMANCE_CORE_CRITERIA.length, 9);
@@ -44,6 +48,7 @@ assert.strictEqual(production.criteria.some(item => item.key === 'logistics_deli
 assert.strictEqual(logistics.criteria.some(item => item.key === 'logistics_delivery'), true);
 assert.strictEqual(logistics.criteria.some(item => item.key === 'production_operations'), false);
 assert.strictEqual(supervisor.criteria.some(item => item.key === 'leadership_management'), true);
+assert.strictEqual(hr.criteria.some(item => item.key === 'human_resources'), true);
 assert.strictEqual(office.criteria.reduce((total, item) => total + item.indicators.length, 0), 42);
 assert.strictEqual(supervisor.criteria.reduce((total, item) => total + item.indicators.length, 0), 50);
 assert.strictEqual(questionnaire.validatePerformanceQuestionnaire(office), true);
@@ -101,5 +106,7 @@ assert(migrationDown.includes('WARNING: This rollback permanently removes v2 que
 const frontend = fs.readFileSync(path.join(__dirname, '..', 'public/js/performance.js'), 'utf8');
 assert(!frontend.includes('const PERFORMANCE_CRITERIA ='), 'The browser must not define its own questionnaire.');
 assert(frontend.includes('review.questionnaire?.criteria') && frontend.includes('criteria_evidence'));
+assert(frontend.includes('function syncPerformanceManagerControls()'), 'Manager controls must be re-synchronized after the page renders.');
+assert(frontend.includes("actions.removeAttribute('hidden')"), 'Manager action buttons must be explicitly restored for a verified manager session.');
 
 console.log('Performance questionnaire v2 tests: PASS');
